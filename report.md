@@ -1,10 +1,11 @@
 # LinuxLoader.efi Reverse Engineering Report
 
 **Target**: `images/extracted/LinuxLoader.efi` — Oplus Qualcomm ABL (Android Boot Loader)  
-**Platform**: AArch64 PE32+ EFI Application, 760KB, 772 functions  
+**Platform**: AArch64 PE32+ EFI Application, 760KB, 725 functions (Ghidra analysis)  
 **Build**: Qualcomm CLANG35 DEBUG, Feb 12, 2026  
 **Codename**: Canoe (Oplus device)  
-**Tooling**: radare2 + r2ghidra (pdc decompiler), cross-referenced against `edk2/QcomModulePkg/` source  
+**Tooling**: Ghidra 12.0.3 headless (GhidraMCP v5.0.0, 191 REST endpoints) + edk2 source cross-reference  
+**Previous pass**: radare2 + pdc (replaced — see §6 for tooling comparison)  
 
 ---
 
@@ -98,6 +99,112 @@ Extensive custom kernel command line parameters:
 | `oplus_bsp_dynamic_readahead.enable` | Dynamic readahead toggle |
 | `oplus_bsp_uxmem_opt.enable` | UX memory optimization toggle |
 | `oplus_bsp_aizerofs.rus_disable` | AI ZeroFS RUS disable flags |
+
+#### 2e. Decompiled OEM Functions (Ghidra — previously failed with r2)
+
+The following Oplus-proprietary functions were successfully decompiled using Ghidra 12.0.3. These were **completely opaque** under r2's pdc decompiler.
+
+**`ReadRpmbBootInfo` (0x355c0) — olock Secure Lock State Reader**
+
+Reads the olock state from RPMB (Replay Protected Memory Block) — a hardware-protected storage area that cannot be modified without the RPMB authentication key:
+
+```c
+// Pseudocode (Ghidra decompilation, annotated)
+int ReadRpmbBootInfo(struct rpmb_boot_info *out_buf) {
+    char rpmb_buf[0x1000];
+    uint32_t buf_len = 0x1000;
+    uint32_t cmd = 9;  // RPMB read boot info command
+
+    status = SendRpmbCommand(&cmd, 4, rpmb_buf, &buf_len);
+    if (status != 0) {
+        DebugPrint(ERROR, "read rpmb boot info fail, status is %d\n");
+        return -1;
+    }
+
+    if (buf_len == 0x404 && rpmb_buf[0:4] == 0) {
+        memcpy(out_buf, &rpmb_buf[4], 0x400);  // Copy 1KB boot info struct
+    }
+
+    // Verify SHA-256 hash at offset 0x7c in the struct
+    status = VerifyRpmbHash(out_buf, &computed_hash);
+    if (status != 0) {
+        DebugPrint(ERROR, "hash not match\n");
+        memset(out_buf, 0, 0x400);  // Wipe on hash failure
+        return -1;
+    }
+
+    DebugPrint(INFO, "last_bootmode: %d\n");
+    return 0;
+}
+```
+
+**Key insight**: The olock state is RPMB-backed with hash verification. This means:
+- It **cannot** be patched by modifying flash storage (RPMB has its own auth key)
+- A binary patch must target the **check** of the olock state, not the state itself
+- The relevant check in `LinuxLoaderEntry` at 0x6b78 is:
+  ```c
+  if (DAT_000baa68._4_1_ == 1 && rpmb_result._4_4_ == 1) {
+      DebugPrint(ERROR, "if olock secure lock state, Not allow Recovery:%d\n");
+      // ... clears recovery command from misc partition ...
+  }
+  ```
+
+**`VerifyFastbootAccess` (0x3e440) — Whitelist/Special Version Gate**
+
+This 390-line function controls whether fastboot is allowed. Decompiled flow:
+
+```
+1. ReadSecurityState() → check if secureboot is enabled
+   - If disabled: allow fastboot immediately (DAT_000bae79 = '1'), return 0
+   - If read fails: log warning, continue checks
+
+2. Check boot partition names for A/B slot validity
+
+3. ReadVersionTypeInfo() → read version type from secure storage
+   - Compare against known "e" (engineering) type
+   - If match: allow ("e verify pass"), goto whitelist check
+   - If no match: "special version" → DENY fastboot, return -1
+
+4. ReadOcdtInfo(1, ...) and ReadOcdtInfo(2, ...) → read OCDT project info
+   - Extract project number (DAT_000b2114)
+   - Check against hardcoded whitelist:
+     if ((DAT_000b2114 - 0x611f < 0x11) &&
+         ((1 << (DAT_000b2114 - 0x611f & 0x1f) & 0x1c001) != 0))
+       → ALLOW ("ALLOW fastboot when in prj whitelist!")
+     Also allows if DAT_000b2114 == 0x650f
+   - If not in whitelist: "not in export whitelist" → fallback to oplusreserve1 check
+
+5. Fallback: read from "opporeserve1" or "oplusreserve1" partition
+   - Parse unlock record data from partition
+   - Verify RSA signature ("fastboot_ocdt_info_rsa_verify")
+   - If valid: allow fastboot
+   - If invalid: DENY
+```
+
+**Hardcoded whitelist values decoded**:
+- Project IDs `0x611f` through `0x6130` with bitmask `0x1c001` = projects at offsets 0, 14, 15, 16 from base
+- Special project `0x650f` is always allowed
+- These are Oplus internal project numbers for devices where fastboot is permitted
+
+**`VerifyBootAndAppendCmdline` (0x2ac88) — Device State Decision**
+
+The 615-line AVB verification function. The critical device_state logic at offset 0x2b910:
+
+```c
+// Read is_unlocked via protocol callback
+int is_unlocked;
+status = (*(protocol + 0x48))(protocol, &is_unlocked);  // offset 0x48 in protocol vtable
+if (status == 0) {
+    char *state = "locked";
+    if (is_unlocked != 0) {
+        state = "unlocked";
+    }
+    AppendBootParam(cmdline_ctx, "androidboot.vbmeta.device_state", state);
+    // ... continues with vbmeta hash computation ...
+}
+```
+
+This is exactly what `patch_adrl_unlocked_to_locked` in patchlib.h targets — replacing the ADRP+ADD pointing to "unlocked" with one pointing to "locked".
 
 ### Layer 3: gbl_root_canoe Custom Modifications
 
@@ -226,55 +333,70 @@ This is the boot state evaluation logic that reads the `is_unlocked` byte and co
 | Boot state bypass | Internal unlock flag forced to TRUE | Low — reversible on reboot |
 | EFISP string neutralization | Prevents recursion in patched ABL | None — cosmetic |
 
-### 5b. Feasible Additional Patches
+### 5b. Feasible Additional Patches (with Ghidra-verified targets)
 
-| Patch | Description | Difficulty | Risk |
-|-------|-------------|------------|------|
-| **olock bypass** | Patch `get_olock_secure_lock_state` to always return unlocked state | Medium — requires finding the function and patching its return value | Medium — may affect carrier unlock status |
-| **Whitelist bypass** | NOP the project whitelist check in the fastboot entry path | Easy — string reference to "ALLOW fastboot when in prj whitelist" leads directly to the branch | Low — only affects fastboot availability |
-| **Special version bypass** | NOP the special version check | Easy — same approach as whitelist | Low — only affects fastboot availability |
-| **Custom cmdline injection** | Modify `oplusboot.*` parameter values at the point they're appended to cmdline | Medium — requires finding the cmdline construction function | Low — kernel parameters are informational |
-| **AVB error override** | Force AVB to always return success for custom ROMs | Hard — deeply integrated with libavb, multiple verification points | High — disables verified boot entirely |
-| **Charger mode (KPOC) bypass** | Patch `allow_kpoc` check for custom charging behavior | Easy — string reference leads to simple boolean check | Low — only affects power-off charging |
-| **Recovery mode unblock** | Bypass olock check specifically for recovery mode | Medium — the "Not allow Recovery" check is separate from fastboot | Medium — recovery access on carrier-locked devices |
-| **Boot mode forcing** | Override `oplusboot.mode` to force specific boot modes | Easy — string replacement in cmdline construction | Low — useful for development |
+| Patch | Target | Concrete Approach | Difficulty | Risk |
+|-------|--------|-------------------|------------|------|
+| **olock bypass** | `LinuxLoaderEntry+0x1d28` (0x6b78) | The check is `if (DAT_000baa68._4_1_ == 1 && rpmb_result._4_4_ == 1)`. Patch the `CBZ` / `CBNZ` at the comparison to always skip the olock block. The olock state lives in RPMB (hardware-protected), so patching the **read** is not viable — patch the **branch after the check**. | Medium | Medium — carrier lock enforcement |
+| **Whitelist bypass** | `VerifyFastbootAccess+0x3e8` (0x3e828) | The whitelist check compares `DAT_000b2114` against hardcoded project IDs with bitmask `0x1c001`. Replace the `CBNZ` that skips the "ALLOW" path with a `B` (unconditional branch), or patch the `ReadOcdtInfo` return to always provide a whitelisted project ID. | Easy | Low |
+| **Special version bypass** | `VerifyFastbootAccess+0x650` (0x3ea90) | After `ReadVersionTypeInfo` fails the "e verify" check, it falls through to "NOT ALLOW fastboot when special version". Patch the branch at the `CompareMemory` result check to always take the "pass" path. | Easy | Low |
+| **Recovery mode unblock** | `LinuxLoaderEntry+0x1d5c` (0x6bac) | Separate from fastboot — the `"Not allow Recovery"` check reads the same olock state but then clears the recovery command from the misc partition. Patch the outer `if (olock_state == 1)` branch to skip. | Medium | Medium |
+| **Device state spoofing** | `VerifyBootAndAppendCmdline+0xc88` (0x2b910) | Already implemented by patchlib.h patch 2. The Ghidra decompilation confirms: `pcVar18 = "locked"; if (is_unlocked != 0) pcVar18 = "unlocked"; AppendBootParam(ctx, 0x5bd5d, pcVar18);` | Done | Low |
+| **Export whitelist bypass** | `VerifyFastbootAccess+0x668` (0x3eaa8) | Falls through to "not in export whitelist" after project ID check fails. Same approach as whitelist bypass — force the branch. | Easy | Low |
 
-### 5c. Patches Requiring Significant Effort
+### 5c. RPMB-Protected State: What Cannot Be Patched
+
+The `ReadRpmbBootInfo` function (0x355c0) reads olock state from **RPMB** — Replay Protected Memory Block. This is a hardware-enforced secure storage area on the eMMC/UFS chip:
+
+- RPMB writes require an **authentication key** burned into the storage controller at factory
+- The olock data includes a **SHA-256 hash** that is verified after read (`VerifyRpmbHash` at 0x35840)
+- If the hash doesn't match, the entire 1KB struct is **zeroed** (secure wipe)
+
+**Implication**: You cannot modify the olock state by patching storage. You can only bypass the **check** of the state in the ABL binary. This is a fundamental constraint that shapes all olock-related patches.
+
+### 5d. Patches Requiring Significant Effort
 
 | Patch | Description | Why Difficult |
 |-------|-------------|---------------|
-| **Full carrier unlock** | Bypass all lock state checks including olock | Multiple enforcement points across the binary; risk of bricking if incomplete |
+| **Full carrier unlock** | Bypass all lock state checks including olock | Multiple enforcement points: fastboot gate, recovery gate, boot state, device_state cmdline. Must patch all consistently. |
 | **Custom AVB key enrollment** | Replace OEM AVB public key with custom key | Key is embedded in vbmeta partition and verified by XBL, not just ABL |
 | **Secure boot bypass** | Disable XBL → ABL signature verification | Not achievable from ABL alone; requires XBL modification |
+| **RPMB state modification** | Change actual olock data in RPMB | Requires RPMB auth key — not extractable without hardware attack |
 
 ---
 
 ## 6. Reverse Engineering Methodology & Tooling Assessment
 
-### 6a. Approach Used
+### 6a. Approach Used (Two-Pass)
 
-1. **Full analysis** (radare2 `aaa` level 2) — identified 772 functions
-2. **String-driven identification** — UEFI binaries embed extensive debug strings from `DEBUG()` macros, which map directly to source-level function names and file paths
-3. **Source cross-referencing** — the provided `edk2/QcomModulePkg/` source was the primary reference for understanding decompiled output
-4. **Annotation** — key functions renamed (`LinuxLoaderEntry`, `UefiModuleEntryPoint`, `DebugPrint`, `DebugAssert`) and commented
+**Pass 1 (r2mcp):** Initial exploration with radare2 pdc decompiler. Identified function count, string locations, and basic control flow. Failed on all OEM-proprietary functions due to orphan blocks and lack of type information.
 
-### 6b. r2mcp (pdc) Decompiler Limitations
+**Pass 2 (GhidraMCP):** Full re-analysis with Ghidra 12.0.3 headless server (GhidraMCP v5.0.0). Successfully decompiled all 725 functions including the three critical OEM functions that r2 failed on. Renamed 20 key functions, cross-referenced all string anchors via xref API.
 
-The radare2 pdc decompiler produced **functional but low-quality** output for this binary:
+### 6b. Tooling Comparison: r2 pdc vs Ghidra
 
-- **No UEFI type awareness**: All `gBS->LocateProtocol()` calls appear as `callreg x8` through untyped pointers. Without struct definitions for `EFI_BOOT_SERVICES`, `EFI_SYSTEM_TABLE`, etc., protocol calls are opaque.
-- **Orphan blocks**: The massive `LinuxLoaderEntry` function (~8KB, spanning `0x4e50`–`0x7140+`) was split into dozens of orphan code blocks that the decompiler couldn't properly reconnect.
-- **No protocol GUID resolution**: 16-byte GUIDs appear as raw hex addresses with no mapping to protocol names.
-- **AArch64 accuracy**: Approximately 76% of functions decompiled to recognizable pseudocode. The remaining 24% had structural issues (missed control flow, incorrect stack frame reconstruction).
+| Aspect | r2 pdc | Ghidra 12.0.3 |
+|--------|--------|---------------|
+| **LinuxLoaderEntry** (2114 lines) | Orphan blocks, unreadable | Complete C pseudocode with control flow |
+| **VerifyFastbootAccess** (390 lines) | Not attempted (no function boundary) | Full decompilation with whitelist logic visible |
+| **ReadRpmbBootInfo** (90 lines) | Not found | Clean decompilation showing RPMB protocol |
+| **VerifyBootAndAppendCmdline** (615 lines) | Partial (device_state logic obscured) | Complete with protocol vtable calls resolved |
+| **Protocol calls** | `callreg x8` (opaque) | `(**(code **)(DAT_000bad90 + 200))` (offset → gBS function) |
+| **String references** | Required manual address lookup | Inline in decompiled output |
+| **Function identification** | 4 functions named | 20 functions named via API |
+| **Rename/annotation** | Per-session only | Persistent via REST API |
 
-### 6c. Recommended Tooling for Future Work
+### 6c. Tooling Setup (Now Operational)
 
-| Tool | Suitability | Why |
-|------|-------------|-----|
-| **Binary Ninja + EFI Resolver** | Best | Automatic UEFI type loading, protocol GUID resolution, AArch64 platform support |
-| **Ghidra + UEFI Surveyor** | Good | Free, 193 MCP tools (Bethington fork), UEFI datatype libraries |
-| **r2ghidra (pdg)** | Acceptable | Available but requires extensive manual type annotation |
-| **r2 pdc** | Minimal | Used here; functional but lacks UEFI awareness entirely |
+| Component | Version | Location |
+|-----------|---------|----------|
+| Ghidra | 12.0.3 | `/opt/ghidra_12.0.3_PUBLIC/` |
+| GhidraMCP | 5.0.0-headless | `/home/vivy/ghidra-mcp/target/GhidraMCP-5.0.0.jar` |
+| Python MCP Bridge | 5.0.0 | `/home/vivy/ghidra-mcp/.venv/` |
+| Starter script | — | `~/.local/bin/ghidra-mcp` |
+| OpenCode MCP config | — | `~/.config/opencode/opencode.json` (ghidra entry) |
+| OpenJDK | 21.0.10 | `/usr/lib/jvm/java-21-openjdk-amd64/` |
+| Maven | 3.9.9 | `/opt/apache-maven-3.9.9/` |
 
 ### 6d. Hallucination Prevention Measures Applied
 
@@ -310,16 +432,54 @@ gbl_root_canoe/
 
 ---
 
-## 8. Key Addresses (LinuxLoader.efi)
+## 8. Key Addresses (LinuxLoader.efi) — Ghidra-Annotated
 
-| Address | Function | Notes |
-|---------|----------|-------|
-| `0x189c` | `UefiModuleEntryPoint` | DXE entry; initializes gST/gBS/gRT/gDS |
-| `0x4e50` | `LinuxLoaderEntry` | Main application entry; boot flow orchestrator |
-| `0x1acc` | `DebugPrint` | `DEBUG()` macro implementation |
-| `0x1da4` | `DebugAssert` | `ASSERT()` macro implementation |
-| `0x183e8` | `ReadWriteDeviceInfo` (probable) | Reads/writes devinfo partition |
-| `0x55e68` | Module constructor | Stack canary and library init |
-| `0xba000+` region | `.data` section | Global variables: gST, gBS, gRT, gDS, DeviceInfo cache |
-| `0x81000+` region | `.rdata` section | Protocol GUIDs, constants |
-| `0x58000–0x78000` | `.rdata` strings | Debug strings, cmdline parameters |
+### Named Functions (20 renamed via GhidraMCP)
+
+| Address | Function | Lines | Notes |
+|---------|----------|-------|-------|
+| `0x189c` | `ModuleEntryPoint` | ~80 | DXE entry; initializes gST/gBS/gRT/gDS, calls LinuxLoaderEntry |
+| `0x4e50` | `LinuxLoaderEntry` | 2114 | Main boot flow: olock check, EFISP/GBL load, key detection, fastboot |
+| `0x2ac88` | `VerifyBootAndAppendCmdline` | 615 | AVB verification; builds `androidboot.vbmeta.device_state` cmdline |
+| `0x3e440` | `VerifyFastbootAccess` | 390 | Whitelist/special version gate; RSA signature check on unlock record |
+| `0x355c0` | `ReadRpmbBootInfo` | 90 | Reads olock state from RPMB; SHA-256 hash verification |
+| `0x35b30` | `SendRpmbCommand` | — | Low-level RPMB command dispatch (cmd=9 for boot info) |
+| `0x35840` | `VerifyRpmbHash` | — | SHA-256 hash of RPMB boot info struct |
+| `0x28c14` | `ReadSecurityState` | — | Reads secureboot fuse state |
+| `0x33040` | `ReadOcdtInfo` | — | Reads OCDT project info for whitelist |
+| `0x34310` | `ReadVersionTypeInfo` | — | Reads firmware version type from secure storage |
+| `0x29268` | `HandleWaitForKeyPress` | — | Waits for user key press (used after olock denial) |
+| `0x17b88` | `GetBlkIoHandles` | — | Gets block I/O protocol handles for partition |
+| `0x18298` | `ReadPartitionBlocks` | — | Reads raw blocks from partition |
+| `0x2ead8` | `AppendBootParam` | — | Appends key=value to kernel command line |
+| `0xda40` | `InitializeFastboot` | — | FastbootInitialize() entry point |
+| `0x55bf8` | `LocateProtocolByGuid` | — | Wraps gBS->LocateProtocol |
+| `0x55d9c` | `SetMemZero` | — | memset(ptr, 0, len) wrapper |
+| `0x1440` | `CompareMemory` | — | memcmp wrapper |
+| `0x2020` | `BuildPartitionName` | — | Constructs partition name with slot suffix |
+| `0x1acc` | `DebugPrint` | — | DEBUG() macro backend |
+
+### Critical Patch Points
+
+| Address | Context | What's There |
+|---------|---------|-------------|
+| `0x6b78` | LinuxLoaderEntry + olock recovery check | `if (olock_state == 1) → block recovery` |
+| `0x6ce0` | LinuxLoaderEntry + olock fastboot check | `if (olock_state != 0) → "Not allow Fastboot"` |
+| `0x2b910` | VerifyBootAndAppendCmdline + device_state | `locked`/`unlocked` string selection for cmdline |
+| `0x3e828` | VerifyFastbootAccess + whitelist allow | `"ALLOW fastboot when in prj whitelist"` branch |
+| `0x3ea90` | VerifyFastbootAccess + special version deny | `"NOT ALLOW fastboot when special version"` branch |
+| `0x3eaa8` | VerifyFastbootAccess + export whitelist deny | `"not in export whitelist"` fallback |
+
+### Data Regions
+
+| Address | Content |
+|---------|---------|
+| `0xBAD68` | `gImageHandle` (EFI_HANDLE) |
+| `0xBAD90` | `gBS` (EFI_BOOT_SERVICES pointer) |
+| `0xBAD70` | `gRT` (EFI_RUNTIME_SERVICES pointer) |
+| `0xBAD80` | `gDS` (DXE_SERVICES pointer) |
+| `0xBAA68` | `DeviceInfo` cache (olock state at offset +4, byte 1) |
+| `0xBAAE0` | Partition count |
+| `0xBAE79` | Secureboot bypass flag (`'1'` = skip fastboot verify) |
+| `0xB2110` | OCDT project info (for whitelist) |
+| `0xB2114` | Project ID number (compared against whitelist bitmask) |
