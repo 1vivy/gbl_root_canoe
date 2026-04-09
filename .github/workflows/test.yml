@@ -1,0 +1,17 @@
+name: Test CI
+
+on: [push,pull_request]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: sudo apt update && sudo apt install lld clang llvm uuid-dev
+
+    - name: Run test
+      run: make test
