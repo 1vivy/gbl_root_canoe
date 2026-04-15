@@ -29,3 +29,6 @@ extracted/
 .vscode/
 
 edk2/build_modulepkg.log
+
+images/*
+!images/PUT_ABL_IMG_HERE
