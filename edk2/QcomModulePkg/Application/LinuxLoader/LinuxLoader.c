@@ -934,7 +934,8 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       DEBUG ((EFI_D_ERROR, "Unable to read allow unlock value: %r\n", Status));
     } else if (!IsAllowUnlock) {
       DEBUG ((EFI_D_WARN, "Allow unlock is disabled; keeping superfastboot key window available\n"));
-      Print(L"Overriding allow unlock; keeping superfastboot key window and flashing available\n");
+      Print(L"Overriding allow unlock; keeping superfastboot key window and flashing available.\n");
+      Print(L"Please check if OEM unlocking is toggled on in Developer Settings! Document and report to author.\n");
     }
 #else
     Status = EFI_SUCCESS;
@@ -946,8 +947,8 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
    * superfastboot-only build with no normal-boot fallback.
    */
   //wait for 5 sec for key press
-  Print(L"Press Volume Down key to enter Fastboot mode, waiting for 3 seconds into Normal mode...\n");
-  Print(L"Press Volume Up key to enter Normal mode\n");
+  //Print(L"Press Volume Down key to enter Fastboot mode, waiting for 3 seconds into Normal mode...\n");
+  //Print(L"Press Volume Up key to enter Normal mode\n");
   INT8 KeyStatus = WaitForVolumeDownKey (3000);
   if(KeyStatus == 1) {
     Print(L"Volume Down key detected, entering Fastboot mode...\n");
