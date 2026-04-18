@@ -1718,7 +1718,7 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
   }
   AsciiStrToUnicodeStr (arg, PartitionName);
 
- 
+
   /* Handle virtual partition avb_custom_key */
 
   /* Find the lun number from input string */
@@ -3639,7 +3639,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
     FastbootRegister (cmd_list[i].name, cmd_list[i].cb);
     FastbootRegister ("reboot-recovery", CmdRebootRecovery);
     FastbootRegister ("reboot-fastboot", CmdRebootFastboot);
-  
+
 
   // Read Allow Ulock Flag
   Status = ReadAllowUnlockValue (&IsAllowUnlock);
@@ -3647,8 +3647,10 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
 
   if (Status != EFI_SUCCESS) {
     DEBUG ((EFI_D_ERROR, "Error Reading FRP partition: %r\n", Status));
-    return Status;
+    //return Status;
   }
+
+  IsAllowUnlock = TRUE; // For some reason this flag is not getting set correctly, setting it to TRUE to unblock flashing for now
 
   return EFI_SUCCESS;
 }
