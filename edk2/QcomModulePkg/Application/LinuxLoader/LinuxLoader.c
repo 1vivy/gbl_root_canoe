@@ -266,6 +266,239 @@ WaitForVolumeDownKey (IN UINT32 TimeoutMs)
 
   return KeyDetected;
 }
+
+/*
+ * Scan for "logfs" partition, if found, mount it and archive existing UefiLog1.txt if present.
+ * Bds will flush UEFI logs to UefiLogX.txt as long as the partition is mounted.
+ * For some reason the boot counter does not work, we rotate and save up to 5 logs ourselves.
+ */
+STATIC EFI_STATUS
+MountLogFsForUefiLog (VOID)
+{
+  EFI_STATUS                       Status;
+  PartiSelectFilter                HandleFilter;
+  HandleInfo                       HandleInfoList[1];
+  UINT32                           MaxHandles;
+  UINT32                           BlkIoAttrib;
+  EFI_HANDLE                      *Handle;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs;
+  EFI_FILE_PROTOCOL               *Root;
+  EFI_FILE_PROTOCOL               *SourceFile;
+  EFI_FILE_PROTOCOL               *ArchiveFile;
+  EFI_FILE_PROTOCOL               *IndexFile;
+  CHAR16                           ArchivePath[32];
+  UINT32                           Slot;
+  UINT32                           NextSlot;
+  UINTN                            Size;
+  UINT8                            Buffer[4096];
+
+  SourceFile = NULL;
+  ArchiveFile = NULL;
+  IndexFile = NULL;
+  Slot = 0;
+
+  ZeroMem (&HandleFilter, sizeof (HandleFilter));
+  ZeroMem (HandleInfoList, sizeof (HandleInfoList));
+
+  BlkIoAttrib = BLK_IO_SEL_PARTITIONED_GPT |
+                BLK_IO_SEL_PARTITIONED_MBR |
+                BLK_IO_SEL_MEDIA_TYPE_NON_REMOVABLE |
+                BLK_IO_SEL_MATCH_PARTITION_LABEL;
+  HandleFilter.PartitionLabel = L"logfs";
+  MaxHandles = ARRAY_SIZE (HandleInfoList);
+
+  Status = GetBlkIOHandles (BlkIoAttrib, &HandleFilter,
+                            HandleInfoList, &MaxHandles);
+  if (EFI_ERROR (Status) || MaxHandles != 1) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: partition lookup failed: %r handles=%u\n",
+           Status, MaxHandles);
+#endif
+    return EFI_NOT_FOUND;
+  }
+
+  Handle = HandleInfoList[0].Handle;
+  if (Handle == NULL) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: partition handle missing\n");
+#endif
+    return EFI_NOT_FOUND;
+  }
+
+#ifndef DISABLE_PRINT
+  Print (L"LOGFS Save: connecting controller\n");
+#endif
+  Status = gBS->ConnectController (Handle, NULL, NULL, TRUE);
+  if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: ConnectController failed: %r\n", Status);
+#endif
+    return Status;
+  }
+
+  Status = gBS->HandleProtocol (Handle,
+                                &gEfiSimpleFileSystemProtocolGuid,
+                                (VOID **)&Fs);
+  if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: SimpleFileSystem unavailable: %r\n", Status);
+#endif
+    return Status;
+  }
+
+  Status = Fs->OpenVolume (Fs, &Root);
+  if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: OpenVolume failed: %r\n", Status);
+#endif
+    return Status;
+  }
+
+#ifndef DISABLE_PRINT
+  Print (L"LOGFS Save: mounted successfully\n");
+#endif
+
+  Status = Root->Open (Root,
+                       &SourceFile,
+                       L"\\UefiLog1.txt",
+                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                       0);
+  if (Status == EFI_NOT_FOUND) {
+#ifndef DISABLE_PRINT
+    Print (L"LOGFS Save: no previous UefiLog1.txt to archive\n");
+#endif
+    Root->Close (Root);
+    return EFI_SUCCESS;
+  }
+  if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: open UefiLog1.txt failed: %r\n", Status);
+#endif
+    Root->Close (Root);
+    return Status;
+  }
+
+  Status = Root->Open (Root,
+                       &IndexFile,
+                       L"\\UefiLogSaved.idx",
+                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
+                         EFI_FILE_MODE_CREATE,
+                       0);
+  if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: open UefiLogSaved.idx failed: %r\n", Status);
+#endif
+    SourceFile->Close (SourceFile);
+    Root->Close (Root);
+    return Status;
+  }
+
+  Size = sizeof (Slot);
+  Status = IndexFile->Read (IndexFile, &Size, &Slot);
+  if (EFI_ERROR (Status) || Size != sizeof (Slot)) {
+    Slot = 0;
+  }
+  Slot %= 5;
+  NextSlot = (Slot + 1) % 5;
+
+  Status = IndexFile->SetPosition (IndexFile, 0);
+  if (!EFI_ERROR (Status)) {
+    Size = sizeof (NextSlot);
+    Status = IndexFile->Write (IndexFile, &Size, &NextSlot);
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = IndexFile->Flush (IndexFile);
+  }
+  IndexFile->Close (IndexFile);
+  IndexFile = NULL;
+  if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: update slot index failed: %r\n", Status);
+#endif
+    SourceFile->Close (SourceFile);
+    Root->Close (Root);
+    return Status;
+  }
+
+  UnicodeSPrint (ArchivePath, sizeof (ArchivePath), L"\\UefiLogSaved%u.txt", Slot);
+
+  Status = Root->Open (Root,
+                       &ArchiveFile,
+                       ArchivePath,
+                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE,
+                       0);
+  if (!EFI_ERROR (Status)) {
+    Status = ArchiveFile->Delete (ArchiveFile);
+    ArchiveFile = NULL;
+    if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+      Print (L"LOGFS Save: delete old archive failed: %r\n", Status);
+#endif
+      SourceFile->Close (SourceFile);
+      Root->Close (Root);
+      return Status;
+    }
+  }
+
+  Status = Root->Open (Root,
+                       &ArchiveFile,
+                       ArchivePath,
+                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
+                         EFI_FILE_MODE_CREATE,
+                       0);
+  if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: create archive failed: %r\n", Status);
+#endif
+    SourceFile->Close (SourceFile);
+    Root->Close (Root);
+    return Status;
+  }
+
+  Status = SourceFile->SetPosition (SourceFile, 0);
+  if (!EFI_ERROR (Status)) {
+    Status = ArchiveFile->SetPosition (ArchiveFile, 0);
+  }
+  while (!EFI_ERROR (Status)) {
+    Size = sizeof (Buffer);
+    Status = SourceFile->Read (SourceFile, &Size, Buffer);
+    if (EFI_ERROR (Status) || Size == 0) {
+      break;
+    }
+    Status = ArchiveFile->Write (ArchiveFile, &Size, Buffer);
+  }
+
+  if (Status == EFI_SUCCESS) {
+    Status = ArchiveFile->Flush (ArchiveFile);
+  }
+
+  ArchiveFile->Close (ArchiveFile);
+  if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: archive copy failed: %r\n", Status);
+#endif
+    SourceFile->Close (SourceFile);
+    Root->Close (Root);
+    return Status;
+  }
+
+#ifndef DISABLE_PRINT
+  Print (L"LOGFS Save: archived UefiLog1.txt to %s\n", ArchivePath);
+#endif
+
+  Status = SourceFile->Delete (SourceFile);
+  if (EFI_ERROR (Status)) {
+#ifndef DISABLE_PRINT_2
+    Print (L"LOGFS Save: delete source UefiLog1.txt failed: %r\n", Status);
+#endif
+    Root->Close (Root);
+    return Status;
+  }
+
+  Root->Close (Root);
+  return EFI_SUCCESS;
+}
+
 #ifndef TEST_ADAPTER
 STATIC EFI_STATUS
 BootEfiImage (VOID *Data, UINT32 Size)
@@ -927,6 +1160,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 
 
   UpdatePartitionEntries ();
+  MountLogFsForUefiLog ();
   /*Check for multislot boot support*/
 #ifndef TEST_ADAPTER
     Status = ReadAllowUnlockValue (&IsAllowUnlock);
