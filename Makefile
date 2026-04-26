@@ -1,4 +1,4 @@
-.PHONY: clean patch build dist build_superfbonly build_minimal_generic build_fastboot_boot_efi fastboot_boot_step0 build_generic build_patcher_android build_module test_exploit test_boot test
+.PHONY: clean patch build dist build_superfbonly build_minimal_generic build_fastboot_boot_efi fastboot_boot_step0 build_keymaster_set_efi fastboot_boot_keymaster_set build_generic build_patcher_android build_patcher_android_keymaster build_module magisk_module_keymaster_set test_exploit test_boot test
 
 clean:
 	rm -rf edk2/Build || true
@@ -80,6 +80,31 @@ build_fastboot_boot_efi: build_minimal_generic
 fastboot_boot_step0: build_fastboot_boot_efi
 	fastboot boot ./dist/minimal_generic_superfastboot.efi
 
+# Step 1: separate Keymaster-only experiment path. This keeps legacy AVB,
+# cmdline, persistence, screen, and verity patches disabled; only patch 1 and
+# the KEYMASTER_PATCH scaffold are compiled in.
+build_keymaster_set_efi: clean
+	cp -r ./Conf ./edk2/
+	bash -c 'cd edk2 && . ./edksetup.sh && make BOARD_BOOTLOADER_PRODUCT_NAME=canoe TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
+  		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- VERIFIED_BOOT_ENABLED=1 \
+  		VERIFIED_BOOT_LE=0 AB_RETRYCOUNT_DISABLE=0 TARGET_BOARD_TYPE_AUTO=0 \
+  		BUILD_USES_RECOVERY_AS_BOOT=0 DISABLE_PARALLEL_DOWNLOAD_FLASH=0 PVMFW_BCC_ENABLED=-DPVMFW_BCC\
+  		REMOVE_CARVEOUT_REGION=1 QSPA_BOOTCONFIG_ENABLE=1 USER_BUILD_VARIANT=0 AUTO_PATCH_ABL=1 \
+  		KEYMASTER_PATCH=1 DISABLE_PRINT=0 DISABLE_PRINT_2=0 \
+  		PREBUILT_HOST_TOOLS="BUILD_CC=clang BUILD_CXX=clang++ LDPATH=-fuse-ld=lld BUILD_AR=llvm-ar"' || true
+	# test if the build is successful by checking the output file
+	if [ ! -f edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ]; then \
+		echo "Build failed"; \
+		exit 1; \
+	fi
+	cp edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ./dist/keymaster_set_superfastboot.efi
+	ls -l ./dist
+	@echo "Keymaster-set EFI ready: dist/keymaster_set_superfastboot.efi"
+	@echo "Boot with: fastboot boot dist/keymaster_set_superfastboot.efi"
+
+fastboot_boot_keymaster_set: build_keymaster_set_efi
+	fastboot boot ./dist/keymaster_set_superfastboot.efi
+
 build_generic: clean
 	cp -r ./Conf ./edk2/
 	bash -c 'cd edk2 && . ./edksetup.sh && make BOARD_BOOTLOADER_PRODUCT_NAME=canoe TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
@@ -99,11 +124,21 @@ build_generic: clean
 build_patcher_android: clean
 	$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang tools/patch_abl.c -o dist/patch_abl_android
 	bash ./tools/build_extractfv_android.sh
+build_patcher_android_keymaster: clean
+	$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang -DKEYMASTER_PATCH -DDISABLE_PATCH_2 -DDISABLE_PATCH_3 -DDISABLE_PATCH_4 -DDISABLE_PATCH_5 -DDISABLE_PATCH_6 -DDISABLE_PATCH_7 -DDISABLE_PATCH_8 -DDISABLE_PATCH_9 tools/patch_abl.c -o dist/patch_abl_android
+	bash ./tools/build_extractfv_android.sh
 build_module: build_patcher_android
 	mv dist/patch_abl_android magisk_module/bin/patch_abl
 	mv dist/extractfv_android magisk_module/bin/extractfv
 	mkdir release || true
 	cd magisk_module && zip -r ../release/$(DIST_NAME).zip ./
+	rm magisk_module/bin/patch_abl
+	rm magisk_module/bin/extractfv
+magisk_module_keymaster_set: build_patcher_android_keymaster
+	mv dist/patch_abl_android magisk_module/bin/patch_abl
+	mv dist/extractfv_android magisk_module/bin/extractfv
+	mkdir release || true
+	cd magisk_module && zip -r ../release/$(DIST_NAME)-keymaster-set.zip ./
 	rm magisk_module/bin/patch_abl
 	rm magisk_module/bin/extractfv
 

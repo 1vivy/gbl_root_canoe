@@ -55,6 +55,8 @@
   # Set to 1 to disable AVB/cmdline/bootstate-altering patches (patches 2-9).
   # Only patch 1 (EFISP recursion prevention) remains active.
   DEFINE MINIMAL_PATCH           = 0
+  # Set to 1 to enable the separate Keymaster-only patch scaffold.
+  DEFINE KEYMASTER_PATCH         = 0
 
 [LibraryClasses.common]
   BaseStackCheckLib|MdePkg/Library/BaseStackCheckLib/BaseStackCheckLib.inf
@@ -188,6 +190,9 @@
   !endif
   !if $(MINIMAL_PATCH) == 1
       GCC:*_*_*_CC_FLAGS = -DDISABLE_PATCH_2 -DDISABLE_PATCH_3 -DDISABLE_PATCH_4 -DDISABLE_PATCH_5 -DDISABLE_PATCH_6 -DDISABLE_PATCH_7 -DDISABLE_PATCH_8 -DDISABLE_PATCH_9
+  !endif
+  !if $(KEYMASTER_PATCH) == 1
+      GCC:*_*_*_CC_FLAGS = -DKEYMASTER_PATCH -DDISABLE_PATCH_2 -DDISABLE_PATCH_3 -DDISABLE_PATCH_4 -DDISABLE_PATCH_5 -DDISABLE_PATCH_6 -DDISABLE_PATCH_7 -DDISABLE_PATCH_8 -DDISABLE_PATCH_9
   !endif
 
     !if $(DISABLE_PRINT) == 1
