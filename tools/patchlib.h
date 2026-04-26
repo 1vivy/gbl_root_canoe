@@ -900,6 +900,7 @@ BOOLEAN PatchBuffer(CHAR8* data, INT32 size) {
     if (!patch_string_jump(data, size))
         Print_patcher("Warning: Failed to patch lockstate jump\n");
     #endif
+    #if !defined(DISABLE_PATCH_3) || !defined(DISABLE_PATCH_4) || !defined(DISABLE_PATCH_5)
     INT32 offset = -1;
     INT8 lock_register_num = -1;
     INT32 num_patches = patch_abl_bootstate(data, size, &lock_register_num, &offset);
@@ -910,15 +911,18 @@ BOOLEAN PatchBuffer(CHAR8* data, INT32 size) {
     Print_patcher("Anchor offset : 0x%X\n", offset);
     Print_patcher("Lock register : W%d\n", (int)lock_register_num);
     Print_patcher("Boot patches: %d\n", num_patches);
+    #endif
 
     #ifndef DISABLE_PATCH_8
     if (patch_verifiedbootstate_orange(data, size, 0) == 0)
         Print_patcher("Warning: Failed to patch verifiedbootstate to orange\n");
     #endif
+    #if !defined(DISABLE_PATCH_4) || !defined(DISABLE_PATCH_5)
     if (find_ldrB_instructio_reverse(data, size, offset, lock_register_num) != 0) {
         Print_patcher("Warning: Failed to patch LDRB->STRB chain for W%d\n",
                (int)lock_register_num);
     }
+    #endif
 
     #ifndef DISABLE_PATCH_9
     if (patch_abl_verity_logging(data, size, 0) != 0)

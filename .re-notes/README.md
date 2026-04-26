@@ -18,7 +18,7 @@
 
 - Minimal fastboot EFI path is intended to keep only patch 1: UTF-16 `efisp` → `nulls`, preventing EFISP recursion.
 - Patches 2–9 are disabled for the minimal artifact via `MINIMAL_PATCH=1` and compiler defines `DISABLE_PATCH_2`…`DISABLE_PATCH_9`.
-- Verified artifact: `dist/minimal_generic_superfastboot.efi`, SHA256 `0f654e3389fb526e1ce4ca43904c42438fece5dc2632daae066eeef97f50ce64`, size `204800` bytes.
+- Verified artifact: `dist/minimal_generic_superfastboot.efi`, SHA256 `09351f8dd53d4162e71c4fac4f3240a5b1f13531895b53a2cbdfb6f0127c1d90`, size `200704` bytes.
 
 ## Next RE focus
 

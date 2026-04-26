@@ -6,6 +6,7 @@
 - `BuildOptions` now records `MINIMAL_PATCH: '1'` with `AUTO_PATCH_ABL: '1'`.
 - Compiler invocations for `LinuxLoader` include `-DDISABLE_PATCH_2` through `-DDISABLE_PATCH_9`.
 - Gated helpers used only by disabled patches to avoid `-Werror=unused-function` under minimal builds.
+- Gated the patch driver so a `MINIMAL_PATCH=1` build skips bootstate-chain scanning and LDRB→STRB source tracking when patches 3–5 are all disabled.
 
 ## Files changed
 
@@ -18,10 +19,10 @@
 ## Artifact
 
 - Path: `dist/minimal_generic_superfastboot.efi`
-- Size: `204800`
-- SHA256: `0f654e3389fb526e1ce4ca43904c42438fece5dc2632daae066eeef97f50ce64`
+- Size: `200704`
+- SHA256: `09351f8dd53d4162e71c4fac4f3240a5b1f13531895b53a2cbdfb6f0127c1d90`
 
 ## Confidence
 
-- High that minimal build defines now reach `LinuxLoader` and compile with patches 2–9 disabled.
+- High that minimal build defines now reach `LinuxLoader`, compile with patches 2–9 disabled, and skip runtime patch-driver work for patches 3–5.
 - Runtime device validation still pending via `fastboot boot dist/minimal_generic_superfastboot.efi`.
