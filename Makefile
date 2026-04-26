@@ -1,3 +1,5 @@
+.PHONY: clean patch build dist build_superfbonly build_minimal_generic build_fastboot_boot_efi fastboot_boot_step0 build_generic build_patcher_android build_module test_exploit test_boot test
+
 clean:
 	rm -rf edk2/Build || true
 	rm -rf edk2/Conf || true
@@ -50,6 +52,33 @@ build_superfbonly: clean
 	fi
 	cp edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ./dist/superfastboot.efi
 	ls -l ./dist
+
+build_minimal_generic: clean
+	cp -r ./Conf ./edk2/
+	bash -c 'cd edk2 && . ./edksetup.sh && make BOARD_BOOTLOADER_PRODUCT_NAME=canoe TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
+  		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- VERIFIED_BOOT_ENABLED=1 \
+  		VERIFIED_BOOT_LE=0 AB_RETRYCOUNT_DISABLE=0 TARGET_BOARD_TYPE_AUTO=0 \
+  		BUILD_USES_RECOVERY_AS_BOOT=0 DISABLE_PARALLEL_DOWNLOAD_FLASH=0 PVMFW_BCC_ENABLED=-DPVMFW_BCC\
+  		REMOVE_CARVEOUT_REGION=1 QSPA_BOOTCONFIG_ENABLE=1 USER_BUILD_VARIANT=0 AUTO_PATCH_ABL=1 \
+  		MINIMAL_PATCH=1 DISABLE_PRINT=0 DISABLE_PRINT_2=0 \
+  		PREBUILT_HOST_TOOLS="BUILD_CC=clang BUILD_CXX=clang++ LDPATH=-fuse-ld=lld BUILD_AR=llvm-ar"' || true
+	# test if the build is successful by checking the output file
+	if [ ! -f edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ]; then \
+		echo "Build failed"; \
+		exit 1; \
+	fi
+	cp edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ./dist/minimal_generic_superfastboot.efi
+	ls -l ./dist
+
+# Step 0: build a fastboot-bootable GBL EFI that keeps the normal boot path.
+# AUTO_PATCH_ABL remains enabled, but AVB/cmdline/bootstate-altering patches are
+# disabled; only EFISP recursion prevention is left for the chained ABL.
+build_fastboot_boot_efi: build_minimal_generic
+	@echo "Step-0 EFI ready: dist/minimal_generic_superfastboot.efi"
+	@echo "Boot with: fastboot boot dist/minimal_generic_superfastboot.efi"
+
+fastboot_boot_step0: build_fastboot_boot_efi
+	fastboot boot ./dist/minimal_generic_superfastboot.efi
 
 build_generic: clean
 	cp -r ./Conf ./edk2/
