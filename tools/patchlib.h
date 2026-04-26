@@ -4,6 +4,8 @@
 
 typedef enum { LOC_REG, LOC_STK64, LOC_STK8 } DataLocType;
 
+#ifndef DISABLE_PATCH_5
+
 typedef struct {
     DataLocType type;
     INT32 val;
@@ -85,6 +87,8 @@ static StrbInfo decode_any_strb(UINT32 raw) {
     return info;
 }
 
+#endif
+
 INT32 patch_abl_gbl(CHAR8* buffer, INT32 size) {
     CHAR8 target[]      = { 'e',0, 'f',0, 'i',0, 's',0, 'p',0 };
     CHAR8 replacement[] = { 'n',0, 'u',0, 'l',0, 'l',0, 's',0 };
@@ -137,6 +141,7 @@ INT32 patch_abl_bootstate(CHAR8* buffer, INT32 size,
     return patched_count;
 }
 
+#ifndef DISABLE_PATCH_5
 static INT32 track_forward_patch_strb(CHAR8* buffer, INT32 size, INT32 ldrb_off,
                                       INT8 src_reg, INT32 anchor_off) {
     LocSet set;
@@ -302,6 +307,7 @@ static INT32 track_forward_patch_strb(CHAR8* buffer, INT32 size, INT32 ldrb_off,
     Print_patcher("Forward tracking: no sink STRB found after anchor 0x%X\n", anchor_off);
     return -1;
 }
+#endif
 
 /* ============================================================
  *  第十二部分：反向找 LDRB 源头

@@ -343,14 +343,18 @@ static DecodedInst decode_at(const CHAR8* buf, INT32 off) {
 }
 
 /* 构造 MOV Wd, #imm16 */
+#ifndef DISABLE_PATCH_4
 static UINT32 encode_movz_w(UINT8 rd, UINT16 imm16) {
     return 0x52800000u | ((UINT32)imm16 << 5) | (rd & 0x1Fu);
 }
+#endif
 
 /* STRB: 替换 Rt -> WZR (31) */
+#ifndef DISABLE_PATCH_5
 static UINT32 strb_with_reg(UINT32 raw, UINT8 new_rt) {
     return (raw & ~0x1Fu) | (new_rt & 0x1Fu);
 }
+#endif
 
 /* ADRP: 替换 Rd */
 static UINT32 adrp_with_rd(UINT32 raw, UINT8 new_rd) {
