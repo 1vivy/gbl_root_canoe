@@ -82,6 +82,7 @@
 #include <Library/HypervisorMvCalls.h>
 #include <Library/UpdateCmdLine.h>
 #include <Protocol/EFICardInfo.h>
+#include <Protocol/LoadedImage.h>
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -500,6 +501,10 @@ MountLogFsForUefiLog (VOID)
 }
 
 #ifndef TEST_ADAPTER
+#ifdef ENABLE_KEYMASTER_HOOKS
+static VOID SetChainedAblScanRegion(VOID *Base, UINTN Size);
+#endif
+
 STATIC EFI_STATUS
 BootEfiImage (VOID *Data, UINT32 Size)
 {
@@ -518,6 +523,22 @@ BootEfiImage (VOID *Data, UINT32 Size)
     DEBUG ((EFI_D_ERROR, "LoadImage failed: %r\n", Status));
     return Status;
   }
+
+#ifdef ENABLE_KEYMASTER_HOOKS
+  {
+    EFI_LOADED_IMAGE_PROTOCOL *LoadedImage = NULL;
+    Status = gBS->HandleProtocol (
+                    ImageHandle,
+                    &gEfiLoadedImageProtocolGuid,
+                    (VOID **)&LoadedImage
+                    );
+    if (!EFI_ERROR (Status) && LoadedImage != NULL) {
+      SetChainedAblScanRegion (LoadedImage->ImageBase, LoadedImage->ImageSize);
+    } else {
+      AsciiPrint ("LoadIntegratedEfi: loaded child image lookup failed: %r\n", Status);
+    }
+  }
+#endif
 
   Status = gBS->StartImage (ImageHandle, NULL, NULL);
   if (EFI_ERROR (Status)) {
@@ -1087,6 +1108,10 @@ LoadAblFromPartition (CHAR8 **OutBuffer, UINT32 *OutSize)
 #define UEFI
 #endif
 #include "../../../../tools/patchlib.h"
+#ifdef ENABLE_KEYMASTER_HOOKS
+#include "../../../../tools/qseecom_hook.h"
+#include "../../../../tools/scm_hook.h"
+#endif
 #endif
 STATIC VOID LoadIntegratedEfi(VOID){
 #ifndef AUTO_PATCH_ABL
@@ -1100,6 +1125,20 @@ STATIC VOID LoadIntegratedEfi(VOID){
         FreePool(buffer);
         return;
     }
+#ifdef ENABLE_KEYMASTER_HOOKS
+    {
+        EFI_STATUS HookStatus = InstallQseecomHook();
+        if (EFI_ERROR(HookStatus)) {
+            AsciiPrint("LoadIntegratedEfi: QSEECOM hook failed: %r (continuing without KM patch)\n",
+                       HookStatus);
+        }
+        EFI_STATUS ScmHookStatus = InstallScmHook();
+        if (EFI_ERROR(ScmHookStatus)) {
+            AsciiPrint("LoadIntegratedEfi: SCM hook failed: %r (SetFuse calls will reach TZ)\n",
+                       ScmHookStatus);
+        }
+    }
+#endif
     BootEfiImage(buffer, size);
 #endif
 }

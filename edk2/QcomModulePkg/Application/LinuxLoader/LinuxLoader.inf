@@ -150,6 +150,10 @@
 	gEfiPartitionRecordGuid
 	gEfiResetReasonProtocolGuid
 	gQcomRngProtocolGuid
+	gQcomQseecomProtocolGuid
+	gEfiSPSSProtocolGuid
+	gEfiQcomVerifiedBootProtocolGuid
+	gQcomScmProtocolGuid
 	
 
 [FixedPcd]
