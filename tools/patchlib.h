@@ -102,20 +102,6 @@ INT32 patch_abl_gbl(CHAR8* buffer, INT32 size) {
     return -1;
 }
 
-#ifdef KEYMASTER_PATCH
-INT32 patch_keymaster_request_fields(CHAR8* buffer, INT32 size) {
-    (void)buffer;
-    (void)size;
-#ifndef ENABLE_KEYMASTER_FIELD_PATCH
-    Print_patcher("Keymaster patch scaffold enabled; request-field mutation is disabled\n");
-    return 0;
-#else
-    Print_patcher("Error: ENABLE_KEYMASTER_FIELD_PATCH requested but no field patch is implemented yet\n");
-    return -1;
-#endif
-}
-#endif
-
 INT16 Original[] = {
     -1, 0x00, 0x00, 0x34, 0x28, 0x00, 0x80, 0x52,
     0x06, 0x00, 0x00, 0x14, 0xE8, -1, 0x40, 0xF9,
@@ -272,7 +258,7 @@ static INT32 track_forward_patch_strb(CHAR8* buffer, INT32 size, INT32 ldrb_off,
             }
             break;
 
-        /* ---- STRB (所有形式) ---- */
+        /* ---- STRB (All forms) ---- */
         case INST_STRB_IMM:
         case INST_STRB_POST:
         case INST_STRB_PRE: {
@@ -324,7 +310,7 @@ static INT32 track_forward_patch_strb(CHAR8* buffer, INT32 size, INT32 ldrb_off,
 #endif
 
 /* ============================================================
- *  第十二部分：反向找 LDRB 源头
+ *  Part 12: Reverse search for LDRB source
  * ============================================================ */
 INT32 find_ldrB_instructio_reverse(CHAR8* buffer, INT32 size,
                                    INT32 anchor_offset, INT8 target_register) {
@@ -899,12 +885,6 @@ BOOLEAN PatchBuffer(CHAR8* data, INT32 size) {
     #ifndef DISABLE_PATCH_1
     if (patch_abl_gbl(data, size) != 0)
         Print_patcher("Warning: Failed to patch ABL GBL\n");
-    #endif
-    #ifdef KEYMASTER_PATCH
-    if (patch_keymaster_request_fields(data, size) != 0) {
-        Print_patcher("Error: Failed to apply Keymaster request-field patch\n");
-        return FALSE;
-    }
     #endif
     #ifndef DISABLE_PATCH_2
     if (patch_adrl_unlocked_to_locked(data, size, 0) == 0){

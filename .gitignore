@@ -29,5 +29,15 @@ extracted/
 .vscode/
 
 edk2/build_modulepkg.log
-
+.re*/
+.c*/
+.CL*
 backups/
+release/
+
+# Vendored upstream sources kept locally for cross-reference (Qualcomm
+# BOOT.MXF, Qualcomm edk2-uefi). Large; not committed to this repo.
+external/
+
+# Per-device override header generated from an OTA payload
+tools/keymaster_overrides.generated.h
