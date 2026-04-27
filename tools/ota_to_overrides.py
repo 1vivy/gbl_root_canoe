@@ -122,21 +122,46 @@ def _parse_props(vbmeta_path: Path) -> dict[str, str]:
 
 
 def _encode_os_version(version: str) -> int:
-    """KeymasterClient.c parser: ((Major << 14) | (Minor << 7) | SubMinor)."""
+    """Bootloader-level OS version encoding from VerifiedBoot.c::ParseFooterOsVersion
+    in external/edk2-uefi.lnx.5.0.r10-rel/QcomModulePkg/Library/avb/.
+
+        ((Major << 14) | (Minor << 7) | SubMinor)
+
+    Major: 18-bit field (max 262143), Minor / SubMinor: 7-bit each (max 127).
+    For "16.0.0": (16 << 14) | 0 | 0 = 0x40000.
+    """
     parts = (version or "0").split(".")
     while len(parts) < 3:
         parts.append("0")
     major, minor, sub = (int(parts[i]) for i in range(3))
+    if minor > 0x7F or sub > 0x7F:
+        raise SystemExit(f"OS version {version!r} components exceed 7-bit limit")
     return (major << 14) | (minor << 7) | sub
 
 
 def _encode_spl(spl: str) -> int:
-    """KeymasterClient.c-style YYYYMM int. e.g. '2026-04-01' -> 202604 (decimal)."""
+    """Bootloader-level SPL encoding from VerifiedBoot.c::ParseFooterSecPatch:
+
+        ((Day << 11) | ((Year - 2000) << 4) | Month)
+
+    Day: 5-bit (1..31), Year-since-2000: 7-bit (2000..2127), Month: 4-bit (1..12).
+    For "2026-04-01": (1 << 11) | (26 << 4) | 4 = 0x9A4.
+
+    TZ on canoe re-encodes this back to YYYYMMDD for the CSR's boot_patch_level
+    field, so both directions of the round-trip have to use this exact formula
+    or the CSR comes out with garbage values (e.g. 21181202 from a 202604 input).
+    """
     m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", spl or "")
     if not m:
-        raise SystemExit(f"unrecognized security patch format: {spl!r}")
-    year, month, _ = (int(g) for g in m.groups())
-    return year * 100 + month
+        raise SystemExit(f"unrecognized security patch format: {spl!r} (expected YYYY-MM-DD)")
+    year, month, day = (int(g) for g in m.groups())
+    if year < 2000 or year > 2127:
+        raise SystemExit(f"year {year} out of bootloader-encodable range (2000-2127)")
+    if month < 1 or month > 12:
+        raise SystemExit(f"month {month} out of range")
+    if day < 1 or day > 31:
+        raise SystemExit(f"day {day} out of range")
+    return (day << 11) | ((year - 2000) << 4) | month
 
 
 def _format_digest(digest: bytes) -> str:
@@ -206,7 +231,7 @@ def main() -> int:
         f"#define KM_OVERRIDE_COLOR            0u   /* GREEN */\n"
         f"#define KM_OVERRIDE_IS_UNLOCKED      0u   /* locked */\n"
         f"#define KM_OVERRIDE_SYSTEM_VERSION   0x{os_ver:x}u\n"
-        f"#define KM_OVERRIDE_SYSTEM_SPL       {spl}u\n"
+        f"#define KM_OVERRIDE_SYSTEM_SPL       0x{spl:X}u\n"
         "\n"
         "#endif /* KEYMASTER_OVERRIDES_GENERATED_H */\n"
     )
@@ -215,7 +240,7 @@ def main() -> int:
     print(f"  RoT digest    = {rot_digest.hex()}")
     print(f"  Pubkey digest = {pubkey_digest.hex()}")
     print(f"  OS version    = {os_ver_str!r} -> 0x{os_ver:x}")
-    print(f"  SPL           = {spl_str!r} -> {spl}")
+    print(f"  SPL           = {spl_str!r} -> 0x{spl:X}")
     return 0
 
 

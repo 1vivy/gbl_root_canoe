@@ -43,10 +43,19 @@
     0xca, 0x37, 0xef, 0x62, 0x18, 0xe5, 0x66, 0xc7
 #endif
 
-/* GREEN BootState PublicKey = SHA256(AVBPubKey) without IsUnlocked byte —
- * matches KeymasterClient.c:386-388 in external/edk2-uefi.lnx.5.0.r10-rel.
- * NB: TZ on this device does not strictly validate this field, so the
- * earlier value (== KM_OVERRIDE_ROT_DIGEST) also worked empirically. */
+/* GREEN BootState PublicKey = SHA256(AVB pubkey) without the IsUnlocked
+ * byte appended. Matches KeymasterClient.c:386-388 in the upstream Qualcomm
+ * tree (external/edk2-uefi.lnx.5.0.r10-rel/QcomModulePkg/Library/avb/) and
+ * the value the OEM bootloader natively emits in the kernel cmdline as
+ * `oplus.avbkeysha256=8d897f62...3853bb` (confirmed against the known-good
+ * efisp-mod snapshot 2026-04-27 16:21 in backups/rkp_known_good_*).
+ *
+ * History: v13 had this set equal to KM_OVERRIDE_ROT_DIGEST (= SHA256(pubkey
+ * || 0x00)); v14 changed to upstream-correct; debugging an RKP HTTP 403 we
+ * briefly reverted in v16. Both values produce the same end-state behavior
+ * on this device (the known-good build with this upstream-correct value
+ * also 403s under the same Google-side per-chip RKP throttle), so we
+ * standardize on the upstream-correct form. */
 #ifndef KM_OVERRIDE_PUBKEY_DIGEST
 #define KM_OVERRIDE_PUBKEY_DIGEST \
     0x8d, 0x89, 0x7f, 0x62, 0x49, 0x2e, 0xa6, 0x17, \
@@ -65,16 +74,33 @@
 #define KM_OVERRIDE_IS_UNLOCKED      0u
 #endif
 
-/* OS version encoded as ((Major << 14) | (Minor << 7) | SubMinor). 0x40000 = 16.0.0. */
+/* OS version in the bootloader-level encoding from
+ * VerifiedBoot.c::ParseFooterOsVersion:
+ *
+ *     OsVersion = (Major << 14) | (Minor << 7) | SubMinor
+ *
+ * Major up to 18 bits, Minor / SubMinor 7 bits each. For "16.0.0":
+ * (16 << 14) | 0 | 0 = 0x40000. */
 #ifndef KM_OVERRIDE_SYSTEM_VERSION
-#define KM_OVERRIDE_SYSTEM_VERSION   0x40000u
+#define KM_OVERRIDE_SYSTEM_VERSION   0x40000u  /* 16.0.0 */
 #endif
 
-/* SPL encoded as decimal YYYY * 100 + MM (AOSP KM_TAG_OS_PATCHLEVEL format).
- * 202604 = 2026-04. NB: TZ on this device doesn't strictly validate SPL —
- * the earlier 0x9A4 (= 2468) worked too. */
+/* SPL in the bootloader-level encoding from VerifiedBoot.c::ParseFooterSecPatch
+ * in external/edk2-uefi.lnx.5.0.r10-rel/QcomModulePkg/Library/avb/:
+ *
+ *     SPL = (Day << 11) | ((Year - 2000) << 4) | Month
+ *
+ * For "2026-04-01": (1 << 11) | (26 << 4) | 4 = 0x9A4.
+ *
+ * TZ on canoe re-encodes this back to YYYYMMDD for the CSR's
+ * boot_patch_level field, so the encoding has to round-trip through this
+ * formula. Feeding TZ a value in the wrong domain (e.g. AOSP YYYYMM
+ * 202604) makes TZ produce nonsense like boot_patch_level=21181202 in
+ * the CSR — which is what triggered Google RKP HTTP 403 in v14.
+ *
+ * Use tools/ota_to_overrides.py to compute this for a different OTA. */
 #ifndef KM_OVERRIDE_SYSTEM_SPL
-#define KM_OVERRIDE_SYSTEM_SPL       202604u
+#define KM_OVERRIDE_SYSTEM_SPL       0x9A4u   /* 2026-04-01 */
 #endif
 
 /* ---- Override blobs consumed by qseecom_hook.h ---- */
