@@ -95,7 +95,17 @@ patch_hooks: clean
 	./tools/extractfv ./images/abl.img -o ./dist
 	rm ./tools/extractfv
 	mv ./dist/LinuxLoader.efi ./dist/ABL_original.efi
-	gcc -DDISABLE_PATCH_2 -DDISABLE_PATCH_3 -DDISABLE_PATCH_4 -DDISABLE_PATCH_5 -DDISABLE_PATCH_6 -DDISABLE_PATCH_7 -DDISABLE_PATCH_8 -DDISABLE_PATCH_9 -o tools/patch_abl tools/patch_abl.c
+	# Static-hook flow: patch 1 (EFISP recursion fix) + patch 7
+	# (patch_orange_state_screen — OnePlus/OPPO orange-screen
+	# suppression). Patches 2-6, 8, 9 are obsolete here because the
+	# runtime QSEECOM/SCM hooks do that work at the protocol boundary;
+	# stacking the in-binary lockstate rewrites with the hook spoof
+	# creates conflicting writes. images/abl.img is expected to be a
+	# 703-OTA ABL (canoe), where patch 7's matcher is known to fire.
+	gcc -DDISABLE_PATCH_2 -DDISABLE_PATCH_3 -DDISABLE_PATCH_4 \
+	    -DDISABLE_PATCH_5 -DDISABLE_PATCH_6 -DDISABLE_PATCH_8 \
+	    -DDISABLE_PATCH_9 \
+	    -o tools/patch_abl tools/patch_abl.c
 	./tools/patch_abl ./dist/ABL_original.efi ./dist/ABL.efi > ./dist/patch_log.txt
 	rm tools/patch_abl
 	cat ./dist/patch_log.txt

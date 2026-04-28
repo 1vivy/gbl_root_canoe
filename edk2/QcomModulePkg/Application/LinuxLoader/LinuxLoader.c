@@ -1108,23 +1108,22 @@ LoadAblFromPartition (CHAR8 **OutBuffer, UINT32 *OutSize)
 #define UEFI
 #endif
 #include "../../../../tools/patchlib.h"
+#endif
+/* UEFI macro and hook headers live outside the AUTO_PATCH_ABL gate.
+ * Both the static path (BootEfiImage of the xxd-baked payload) and the
+ * runtime path (LoadAblFromPartition + PatchBuffer + BootEfiImage) use
+ * SetChainedAblScanRegion / InstallQseecomHook / InstallScmHook when
+ * ENABLE_KEYMASTER_HOOKS is on. The hook header's `#ifdef UEFI` block
+ * brings in <Protocol/EFIQseecom.h> et al, so we ensure UEFI is set
+ * before pulling them in. */
+#ifndef UEFI
+#define UEFI
+#endif
 #ifdef ENABLE_KEYMASTER_HOOKS
 #include "../../../../tools/qseecom_hook.h"
 #include "../../../../tools/scm_hook.h"
 #endif
-#endif
 STATIC VOID LoadIntegratedEfi(VOID){
-#ifndef AUTO_PATCH_ABL
-    BootEfiImage(dist_ABL_efi,dist_ABL_efi_len);
-#else
-    CHAR8* buffer;
-    UINT32 size;
-    LoadAblFromPartition(&buffer, &size);
-    if(!PatchBuffer(buffer, size)) {
-        PRINT(L"LoadIntegratedEfi: Failed to patch buffer\n");
-        FreePool(buffer);
-        return;
-    }
 #ifdef ENABLE_KEYMASTER_HOOKS
     {
         EFI_STATUS HookStatus = InstallQseecomHook();
@@ -1139,6 +1138,17 @@ STATIC VOID LoadIntegratedEfi(VOID){
         }
     }
 #endif
+#ifndef AUTO_PATCH_ABL
+    BootEfiImage(dist_ABL_efi,dist_ABL_efi_len);
+#else
+    CHAR8* buffer;
+    UINT32 size;
+    LoadAblFromPartition(&buffer, &size);
+    if(!PatchBuffer(buffer, size)) {
+        PRINT(L"LoadIntegratedEfi: Failed to patch buffer\n");
+        FreePool(buffer);
+        return;
+    }
     BootEfiImage(buffer, size);
 #endif
 }
