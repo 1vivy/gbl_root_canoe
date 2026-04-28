@@ -200,6 +200,9 @@
     !if $(DISABLE_PRINT) == 1
       GCC:*_*_*_CC_FLAGS = -DDISABLE_PRINT
   !endif
+    !if $(DISABLE_PRINT_2) == 1
+      GCC:*_*_*_CC_FLAGS = -DDISABLE_PRINT_2
+  !endif
   !if $(WEAR_OS)
       GCC:*_*_*_CC_FLAGS = -DWEAR_OS
   !endif
