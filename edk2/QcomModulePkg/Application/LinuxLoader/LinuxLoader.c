@@ -1168,8 +1168,8 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       DEBUG ((EFI_D_ERROR, "Unable to read allow unlock value: %r\n", Status));
     } else if (!IsAllowUnlock) {
       DEBUG ((EFI_D_WARN, "Allow unlock is disabled; keeping superfastboot key window available\n"));
-      Print(L"Overriding allow unlock; keeping superfastboot key window and flashing available.\n");
-      Print(L"Please check if OEM unlocking is toggled on in Developer Settings! Document and report to author.\n");
+      //Print(L"Overriding allow unlock; keeping superfastboot key window and flashing available.\n");
+      //Print(L"Please check if OEM unlocking is toggled on in Developer Settings! Document and report to author.\n");
     }
 #else
     Status = EFI_SUCCESS;
