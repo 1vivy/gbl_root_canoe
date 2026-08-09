@@ -3377,40 +3377,6 @@ PublishGetVarPartitionInfo (
   }
   return RetStatus;
 }
-EFI_STATUS
-ReadAllowUnlockValue (UINT32 *IsAllowUnlock)
-{
-  EFI_STATUS Status;
-  EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
-  EFI_HANDLE *Handle = NULL;
-  UINT8 *Buffer;
-
-  Status = PartitionGetInfo ((CHAR16 *)L"frp", &BlockIo, &Handle);
-  if (Status != EFI_SUCCESS)
-    return Status;
-
-  if (!BlockIo)
-    return EFI_NOT_FOUND;
-
-  Buffer = AllocateZeroPool (BlockIo->Media->BlockSize);
-  if (!Buffer) {
-    DEBUG ((EFI_D_ERROR, "Failed to allocate memory for unlock value \n"));
-    return EFI_OUT_OF_RESOURCES;
-  }
-
-  Status = BlockIo->ReadBlocks (BlockIo, BlockIo->Media->MediaId,
-                                BlockIo->Media->LastBlock,
-                                BlockIo->Media->BlockSize, Buffer);
-  if (Status != EFI_SUCCESS)
-    goto Exit;
-
-  /* IsAllowUnlock value stored at the LSB of last byte*/
-  *IsAllowUnlock = Buffer[BlockIo->Media->BlockSize - 1] & 0x01;
-
-Exit:
-  FreePool (Buffer);
-  return Status;
-}
 
 /* Registers all Stock commands, Publishes all stock variables
  * and partitiion sizes. base and size are the respective parameters
@@ -3540,17 +3506,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
     FastbootRegister (cmd_list[i].name, cmd_list[i].cb);
     FastbootRegister ("reboot-recovery", CmdRebootRecovery);
     FastbootRegister ("reboot-fastboot", CmdRebootFastboot);
-  
-
-  // Read Allow Ulock Flag
-  Status = ReadAllowUnlockValue (&IsAllowUnlock);
-  DEBUG ((EFI_D_VERBOSE, "IsAllowUnlock is %d\n", IsAllowUnlock));
-
-  if (Status != EFI_SUCCESS) {
-    DEBUG ((EFI_D_ERROR, "Error Reading FRP partition: %r\n", Status));
-    return Status;
-  }
-
   return EFI_SUCCESS;
 }
 
