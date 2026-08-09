@@ -2,7 +2,9 @@
 
 [中文版](README_zh.md)
 
-`gbl_root_canoe` is an EDK2-based workspace for patching the EFI applications within Qualcomm ABL (Android Bootloader) images. It leverages a GBL (Generic Bootloader Loader) vulnerability to inject custom EFIs, primarily intended for achieving a **Fake Locked Bootloader** state on Snapdragon 8 Gen 5 / 8 Elite (Gen 5) devices to bypass bootloader unlock detection. The patched EFI is typically flashed into the `efisp` partition.
+`gbl_root_canoe` is an EDK2-based workspace for patching the EFI applications within Qualcomm ABL (Android Bootloader) images. It leverages a GBL (Generic Bootloader Loader) vulnerability so the real ABL loads an embedded **superfastboot BDS** off the raw `efisp` partition. The BDS then scans a compatible partition (ext4/fat32) for boot entries and chains to the selected one - primarily to achieve a **Fake Locked Bootloader** state on Snapdragon 8 Gen 5 / 8 Elite (Gen 5) devices to bypass bootloader unlock detection.
+
+`BDS.efi` is written raw to the `efisp` partition; the cracked ABL (`boot.efi`) and the boot entry list (`BOOTENTRIES`) live on the `persist` partition under its `efisp/` directory.
 
 ---
 
@@ -14,27 +16,24 @@ This section is for developers who want to compile the toolkits from source.
 You must be on a **Linux** host to build the project:
 - `gcc` / `clang`, `lld`, `make`, `zip`, `python3`
 - `liblzma-dev` (for compiling `extractfv`)
-- **Android NDK** (Required for `make build_module` to cross-compile tools for Android)
+- **Android NDK** (Required for `make target_magisk_module` to cross-compile tools for Android)
 - **MinGW-w64**
 
 ### Build Targets
 
-**Note:** You **do not** need to provide an `abl.img` to build the distributable toolkits or Magisk module.
+**Note:** You **do not** need to provide an `abl.img` to build the distributable toolkits or module.
 
 - **`make target_toolkit_linux`**
-  Builds the EDK2 native payload (`loader.elf`) and compiles the patching utilities (`extractfv`, `patch_abl`, `elf_inject`, etc.) for Linux.
+  Builds the superfastboot BDS (`BDS.efi`) from the `uefi` submodule and compiles the patching utilities (`extractfv`, `patch_abl`) for Linux.
 
 - **`make target_toolkit_windows`**
-  Similar to `dist_loader`, but cross-compiles the patching utilities into Windows `.exe` programs using MinGW-w64.
+  Same as above, but cross-compiles the utilities into Windows `.exe` programs using MinGW-w64.
 
 - **`make target_magisk_module`**
-  Cross-compiles the patcher tools for Android using your NDK and builds the EDK2 payload.
+  Cross-compiles the patcher tools for Android using your NDK, builds the BDS, and packages everything as a KernelSU/Magisk module.
 
 - **`make target_toolkit_android`**
-  Produces a standalone Android arm64 toolkit (`toolkit_android.zip`) with Android-native binaries for on-device use outside of the Magisk module.
-
-- **`make target_generic_efi`**
-  Embeds the patch tools, aiming to be universal across multiple device models. However, high-version compatibility is poor, and it is gradually being deprecated.
+  Produces a standalone Android arm64 toolkit (`toolkit_android.zip`) with Android-native binaries for on-device use outside of the module.
 
 ---
 
@@ -42,39 +41,36 @@ You must be on a **Linux** host to build the project:
 
 For more detailed instructions, please refer to the [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki).
 
-### 1. Using the Magisk Module (On-Device)
+### 1. Using the Module (On-Device)
 
-The Magisk module is designed to run directly on your rooted Android device.
+The module is designed to run directly on your rooted Android device.
 
 **Requirements:**
 - Device must be Snapdragon 8 Gen 5 / 8 Elite (Gen 5).
 - Bootloader must be unlocked.
 - Kernel must NOT have Baseband Guard.
+- The ABL on the `abl` partition must contain the GBL vulnerability. If it does not, flash an older ABL with the vulnerability first (the cracked `boot.efi` does not need to match the ABL on the `abl` partition).
 
 **Installation & Usage:**
-When flashing the Magisk module via a root manager (like KernelSU, Magisk, or APatch), the customized script will interact with you using the volume keys:
-- **Volume Up (First-time installation):** The script automatically extracts the live `.abl` image, patches it, and flashes the patched file directly to `/dev/block/by-name/efisp`. After this finishes, you must reboot into Recovery mode and **format Data**. Once booted, install this module again (selecting Volume Down the second time) to complete the installation.
-- **Volume Down (OTA retention or post-format):** Used for retaining the BL version after an OTA update. Before updating OTA, use the module to automatically downgrade ABL, then reboot the system.
+When flashing the module via a root manager (KernelSU, Magisk, or APatch), the script interacts with you using the volume keys:
+- **Volume Up (First-time installation):** The script extracts the current-slot `.abl`, cracks it into `boot.efi`, places `boot.efi` / `LinuxLoader.efi` / `BOOTENTRIES` into `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`. After this, reboot into Recovery and **format Data**. Once booted, install this module again (Volume Down the second time) to complete the installation.
+- **Volume Down (OTA retention or post-format):** Installs the OTA-update patch. After each OTA, open the module WebUI and flash again to retain the BL version.
 
 ### 2. Using the PC Toolkits (Linux / Windows)
 
 If you downloaded the `target_toolkit_linux` or `target_toolkit_windows` zip files:
 1. Extract the toolkit zip on your PC.
 2. Place your device's stock `abl.img` inside the `images/` (or `images\`) directory of the toolkit.
-3. **Linux:** Run `bash build.sh` (or `make build`). **Windows:** Run `build.bat`.
-4. The scripts will extract, patch, and inject the custom payload, outputting the modified file `ABL_with_superfastboot.efi`. (Check the output logs; if it says "Warning: Failed to patch ABL GBL", the device is not vulnerable and ABL needs to be downgraded).
+3. **Linux:** Run `bash build.sh`. **Windows:** Run `build.bat`.
+4. The script extracts and cracks the ABL, outputting `ABL.efi` (fake re-lock) and `ABL_original.efi` (original). `BDS.efi` is bundled. Check `patch_log.txt` - if it says "Warning: Failed to patch ABL GBL", the ABL lacks the vulnerability and the `abl` partition must be downgraded to an older ABL with it.
 
-### 3. Using Pre-patched EFIs
-Download a specific release version that contains the phone model or codename in its filename. Use `ABL_with_superfastboot.efi` or `ABL.efi` from the package to boot or flash via `fastboot` commands (e.g., `fastboot flash efisp ABL_with_superfastboot.efi`). It is highly recommended to use the version with `superfastboot` to preserve fallback fastboot-flashing capabilities.
+Then complete the install manually (see the [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki) for full steps): copy `ABL.efi` into `/mnt/vendor/persist/efisp/`, create `BOOTENTRIES`, `sync`, and flash `BDS.efi` to `efisp` (`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`).
 
-### 4. Using Generic EFIs (Deprecated)
-Download `generic_superfastboot.efi` and perform the relevant flashing steps. Due to compatibility issues and instability across different OEM device features, it might perform poorly on certain models or OS versions, and is **no longer recommended**.
+### 3. OTA Upgrade
+Before rebooting for an OTA update, use the module WebUI to flash and retain the old ABL version. "Update efisp" is enabled by default; for a major version upgrade keep it on, otherwise the device may get stuck on the first boot screen.
 
-### 5. OTA Upgrade
-Before rebooting for an OTA update, use the module to flash and retain the old ABL version. If you are doing a major version upgrade, it is recommended to check "Update efisp", otherwise the device might get stuck on the initial boot screen.
-
-### 6. Superfastboot Usage Instructions
-When OEM Unlocking is enabled and the white warning text appears on boot, you must press **Volume Down** to enter Superfastboot mode.
+### 4. Superfastboot Usage Instructions
+When OEM Unlocking is enabled and the white warning text appears on boot, press **Volume Down** to enter Superfastboot mode (the BDS).
 Common commands include:
 - **Temp-boot an EFI file (without flashing)**: `fastboot boot xxx.efi`
 - **Lock and Unlock (BL related)**:
@@ -89,8 +85,8 @@ Common commands include:
   - `fastboot reboot recovery`
   - `fastboot reboot`
 
-### 7. Explanation of Different Variants
-1. `ABL.efi`: The patched ABL.
-2. `ABL_original`: For developers to analyze in IDA, used for error reporting. **DO NOT flash**.
-3. `ABL_with_superfastboot.efi`: The patched ABL integrated with superfastboot.
-4. `loader.elf`: The superfastboot binary file. Unlinked to EFI format, it is meant to link with toolbox. Cannot be flashed directly.
+### 5. File Reference
+1. `BDS.efi`: The superfastboot BDS, flashed raw to the `efisp` partition.
+2. `boot.efi` / `ABL.efi`: The cracked ABL with fake re-lock (the module names it `boot.efi`; the toolkit names it `ABL.efi`), placed on `persist` under `efisp/`.
+3. `LinuxLoader.efi` / `ABL_original.efi`: The original unpatched ABL (the `ANDROID_NOFAKEBL` entry). For analysis; do not flash to `efisp`.
+4. `BOOTENTRIES`: Boot entry list, format `<name>:<path relative to efisp/>`.

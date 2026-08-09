@@ -14,7 +14,7 @@ const i18n = {
   zh: {
     pageTitle: "假回锁 - BL Flasher",
     ksuWebUI: "KernelSU Module WebUI",
-    heroDesc: "自动识别当前活动槽位，如果新版本存在GBL漏洞，则跳过BL刷写，同时将BL相关镜像刷写到另一个槽位，并按需求自动修补新版ABL到efisp",
+    heroDesc: "自动识别当前活动槽位，若新版本存在GBL漏洞则跳过BL刷写；将BL镜像刷写到另一槽位，并将破解ABL放入persist的efisp目录、BDS刷入efisp分区",
     slotStatus: "槽位状态",
     refresh: "刷新",
     currentSlot: "当前槽位",
@@ -23,9 +23,8 @@ const i18n = {
     taskStatus: "任务状态",
     flash: "刷写到另一槽位",
     clearLog: "清空日志",
-    updateEfisp: "更新 efisp（默认关闭，仅勾选时执行）",
-    superfastboot: "安装 superfastboot（将 loader 注入到 ABL，需同时勾选\"更新 efisp\"）",
-    debugMode: "调试模式（仅处理不刷写，生成的文件保存在 tmp 目录）",
+    updateEfisp: "更新 efisp（默认开启）",
+    debugMode: "调试模式（仅处理不刷写，efisp 目录使用模块 tmp/efisp）",
     warning: "刷写对象是 bootloader 相关分区，风险较高。开始前请确认镜像与机型严格匹配。",
     imageMap: "镜像映射",
     partition: "分区名",
@@ -42,7 +41,6 @@ const i18n = {
     waitingStatus: "等待检测",
     slotUnknown: "槽位未知",
     logWaiting: "等待日志输出...",
-    toastNeedEfisp: "安装 superfastboot 需要同时勾选'更新 efisp'",
     toastRunning: "已有刷写任务在运行",
     toastStartDebug: "调试任务已启动",
     toastStartFlash: "刷写任务已启动",
@@ -57,7 +55,6 @@ const i18n = {
     modalStep1Normal: (slot) => `第一次确认: 将把当前槽位的 BL 分区拷贝到槽位 ${slot}`,
     modalStep2: "第二次确认: 这是高风险写入操作，错误操作可能导致目标槽位无法启动。确认后将立即开始刷写。",
     withEfisp: "，并更新 efisp。",
-    withSfb: "，并更新 efisp（包含 superfastboot loader）。",
     noEfisp: "，不更新 efisp。",
     confirmSlot: "请确认槽位无误。",
     taskRunning:"任务运行中",
@@ -69,7 +66,7 @@ const i18n = {
   en: {
     pageTitle: "Fake Lock - BL Flasher",
     ksuWebUI: "KernelSU Module WebUI",
-    heroDesc: "Auto-detect active slot. Skip BL flash if new build has GBL exploit. Flash BL images to inactive slot and patch ABL to efisp as needed.",
+    heroDesc: "Auto-detect active slot. Skip BL flash if new build has GBL exploit. Flash BL images to inactive slot, place the cracked ABL in persist's efisp dir and flash the BDS to the efisp partition.",
     slotStatus: "Slot Status",
     refresh: "Refresh",
     currentSlot: "Current Slot",
@@ -78,9 +75,8 @@ const i18n = {
     taskStatus: "Task Status",
     flash: "Flash To Other Slot",
     clearLog: "Clear Log",
-    updateEfisp: "Update efisp (off by default)",
-    superfastboot: "Install superfastboot (inject loader to ABL, requires 'Update efisp')",
-    debugMode: "Debug Mode (process only, no flash, files in tmp)",
+    updateEfisp: "Update efisp (on by default)",
+    debugMode: "Debug Mode (process only, no flash; efisp dir uses module tmp/efisp)",
     warning: "Flashing bootloader partitions is high risk. Verify images match your device before starting.",
     imageMap: "Image Mapping",
     partition: "Partition",
@@ -97,7 +93,6 @@ const i18n = {
     waitingStatus: "Waiting",
     slotUnknown: "Slot Unknown",
     logWaiting: "Waiting for log...",
-    toastNeedEfisp: "superfastboot requires 'Update efisp' enabled",
     toastRunning: "Flash task is already running",
     toastStartDebug: "Debug task started",
     toastStartFlash: "Flash task started",
@@ -112,7 +107,6 @@ const i18n = {
     modalStep1Normal: (slot) => `1st Confirm: Copy BL partition from current slot to ${slot}`,
     modalStep2: "2nd Confirm: This is a high-risk write operation. Wrong action may brick the target slot. Flash will start immediately after confirm.",
     withEfisp: ", and update efisp.",
-    withSfb: ", and update efisp (with superfastboot loader).",
     noEfisp: ", efisp not updated.",
     confirmSlot: "Please confirm slot is correct.",
     taskRunning:"Task Running",
@@ -141,7 +135,6 @@ const elements = {
   nextConfirmButton: document.getElementById("nextConfirmButton"),
   cancelConfirmButton: document.getElementById("cancelConfirmButton"),
   updateEfispCheckbox: document.getElementById("updateEfispCheckbox"),
-  installSuperfastbootCheckbox: document.getElementById("installSuperfastbootCheckbox"),
   debugModeCheckbox: document.getElementById("debugModeCheckbox"),
   pageTitle: document.getElementById("pageTitle")
 };
@@ -159,7 +152,6 @@ function applyLanguage(lang) {
   document.querySelector("#lblImageCount").textContent = t.imageCount;
   document.querySelector("#lblTaskStatus").textContent = t.taskStatus;
   document.querySelector("#lblUpdateEfisp").textContent = t.updateEfisp;
-  document.querySelector("#lblSuperfastboot").textContent = t.superfastboot;
   document.querySelector("#lblDebugMode").textContent = t.debugMode;
   document.querySelector("#lblWarning").textContent = t.warning;
   document.querySelector("#lblImageMap").textContent = t.imageMap;
@@ -338,14 +330,11 @@ function openConfirmModal() {
   const t = i18n[state.lang];
   const tar = state.status?.TARGET_SLOT || "?";
   const efisp = elements.updateEfispCheckbox?.checked;
-  const sfb = elements.installSuperfastbootCheckbox?.checked;
   const dbg = elements.debugModeCheckbox?.checked;
-  if (sfb && !efisp) { toast(t.toastNeedEfisp); return; }
   state.confirmStep = 1;
   let msg = dbg ? t.modalStep1Debug : t.modalStep1Normal(tar);
   if (!dbg) {
-    if (efisp) msg += sfb ? t.withSfb : t.withEfisp;
-    else msg += t.noEfisp;
+    msg += efisp ? t.withEfisp : t.noEfisp;
     msg += t.confirmSlot;
   }
   elements.confirmText.textContent = msg;
@@ -370,11 +359,8 @@ function handleConfirmProgress() {
 function startFlash() {
   const t = i18n[state.lang];
   const efisp = elements.updateEfispCheckbox?.checked;
-  const sfb = elements.installSuperfastbootCheckbox?.checked;
   const dbg = elements.debugModeCheckbox?.checked;
-  let mode = "skip-efisp";
-  if (dbg) mode = sfb ? "debug-with-superfastboot" : "debug";
-  else if (efisp) mode = sfb ? "update-efisp-with-superfastboot" : "update-efisp";
+  let mode = dbg ? "debug" : (efisp ? "update-efisp" : "skip-efisp");
   try {
     const out = parseKeyValueOutput(runScript("start", mode));
     if (out.ALREADY_RUNNING) toast(t.toastRunning);

@@ -20,12 +20,16 @@ if [ "$LANG" = "zh" ]; then
   TEXT_NO_SLOT="无法识别当前槽位"
   TEXT_NO_TARGET_SLOT="无法计算目标槽位"
   TEXT_FLASHING="正在将镜像刷写到槽位"
-  TEXT_DEBUG_MODE="调试模式：仅处理不刷写"
+  TEXT_DEBUG_MODE="调试模式：仅处理不刷写，efisp 目录使用模块 tmp/efisp"
   TEXT_DEBUG_DONE="调试完成，文件保存在"
-  TEXT_DEBUG_ABL_DONE="调试完成，ABL 已提取到"
   TEXT_DEBUG_FAILED="调试过程中出错"
   TEXT_EXTRACT_FAILED="ABL 提取失败"
   TEXT_PATCH_FAILED="补丁应用失败"
+  TEXT_PERSIST_NOT_MOUNTED="persist 分区未挂载到 /mnt/vendor/persist"
+  TEXT_EFISP_MKDIR_FAILED="创建 efisp 启动目录失败"
+  TEXT_EFISP_WRITE_FAILED="写入 efisp 启动文件失败"
+  TEXT_BACKUP_BOOT="已备份旧的 boot.efi"
+  TEXT_EFISP_FILES_OK="efisp 启动项已更新"
   TEXT_EFISP_SET_RW_FAILED="efisp 分区设置可写失败"
   TEXT_EFISP_FLASH_FAILED="efisp 刷写失败"
   TEXT_EFISP_FLASH_OK="efisp 刷写完成"
@@ -33,11 +37,6 @@ if [ "$LANG" = "zh" ]; then
   TEXT_GBL_VULN_SKIP="已跳过BL刷写"
   TEXT_GBL_DETECT_FAILED="漏洞检测失败，继续流程"
   TEXT_NO_GBL_VULN="未检测到GBL漏洞"
-  TEXT_INJECT_SFB="注入 superfastboot..."
-  TEXT_NO_LOADER_ELF="loader.elf 不存在"
-  TEXT_INJECT_FAILED="注入失败"
-  TEXT_GENFW_FAILED="转换失败"
-  TEXT_INJECT_OK="注入完成"
   TEXT_EFISP_WARN="efisp 刷写失败，继续刷入BL"
   TEXT_SET_RW_FAILED="分区设置可写失败"
   TEXT_FLASH_PART="刷写"
@@ -51,12 +50,16 @@ else
   TEXT_NO_SLOT="Cannot detect current slot"
   TEXT_NO_TARGET_SLOT="Cannot detect target slot"
   TEXT_FLASHING="Flashing to slot"
-  TEXT_DEBUG_MODE="Debug Mode"
+  TEXT_DEBUG_MODE="Debug Mode: process only, no flash; efisp dir uses module tmp/efisp"
   TEXT_DEBUG_DONE="Debug done"
-  TEXT_DEBUG_ABL_DONE="ABL extracted"
   TEXT_DEBUG_FAILED="Debug error"
   TEXT_EXTRACT_FAILED="ABL extract failed"
   TEXT_PATCH_FAILED="Patch failed"
+  TEXT_PERSIST_NOT_MOUNTED="persist is not mounted at /mnt/vendor/persist"
+  TEXT_EFISP_MKDIR_FAILED="efisp boot dir create failed"
+  TEXT_EFISP_WRITE_FAILED="efisp boot file write failed"
+  TEXT_BACKUP_BOOT="Backed up old boot.efi"
+  TEXT_EFISP_FILES_OK="efisp boot entries updated"
   TEXT_EFISP_SET_RW_FAILED="efisp setrw failed"
   TEXT_EFISP_FLASH_FAILED="efisp flash failed"
   TEXT_EFISP_FLASH_OK="efisp flash ok"
@@ -64,11 +67,6 @@ else
   TEXT_GBL_VULN_SKIP="Skipped BL flash"
   TEXT_GBL_DETECT_FAILED="Vuln check failed"
   TEXT_NO_GBL_VULN="No GBL vuln found"
-  TEXT_INJECT_SFB="Injecting superfastboot"
-  TEXT_NO_LOADER_ELF="loader.elf missing"
-  TEXT_INJECT_FAILED="Inject failed"
-  TEXT_GENFW_FAILED="Convert failed"
-  TEXT_INJECT_OK="Injected"
   TEXT_EFISP_WARN="efisp failed, continue BL"
   TEXT_SET_RW_FAILED="setrw failed"
   TEXT_FLASH_PART="Flashing"
@@ -81,6 +79,9 @@ fi
 
 RUNTIME_DIR="$MODDIR/tmp"
 BY_NAME_DIR="/dev/block/by-name"
+PERSIST_MNT="/mnt/vendor/persist"
+EFISP_DIR="$PERSIST_MNT/efisp"
+BDS_EFI="$MODDIR/BDS.efi"
 IMAGE_NAMES="abl"
 LOG_FILE="$RUNTIME_DIR/flash.log"
 STATE_FILE="$RUNTIME_DIR/state"
@@ -140,26 +141,85 @@ current_pid() {
   return 1
 }
 
-patch_efisp() {
-  is_sfb=$2
-  is_debug=$3
+# The ext4 persist partition is auto-mounted by init at /mnt/vendor/persist
+# (read-write), and the superfastboot BDS reads its \efisp directory as the boot
+# root. Refuse to proceed when it is not mounted: writing under an unmounted
+# /mnt/vendor/persist would land on the root filesystem and the BDS would never
+# see it. In debug mode the boot root is staged under the module tmp dir
+# instead, so this check does not apply.
+persist_mounted() { grep -q " $PERSIST_MNT " /proc/mounts; }
+
+# Write the BOOTENTRIES file the superfastboot BDS parses. Each line is
+# "<name>:<path relative to the \efisp boot root>"; the BDS lists only entries
+# whose file actually exists, so ANDROID_BACKUP stays hidden until a previous
+# boot.efi has been backed up.
+write_bootentries_to() {
+  cat > "$1/BOOTENTRIES" <<'EOF'
+ANDROID:boot.efi
+ANDROID_BACKUP:boot_backup.efi
+ANDROID_NOFAKEBL:LinuxLoader.efi
+EOF
+}
+
+# Extract and crack the target-slot ABL, then lay out the \efisp boot root
+# (boot.efi = cracked ABL, boot_backup.efi = the previous one, LinuxLoader.efi =
+# the original unpatched ABL) and flash the BDS itself to the raw efisp
+# partition. The ABL loaded by the real bootloader is the BDS; the BDS then
+# chains to one of these entries.
+#
+# In debug mode the boot root is staged under $RUNTIME_DIR/efisp and nothing is
+# written to a partition.
+#
+# Returns 2 when the GBL vulnerability is present (the real ABL will load the
+# BDS off efisp, so no slot copy is needed), 0 when it is absent (fall back to
+# copying the ABL to the inactive slot), or 1 on error.
+update_efisp() {
+  abl=$1
+  is_debug=$2
   rm -f $RUNTIME_DIR/*
-  $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$1" >> "$LOG_FILE" 2>&1
+  $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$abl" >> "$LOG_FILE" 2>&1
   $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> $RUNTIME_DIR/patch.log 2>&1
   cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"
   [ -f $RUNTIME_DIR/patched.efi ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
 
-  if [ "$is_sfb" = "with-superfastboot" ]; then
-    write_log "$TEXT_INJECT_SFB"
-    [ -f "$MODDIR/loader.elf" ] || { write_log "$TEXT_NO_LOADER_ELF"; return 1; }
-    $MODDIR/bin/elf_inject "$MODDIR/loader.elf" $RUNTIME_DIR/patched.efi $RUNTIME_DIR/injected.dll >> "$LOG_FILE" 2>&1
-    [ -f $RUNTIME_DIR/injected.dll ] || { write_log "$TEXT_INJECT_FAILED"; return 1; }
-    $MODDIR/bin/GenFw -e UEFI_APPLICATION -o $RUNTIME_DIR/patched.efi $RUNTIME_DIR/injected.dll >> "$LOG_FILE" 2>&1
-    write_log "$TEXT_INJECT_OK"
+  # The optional GBL patch (efisp -> nulls rename) succeeds only when the ABL
+  # actually loads efisp; its warning is therefore the vuln indicator.
+  if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
+    gbl_vuln=0
+  else
+    gbl_vuln=1
   fi
 
-  if [ "$is_debug" = "debug" ]; then
+  if [ "$is_debug" = "yes" ]; then
     write_log "$TEXT_DEBUG_MODE"
+    efisp_target=$RUNTIME_DIR/efisp
+  else
+    efisp_target=$EFISP_DIR
+    if ! persist_mounted; then
+      write_log "$TEXT_PERSIST_NOT_MOUNTED"
+      return 1
+    fi
+  fi
+
+  mkdir -p "$efisp_target" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
+
+  # Keep the previous boot.efi around as a one-level backup. Skipped in debug,
+  # where the staging dir is freshly emptied.
+  if [ "$is_debug" != "yes" ] && [ -f "$efisp_target/boot.efi" ]; then
+    mv "$efisp_target/boot.efi" "$efisp_target/boot_backup.efi" >> "$LOG_FILE" 2>&1
+    write_log "$TEXT_BACKUP_BOOT"
+  fi
+
+  if ! cp $RUNTIME_DIR/patched.efi "$efisp_target/boot.efi" >> "$LOG_FILE" 2>&1 || \
+     ! cp $RUNTIME_DIR/LinuxLoader.efi "$efisp_target/LinuxLoader.efi" >> "$LOG_FILE" 2>&1; then
+    write_log "$TEXT_EFISP_WRITE_FAILED"
+    return 1
+  fi
+  write_bootentries_to "$efisp_target"
+  sync
+  write_log "$TEXT_EFISP_FILES_OK"
+
+  if [ "$is_debug" = "yes" ]; then
     return 0
   fi
 
@@ -167,13 +227,14 @@ patch_efisp() {
     write_log "$TEXT_EFISP_SET_RW_FAILED"
     return 1
   fi
-  if ! dd if=$RUNTIME_DIR/patched.efi of="$BY_NAME_DIR/efisp" bs=4M conv=fsync >> "$LOG_FILE" 2>&1; then
+  if ! dd if="$BDS_EFI" of="$BY_NAME_DIR/efisp" bs=4M conv=fsync >> "$LOG_FILE" 2>&1; then
     write_log "$TEXT_EFISP_FLASH_FAILED"
     return 1
   fi
   sync
   write_log "$TEXT_EFISP_FLASH_OK"
-  if ! grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
+
+  if [ "$gbl_vuln" = "1" ]; then
     write_log "$TEXT_GBL_VULN"
     return 2
   fi
@@ -220,20 +281,10 @@ USER_LANG=$LANG"
 
 run_flash() {
   mode=$1
-  sfb=no
   debug=no
-  if [ "$mode" = "update-efisp-with-superfastboot" ]; then
-    mode=update-efisp
-    sfb=with-superfastboot
-  fi
   if [ "$mode" = "debug" ]; then
     debug=yes
-    mode=skip-efisp
-  fi
-  if [ "$mode" = "debug-with-superfastboot" ]; then
-    debug=yes
     mode=update-efisp
-    sfb=with-superfastboot
   fi
 
   ensure_runtime
@@ -248,30 +299,21 @@ run_flash() {
   [ -z "$target_slot" ] && { write_state error "$TEXT_NO_TARGET_SLOT"; exit 1; }
   write_state running "$TEXT_FLASHING $target_slot"
 
+  abl=$(partition_path abl "$target_slot")
+
   if [ "$debug" = "yes" ]; then
-    abl=$(partition_path abl "$target_slot")
-    if [ "$mode" = "update-efisp" ]; then
-      patch_efisp "$abl" $sfb yes
-      if [ $? -eq 0 ]; then
-        write_state success "$TEXT_DEBUG_DONE"
-      else
-        write_state error "$TEXT_DEBUG_FAILED"
-      fi
+    update_efisp "$abl" yes
+    if [ $? -eq 0 ]; then
+      write_state success "$TEXT_DEBUG_DONE $RUNTIME_DIR"
     else
-      $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$abl" >> "$LOG_FILE" 2>&1
-      if [ -f $RUNTIME_DIR/LinuxLoader.efi ]; then
-        write_state success "$TEXT_DEBUG_ABL_DONE"
-      else
-        write_state error "$TEXT_EXTRACT_FAILED"
-      fi
+      write_state error "$TEXT_DEBUG_FAILED"
     fi
     exit 0
   fi
 
   efisp_fail=0
-  abl=$(partition_path abl "$target_slot")
   if [ "$mode" = "update-efisp" ]; then
-    patch_efisp "$abl" $sfb no
+    update_efisp "$abl" no
     res=$?
     if [ $res -eq 1 ]; then
       efisp_fail=1

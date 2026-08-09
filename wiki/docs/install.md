@@ -1,74 +1,85 @@
-# Release Download & Flashing Guide
+# Installation Guide
 
-## 1. Download the Release
+## Boot Flow
 
-There are two types of releases available:
+The real ABL loads an embedded **superfastboot BDS** off the raw `efisp` partition (via the GBL vulnerability). The BDS then scans a compatible partition for boot entries and chains to the selected one.
 
-### 🔒 Device-Specific Version (Recommended)
+On this device the boot root is the `persist` partition (ext4, auto-mounted at `/mnt/vendor/persist`), under its `efisp/` directory:
 
-The filename includes your **device model**, **codename**, and **corresponding ABL version**. It contains the following files:
+| File | Purpose |
+|------|---------|
+| `boot.efi` | Cracked ABL with fake re-lock (`ANDROID` entry) |
+| `boot_backup.efi` | Previous `boot.efi` (`ANDROID_BACKUP` entry) |
+| `LinuxLoader.efi` | Original unpatched ABL (`ANDROID_NOFAKEBL` entry) |
+| `BOOTENTRIES` | Boot entry list, format `<name>:<path relative to efisp/>` |
 
-| Filename | Description |
-|----------|-------------|
-| `ABL_with_superfastboot.efi` | Includes Super Fastboot (Recommended) |
-| `ABL.efi` | Without Super Fastboot |
-| `ABL_original.efi` | Original backup — **Do NOT flash** |
+`BDS.efi` is written raw to the `efisp` partition (not into a filesystem).
 
-### 🌐 Generic Patch Version
+## 1. Prerequisite: GBL Vulnerability
 
-- `generic_superfastboot.efi`
+The ABL on the `abl` partition must contain the **GBL vulnerability** so it loads the BDS off `efisp`. If your ABL lacks it, flash an **older ABL version** that has the vulnerability to the `abl` partition first. The cracked `boot.efi` does **not** need to match the ABL on the `abl` partition.
 
-> **It is recommended to use the device-specific version and prefer the `superfastboot` variant.**
+## 2. Install Method
 
+| Method | Description |
+|--------|-------------|
+| **KernelSU module (Recommended)** | Automated: extracts & cracks the current ABL, lays out the boot root, and flashes the BDS |
+| **Toolkit (Manual)** | For traditional users: run `build.sh` / `build.bat` on your `abl.img`, then place files and flash manually |
 
-## 2. Select Operation Mode
+## 3. Module Install (KernelSU)
 
-| Mode | Applicable Scenario |
+### 3.1 Fresh install
+
+1. Install the module via KernelSU. When prompted, press **Vol+ (YES)**.
+   The module extracts & cracks the current-slot ABL, places `boot.efi` / `LinuxLoader.efi` / `BOOTENTRIES` into `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`.
+2. Reboot to **Recovery** and **format data**.
+   > ⚠️ The first reboot may crash — simply retry.
+3. Reinstall the module and press **Vol- (NO)** to install the OTA-update patch.
+4. Reboot the system.
+
+### 3.2 After an OTA
+
+After each OTA, open the module WebUI and flash again to keep the BL version (re-cracks the new ABL to the inactive slot / refreshes the boot root).
+
+## 4. Toolkit Install (Manual)
+
+> The toolkit is manual-install only; superfb does not provide automated installation for toolkit users.
+
+1. Place your `abl.img` in the toolkit `images/` folder and run `build.sh` (Android/Linux) or `build.bat` (Windows). Outputs:
+   - `ABL.efi` — cracked ABL (fake re-lock)
+   - `ABL_original.efi` — original unpatched ABL
+   - `BDS.efi` — bundled
+2. Create the folder `/mnt/vendor/persist/efisp` (e.g. via MT Manager).
+3. Copy `ABL.efi` into it (optionally `ABL_original.efi` as the no-fake-BL entry).
+4. Create `BOOTENTRIES` with:
+   ```
+   ANDROID:ABL.efi
+   ANDROID_NOFAKEBL:ABL_original.efi
+   ```
+5. `sync`
+6. Flash `BDS.efi` to the `efisp` partition:
+   ```
+   dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M
+   ```
+   If the build log shows `Failed to patch ABL GBL`, downgrade the `abl` partition to an older ABL with the vulnerability before booting.
+
+## 5. Re-lock Mode
+
+| Mode | Applicable scenario |
 |------|---------------------|
-| **Re-lock (True Re-lock)** | Devices with official unlock support (e.g., Twoplus), or international Dami devices that passed official unlock review |
-| **Fake Re-lock** | Devices with force-unlocked bootloader, or devices requiring official fastboot as fallback |
+| **True re-lock** | Devices with official unlock support (e.g. OnePlus), or international devices that passed official unlock review |
+| **Fake re-lock** | Force-unlocked devices, or devices needing official fastboot as fallback |
 
-
-## 3. Fake Re-lock Procedure
-
-### 3.1 Currently in a **Locked + Rooted** State
-
-Follow these steps in order:
-
-1. Root the device via **KernelSU (KSU)**
-2. Flash the `efisp` partition using the `dd` command
-3. Use KSU to **persistently install the patch to the partition**
-4. Enter **Super Fastboot** and perform the unlock operation
-   - ✅ **Dami devices**: Data will **NOT be wiped** at this step
-   - ⚠️ **OnePlus devices**: Must perform a **deep test unlock**; data will be lost, but Root access is retained
-
-### 3.2 Currently in an **Unlocked** State
-
-Follow these steps in order:
-
-1. Obtain Root access normally
-2. Enter **official fastboot** and flash the `efisp` partition
-3. Reboot into Recovery and perform a format/wipe> ⚠️ The first reboot may crash — simply retry
-
-
-## 4. True Re-lock Procedure
-
-### 4.1 Currently in a **Locked** State
-
-Follow **Section 3.1**, but **skip the unlock step**.
-
-### 4.2 Currently in an **Unlocked** State
-
-Follow **Section 3.2**, then additionally perform the **re-lock operation**.
-
-> ✅ **It is recommended to use Super Fastboot for re-locking. Dami devices will not lose data during re-lock.**
-
+- **Fake re-lock**: the cracked `boot.efi` already provides the fake lock.
+- **True re-lock**: boot into the BDS (Super Fastboot) and perform the re-lock operation.
+  - ✅ Some devices (e.g. Dami): re-lock does **not** wipe data.
+  - ⚠️ OnePlus: requires a **deep test unlock**; data will be lost, but root is retained.
 
 ## ⚠️ Important Warnings
 
-> **Before performing any operation, make sure to verify the following:**
+> Before performing any operation, verify the following:
 
-- 📌 Check whether any partition **other than those containing `boot`** has been modified — restore them if so
-- 📌 Partitions verified by `init`: **AVB still enabled** must not be modified
-- 📌 The `dtbo` partition verified by ABL **must not be modified** in true re-lock mode
-- ❌ **Do NOT install TWRP** — doing so will result in **data corruption**
+- 📌 Restore any partition **other than those containing `boot`** that you modified.
+- 📌 Partitions verified by `init`: **AVB must remain enabled** — do not modify.
+- 📌 The `dtbo` partition verified by ABL **must not be modified** in true re-lock mode.
+- ❌ **Do NOT install TWRP** — it will cause **data corruption**.

@@ -1,10 +1,8 @@
 ### Submodules
 dependences of the project
 # uefi
-superfastboot, for better testing
+builds the superfastboot BDS (BDS.efi), flashed raw to the efisp partition
 # ablfvextractor
-extract abl
-# elflinker
-links abl with superfb
+extracts the ABL firmware volume (extractfv)
 # patcher
-core patching engine
+core patching engine (patch_abl)
