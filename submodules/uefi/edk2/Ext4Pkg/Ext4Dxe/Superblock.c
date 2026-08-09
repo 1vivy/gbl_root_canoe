@@ -18,7 +18,12 @@ STATIC CONST UINT32  gSupportedIncompatFeat =
   EXT4_FEATURE_INCOMPAT_64BIT | EXT4_FEATURE_INCOMPAT_DIRDATA |
   EXT4_FEATURE_INCOMPAT_FLEX_BG | EXT4_FEATURE_INCOMPAT_FILETYPE |
   EXT4_FEATURE_INCOMPAT_EXTENTS | EXT4_FEATURE_INCOMPAT_LARGEDIR |
-  EXT4_FEATURE_INCOMPAT_MMP;
+  EXT4_FEATURE_INCOMPAT_MMP | EXT4_FEATURE_INCOMPAT_RECOVER;
+// RECOVER ("needs journal recovery") is accepted because this driver is
+// read-only: it never replays the journal, so a filesystem left dirty by a
+// power cut still has its already-committed data readable. A bootloader must
+// boot after an unclean shutdown, and rejecting RECOVER would make every dirty
+// persist partition unrecognisable.
 
 // TODO: Add meta_bg support
 
@@ -169,7 +174,18 @@ Ext4OpenSuperblock (
   }
 
   Partition->NumberBlocks = Ext4MakeBlockNumberFromHalfs (Partition, Sb->s_blocks_count, Sb->s_blocks_count_hi);
-  Partition->NumberBlockGroups = DivU64x32 (Partition->NumberBlocks, Sb->s_blocks_per_group);
+  // Block group count is ceil(NumberBlocks / blocks_per_group), not floor: a
+  // filesystem whose block count doesn't fill a whole group still has that
+  // partial group (e.g. a 46 MiB persist image = 11776 blocks < 32768 bpg is
+  // one group, not zero).  Floor division yielded 0 for any sub-128MiB image,
+  // so every inode lookup failed the bounds check in Ext4ReadInode and the
+  // mount returned EFI_VOLUME_CORRUPTED.  This matches the kernel's
+  // ext4_div_round_up(blocks_count - first_data_block, blocks_per_group); for
+  // 4KiB blocks first_data_block is 0, so the simpler form is equivalent.
+  Partition->NumberBlockGroups = DivU64x32 (
+                                   Partition->NumberBlocks + Sb->s_blocks_per_group - 1,
+                                   Sb->s_blocks_per_group
+                                   );
 
   DEBUG ((
     EFI_D_INFO,
