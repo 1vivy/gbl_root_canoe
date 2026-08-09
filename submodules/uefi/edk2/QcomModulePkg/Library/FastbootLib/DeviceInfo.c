@@ -141,8 +141,6 @@ EFI_STATUS
 SetDeviceUnlockValue (UINT32 Type, BOOLEAN State)
 {
   EFI_STATUS Status = EFI_SUCCESS;
-  EFI_GUID Ptype = gEfiMiscPartitionGuid;
-  MemCardType CardType = UNKNOWN;
 
   switch (Type) {
   case UNLOCK:
