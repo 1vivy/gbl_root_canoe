@@ -1560,6 +1560,7 @@ GetActiveSlot (Slot *ActiveSlot)
     /* Check for first boot and set default slot */
     /* For First boot all A/B attributes for the slot would be 0 */
     UINT64 BootPriority = 0;
+    UINT64 RetryCount = 0;
     struct PartitionEntry *SlotA = GetBootPartitionEntry (&Slots[0]);
     if (SlotA == NULL) {
       DEBUG ((EFI_D_ERROR, "GetActiveSlot: First Boot: No boot partition "
@@ -1570,6 +1571,8 @@ GetActiveSlot (Slot *ActiveSlot)
 
     BootPriority = (SlotA->PartEntry.Attributes & PART_ATT_PRIORITY_VAL) >>
                    PART_ATT_PRIORITY_BIT;
+    RetryCount = (SlotA->PartEntry.Attributes & PART_ATT_MAX_RETRY_COUNT_VAL) >>
+                 PART_ATT_MAX_RETRY_CNT_BIT;
 
     if ((SlotA->PartEntry.Attributes & PART_ATT_ACTIVE_VAL) == 0 &&
         (SlotA->PartEntry.Attributes & PART_ATT_SUCCESSFUL_VAL) == 0 &&

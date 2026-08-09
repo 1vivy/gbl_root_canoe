@@ -1,0 +1,72 @@
+## @file
+#  Static-library flavour of the Ext4Dxe EXT4 file system driver.
+#
+#  Identical sources to Ext4Dxe.inf, but exported as a library class so the
+#  LinuxLoader application can link the driver in and invoke Ext4EntryPoint ()
+#  itself, the same way it hand-starts the embedded FAT stack, instead of
+#  relying on a separately dispatched DXE driver.  Note the deliberate absence
+#  of UefiDriverEntryPoint: the consuming application already supplies
+#  _ModuleEntryPoint.
+#
+#  The driver is read-only in practice: Ext4WriteFile () returns
+#  EFI_WRITE_PROTECTED and no WriteBlocks/WriteDisk path exists, which is what
+#  the boot menu wants for mounting the persist partition.
+#
+#  Copyright (c) 2021 Pedro Falcato
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = Ext4DxeLib
+  FILE_GUID                      = 8E2A1C73-4B59-4E6A-9C1D-2F5A77B4E0A1
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = Ext4DxeLib
+
+[Sources]
+  Ext4Dxe.c
+  Partition.c
+  DiskUtil.c
+  Superblock.c
+  BlockGroup.c
+  Inode.c
+  Directory.c
+  Extents.c
+  File.c
+  Collation.c
+  Crc32c.c
+  Crc16.c
+
+[Packages]
+  EmbeddedPkg/EmbeddedPkg.dec
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiRuntimeServicesTableLib
+  UefiBootServicesTableLib
+  MemoryAllocationLib
+  BaseMemoryLib
+  BaseLib
+  UefiLib
+  DebugLib
+  PcdLib
+  OrderedCollectionLib
+  TimeBaseLib
+
+[Guids]
+  gEfiFileInfoGuid
+  gEfiFileSystemInfoGuid
+  gEfiFileSystemVolumeLabelInfoIdGuid
+
+[Protocols]
+  gEfiDiskIoProtocolGuid
+  gEfiDiskIo2ProtocolGuid
+  gEfiBlockIoProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiUnicodeCollationProtocolGuid
+  gEfiUnicodeCollation2ProtocolGuid
+
+[Pcd]
+  gEfiMdePkgTokenSpaceGuid.PcdUefiVariableDefaultLang
+  gEfiMdePkgTokenSpaceGuid.PcdUefiVariableDefaultPlatformLang

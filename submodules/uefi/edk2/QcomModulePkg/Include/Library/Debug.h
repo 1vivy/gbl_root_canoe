@@ -38,13 +38,26 @@
 #include <Library/DebugLib.h>
 
 extern UINT64 GetTimerCountms (VOID);
+extern BOOLEAN TargetBuildVariantUser (VOID);
 
 #undef DEBUG
 
 #define _GET_PRINT_LEVEL(Print_level, ...) Print_level
 #define GET_PRINT_LEVEL(expression) _GET_PRINT_LEVEL expression
 
-
+#if !defined (MDEPKG_NDEBUG)
+  #define DEBUG(Expression)                                     \
+    do {                                                        \
+      if (DebugPrintEnabled ()) {                               \
+        if (!TargetBuildVariantUser ()) {                       \
+          UINT32 PrintLevel = GET_PRINT_LEVEL (Expression);        \
+          _DEBUG ((PrintLevel, "[%lu]", GetTimerCountms ()));  \
+        }                                                       \
+        _DEBUG (Expression);                                    \
+      }                                                         \
+    } while (FALSE)
+#else
   #define DEBUG(Expression)
+#endif
 
 #endif

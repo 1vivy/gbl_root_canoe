@@ -846,3 +846,12 @@ UINT32 BoardSoftSkuId (VOID)
 {
   return platform_board_info.SoftSkuId;
 }
+
+BOOLEAN TargetBuildVariantUser (VOID)
+{
+#ifdef USER_BUILD_VARIANT
+  return TRUE;
+#else
+  return FALSE;
+#endif
+}

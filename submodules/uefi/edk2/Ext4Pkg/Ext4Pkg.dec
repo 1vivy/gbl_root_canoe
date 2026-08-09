@@ -1,0 +1,17 @@
+## @file
+#  Ext4 Package
+#
+#  This package provides the Ext4 file system driver. The driver itself is
+#  consumed by LinuxLoader as a static library (see Ext4Dxe/Ext4DxeLib.inf),
+#  so this .dec only carries the package declaration; the driver exports no
+#  GUIDs, PCDs or library classes of its own.
+#
+#  Copyright (c) 2021 Pedro Falcato
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = Ext4Pkg
+  PACKAGE_GUID                   = 6B4BF998-668B-46D3-BCFA-971F99F8708C
+  PACKAGE_VERSION                = 0.1

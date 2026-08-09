@@ -1,0 +1,45 @@
+## @file
+#  Static-library flavour of DiskIoDxe.
+#
+#  Same sources as DiskIoDxe.inf, exported as a library class so a UEFI
+#  application can link it in and call InitializeDiskIo () directly.  The FAT
+#  driver binds against Disk I/O, so an application that carries its own FAT
+#  stack needs this producer too when the platform firmware does not ship one.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = DiskIoDxeLib
+  FILE_GUID                      = 7A54B9E3-6D28-4C1F-9B72-5E3D8A214C60
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = DiskIoDxeLib
+
+[Sources]
+  ComponentName.c
+  DiskIo.h
+  DiskIo.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  UefiBootServicesTableLib
+  MemoryAllocationLib
+  BaseMemoryLib
+  BaseLib
+  UefiLib
+  DebugLib
+  PcdLib
+
+[Protocols]
+  gEfiDiskIoProtocolGuid
+  gEfiDiskIo2ProtocolGuid
+  gEfiBlockIoProtocolGuid
+  gEfiBlockIo2ProtocolGuid
+
+[Pcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdDiskIoDataBufferBlockNum

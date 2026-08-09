@@ -87,6 +87,20 @@
   BaseMemoryLib|MdePkg/Library/BaseMemoryLib/BaseMemoryLib.inf
   LzmaDecompressLib|MdeModulePkg/Library/LzmaCustomDecompressLib/LzmaCustomDecompressLib.inf
 
+  # FAT stack linked into LinuxLoader so the boot menu can read FAT32 volumes
+  # even where the platform firmware publishes nothing above Block I/O. These
+  # are the stock EDK2 drivers, re-exported as library classes.
+  UnicodeCollationEngLib|MdeModulePkg/Universal/Disk/UnicodeCollation/EnglishDxe/EnglishLib.inf
+  DiskIoDxeLib|MdeModulePkg/Universal/Disk/DiskIoDxe/DiskIoLib.inf
+  FatDxeLib|FatPkg/EnhancedFatDxe/FatLib.inf
+  # Read-only EXT4 driver, linked in alongside the FAT stack so the boot menu
+  # can mount the ext4 persist partition. Started by hand from SfbStartFatStack,
+  # exactly like the three above; it binds to Disk I/O handles the connect pass
+  # has already built and installs Simple File System on the ext4 partition.
+  Ext4DxeLib|Ext4Pkg/Ext4Dxe/Ext4DxeLib.inf
+  OrderedCollectionLib|MdePkg/Library/BaseOrderedCollectionRedBlackTreeLib/BaseOrderedCollectionRedBlackTreeLib.inf
+  TimeBaseLib|EmbeddedPkg/Library/TimeBaseLib/TimeBaseLib.inf
+
 
 [LibraryClasses.ARM]
   ArmLib|ArmPkg/Library/ArmLib/ArmBaseLib.inf
@@ -260,6 +274,17 @@
   gEfiMdePkgTokenSpaceGuid.PcdDebugPropertyMask|0x2f
   gEfiMdePkgTokenSpaceGuid.PcdDebugPrintErrorLevel|0x80000042
   gEfiMdePkgTokenSpaceGuid.PcdReportStatusCodePropertyMask|0x06
+
+# Consumed by the embedded FAT stack. Pinned here rather than left to the
+# package defaults because the platform resolves PcdLib to the null instance,
+# so every PCD these drivers touch has to resolve at build time.
+  gEfiMdePkgTokenSpaceGuid.PcdUefiVariableDefaultLang|"eng"
+  gEfiMdePkgTokenSpaceGuid.PcdUefiVariableDefaultPlatformLang|"en-US"
+  gEfiMdeModulePkgTokenSpaceGuid.PcdDiskIoDataBufferBlockNum|64
+
+[PcdsFeatureFlag.common]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdUnicodeCollationSupport|TRUE
+  gEfiMdeModulePkgTokenSpaceGuid.PcdUnicodeCollation2Support|TRUE
 
 ################################################################################
 #

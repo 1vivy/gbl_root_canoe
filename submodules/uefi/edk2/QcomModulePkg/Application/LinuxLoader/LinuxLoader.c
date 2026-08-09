@@ -69,7 +69,6 @@
 
 #include "AutoGen.h"
 #include "BootStats.h"
-#include "KeyPad.h"
 #include "LinuxLoaderLib.h"
 #include <FastbootLib/FastbootMain.h>
 #include <Library/DeviceInfo.h>
@@ -82,6 +81,8 @@
 #include <Library/HypervisorMvCalls.h>
 #include <Library/UpdateCmdLine.h>
 #include <Protocol/EFICardInfo.h>
+#include <Protocol/SimpleTextIn.h>
+#include "SuperFbMenu.h"
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -91,80 +92,6 @@
 VOID BootIntoHibernationImage (BootInfo *Info,
                                BOOLEAN *SetRotAndBootStateAndVBH);
 #endif
-
-STATIC BOOLEAN BootIntoFastboot = FALSE;
-STATIC BOOLEAN BootIntoRecovery = FALSE;
-UINT64 FlashlessBootImageAddr = 0;
-STATIC DeviceInfo DevInfo;
-
-
-STATIC VOID
-SetDefaultAudioFw ()
-{
-  CHAR8 AudioFW[MAX_AUDIO_FW_LENGTH];
-  STATIC CHAR8* Src;
-  STATIC CHAR8* AUDIOFRAMEWORK;
-  STATIC UINT32 Length;
-  EFI_STATUS Status;
-
-  AUDIOFRAMEWORK = GetAudioFw ();
-  Status = ReadAudioFrameWork (&Src, &Length);
-  if ((AsciiStrCmp (Src, "audioreach") == 0) ||
-                              (AsciiStrCmp (Src, "elite") == 0) ||
-                              (AsciiStrCmp (Src, "awe") == 0)) {
-    if (Status == EFI_SUCCESS) {
-      if (AsciiStrLen (Src) == 0) {
-        if (AsciiStrLen (AUDIOFRAMEWORK) > 0) {
-          AsciiStrnCpyS (AudioFW, MAX_AUDIO_FW_LENGTH, AUDIOFRAMEWORK,
-          AsciiStrLen (AUDIOFRAMEWORK));
-          StoreAudioFrameWork (AudioFW, AsciiStrLen (AUDIOFRAMEWORK));
-        }
-      }
-    }
-    else {
-      DEBUG ((EFI_D_ERROR, "AUDIOFRAMEWORK is NOT updated length =%d, %a\n",
-      Length, AUDIOFRAMEWORK));
-    }
-  }
-  else {
-    if (Src != NULL) {
-      Status =
-      ReadWriteDeviceInfo (READ_CONFIG, (VOID *)&DevInfo, sizeof (DevInfo));
-      if (Status != EFI_SUCCESS) {
-        DEBUG ((EFI_D_ERROR, "Unable to Read Device Info: %r\n", Status));
-       }
-      gBS->SetMem (DevInfo.AudioFramework, sizeof (DevInfo.AudioFramework), 0);
-      gBS->CopyMem (DevInfo.AudioFramework, AUDIOFRAMEWORK,
-                                      AsciiStrLen (AUDIOFRAMEWORK));
-      Status =
-      ReadWriteDeviceInfo (WRITE_CONFIG, (VOID *)&DevInfo, sizeof (DevInfo));
-      if (Status != EFI_SUCCESS) {
-        DEBUG ((EFI_D_ERROR, "Unable to store audio framework: %r\n", Status));
-        return;
-      }
-    }
-  }
-}
-
-BOOLEAN IsABRetryCountUpdateRequired (VOID)
-{
- BOOLEAN BatteryStatus;
-
- /* Check power off charging */
- TargetPauseForBatteryCharge (&BatteryStatus);
-
- /* Do not decrement bootable retry count in below states:
-* fastboot, fastbootd, charger, recovery
-*/
- if ((BatteryStatus &&
- IsChargingScreenEnable ()) ||
- BootIntoFastboot ||
- BootIntoRecovery) {
-  return FALSE;
- }
-  return TRUE;
-}
-
 
 /**
   Linux Loader Application EntryPoint
@@ -184,6 +111,7 @@ BOOLEAN IsABRetryCountUpdateRequired (VOID)
  * @return TRUE       检测到音量下键
  * @return FALSE      超时未检测到
  */
+#ifndef TEST_ADAPTER
 STATIC UINT8
 WaitForVolumeDownKey (IN UINT32 TimeoutMs)
 {
@@ -266,6 +194,99 @@ WaitForVolumeDownKey (IN UINT32 TimeoutMs)
 
   return KeyDetected;
 }
+#endif /* !TEST_ADAPTER */
+
+#ifdef TEST_ADAPTER
+/*
+ * 开机时扫描音量上键（WaitForVolumeDownKey 的镜像）。
+ *
+ * 先清空输入缓冲区，再用 WaitForEvent 在超时窗口内等待一次真正的音量上键。
+ * 关键在于：非目标按键（尤其是开机时按住、随后松开的电源键）会被跳过并继续
+ * 等待，而不是结束扫描——所以电源键既不会被误当成输入，也不会遮挡音量键。
+ *
+ * @param TimeoutMs   扫描窗口（毫秒）
+ * @return TRUE(1)     检测到音量上键
+ * @return FALSE(0)    超时未检测到
+ */
+STATIC UINT8
+WaitForVolumeUpKey (IN UINT32 TimeoutMs)
+{
+  EFI_STATUS    Status;
+  EFI_EVENT     TimerEvent;
+  EFI_EVENT     WaitList[2];
+  UINTN         EventIndex;
+  EFI_INPUT_KEY Key;
+  UINT8         KeyDetected = 0;
+
+  /* 先清空输入缓冲区 */
+  gST->ConIn->Reset (gST->ConIn, FALSE);
+
+  /* 创建定时器事件 */
+  Status = gBS->CreateEvent (
+                  EVT_TIMER,
+                  TPL_CALLBACK,
+                  NULL,
+                  NULL,
+                  &TimerEvent
+                  );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "CreateEvent Timer failed: %r\n", Status));
+    return FALSE;
+  }
+
+  /* 设置定时器：一次性触发，单位为 100ns */
+  Status = gBS->SetTimer (
+                  TimerEvent,
+                  TimerRelative,
+                  (UINT64)TimeoutMs * 10000   /* ms -> 100ns */
+                  );
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "SetTimer failed: %r\n", Status));
+    gBS->CloseEvent (TimerEvent);
+    return FALSE;
+  }
+
+  /* 等待事件列表：按键事件 或 定时器超时 */
+  WaitList[0] = gST->ConIn->WaitForKey;
+  WaitList[1] = TimerEvent;
+
+  while (TRUE) {
+    Status = gBS->WaitForEvent (2, WaitList, &EventIndex);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((EFI_D_ERROR, "WaitForEvent failed: %r\n", Status));
+      break;
+    }
+
+    if (EventIndex == 0) {
+      /* 按键事件触发 */
+      Status = gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
+      if (!EFI_ERROR (Status)) {
+        DEBUG ((EFI_D_INFO, "Key detected: ScanCode=0x%x, UnicodeChar=0x%x\n",
+                Key.ScanCode, Key.UnicodeChar));
+
+        if (Key.ScanCode == SCAN_UP) { /* recovery / boot menu key */
+          /* 检测到音量上键 */
+          KeyDetected = 1;
+          break;
+        }
+        /* 不是目标按键（电源键/音量下键等），忽略并继续等待 */
+        DEBUG ((EFI_D_INFO, "Not volume up key, continue waiting...\n"));
+      }
+    } else {
+      /* 定时器超时 */
+      DEBUG ((EFI_D_INFO, "Timeout: %d ms expired, no volume up key\n",
+              TimeoutMs));
+      break;
+    }
+  }
+
+  /* 清理定时器事件 */
+  gBS->CloseEvent (TimerEvent);
+
+  return KeyDetected;
+}
+#endif /* TEST_ADAPTER */
+
 #ifndef TEST_ADAPTER
 STATIC EFI_STATUS
 BootEfiImage (VOID *Data, UINT32 Size)
@@ -883,7 +904,9 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
 
   EFI_STATUS Status;
+#ifndef TEST_ADAPTER
   UINT32 IsAllowUnlock = FALSE;
+#endif
 
    /* Update stack check guard with random value for better security */
   /* SilentMode Boot */
@@ -917,7 +940,14 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
   Status = DeviceInfoInit ();
   if (Status != EFI_SUCCESS) {
     DEBUG ((EFI_D_ERROR, "Initialize the device info failed: %r\n", Status));
+#ifndef TEST_ADAPTER
     goto stack_guard_update_default;
+#endif
+    /*
+     * The boot menu product carries on regardless: presenting the menu is its
+     * entire job, and device info is only needed once fastboot is entered.
+     * Bailing out here would leave the user with a blank screen instead.
+     */
   }
 
   Status = EnumeratePartitions ();
@@ -925,23 +955,67 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "LinuxLoader: Could not enumerate partitions: %r\n",
             Status));
+#ifndef TEST_ADAPTER
     goto stack_guard_update_default;
+#endif
+    /* Leave the partition table alone; it was never populated. */
+  } else {
+    UpdatePartitionEntries ();
   }
 
+#ifdef TEST_ADAPTER
+  {
+    UINT8  MenuRequested;
 
-  UpdatePartitionEntries ();
-  /*Check for multislot boot support*/
-#ifndef TEST_ADAPTER
-    Status = ReadAllowUnlockValue (&IsAllowUnlock);
+    /*
+     * Scan for Volume Up held at power-on FIRST, before any other init disturbs
+     * the console input. WaitForVolumeUpKey flushes stale input and then waits
+     * for a genuine Volume Up press, skipping every other key (notably the
+     * power key used to switch the device on) rather than being fooled by it.
+     * Volume Up (the official recovery key slot) opens the boot menu; no Volume
+     * Up within the window launches the saved default entry.
+     */
+    MenuRequested = WaitForVolumeUpKey (3000);
+    DEBUG ((EFI_D_INFO, "SFB: power-on volume-up detected=%u\n", MenuRequested));
+
+    /*
+     * Now bring up the embedded FAT/USB stack so both the default entry and the
+     * menu can see every FAT32 volume, including one on a USB drive.
+     */
+    Status = SfbStartFatStack ();
+    if (EFI_ERROR (Status)) {
+      /* Not fatal: the menu still offers fastboot and the program selector. */
+      DEBUG ((EFI_D_ERROR, "Unable to start the FAT stack: %r\n", Status));
+    }
+
+    if (!MenuRequested) {
+      /* No menu key: boot the saved default. This does not return on success;
+       * it only comes back if there is no saved default or the launch failed,
+       * in which case the menu is shown so the user is never stranded. */
+      SfbLaunchDefaultEntry ();
+    }
+
+    /*
+     * Reached here because the menu was requested, or there was no default to
+     * boot. Announce it and hold briefly so a still-held volume key is released
+     * before the menu takes input, then run the menu. It only returns TRUE when
+     * the user picked fastboot.
+     */
+    SfbShowEnteringMenu ();
+    if (!SfbRunBootMenu ()) {
+      Status = EFI_SUCCESS;
+      goto stack_guard_update_default;
+    }
+
+    SfbShowFastbootMode ();
+    DEBUG ((EFI_D_INFO, "Boot menu requested fastboot\n"));
+  }
 #else
-    IsAllowUnlock = TRUE; // For test adapter, directly set allow unlock to true to enter fastboot
-    Status = EFI_SUCCESS;
-#endif
+  /*Check for multislot boot support*/
+  Status = ReadAllowUnlockValue (&IsAllowUnlock);
   if (Status != EFI_SUCCESS|| !IsAllowUnlock) {
     DEBUG ((EFI_D_ERROR, "Unable to read allow unlock value: %r\n", Status));
-#ifndef TEST_ADAPTER
     LoadIntegratedEfi();
- #endif
     return EFI_SUCCESS;
   }
 
@@ -951,18 +1025,11 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     Print(L"Volume Down key detected, entering Fastboot mode...\n");
   } else {
     DEBUG ((EFI_D_INFO, "No key detected, proceeding with normal boot...\n"));
-#ifndef TEST_ADAPTER
     LoadIntegratedEfi();
-#endif
     return EFI_SUCCESS;
    }
+#endif
   FindPtnActiveSlot ();
-  
-
-  BootIntoFastboot = TRUE;
-
-  SetDefaultAudioFw ();
-
 
 #ifdef AUTO_VIRT_ABL
   DEBUG ((EFI_D_INFO, "Rebooting the device.\n"));

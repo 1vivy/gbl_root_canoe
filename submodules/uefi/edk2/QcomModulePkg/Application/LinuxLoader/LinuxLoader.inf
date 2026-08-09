@@ -72,6 +72,12 @@
 	LinuxLoader.c
 	hibernation/HibernationImageLoader.c
 	hibernation/Jumptokernel.s
+	SuperFbMenu.h
+	SuperFbFat.c
+	SuperFbStore.c
+	SuperFbEntries.c
+	SuperFbMenu.c
+	SuperFbBrowser.c
 
 [Packages]
 	ArmPkg/ArmPkg.dec
@@ -80,6 +86,7 @@
 	ArmPlatformPkg/ArmPlatformPkg.dec
 	MdeModulePkg/MdeModulePkg.dec
 	QcomModulePkg/QcomModulePkg.dec
+	FatPkg/FatPkg.dec
 
 [LibraryClasses]
 	DxeServicesTableLib
@@ -100,6 +107,17 @@
 	StackCanary
 	FastbootLib
 	LzmaDecompressLib
+	PrintLib
+	MemoryAllocationLib
+	UefiRuntimeServicesTableLib
+	# FAT stack carried inside the image: the boot menu starts these by hand
+	# instead of relying on a DXE dispatcher to do it.
+	UnicodeCollationEngLib
+	DiskIoDxeLib
+	FatDxeLib
+	# Read-only EXT4 driver started the same way, to mount the ext4 persist
+	# partition and expose its \efisp directory as a boot volume.
+	Ext4DxeLib
 
 [LibraryClasses.AARCH64]
 
@@ -130,6 +148,9 @@
 	gEfiUfsLU6Guid
 	gEfiUfsLU7Guid
         gEfiNvme0Guid
+	gEfiFileSystemVolumeLabelInfoIdGuid
+	# Identifies the ESP whose tail holds the boot menu's settings.
+	gEfiPartTypeSystemPartGuid
 
 [Protocols]
 	gEfiSimpleTextInputExProtocolGuid
@@ -141,7 +162,11 @@
 	gEfiSimpleFileSystemProtocolGuid
 	gEfiLoadFileProtocolGuid
 	gEfiDiskIoProtocolGuid
+	gEfiPartitionInfoProtocolGuid
 	gEfiUsbIoProtocolGuid
+	# USB host controllers connected at menu start and released before fastboot.
+	gEfiUsb2HcProtocolGuid
+	gEfiPciIoProtocolGuid
 	gEfiPlatformInfoProtocolGuid
 	gEfiChipInfoProtocolGuid
 	gQcomPmicVersionProtocolGuid
@@ -150,6 +175,10 @@
 	gEfiPartitionRecordGuid
 	gEfiResetReasonProtocolGuid
 	gQcomRngProtocolGuid
+	# Patched around FAT32 image launches so the boot menu can run unsigned
+	# loaders on an unlocked device.
+	gEfiSecurityArchProtocolGuid
+	gEfiSecurity2ArchProtocolGuid
 	
 
 [FixedPcd]

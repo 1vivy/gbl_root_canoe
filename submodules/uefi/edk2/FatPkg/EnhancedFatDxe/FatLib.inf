@@ -1,0 +1,71 @@
+## @file
+#  Static-library flavour of the EnhancedFatDxe FAT driver.
+#
+#  Identical sources to Fat.inf, but exported as a library class so a UEFI
+#  application can link the driver in and invoke FatEntryPoint () itself
+#  instead of relying on a separately dispatched DXE driver.  Note the
+#  deliberate absence of UefiDriverEntryPoint: the consuming application
+#  already supplies _ModuleEntryPoint.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = FatDxeLib
+  FILE_GUID                      = 2C6C4C21-1D3B-45A9-8E27-9E4F3B7A55D1
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = FatDxeLib
+
+[Sources]
+  DirectoryCache.c
+  DiskCache.c
+  FileName.c
+  Hash.c
+  DirectoryManage.c
+  ComponentName.c
+  FatFileSystem.h
+  Fat.h
+  ReadWrite.c
+  OpenVolume.c
+  Open.c
+  Misc.c
+  Init.c
+  Info.c
+  FileSpace.c
+  Flush.c
+  Fat.c
+  Delete.c
+  Data.c
+  UnicodeCollation.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiRuntimeServicesTableLib
+  UefiBootServicesTableLib
+  MemoryAllocationLib
+  BaseMemoryLib
+  BaseLib
+  UefiLib
+  DebugLib
+  PcdLib
+
+[Guids]
+  gEfiFileInfoGuid
+  gEfiFileSystemInfoGuid
+  gEfiFileSystemVolumeLabelInfoIdGuid
+
+[Protocols]
+  gEfiDiskIoProtocolGuid
+  gEfiDiskIo2ProtocolGuid
+  gEfiBlockIoProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiUnicodeCollationProtocolGuid
+  gEfiUnicodeCollation2ProtocolGuid
+
+[Pcd]
+  gEfiMdePkgTokenSpaceGuid.PcdUefiVariableDefaultLang
+  gEfiMdePkgTokenSpaceGuid.PcdUefiVariableDefaultPlatformLang

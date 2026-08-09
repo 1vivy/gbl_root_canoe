@@ -1,0 +1,40 @@
+## @file
+#  Static-library flavour of the English Unicode Collation driver.
+#
+#  Same sources as EnglishDxe.inf, exported as a library class so a UEFI
+#  application can link it in and call InitializeUnicodeCollationEng ()
+#  directly.  EnhancedFatDxe refuses to start a volume without a Unicode
+#  Collation (2) producer, so an application carrying its own FAT stack must
+#  supply one when the platform firmware does not.
+#
+#  SPDX-License-Identifier: BSD-2-Clause-Patent
+##
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = UnicodeCollationEngLib
+  FILE_GUID                      = 4F1B9D57-8C3A-4E62-A5D1-13B7F0E9C284
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 1.0
+  LIBRARY_CLASS                  = UnicodeCollationEngLib
+
+[Sources]
+  UnicodeCollationEng.c
+  UnicodeCollationEng.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+
+[LibraryClasses]
+  UefiBootServicesTableLib
+  DebugLib
+  PcdLib
+
+[FeaturePcd]
+  gEfiMdeModulePkgTokenSpaceGuid.PcdUnicodeCollationSupport
+  gEfiMdeModulePkgTokenSpaceGuid.PcdUnicodeCollation2Support
+
+[Protocols]
+  gEfiUnicodeCollationProtocolGuid
+  gEfiUnicodeCollation2ProtocolGuid

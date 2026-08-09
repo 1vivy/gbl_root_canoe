@@ -439,6 +439,7 @@ LoadImageFromPartition (VOID *ImageBuffer, UINT32 *ImageSize, CHAR16 *Pname)
   HandleInfo HandleInfoList[1];
   STATIC UINT32 MaxHandles;
   STATIC UINT32 BlkIOAttrib = 0;
+  UINT64 LoadImageStartTime = GetTimerCountms ();
 
   BlkIOAttrib = BLK_IO_SEL_PARTITIONED_MBR;
   BlkIOAttrib |= BLK_IO_SEL_PARTITIONED_GPT;

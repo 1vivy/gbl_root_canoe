@@ -258,7 +258,6 @@ SetActiveSlot (Slot *NewSlot, BOOLEAN ResetSuccessBit);
 BOOLEAN IsCurrentSlotBootable (VOID);
 EFI_STATUS HandleActiveSlotUnbootable (BOOLEAN ForceBootAlternateSlot);
 EFI_STATUS ClearUnbootable (VOID);
-BOOLEAN IsABRetryCountUpdateRequired (VOID);
 UINT32 PartitionVerifyMibibImage (UINT8 *Image);
 UINT64 GetPartitionSize (EFI_BLOCK_IO_PROTOCOL *BlockIo);
 BOOLEAN IsSlotsUbootable (VOID);
