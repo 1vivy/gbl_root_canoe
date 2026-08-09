@@ -141,7 +141,6 @@ EFI_STATUS
 SetDeviceUnlockValue (UINT32 Type, BOOLEAN State)
 {
   EFI_STATUS Status = EFI_SUCCESS;
-  struct RecoveryMessage Msg;
   EFI_GUID Ptype = gEfiMiscPartitionGuid;
   MemCardType CardType = UNKNOWN;
 
@@ -168,21 +167,6 @@ SetDeviceUnlockValue (UINT32 Type, BOOLEAN State)
 
     DEBUG ((EFI_D_ERROR, "Unable to set the Value: %r", Status));
     return Status;
-  }
-
-  gBS->SetMem ((VOID *)&Msg, sizeof (Msg), 0);
-  Status = AsciiStrnCpyS (Msg.Recovery, sizeof (Msg.Recovery),
-                          RECOVERY_WIPE_DATA, AsciiStrLen (RECOVERY_WIPE_DATA));
-  if (Status == EFI_SUCCESS) {
-    CardType = CheckRootDeviceType ();
-    if (CardType == NAND) {
-      Status = GetNandMiscPartiGuid (&Ptype);
-      if (Status != EFI_SUCCESS) {
-        return Status;
-      }
-    }
-
-    Status = WriteToPartition (&Ptype, &Msg, sizeof (Msg));
   }
 
   return Status;
@@ -223,10 +207,6 @@ STATIC EFI_STATUS
 ResetDeviceStateAndRecovery (UINT32 Type, BOOLEAN State)
 {
   EFI_STATUS Status = EFI_SUCCESS;
-#ifndef AUTO_LVGVM_ABL
-  struct RecoveryMessage Msg;
-  EFI_GUID Ptype = gEfiMiscPartitionGuid;
-#endif
 
   Status = ResetDeviceState ();
   if (Status != EFI_SUCCESS) {
@@ -239,15 +219,6 @@ ResetDeviceStateAndRecovery (UINT32 Type, BOOLEAN State)
     DEBUG ((EFI_D_ERROR, "Unable to set the Value: %r", Status));
     return Status;
   }
-
-#ifndef AUTO_LVGVM_ABL
-  gBS->SetMem ((VOID *)&Msg, sizeof (Msg), 0);
-  Status = AsciiStrnCpyS (Msg.Recovery, sizeof (Msg.Recovery),
-                          RECOVERY_WIPE_DATA, AsciiStrLen (RECOVERY_WIPE_DATA));
-  if (Status == EFI_SUCCESS) {
-    Status = WriteToPartition (&Ptype, &Msg, sizeof (Msg));
-  }
-#endif
 
   return Status;
 }
