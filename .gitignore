@@ -25,6 +25,9 @@ ENV/
 *.efi
 extracted/
 
+# Track abl images in the ablrepo (checked-in artifacts, not build output)
+!ablrepo/**/*.img
+
 # VS Code
 .vscode/
 
