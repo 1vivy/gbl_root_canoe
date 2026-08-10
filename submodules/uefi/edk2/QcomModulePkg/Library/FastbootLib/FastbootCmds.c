@@ -1472,6 +1472,183 @@ CmdDownload (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 }
 
 #ifdef ENABLE_UPDATE_PARTITIONS_CMDS
+STATIC EFI_STATUS
+FetchParseHex (IN CONST CHAR8 *Token, OUT UINT64 *Value)
+{
+  CONST CHAR8 *Cursor = Token;
+
+  if (Cursor[0] == '0' && (Cursor[1] == 'x' || Cursor[1] == 'X'))
+    Cursor += 2;
+  if (*Cursor == '\0')
+    return EFI_INVALID_PARAMETER;
+
+  for (; *Cursor; Cursor++) {
+    if (!((*Cursor >= '0' && *Cursor <= '9') ||
+          (*Cursor >= 'a' && *Cursor <= 'f') ||
+          (*Cursor >= 'A' && *Cursor <= 'F')))
+      return EFI_INVALID_PARAMETER;
+  }
+
+  *Value = AsciiStrHexToUint64 (Token);
+  return EFI_SUCCESS;
+}
+
+/* fetch:<partition>[:<offset>[:<size>]]
+ *
+ * Reads [offset, offset + size) from the named partition and streams it back
+ * to the host. offset and size are hex; when omitted offset defaults to 0 and
+ * size to the rest of the partition. This is read-only - nothing on the device
+ * is modified. The host upload phase (DATA + payload + OKAY) mirrors the
+ * synchronous send used by CmdGetVarAll.
+ */
+STATIC VOID
+CmdFetch (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
+{
+  EFI_STATUS Status;
+  EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
+  EFI_HANDLE *Handle = NULL;
+  CHAR8 FetchArg[MAX_FASTBOOT_COMMAND_SIZE];
+  CHAR16 PartitionName[MAX_GPT_NAME_SIZE];
+  CHAR8 *OffsetStr;
+  CHAR8 *SizeStr;
+  UINT64 ByteOffset = 0;
+  UINT64 RequestSize = 0;
+  UINT64 PartitionSize;
+  UINT64 BlockSize;
+  UINT64 MaxChunk;
+  UINT64 CurrentOffset;
+  UINT64 RemainingBytes;
+  UINT64 BlockOffset;
+  UINT64 SendBytes;
+  UINT64 ReadBytes;
+  VOID *TxBuffer;
+  BOOLEAN SizeGiven = FALSE;
+
+  /* A flash queued by parallel download may still be running; finish it so the
+   * data we read back is consistent, and clear any LUN filter left by flash. */
+  WaitForFlashFinished ();
+  LunSet = FALSE;
+
+  if (arg == NULL || AsciiStrLen (arg) == 0 ||
+      AsciiStrLen (arg) >= sizeof (FetchArg)) {
+    FastbootFail ("Invalid fetch argument");
+    return;
+  }
+  AsciiStrnCpyS (FetchArg, sizeof (FetchArg), arg, AsciiStrLen (arg));
+
+  /* Split "partition[:offset[:size]]". Qualcomm partition names never contain
+   * ':', so a left-to-right split is unambiguous. */
+  OffsetStr = AsciiStrStr (FetchArg, ":");
+  if (OffsetStr != NULL) {
+    *OffsetStr++ = '\0';
+    SizeStr = AsciiStrStr (OffsetStr, ":");
+    if (SizeStr != NULL)
+      *SizeStr++ = '\0';
+
+    if (EFI_ERROR (FetchParseHex (OffsetStr, &ByteOffset))) {
+      FastbootFail ("Invalid fetch offset");
+      return;
+    }
+    if (SizeStr != NULL) {
+      if (EFI_ERROR (FetchParseHex (SizeStr, &RequestSize))) {
+        FastbootFail ("Invalid fetch size");
+        return;
+      }
+      SizeGiven = TRUE;
+    }
+  }
+
+  if (AsciiStrLen (FetchArg) == 0 ||
+      AsciiStrLen (FetchArg) >= MAX_GPT_NAME_SIZE) {
+    FastbootFail ("Invalid partition name");
+    return;
+  }
+  AsciiStrToUnicodeStr (FetchArg, PartitionName);
+
+  Status = PartitionGetInfo (PartitionName, &BlockIo, &Handle);
+  if (Status != EFI_SUCCESS) {
+    FastbootFail ("Partition not found");
+    return;
+  }
+  if (BlockIo == NULL || BlockIo->Media == NULL) {
+    FastbootFail ("Partition is corrupted");
+    return;
+  }
+
+  PartitionSize = GetPartitionSize (BlockIo);
+  BlockSize = BlockIo->Media->BlockSize;
+  if (PartitionSize == 0 || BlockSize == 0 || BlockSize > USB_BUFFER_SIZE) {
+    FastbootFail ("Invalid partition geometry");
+    return;
+  }
+
+  if (ByteOffset > PartitionSize) {
+    FastbootFail ("Fetch offset exceeds partition");
+    return;
+  }
+  if (!SizeGiven) {
+    RequestSize = PartitionSize - ByteOffset;
+  } else if (CHECK_ADD64 (ByteOffset, RequestSize) ||
+             ByteOffset + RequestSize > PartitionSize) {
+    FastbootFail ("Fetch range exceeds partition");
+    return;
+  }
+  /* The DATA phase carries an 8-digit (32-bit) length, so a single fetch can
+   * return at most MAX_UINT32 bytes; larger reads must be split by offset. */
+  if (RequestSize > MAX_UINT32) {
+    FastbootFail ("Fetch size too large, use offset/size");
+    return;
+  }
+
+  /* Largest block-aligned read that fits the transmit buffer. */
+  MaxChunk = USB_BUFFER_SIZE - (USB_BUFFER_SIZE % BlockSize);
+
+  TxBuffer = GetFastbootDeviceData ()->gTxBuffer;
+  AsciiSPrint (TxBuffer, MAX_RSP_SIZE, "DATA%08x", (UINT32)RequestSize);
+  Status = GetFastbootDeviceData ()->UsbDeviceProtocol->Send (
+      ENDPOINT_OUT, AsciiStrLen (TxBuffer), TxBuffer);
+  if (Status != EFI_SUCCESS) {
+    FastbootFail ("Failed to send fetch response");
+    return;
+  }
+  WaitForTransferComplete ();
+
+  CurrentOffset = ByteOffset;
+  RemainingBytes = RequestSize;
+  while (RemainingBytes) {
+    /* Read the block-aligned window covering the next slice into TxBuffer,
+     * then send only the requested bytes starting at the in-block offset. */
+    BlockOffset = CurrentOffset % BlockSize;
+    SendBytes = RemainingBytes;
+    if (SendBytes > MaxChunk - BlockOffset)
+      SendBytes = MaxChunk - BlockOffset;
+
+    ReadBytes = BlockOffset + SendBytes;
+    if (ReadBytes % BlockSize)
+      ReadBytes += BlockSize - (ReadBytes % BlockSize);
+
+    Status = BlockIo->ReadBlocks (BlockIo, BlockIo->Media->MediaId,
+                                  CurrentOffset / BlockSize,
+                                  (UINTN)ReadBytes, TxBuffer);
+    if (Status != EFI_SUCCESS) {
+      FastbootFail ("Failed to read partition");
+      return;
+    }
+
+    Status = GetFastbootDeviceData ()->UsbDeviceProtocol->Send (
+        ENDPOINT_OUT, (UINTN)SendBytes, (UINT8 *)TxBuffer + BlockOffset);
+    if (Status != EFI_SUCCESS) {
+      FastbootFail ("Failed to send fetch data");
+      return;
+    }
+    WaitForTransferComplete ();
+
+    CurrentOffset += SendBytes;
+    RemainingBytes -= SendBytes;
+  }
+
+  FastbootOkay ("");
+}
 /*  Function needed for event notification callback */
 STATIC VOID
 BlockIoCallback (IN EFI_EVENT Event, IN VOID *Context)
@@ -3388,6 +3565,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
 #ifdef ENABLE_UPDATE_PARTITIONS_CMDS
       {"flash:", CmdFlash},
       {"erase:", CmdErase},
+      {"fetch:", CmdFetch},
       {"flashing unlock", CmdFlashingUnlock},
       {"flashing lock", CmdFlashingLock},
 #endif
