@@ -3195,10 +3195,6 @@ AcceptCmd (IN UINT64 Size, IN CHAR8 *Data)
     FastbootFail ("Invalid input command");
     return;
   }
-  if(!IsAllowUnlock){
-    FastbootFail ("Flashing is locked");
-    return;
-  }
   if (Size > MAX_FASTBOOT_COMMAND_SIZE)
     Size = MAX_FASTBOOT_COMMAND_SIZE;
   Data[Size] = '\0';
