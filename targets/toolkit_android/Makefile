@@ -7,6 +7,12 @@ copy_resources:
 submodule_uefi: copy_resources
 	cd ../../submodules/uefi && make build
 	cp ../../submodules/uefi/build/BDS.efi ./build/toolkit/BDS.efi
-build: submodule_uefi
+submodule_patcher: copy_resources
+	cd ../../submodules/patcher && make build_android
+	cp ../../submodules/patcher/build/patch_abl_android ./build/toolkit/bin/patch_abl
+submodule_ablfvextractor: copy_resources
+	cd ../../submodules/ablfvextractor && make build_android
+	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/toolkit/bin/extractfv
+build: submodule_uefi submodule_patcher submodule_ablfvextractor
 	# zip
 	cd build/toolkit && zip -r ../toolkit_android.zip ./
