@@ -1470,7 +1470,25 @@ CmdDownload (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
   DEBUG ((EFI_D_VERBOSE, "CmdDownload: Send 12 %a\n",
           GetFastbootDeviceData ()->gTxBuffer));
 }
+STATIC VOID WaitForTransferComplete (VOID)
+{
+  USB_DEVICE_EVENT Msg;
+  USB_DEVICE_EVENT_DATA Payload;
+  UINTN PayloadSize;
 
+  /* Wait for the transfer to complete */
+  while (1) {
+    GetFastbootDeviceData ()->UsbDeviceProtocol->HandleEvent (&Msg,
+            &PayloadSize, &Payload);
+    if (UsbDeviceEventTransferNotification == Msg) {
+      if (1 == USB_INDEX_TO_EP (Payload.TransferOutcome.EndpointIndex)) {
+        if (USB_ENDPOINT_DIRECTION_IN ==
+            USB_INDEX_TO_EPDIR (Payload.TransferOutcome.EndpointIndex))
+          break;
+      }
+    }
+  }
+}
 #ifdef ENABLE_UPDATE_PARTITIONS_CMDS
 STATIC EFI_STATUS
 FetchParseHex (IN CONST CHAR8 *Token, OUT UINT64 *Value)
@@ -2744,26 +2762,6 @@ CmdRebootFastboot (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
 
 STATIC VOID UpdateGetVarVariable (VOID)
 {
-}
-
-STATIC VOID WaitForTransferComplete (VOID)
-{
-  USB_DEVICE_EVENT Msg;
-  USB_DEVICE_EVENT_DATA Payload;
-  UINTN PayloadSize;
-
-  /* Wait for the transfer to complete */
-  while (1) {
-    GetFastbootDeviceData ()->UsbDeviceProtocol->HandleEvent (&Msg,
-            &PayloadSize, &Payload);
-    if (UsbDeviceEventTransferNotification == Msg) {
-      if (1 == USB_INDEX_TO_EP (Payload.TransferOutcome.EndpointIndex)) {
-        if (USB_ENDPOINT_DIRECTION_IN ==
-            USB_INDEX_TO_EPDIR (Payload.TransferOutcome.EndpointIndex))
-          break;
-      }
-    }
-  }
 }
 
 STATIC VOID CmdGetVarAll (VOID)
