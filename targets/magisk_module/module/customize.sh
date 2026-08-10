@@ -52,7 +52,17 @@ if [ "$LANG" = "zh" ]; then
   T_SEL_YES="选择了是，正在安装包含补丁的efisp"
   T_NO_SLOT="无法识别当前槽位，已中止安装"
   T_PATCH_FAIL="补丁应用失败，已中止安装"
-  T_NO_GBL="没有GBL漏洞，请先刷写带有GBL漏洞的旧版本ABL到abl分区后再重新安装"
+  T_NO_GBL="没有GBL漏洞，正在从 ABL repo 获取带漏洞的旧版本 ABL"
+  T_ABLREPO_LOCAL="已从本地模块找到 ABL"
+  T_ABLREPO_LOCAL_BAD="本地 ABL 校验失败，尝试云端"
+  T_ABLREPO_CLOUD="正在从云端下载 ABL..."
+  T_ABLREPO_CLOUD_BAD="云端 ABL 校验失败"
+  T_ABLREPO_FAIL="ABL repo 查找失败，请手动刷写带 GBL 漏洞的旧版本 ABL 到 abl 分区后重试"
+  T_ABLREPO_NO_VULN="repo 中的 ABL 也没有 GBL 漏洞，已中止"
+  T_ABLREPO_DOWNGRADE="正在降级 abl 分区..."
+  T_ABLREPO_OK="abl 分区已降级"
+  T_ABL_SETRW_FAIL="abl 分区设置可写失败"
+  T_ABL_FLASH_FAIL="abl 分区降级刷写失败"
   T_SETRW_FAIL="efisp 分区设置可写失败"
   T_FLASH_FAIL="efisp 分区刷写失败"
   T_PERSIST_NOT_MOUNTED="persist 分区未挂载到 /mnt/vendor/persist"
@@ -78,7 +88,17 @@ else
   T_SEL_YES="Selected YES, installing patched efisp"
   T_NO_SLOT="Failed to detect current slot, abort"
   T_PATCH_FAIL="Failed to apply patch, abort"
-  T_NO_GBL="No GBL exploit found. Flash an older ABL with the GBL vulnerability to the abl partition, then retry."
+  T_NO_GBL="No GBL exploit found, fetching an older ABL with the vulnerability from the ABL repo"
+  T_ABLREPO_LOCAL="Found ABL in local module"
+  T_ABLREPO_LOCAL_BAD="Local ABL verification failed, trying cloud"
+  T_ABLREPO_CLOUD="Downloading ABL from cloud..."
+  T_ABLREPO_CLOUD_BAD="Cloud ABL verification failed"
+  T_ABLREPO_FAIL="ABL repo lookup failed. Manually flash an older ABL with the GBL vulnerability to the abl partition, then retry"
+  T_ABLREPO_NO_VULN="The repo ABL also lacks the GBL exploit, aborting"
+  T_ABLREPO_DOWNGRADE="Downgrading the abl partition..."
+  T_ABLREPO_OK="abl partition downgraded"
+  T_ABL_SETRW_FAIL="Failed to set abl to read-write"
+  T_ABL_FLASH_FAIL="Failed to flash abl partition"
   T_SETRW_FAIL="Failed to set efisp to read-write"
   T_FLASH_FAIL="Failed to flash efisp"
   T_PERSIST_NOT_MOUNTED="persist is not mounted at /mnt/vendor/persist"
@@ -115,7 +135,53 @@ BY_NAME_DIR=/dev/block/by-name
 RUNTIME_DIR=$MODPATH/tmp
 PERSIST_MNT=/mnt/vendor/persist
 EFISP_DIR=$PERSIST_MNT/efisp
+ABLREPO_URL="https://raw.githubusercontent.com/superturtlee/gbl_root_canoe/main/ablrepo"
 mkdir -p $RUNTIME_DIR
+
+# Verify $1 against the sha256 in $2 (first whitespace-delimited token).
+verify_sha256() {
+  [ -f "$1" ] && [ -f "$2" ] || return 1
+  expected=$(cut -d' ' -f1 "$2" | tr -d '[:space:]')
+  actual=$(sha256sum "$1" | cut -d' ' -f1 | tr -d '[:space:]')
+  [ -n "$expected" ] && [ "$expected" = "$actual" ]
+}
+
+# Download $1 into $2 using whichever fetcher is available.
+download_url() {
+  if command -v wget >/dev/null 2>&1; then
+    timeout 60 wget -O "$2" "$1" >/dev/null 2>&1
+  elif command -v curl >/dev/null 2>&1; then
+    timeout 60 curl -fL -o "$2" "$1" >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
+# Fetch an older ABL with the GBL vulnerability. Looks up the local module
+# bundle first, then the cloud. On success, leaves the image at
+# $RUNTIME_DIR/repo_abl.img and returns 0; otherwise returns 1.
+fetch_abl_from_repo() {
+  product=$(getprop ro.product.name 2>/dev/null)
+  [ -z "$product" ] && return 1
+  local_dir="$MODPATH/ablrepo/$product"
+  if [ -f "$local_dir/abl.img" ]; then
+    if [ -f "$local_dir/abl.sha256" ] && verify_sha256 "$local_dir/abl.img" "$local_dir/abl.sha256"; then
+      cp "$local_dir/abl.img" "$RUNTIME_DIR/repo_abl.img"
+      ui_print "$T_ABLREPO_LOCAL"
+      return 0
+    fi
+    ui_print "$T_ABLREPO_LOCAL_BAD"
+  fi
+  ui_print "$T_ABLREPO_CLOUD"
+  if download_url "$ABLREPO_URL/$product/abl.sha256" "$RUNTIME_DIR/repo_abl.sha256" && \
+     download_url "$ABLREPO_URL/$product/abl.img" "$RUNTIME_DIR/repo_abl.img"; then
+    if verify_sha256 "$RUNTIME_DIR/repo_abl.img" "$RUNTIME_DIR/repo_abl.sha256"; then
+      return 0
+    fi
+    ui_print "$T_ABLREPO_CLOUD_BAD"
+  fi
+  return 1
+}
 
 ui_print "$T_EFISP_TITLE"
 ui_print "$T_SOC"
@@ -145,7 +211,31 @@ while true; do
     fi
     if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
       ui_print "$T_NO_GBL"
-      abort "no exploit"
+      if ! fetch_abl_from_repo; then
+        ui_print "$T_ABLREPO_FAIL"
+        abort "abl repo lookup failed"
+      fi
+      $MODPATH/bin/extractfv -o $RUNTIME_DIR -v "$RUNTIME_DIR/repo_abl.img" >> $RUNTIME_DIR/extract_repo.log 2>&1
+      $MODPATH/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> $RUNTIME_DIR/patch_repo.log 2>&1
+      if [ ! -f $RUNTIME_DIR/patched.efi ]; then
+        ui_print "$T_PATCH_FAIL"
+        abort "repo patch failed"
+      fi
+      if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch_repo.log; then
+        ui_print "$T_ABLREPO_NO_VULN"
+        abort "repo abl no vuln"
+      fi
+      ui_print "$T_ABLREPO_DOWNGRADE"
+      if ! blockdev --setrw "$abl_part" >> $RUNTIME_DIR/flash.log 2>&1; then
+        ui_print "$T_ABL_SETRW_FAIL"
+        abort "setrw abl failed"
+      fi
+      if ! dd if=$RUNTIME_DIR/repo_abl.img of="$abl_part" bs=4M conv=fsync >> $RUNTIME_DIR/flash.log 2>&1; then
+        ui_print "$T_ABL_FLASH_FAIL"
+        abort "downgrade abl failed"
+      fi
+      sync
+      ui_print "$T_ABLREPO_OK"
     fi
 
     ui_print "$T_PLACE_BOOT"

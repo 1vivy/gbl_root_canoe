@@ -3,6 +3,7 @@ clean:
 copy_resources:
 	mkdir -p build/module
 	cp -r module/* build/module/
+	[ -d ../../ablrepo ] && cp -r ../../ablrepo ./build/module/ablrepo || true
 submodule_uefi: copy_resources
 	cd ../../submodules/uefi && make build
 	cp ../../submodules/uefi/build/BDS.efi ./build/module/BDS.efi
