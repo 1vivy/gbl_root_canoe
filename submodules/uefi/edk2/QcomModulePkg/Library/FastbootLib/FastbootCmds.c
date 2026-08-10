@@ -183,7 +183,6 @@ STATIC INT32 Lun = NO_LUN;
 STATIC BOOLEAN LunSet;
 
 STATIC FASTBOOT_CMD *cmdlist;
-STATIC UINT32 IsAllowUnlock;
 
 STATIC EFI_STATUS
 FastbootCommandSetup (VOID *Base, UINT64 Size);
@@ -2781,11 +2780,6 @@ SetDeviceUnlock (UINT32 Type, BOOLEAN State)
     return;
   }
 
-  /* If State is TRUE that means set the unlock to true */
-  if (State && !IsAllowUnlock) {
-    FastbootFail ("Flashing Unlock is not allowed\n");
-    return;
-  }
     SetDeviceUnlockValue (Type, State);
     FastbootOkay ("");
     RebootDevice (NORMAL_MODE);
@@ -3067,20 +3061,6 @@ CmdOemSelectDisplayPanel (CONST CHAR8 *arg, VOID *data, UINT32 sz)
     FastbootOkay (resp);
   }
 }
-
-#ifdef ENABLE_UPDATE_PARTITIONS_CMDS
-STATIC VOID
-CmdFlashingGetUnlockAbility (CONST CHAR8 *arg, VOID *data, UINT32 sz)
-{
-  CHAR8 UnlockAbilityInfo[MAX_RSP_SIZE];
-
-  AsciiSPrint (UnlockAbilityInfo, sizeof (UnlockAbilityInfo),
-               "get_unlock_ability: %d", IsAllowUnlock);
-  FastbootInfo (UnlockAbilityInfo);
-  WaitForTransferComplete ();
-  FastbootOkay ("");
-}
-#endif
 
 #if HIBERNATION_SUPPORT_NO_AES
 STATIC VOID
@@ -3408,7 +3388,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
 #ifdef ENABLE_UPDATE_PARTITIONS_CMDS
       {"flash:", CmdFlash},
       {"erase:", CmdErase},
-      {"flashing get_unlock_ability", CmdFlashingGetUnlockAbility},
       {"flashing unlock", CmdFlashingUnlock},
       {"flashing lock", CmdFlashingLock},
 #endif
