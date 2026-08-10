@@ -52,13 +52,16 @@ if [ "$LANG" = "zh" ]; then
   T_SEL_YES="选择了是，正在安装包含补丁的efisp"
   T_NO_SLOT="无法识别当前槽位，已中止安装"
   T_PATCH_FAIL="补丁应用失败，已中止安装"
-  T_NO_GBL="没有GBL漏洞，正在从 ABL repo 获取带漏洞的旧版本 ABL"
+  T_NO_GBL="检测到当前 ABL 没有 GBL 漏洞"
+  T_ABLREPO_CONFIRM="ABL repo 中有带漏洞的旧版 ABL，是否下载并降级 abl 分区？"
+  T_ABLREPO_CONFIRM_YES="音量上 = 下载并降级"
+  T_ABLREPO_CONFIRM_NO="音量下 = 取消"
+  T_ABLREPO_DECLINED="已取消降级，中止安装"
   T_ABLREPO_LOCAL="已从本地模块找到 ABL"
   T_ABLREPO_LOCAL_BAD="本地 ABL 校验失败，尝试云端"
   T_ABLREPO_CLOUD="正在从云端下载 ABL..."
   T_ABLREPO_CLOUD_BAD="云端 ABL 校验失败"
   T_ABLREPO_FAIL="ABL repo 查找失败，请手动刷写带 GBL 漏洞的旧版本 ABL 到 abl 分区后重试"
-  T_ABLREPO_NO_VULN="repo 中的 ABL 也没有 GBL 漏洞，已中止"
   T_ABLREPO_DOWNGRADE="正在降级 abl 分区..."
   T_ABLREPO_OK="abl 分区已降级"
   T_ABL_SETRW_FAIL="abl 分区设置可写失败"
@@ -88,13 +91,16 @@ else
   T_SEL_YES="Selected YES, installing patched efisp"
   T_NO_SLOT="Failed to detect current slot, abort"
   T_PATCH_FAIL="Failed to apply patch, abort"
-  T_NO_GBL="No GBL exploit found, fetching an older ABL with the vulnerability from the ABL repo"
+  T_NO_GBL="Current ABL lacks the GBL vulnerability"
+  T_ABLREPO_CONFIRM="An older ABL with the GBL vuln is available in the ABL repo. Download and downgrade the abl partition?"
+  T_ABLREPO_CONFIRM_YES="Vol+ = download and downgrade"
+  T_ABLREPO_CONFIRM_NO="Vol- = cancel"
+  T_ABLREPO_DECLINED="Downgrade cancelled, aborting"
   T_ABLREPO_LOCAL="Found ABL in local module"
   T_ABLREPO_LOCAL_BAD="Local ABL verification failed, trying cloud"
   T_ABLREPO_CLOUD="Downloading ABL from cloud..."
   T_ABLREPO_CLOUD_BAD="Cloud ABL verification failed"
   T_ABLREPO_FAIL="ABL repo lookup failed. Manually flash an older ABL with the GBL vulnerability to the abl partition, then retry"
-  T_ABLREPO_NO_VULN="The repo ABL also lacks the GBL exploit, aborting"
   T_ABLREPO_DOWNGRADE="Downgrading the abl partition..."
   T_ABLREPO_OK="abl partition downgraded"
   T_ABL_SETRW_FAIL="Failed to set abl to read-write"
@@ -211,20 +217,31 @@ while true; do
     fi
     if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
       ui_print "$T_NO_GBL"
+      ui_print "$T_ABLREPO_CONFIRM"
+      ui_print "$T_ABLREPO_CONFIRM_YES"
+      ui_print "$T_ABLREPO_CONFIRM_NO"
+      repo_confirm=""
+      while [ -z "$repo_confirm" ]; do
+        keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
+        if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+          repo_confirm=yes
+        elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+          repo_confirm=no
+        fi
+      done
+      if [ "$repo_confirm" = "no" ]; then
+        ui_print "$T_ABLREPO_DECLINED"
+        abort "downgrade declined"
+      fi
       if ! fetch_abl_from_repo; then
         ui_print "$T_ABLREPO_FAIL"
         abort "abl repo lookup failed"
       fi
-      $MODPATH/bin/extractfv -o $RUNTIME_DIR -v "$RUNTIME_DIR/repo_abl.img" >> $RUNTIME_DIR/extract_repo.log 2>&1
-      $MODPATH/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> $RUNTIME_DIR/patch_repo.log 2>&1
-      if [ ! -f $RUNTIME_DIR/patched.efi ]; then
-        ui_print "$T_PATCH_FAIL"
-        abort "repo patch failed"
-      fi
-      if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch_repo.log; then
-        ui_print "$T_ABLREPO_NO_VULN"
-        abort "repo abl no vuln"
-      fi
+      # Downgrade ONLY the abl partition so it has the vuln to load BDS. Do NOT
+      # rebuild boot.efi from this image: some systems need the high-version
+      # LinuxLoader from the current partition to boot, so boot.efi (already
+      # built above from the running ABL) stays untouched. The repo ABL is
+      # trusted to carry the vuln.
       ui_print "$T_ABLREPO_DOWNGRADE"
       if ! blockdev --setrw "$abl_part" >> $RUNTIME_DIR/flash.log 2>&1; then
         ui_print "$T_ABL_SETRW_FAIL"
