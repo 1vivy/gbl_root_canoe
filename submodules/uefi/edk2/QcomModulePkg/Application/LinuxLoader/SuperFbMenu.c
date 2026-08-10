@@ -274,22 +274,9 @@ SfbDrawBootMenu (IN CONST SFB_MENU_STATE *Menu,
 
   for (Index = Start; Index < Last; Index++) {
     CONST SFB_BOOT_ENTRY  *Entry = &Menu->Entry[Index];
-    CHAR16                Label[SFB_DESC_CHARS + 16];
-
-    /* USB-backed entries carry an "[E]" prefix so removable boot media is
-     * obvious at a glance. */
-    CONST CHAR16  *Prefix = Entry->IsUsb ? L"[E] " : L"";
-
-    if (Entry->Kind == SfbEntryEfiFile && Entry->IsCustom) {
-      UnicodeSPrint (Label, sizeof (Label), L"%s%s (custom)", Prefix,
-                     Entry->Desc);
-    } else {
-      UnicodeSPrint (Label, sizeof (Label), L"%s%s", Prefix, Entry->Desc);
-    }
-
     SfbDrawRow ((BOOLEAN)(Index == Cursor),
                 (Index == Menu->DefaultIndex) ? L"*" : L" ",
-                Label);
+                Entry->Desc);
   }
 
   if (Last < Menu->Count) {
@@ -341,9 +328,6 @@ SfbRunBootMenu (VOID)
     switch (Menu.Entry[Chosen].Kind) {
     case SfbEntryFastboot:
       SfbFreeMenu (&Menu);
-      /* Hand the shared USB core back before fastboot, which needs it in
-       * device mode. */
-      SfbStopUsbHost ();
       return TRUE;
 
     case SfbEntrySelector:

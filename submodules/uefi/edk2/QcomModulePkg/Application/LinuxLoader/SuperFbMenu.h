@@ -63,11 +63,6 @@ typedef struct {
   /* TRUE when the entry was restored from the custom-entry store record
    * rather than discovered by scanning. */
   BOOLEAN                   IsCustom;
-  /* TRUE when the entry's volume sits behind a USB device path. Such an entry
-   * is shown with an "[E]" prefix and is never persisted as the default: USB
-   * media is removable and its device path is not stable enough to boot
-   * unattended after a reboot. */
-  BOOLEAN                   IsUsb;
   CHAR16                    Desc[SFB_DESC_CHARS];
   CHAR16                    Path[SFB_PATH_CHARS];
   /* FAT volume label the entry lives on; how a stored entry finds its way
@@ -142,20 +137,6 @@ SfbVolumeRootPrefix (IN EFI_HANDLE Volume);
 
 EFI_STATUS
 SfbOpenVolumeRoot (IN EFI_HANDLE Volume, OUT EFI_FILE_PROTOCOL **Root);
-
-/* TRUE when the volume handle's device path runs through a USB node. */
-BOOLEAN
-SfbIsUsbVolume (IN EFI_HANDLE Volume);
-
-/*
- * Tear down the USB host stack this loader connected: disconnect the USB2 host
- * controllers (which stops UsbBus/UsbMass/Partition/Fat below them) and the
- * emulated PCI host controllers, so the shared USB core is released back to
- * device mode before control passes to fastboot. Safe to call when no USB host
- * stack is up.
- */
-VOID
-SfbStopUsbHost (VOID);
 
 /* TRUE when Path names an existing, readable, non-directory file. */
 BOOLEAN

@@ -62,7 +62,6 @@ SfbMakeFileEntry (IN EFI_HANDLE      Volume,
 
   Entry->Kind = SfbEntryEfiFile;
   Entry->Volume = Volume;
-  Entry->IsUsb = SfbIsUsbVolume (Volume);
   StrnCpyS (Entry->Path, SFB_PATH_CHARS, PathOnVolume, SFB_PATH_CHARS - 1);
   StrnCpyS (Entry->Desc, SFB_DESC_CHARS, Desc, SFB_DESC_CHARS - 1);
 
@@ -713,10 +712,7 @@ SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu)
 
   if (!EFI_ERROR (SfbLoadEntryRecord (SFB_STORE_DEFAULT, &Saved))) {
     for (Index = 0; Index < Menu->Count; Index++) {
-      /* A USB entry is never the default even if a stale record resolves onto
-       * one via its volume label. */
-      if (!Menu->Entry[Index].IsUsb &&
-          SfbSameDevicePath (Menu->Entry[Index].DevicePath, Saved.DevicePath)) {
+      if (SfbSameDevicePath (Menu->Entry[Index].DevicePath, Saved.DevicePath)) {
         Menu->DefaultIndex = Index;
         Menu->DefaultIsPersisted = TRUE;
         break;
@@ -724,14 +720,9 @@ SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu)
     }
     SfbFreeEntry (&Saved);
   }
-
-  /* Nothing stored, or the stored image is gone: fall back to the first real
-   * on-device boot entry so an untouched menu still boots something. USB entries
-   * are skipped: they must not be launched unattended by the timeout. */
   if (Menu->DefaultIndex == SFB_NO_INDEX) {
     for (Index = 0; Index < Menu->Count; Index++) {
-      if (Menu->Entry[Index].Kind == SfbEntryEfiFile &&
-          !Menu->Entry[Index].IsUsb) {
+      if (Menu->Entry[Index].Kind == SfbEntryEfiFile) {
         Menu->DefaultIndex = Index;
         break;
       }
@@ -992,13 +983,8 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
   /*
    * Committing the default before the launch is deliberate: an image that boots
    * successfully never comes back to do it afterwards.
-   *
-   * USB entries are never saved as the default, regardless of Temporary: the
-   * media is removable and its device path does not survive a reboot, so a
-   * stored USB default would either fail to resolve or, worse, resolve onto the
-   * wrong disk.
    */
-  if (!Temporary && !Entry->IsUsb) {
+  if (!Temporary) {
     SfbSaveDefaultEntry (Entry);
   }
 

@@ -89,13 +89,6 @@ SfbCreateDriverHandle (OUT EFI_HANDLE *Handle)
  * firmware carries the Qualcomm USB host bring-up (UsbConfigDxe), the XHCI
  * PCI-emulation shim, XhciDxe, UsbBusDxe and UsbMassStorageDxe, but nothing in
  * the fastboot path ever connects them, so an attached USB drive never appears.
- *
- * Connecting recursively from the top reaches the USB config host handle, whose
- * XhciPciEmulation binding brings the shared USB core up in host mode and lets
- * the whole chain build itself down to Simple File System. This also covers the
- * simpler Block I/O -> Disk I/O -> FAT case for platform-published media, so it
- * replaces the old Block-I/O-only pass. USB core mode is handed back before
- * fastboot runs; see SfbStopUsbHost ().
  */
 VOID
 SfbConnectAll (VOID)
@@ -198,74 +191,6 @@ SfbStartFatStack (VOID)
   SfbConnectAll ();
 
   return EFI_SUCCESS;
-}
-
-/*
- * TRUE when the volume handle's device path passes through a USB messaging
- * node. FAT partitions on a USB drive hang off such a path
- * (...USB()/HD(...)/...); internal eMMC/UFS partitions do not.
- */
-BOOLEAN
-SfbIsUsbVolume (IN EFI_HANDLE Volume)
-{
-  EFI_STATUS                Status;
-  EFI_DEVICE_PATH_PROTOCOL  *Node = NULL;
-
-  Status = gBS->HandleProtocol (Volume, &gEfiDevicePathProtocolGuid,
-                                (VOID **)&Node);
-  if (EFI_ERROR (Status) || Node == NULL) {
-    return FALSE;
-  }
-
-  while (!IsDevicePathEnd (Node)) {
-    if (DevicePathType (Node) == MESSAGING_DEVICE_PATH &&
-        (DevicePathSubType (Node) == MSG_USB_DP ||
-         DevicePathSubType (Node) == MSG_USB_CLASS_DP ||
-         DevicePathSubType (Node) == MSG_USB_WWID_DP)) {
-      return TRUE;
-    }
-    Node = NextDevicePathNode (Node);
-  }
-
-  return FALSE;
-}
-
-/* Disconnect every controller that publishes Protocol. */
-STATIC
-VOID
-SfbDisconnectByProtocol (IN EFI_GUID *Protocol)
-{
-  EFI_HANDLE  *Handles = NULL;
-  UINTN       Count = 0;
-  UINTN       Index;
-
-  if (EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol, Protocol, NULL,
-                                          &Count, &Handles)) ||
-      Handles == NULL) {
-    return;
-  }
-
-  for (Index = 0; Index < Count; Index++) {
-    gBS->DisconnectController (Handles[Index], NULL, NULL);
-  }
-
-  FreePool (Handles);
-}
-
-VOID
-SfbStopUsbHost (VOID)
-{
-  /*
-   * Undo what SfbConnectAll () brought up on the USB side. Disconnecting
-   * each USB2 host controller stops the UsbBus/UsbMass/Partition/FAT stack built
-   * on top of it and halts XHCI. On this platform XhciPciEmulation installs its
-   * emulated PCI I/O onto the very handle it binds, so disconnecting that handle
-   * also runs its Stop (), which unconfigures host mode and returns the shared
-   * USB core so fastboot's device-mode stack can claim it. The second pass mops
-   * up any emulated PCI host controller left behind.
-   */
-  SfbDisconnectByProtocol (&gEfiUsb2HcProtocolGuid);
-  SfbDisconnectByProtocol (&gEfiPciIoProtocolGuid);
 }
 
 /*
