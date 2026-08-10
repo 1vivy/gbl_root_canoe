@@ -119,39 +119,10 @@ STATIC CHAR8 LogicalBlkSizeStr[MAX_RSP_SIZE];
 STATIC CHAR8 EraseBlkSizeStr[MAX_RSP_SIZE];
 STATIC CHAR8 MaxDownloadSizeStr[MAX_RSP_SIZE];
 
-struct GetVarSlotInfo {
-  CHAR8 SlotSuffix[MAX_SLOT_SUFFIX_SZ];
-  CHAR8 SlotSuccessfulVar[SLOT_ATTR_SIZE];
-  CHAR8 SlotUnbootableVar[SLOT_ATTR_SIZE];
-  CHAR8 SlotRetryCountVar[SLOT_ATTR_SIZE];
-  CHAR8 SlotSuccessfulVal[ATTR_RESP_SIZE];
-  CHAR8 SlotUnbootableVal[ATTR_RESP_SIZE];
-  CHAR8 SlotRetryCountVal[ATTR_RESP_SIZE];
-};
-
-STATIC struct GetVarSlotInfo *BootSlotInfo = NULL;
-STATIC CHAR8 SlotSuffixArray[SLOT_SUFFIX_ARRAY_SIZE];
-STATIC CHAR8 SlotCountVar[ATTR_RESP_SIZE];
-STATIC CHAR8 CurrentSlotFB[MAX_SLOT_SUFFIX_SZ];
-
-/*Note: This needs to be used only when Slot already has prefix "_" */
-#define SKIP_FIRSTCHAR_IN_SLOT_SUFFIX(Slot)                                    \
-  do {                                                                         \
-    int i = 0;                                                                 \
-    do {                                                                       \
-      Slot[i] = Slot[i + 1];                                                   \
-      i++;                                                                     \
-    } while (i < MAX_SLOT_SUFFIX_SZ - 1);                                      \
-  } while (0);
 
 #define MAX_DISPLAY_PANEL_OVERRIDE 256
 #define MAX_GPU_CONFIG_OVERRIDE 256
 
-/*This variable is used to skip populating the FastbootVar
- * When PopulateMultiSlotInfo called while flashing each Lun
- */
-STATIC BOOLEAN InitialPopulate = FALSE;
-STATIC UINT32 SlotCount;
 extern struct PartitionEntry PtnEntries[MAX_NUM_PARTITIONS];
 
 STATIC ANDROID_FASTBOOT_STATE mState = ExpectCmdState;
@@ -406,143 +377,6 @@ PartitionGetInfo (IN CHAR16 *PartitionName,
   return EFI_NOT_FOUND;
 }
 VOID RebootDevice (UINT8 RebootReason);
-STATIC VOID FastbootPublishSlotVars (VOID)
-{
-  UINT32 i;
-  UINT32 j;
-  CHAR8 *Suffix = NULL;
-  UINT32 PartitionCount = 0;
-  CHAR8 PartitionNameAscii[MAX_GPT_NAME_SIZE];
-  UINT32 RetryCount = 0;
-  BOOLEAN Set = FALSE;
-
-  GetPartitionCount (&PartitionCount);
-  /*Scan through partition entries, populate the attributes*/
-  for (i = 0, j = 0; i < PartitionCount && j < SlotCount; i++) {
-    UnicodeStrToAsciiStr (PtnEntries[i].PartEntry.PartitionName,
-                          PartitionNameAscii);
-
-    if (!(AsciiStrnCmp (PartitionNameAscii, "boot", AsciiStrLen ("boot")))) {
-      Suffix = PartitionNameAscii + AsciiStrLen ("boot_");
-
-      AsciiStrnCpyS (BootSlotInfo[j].SlotSuffix, MAX_SLOT_SUFFIX_SZ, Suffix,
-                     AsciiStrLen (Suffix));
-      AsciiStrnCpyS (BootSlotInfo[j].SlotSuccessfulVar, SLOT_ATTR_SIZE,
-                     "slot-successful:", AsciiStrLen ("slot-successful:"));
-      Set = PtnEntries[i].PartEntry.Attributes & PART_ATT_SUCCESSFUL_VAL
-                ? TRUE
-                : FALSE;
-      AsciiStrnCpyS (BootSlotInfo[j].SlotSuccessfulVal, ATTR_RESP_SIZE,
-                     Set ? "yes" : "no",
-                     Set ? AsciiStrLen ("yes") : AsciiStrLen ("no"));
-      AsciiStrnCatS (BootSlotInfo[j].SlotSuccessfulVar, SLOT_ATTR_SIZE, Suffix,
-                     AsciiStrLen (Suffix));
-      FastbootPublishVar (BootSlotInfo[j].SlotSuccessfulVar,
-                          BootSlotInfo[j].SlotSuccessfulVal);
-
-      AsciiStrnCpyS (BootSlotInfo[j].SlotUnbootableVar, SLOT_ATTR_SIZE,
-                     "slot-unbootable:", AsciiStrLen ("slot-unbootable:"));
-      Set = PtnEntries[i].PartEntry.Attributes & PART_ATT_UNBOOTABLE_VAL
-                ? TRUE
-                : FALSE;
-      AsciiStrnCpyS (BootSlotInfo[j].SlotUnbootableVal, ATTR_RESP_SIZE,
-                     Set ? "yes" : "no",
-                     Set ? AsciiStrLen ("yes") : AsciiStrLen ("no"));
-      AsciiStrnCatS (BootSlotInfo[j].SlotUnbootableVar, SLOT_ATTR_SIZE, Suffix,
-                     AsciiStrLen (Suffix));
-      FastbootPublishVar (BootSlotInfo[j].SlotUnbootableVar,
-                          BootSlotInfo[j].SlotUnbootableVal);
-
-      AsciiStrnCpyS (BootSlotInfo[j].SlotRetryCountVar, SLOT_ATTR_SIZE,
-                     "slot-retry-count:", AsciiStrLen ("slot-retry-count:"));
-      RetryCount =
-          (PtnEntries[i].PartEntry.Attributes & PART_ATT_MAX_RETRY_COUNT_VAL) >>
-          PART_ATT_MAX_RETRY_CNT_BIT;
-      AsciiSPrint (BootSlotInfo[j].SlotRetryCountVal, ATTR_RESP_SIZE, "%llu",
-                   RetryCount);
-      AsciiStrnCatS (BootSlotInfo[j].SlotRetryCountVar, SLOT_ATTR_SIZE, Suffix,
-                     AsciiStrLen (Suffix));
-      FastbootPublishVar (BootSlotInfo[j].SlotRetryCountVar,
-                          BootSlotInfo[j].SlotRetryCountVal);
-      j++;
-    }
-  }
-  FastbootPublishVar ("has-slot:boot", "yes");
-  UnicodeStrToAsciiStr (GetCurrentSlotSuffix ().Suffix, CurrentSlotFB);
-
-  /* Here CurrentSlotFB will only have value of "_a" or "_b".*/
-  SKIP_FIRSTCHAR_IN_SLOT_SUFFIX (CurrentSlotFB);
-
-  FastbootPublishVar ("current-slot", CurrentSlotFB);
-  FastbootPublishVar ("has-slot:system",
-                      PartitionHasMultiSlot ((CONST CHAR16 *)L"system") ? "yes"
-                                                                        : "no");
-  FastbootPublishVar ("has-slot:modem",
-                      PartitionHasMultiSlot ((CONST CHAR16 *)L"modem") ? "yes"
-                                                                       : "no");
-  return;
-}
-
-/*Function to populate attribute fields
- *Note: It traverses through the partition entries structure,
- *populates has-slot, slot-successful,slot-unbootable and
- *slot-retry-count attributes of the boot slots.
- */
-STATIC VOID PopulateMultislotMetadata (VOID)
-{
-  UINT32 i;
-  UINT32 j;
-  UINT32 PartitionCount = 0;
-  CHAR8 *Suffix = NULL;
-  CHAR8 PartitionNameAscii[MAX_GPT_NAME_SIZE];
-
-  GetPartitionCount (&PartitionCount);
-  if (!InitialPopulate) {
-    /*Traverse through partition entries,count matching slots with boot */
-    for (i = 0; i < PartitionCount; i++) {
-      UnicodeStrToAsciiStr (PtnEntries[i].PartEntry.PartitionName,
-                            PartitionNameAscii);
-      if (!(AsciiStrnCmp (PartitionNameAscii, "boot", AsciiStrLen ("boot")))) {
-        SlotCount++;
-        Suffix = PartitionNameAscii + AsciiStrLen ("boot");
-        if (!AsciiStrStr (SlotSuffixArray, Suffix)) {
-          AsciiStrnCatS (SlotSuffixArray, sizeof (SlotSuffixArray), Suffix,
-                         AsciiStrLen (Suffix));
-          AsciiStrnCatS (SlotSuffixArray, sizeof (SlotSuffixArray), ",",
-                         AsciiStrLen (","));
-        }
-      }
-    }
-
-    AsciiSPrint (SlotCountVar, sizeof (SlotCountVar), "%d", SlotCount);
-    FastbootPublishVar ("slot-count", SlotCountVar);
-
-    /*Allocate memory for available number of slots*/
-    BootSlotInfo = AllocateZeroPool (
-                         SlotCount * sizeof (struct GetVarSlotInfo));
-    if (BootSlotInfo == NULL) {
-      DEBUG ((EFI_D_ERROR, "Unable to allocate memory for BootSlotInfo\n"));
-      return;
-    }
-    FastbootPublishSlotVars ();
-    InitialPopulate = TRUE;
-  } else {
-    /*While updating gpt from fastboot dont need to populate all the variables
-     * as above*/
-    for (i = 0; i < SlotCount; i++) {
-      AsciiStrnCpyS (BootSlotInfo[i].SlotSuccessfulVal,
-                     sizeof (BootSlotInfo[i].SlotSuccessfulVal), "no",
-                     AsciiStrLen ("no"));
-      AsciiStrnCpyS (BootSlotInfo[i].SlotUnbootableVal,
-                     sizeof (BootSlotInfo[i].SlotUnbootableVal), "no",
-                     AsciiStrLen ("no"));
-      AsciiSPrint (BootSlotInfo[i].SlotRetryCountVal,
-                   sizeof (BootSlotInfo[j].SlotRetryCountVal), "%d",
-                   MAX_RETRY_COUNT);
-    }
-  }
-  return;
-}
 
 #ifdef ENABLE_UPDATE_PARTITIONS_CMDS
 /* Helper function to write data to disk */
@@ -554,36 +388,6 @@ WriteToDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
              IN UINT64 offset)
 {
   return WriteBlockToPartitionNoFlush (BlockIo, Handle, offset, Size, Image);
-}
-
-STATIC BOOLEAN
-GetPartitionHasSlot (CHAR16 *PartitionName,
-                     UINT32 PnameMaxSize,
-                     CHAR16 *SlotSuffix,
-                     UINT32 SlotSuffixMaxSize)
-{
-  INT32 Index = INVALID_PTN;
-  BOOLEAN HasSlot = FALSE;
-  Slot CurrentSlot;
-
-  Index = GetPartitionIndex (PartitionName);
-  if (Index == INVALID_PTN) {
-    CurrentSlot = GetCurrentSlotSuffix ();
-    StrnCpyS (SlotSuffix, SlotSuffixMaxSize, CurrentSlot.Suffix,
-              StrLen (CurrentSlot.Suffix));
-    StrnCatS (PartitionName, PnameMaxSize, CurrentSlot.Suffix,
-              StrLen (CurrentSlot.Suffix));
-    HasSlot = TRUE;
-  } else {
-    /*Check for _a or _b slots, if available then copy to SlotSuffix Array*/
-    if (StrStr (PartitionName, (CONST CHAR16 *)L"_a") ||
-        StrStr (PartitionName, (CONST CHAR16 *)L"_b")) {
-      StrnCpyS (SlotSuffix, SlotSuffixMaxSize,
-                (PartitionName + (StrLen (PartitionName) - 2)), 2);
-      HasSlot = TRUE;
-    }
-  }
-  return HasSlot;
 }
 
 STATIC EFI_STATUS
@@ -983,48 +787,6 @@ HandleSparseImgFlash (IN CHAR16 *PartitionName,
   return Status;
 }
 
-STATIC VOID
-FastbootUpdateAttr (CONST CHAR16 *SlotSuffix)
-{
-  struct PartitionEntry *Ptn_Entries_Ptr = NULL;
-  UINT32 j;
-  INT32 Index;
-  CHAR16 PartName[MAX_GPT_NAME_SIZE];
-  CHAR8 SlotSuffixAscii[MAX_SLOT_SUFFIX_SZ];
-  UnicodeStrToAsciiStr (SlotSuffix, SlotSuffixAscii);
-
-  StrnCpyS (PartName, StrLen ((CONST CHAR16 *)L"boot") + 1,
-            (CONST CHAR16 *)L"boot", StrLen ((CONST CHAR16 *)L"boot"));
-  StrnCatS (PartName, MAX_GPT_NAME_SIZE - 1, SlotSuffix, StrLen (SlotSuffix));
-
-  Index = GetPartitionIndex (PartName);
-  if (Index == INVALID_PTN) {
-    DEBUG ((EFI_D_ERROR, "Error boot partition for slot: %s not found\n",
-            SlotSuffix));
-    return;
-  }
-  Ptn_Entries_Ptr = &PtnEntries[Index];
-  Ptn_Entries_Ptr->PartEntry.Attributes &=
-      (~PART_ATT_SUCCESSFUL_VAL & ~PART_ATT_UNBOOTABLE_VAL);
-  Ptn_Entries_Ptr->PartEntry.Attributes |=
-      (PART_ATT_PRIORITY_VAL | PART_ATT_MAX_RETRY_COUNT_VAL);
-
-  UpdatePartitionAttributes (PARTITION_ATTRIBUTES);
-  for (j = 0; j < SlotCount; j++) {
-    if (AsciiStrStr (SlotSuffixAscii, BootSlotInfo[j].SlotSuffix)) {
-      AsciiStrnCpyS (BootSlotInfo[j].SlotSuccessfulVal,
-                     sizeof (BootSlotInfo[j].SlotSuccessfulVal), "no",
-                     AsciiStrLen ("no"));
-      AsciiStrnCpyS (BootSlotInfo[j].SlotUnbootableVal,
-                     sizeof (BootSlotInfo[j].SlotUnbootableVal), "no",
-                     AsciiStrLen ("no"));
-      AsciiSPrint (BootSlotInfo[j].SlotRetryCountVal,
-                   sizeof (BootSlotInfo[j].SlotRetryCountVal), "%d",
-                   MAX_RETRY_COUNT);
-    }
-  }
-}
-
 #ifdef NAND_UBI_VOLUME_FLASHING_ENABLED
 /* UBI Volume flashing */
 STATIC
@@ -1088,32 +850,14 @@ HandleRawImgFlash (IN CHAR16 *PartitionName,
   EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
   UINT64 PartitionSize;
   EFI_HANDLE *Handle = NULL;
-  CHAR16 SlotSuffix[MAX_SLOT_SUFFIX_SZ];
-  BOOLEAN MultiSlotBoot = PartitionHasMultiSlot ((CONST CHAR16 *)L"boot");
-  BOOLEAN HasSlot = FALSE;
-#ifdef NAND_UBI_VOLUME_FLASHING_ENABLED
-  CHAR16 OrigPartitionName[MAX_GPT_NAME_SIZE];
-
-  /* The MultiSlot logic may not be applicable for all volumes, thus we need
-   * to retain the original partition name for volume flashing.
-  */
-  StrnCpyS (OrigPartitionName, PartitionMaxSize,
-                PartitionName, PartitionMaxSize);
-#endif
-  /* For multislot boot the partition may not support a/b slots.
-   * Look for default partition, if it does not exist then try for a/b
-   */
-  if (MultiSlotBoot)
-    HasSlot = GetPartitionHasSlot (PartitionName, PartitionMaxSize, SlotSuffix,
-                                   MAX_SLOT_SUFFIX_SZ);
 
   Status = PartitionGetInfo (PartitionName, &BlockIo, &Handle);
   if (Status != EFI_SUCCESS) {
 #ifdef NAND_UBI_VOLUME_FLASHING_ENABLED
     DEBUG ((EFI_D_ERROR, "[%s] Partition Not Found - trying volume\n",
-            OrigPartitionName));
-    Status = HandleUbiVolFlash (OrigPartitionName,
-            ARRAY_SIZE (OrigPartitionName), Image, Size);
+            PartitionName));
+    Status = HandleUbiVolFlash (PartitionName,
+            ARRAY_SIZE (PartitionName), Image, Size);
 #endif
     return Status;
   }
@@ -1142,11 +886,6 @@ HandleRawImgFlash (IN CHAR16 *PartitionName,
     DEBUG ((EFI_D_ERROR, "Writing Block to partition Failure\n"));
   }
 
-  if (MultiSlotBoot && HasSlot &&
-      !(StrnCmp (PartitionName, (CONST CHAR16 *)L"boot",
-                 StrLen ((CONST CHAR16 *)L"boot"))))
-    FastbootUpdateAttr (SlotSuffix);
-
   return Status;
 }
 
@@ -1168,10 +907,6 @@ HandleUbiImgFlash (
   EFI_HANDLE *Handle = NULL;
   CHAR8 PartitionNameAscii[MAX_GPT_NAME_SIZE] = {'\0'};
   UINT64 PartitionSize = 0;
-
-  /* For multislot boot the partition may not support a/b slots.
-   * Look for default partition, if it does not exist then try for a/b
-   */
 
   Status = PartitionGetInfo (PartitionName, &BlockIo, &Handle);
   if (EFI_ERROR (Status)) {
@@ -1717,80 +1452,6 @@ STATIC VOID StopUsbTimer (VOID)
 #endif
 
 #ifdef ENABLE_UPDATE_PARTITIONS_CMDS
-STATIC BOOLEAN
-NamePropertyMatches (CHAR8 *Name)
-{
-
-  return (BOOLEAN) (
-      !AsciiStrnCmp (Name, "has-slot", AsciiStrLen ("has-slot")) ||
-      !AsciiStrnCmp (Name, "current-slot", AsciiStrLen ("current-slot")) ||
-      !AsciiStrnCmp (Name, "slot-retry-count",
-                     AsciiStrLen ("slot-retry-count")) ||
-      !AsciiStrnCmp (Name, "slot-unbootable",
-                     AsciiStrLen ("slot-unbootable")) ||
-      !AsciiStrnCmp (Name, "slot-successful",
-                     AsciiStrLen ("slot-successful")) ||
-      !AsciiStrnCmp (Name, "slot-suffixes", AsciiStrLen ("slot-suffixes")) ||
-      !AsciiStrnCmp (Name, "partition-type:system",
-                     AsciiStrLen ("partition-type:system")) ||
-      !AsciiStrnCmp (Name, "partition-size:system",
-                     AsciiStrLen ("partition-size:system")));
-}
-
-STATIC VOID ClearFastbootVarsofAB (VOID)
-{
-  FASTBOOT_VAR *CurrentList = NULL;
-  FASTBOOT_VAR *PrevList = NULL;
-  FASTBOOT_VAR *NextList = NULL;
-
-  for (CurrentList = Varlist; CurrentList != NULL; CurrentList = NextList) {
-    NextList = CurrentList->next;
-    if (!NamePropertyMatches ((CHAR8 *)CurrentList->name)) {
-      PrevList = CurrentList;
-      continue;
-    }
-
-    if (!PrevList)
-      Varlist = CurrentList->next;
-    else
-      PrevList->next = CurrentList->next;
-
-    FreePool (CurrentList);
-    CurrentList = NULL;
-  }
-}
-
-VOID
-IsBootPtnUpdated (INT32 Lun, BOOLEAN *BootPtnUpdated)
-{
-  EFI_STATUS Status;
-  EFI_PARTITION_ENTRY *PartEntry;
-  UINT32 j;
-
-  *BootPtnUpdated = FALSE;
-  if (Lun == NO_LUN)
-    Lun = 0;
-
-  for (j = 0; j < Ptable[Lun].MaxHandles; j++) {
-    Status =
-        gBS->HandleProtocol (Ptable[Lun].HandleInfoList[j].Handle,
-                             &gEfiPartitionRecordGuid, (VOID **)&PartEntry);
-
-    if (EFI_ERROR (Status)) {
-      DEBUG ((
-          EFI_D_VERBOSE,
-          "Error getting the partition record for Lun %d and Handle: %d : %r\n",
-          Lun, j, Status));
-      continue;
-    }
-
-    if (!StrnCmp (PartEntry->PartitionName, L"boot", StrLen (L"boot"))) {
-      DEBUG ((EFI_D_VERBOSE, "Boot Partition is updated\n"));
-      *BootPtnUpdated = TRUE;
-      return;
-    }
-  }
-}
 
 STATIC VOID ExchangeFlashAndUsbDataBuf (VOID)
 {
@@ -1818,8 +1479,6 @@ ReenumeratePartTable (VOID)
   EFI_STATUS Status;
   LunSet = FALSE;
   EFI_EVENT gBlockIoRefreshEvt;
-  BOOLEAN MultiSlotBoot = FALSE;
-  BOOLEAN BootPtnUpdated = FALSE;
 
   Status =
     gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK, BlockIoCallback,
@@ -1843,30 +1502,6 @@ ReenumeratePartTable (VOID)
   }
   UpdatePartitionEntries ();
 
-  IsBootPtnUpdated (Lun, &BootPtnUpdated);
-  if (BootPtnUpdated) {
-    /*Check for multislot boot support*/
-    MultiSlotBoot = PartitionHasMultiSlot (L"boot");
-    if (MultiSlotBoot) {
-      UpdatePartitionAttributes (PARTITION_ALL);
-      FindPtnActiveSlot ();
-      PopulateMultislotMetadata ();
-      DEBUG ((EFI_D_VERBOSE, "Multi Slot boot is supported\n"));
-    } else {
-      DEBUG ((EFI_D_VERBOSE, "Multi Slot boot is not supported\n"));
-      if (BootSlotInfo == NULL) {
-        DEBUG ((EFI_D_VERBOSE, "No change in Ptable\n"));
-      } else {
-        DEBUG ((EFI_D_VERBOSE, "Nullifying A/B info\n"));
-        ClearFastbootVarsofAB ();
-        FreePool (BootSlotInfo);
-        BootSlotInfo = NULL;
-        gBS->SetMem ((VOID *)SlotSuffixArray, SLOT_SUFFIX_ARRAY_SIZE, 0);
-        InitialPopulate = FALSE;
-      }
-    }
-  }
-
   DEBUG ((EFI_D_INFO, "*************** New partition Table Dump Start "
                       "*******************\n"));
   PartitionDump ();
@@ -1887,14 +1522,11 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
   CHAR16 PartitionName[MAX_GPT_NAME_SIZE];
   CHAR16 *Token = NULL;
   LunSet = FALSE;
-  BOOLEAN MultiSlotBoot = FALSE;
   UINT32 UfsBootLun = 0;
   CHAR8 BootDeviceType[BOOT_DEV_NAME_SIZE_MAX];
   /* For partition info */
   EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
   EFI_HANDLE *Handle = NULL;
-  BOOLEAN HasSlot = FALSE;
-  CHAR16 SlotSuffix[MAX_SLOT_SUFFIX_SZ];
   CHAR8 FlashResultStr[MAX_RSP_SIZE] = "";
   UINT64 PartitionSize = 0;
   UINT32 Ret;
@@ -1985,17 +1617,6 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 
   /* Send okay for next data sending */
   if (sparse_header->magic == SPARSE_HEADER_MAGIC) {
-
-    MultiSlotBoot = PartitionHasMultiSlot ((CONST CHAR16 *)L"boot");
-    if (MultiSlotBoot) {
-      HasSlot = GetPartitionHasSlot (PartitionName,
-                                     ARRAY_SIZE (PartitionName),
-                                     SlotSuffix, MAX_SLOT_SUFFIX_SZ);
-      if (HasSlot) {
-        DEBUG ((EFI_D_VERBOSE, "Partition %s has slot\n", PartitionName));
-      }
-    }
-
     Status = PartitionGetInfo (PartitionName, &BlockIo, &Handle);
     if (EFI_ERROR (Status)) {
       FastbootFail ("Partition not found");
@@ -2109,9 +1730,6 @@ CmdErase (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 {
   EFI_STATUS Status;
   CHAR16 OutputString[FASTBOOT_STRING_MAX_LENGTH];
-  BOOLEAN HasSlot = FALSE;
-  CHAR16 SlotSuffix[MAX_SLOT_SUFFIX_SZ];
-  BOOLEAN MultiSlotBoot = PartitionHasMultiSlot (L"boot");
   CHAR16 PartitionName[MAX_GPT_NAME_SIZE];
 
   WaitForFlashFinished ();
@@ -2122,20 +1740,6 @@ CmdErase (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
   }
   AsciiStrToUnicodeStr (arg, PartitionName);
 
-
-  /* Handle virtual partition avb_custom_key */
-
-  /* In A/B to have backward compatibility user can still give fastboot flash
-   * boot/system/modem etc
-   * based on current slot Suffix try to look for "partition"_a/b if not found
-   * fall back to look for
-   * just the "partition" in case some of the partitions are no included for A/B
-   * implementation
-   */
-  if (MultiSlotBoot)
-    HasSlot = GetPartitionHasSlot (PartitionName, ARRAY_SIZE (PartitionName),
-                                   SlotSuffix, MAX_SLOT_SUFFIX_SZ);
-
   // Build output string
   UnicodeSPrint (OutputString, sizeof (OutputString),
                  L"Erasing partition %s\r\n", PartitionName);
@@ -2144,9 +1748,6 @@ CmdErase (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
     FastbootFail ("Check device console.");
     DEBUG ((EFI_D_ERROR, "Couldn't erase image:  %r\n", Status));
   } else {
-    if (MultiSlotBoot && HasSlot &&
-        !(StrnCmp (PartitionName, L"boot", StrLen (L"boot"))))
-      FastbootUpdateAttr (SlotSuffix);
     FastbootOkay ("");
   }
 }
@@ -2786,10 +2387,8 @@ STATIC VOID
 CmdGetVar (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
 {
   FASTBOOT_VAR *Var;
-  Slot CurrentSlot;
   CHAR16 PartNameUniStr[MAX_GPT_NAME_SIZE];
   CHAR8 *Token = AsciiStrStr (Arg, "partition-");
-  CHAR8 CurrentSlotAsc[MAX_SLOT_SUFFIX_SZ];
 
   UpdateGetVarVariable ();
 
@@ -2808,15 +2407,6 @@ CmdGetVar (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
       }
 
       AsciiStrToUnicodeStr (Token, PartNameUniStr);
-
-      if (PartitionHasMultiSlot (PartNameUniStr)) {
-        CurrentSlot = GetCurrentSlotSuffix ();
-        UnicodeStrToAsciiStr (CurrentSlot.Suffix, CurrentSlotAsc);
-        AsciiStrnCatS ((CHAR8 *)Arg,
-                        MAX_FASTBOOT_COMMAND_SIZE - AsciiStrLen ("getvar:"),
-                        CurrentSlotAsc,
-                        AsciiStrLen (CurrentSlotAsc));
-      }
     }
   }
 
@@ -3540,7 +3130,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   CHAR8 HWPlatformBuf[MAX_RSP_SIZE] = "\0";
   CHAR8 DeviceType[MAX_RSP_SIZE] = "\0";
   UINT32 PartitionCount = 0;
-  BOOLEAN MultiSlotBoot = PartitionHasMultiSlot ((CONST CHAR16 *)L"boot");
   MemCardType Type = UNKNOWN;
   mDataBuffer = Base;
   mNumDataBytes = Size;
@@ -3609,16 +3198,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   AsciiSPrint (FullProduct, sizeof (FullProduct), "%a", PRODUCT_NAME);
   FastbootPublishVar ("product", FullProduct);
   FastbootPublishVar ("secure", IsSecureBootEnabled () ? "yes" : "no");
-  if (MultiSlotBoot) {
-    /*Find ActiveSlot, bydefault _a will be the active slot
-     *Populate MultiSlotMeta data will publish fastboot variables
-     *like slot_successful, slot_unbootable,slot_retry_count and
-     *CurrenSlot, these can modified using fastboot set_active command
-     */
-    FindPtnActiveSlot ();
-    PopulateMultislotMetadata ();
-    DEBUG ((EFI_D_VERBOSE, "Multi Slot boot is supported\n"));
-  }
 
   GetPartitionCount (&PartitionCount);
   Status = PublishGetVarPartitionInfo (PublishedPartInfo, PartitionCount);
