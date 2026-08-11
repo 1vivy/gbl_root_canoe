@@ -290,3 +290,8 @@ while true; do
     break
   fi
 done
+
+# ablrepo is bundled only for install-time ABL downgrade lookup. Remove it so
+# the device-side module dir (/data/adb/modules/fake_bl_efisp) stays lean after
+# installation; the cloud URL remains available for later re-downloads.
+rm -rf "$MODPATH/ablrepo"
