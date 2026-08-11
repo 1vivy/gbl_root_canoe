@@ -192,9 +192,6 @@ WaitForVolumeUpKey (IN UINT32 TimeoutMs)
   return KeyDetected;
 }
 
-
-EFI_STATUS
-ReadAllowUnlockValue (UINT32 *IsAllowUnlock);
 EFI_STATUS EFIAPI  __attribute__ ( (no_sanitize ("safe-stack")))
 LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
