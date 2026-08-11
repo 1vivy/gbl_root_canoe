@@ -211,11 +211,11 @@ bool PatchBuffer(char* data, int32_t size) {
     if (!patch_warning(data, size, global_var_offset)) {
         printf("OPlus Warning: patch_warning failed\n");
     }
-    ///#ifdef ENABLE_TESTING_PATCHS
+
+    //force enable fastboot for unofficially unlock
     if (!patch_fastboot(data, size, global_var_offset)) {
         printf("OPlus Warning: patch_fastboot failed\n");
     }
-    //#endif
     // ==========================================================
 
     return 1;
