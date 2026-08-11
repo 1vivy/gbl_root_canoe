@@ -32,8 +32,6 @@
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbStoreModuleTag = "SuperFbStore";
 
-#ifdef TEST_ADAPTER
-
 #define SFB_STORE_BYTES  (SFB_STORE_SLOT_BYTES * SFB_STORE_SLOTS)
 
 /* Refuse anything too small to have the megabyte of slack we were promised. */
@@ -498,4 +496,3 @@ SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text)
   return Status;
 }
 
-#endif /* TEST_ADAPTER */

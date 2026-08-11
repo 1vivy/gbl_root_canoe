@@ -22,8 +22,6 @@
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
 
-#ifdef TEST_ADAPTER
-
 #define SFB_ATTR_NORMAL    EFI_TEXT_ATTR (EFI_LIGHTGRAY, EFI_BLACK)
 #define SFB_ATTR_SELECTED  EFI_TEXT_ATTR (EFI_BLACK, EFI_LIGHTGRAY)
 #define SFB_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
@@ -348,5 +346,3 @@ SfbRunBootMenu (VOID)
     }
   }
 }
-
-#endif /* TEST_ADAPTER */

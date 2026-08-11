@@ -30,8 +30,6 @@
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbFatModuleTag = "SuperFbFat";
 
-#ifdef TEST_ADAPTER
-
 /*
  * Entry points of the statically linked drivers. Declared locally because the
  * headers that carry them are module-private to their own packages.
@@ -692,4 +690,3 @@ SfbGetVolumeLabel (IN EFI_FILE_PROTOCOL *Root,
   FreePool (Label);
 }
 
-#endif /* TEST_ADAPTER */

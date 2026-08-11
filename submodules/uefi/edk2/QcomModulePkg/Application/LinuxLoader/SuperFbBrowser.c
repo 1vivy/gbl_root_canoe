@@ -22,8 +22,6 @@
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbBrowserModuleTag = "SuperFbBrowser";
 
-#ifdef TEST_ADAPTER
-
 /* Longest single file name we will read out of a directory. */
 #define SFB_NAME_CHARS  128
 
@@ -673,4 +671,3 @@ SfbRunFileBrowser (VOID)
   FreePool (Volumes);
 }
 
-#endif /* TEST_ADAPTER */

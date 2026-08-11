@@ -25,8 +25,6 @@
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbEntriesModuleTag = "SuperFbEntries";
 
-#ifdef TEST_ADAPTER
-
 /*
  * A stored entry is one line of ASCII:
  *
@@ -1045,4 +1043,3 @@ SfbLaunchDefaultEntry (VOID)
   return HasDefault;
 }
 
-#endif /* TEST_ADAPTER */
