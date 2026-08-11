@@ -39,10 +39,8 @@ echo.
 echo Manual install flow:
 echo 1. Create folder /mnt/vendor/persist/efisp (e.g. via MT Manager)
 echo 2. Copy ABL.efi into it
-echo    (optional: also copy ABL_original.efi as the no-fake-BL entry)
 echo 3. Create boot entry file BOOTENTRIES with:
 echo    ANDROID:ABL.efi
-echo    (optional) ANDROID_NOFAKEBL:ABL_original.efi
 echo 4. sync
 if "%GBL_OK%"=="no" (
   echo 5. Downgrade the abl partition to an older ABL with the GBL vulnerability

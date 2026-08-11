@@ -10,7 +10,6 @@
 |------|------|
 | `boot.efi` | 破解版 ABL，带假回锁（`ANDROID` 启动项） |
 | `boot_backup.efi` | 旧的 `boot.efi`（`ANDROID_BACKUP` 启动项） |
-| `LinuxLoader.efi` | 原始未破解 ABL（`ANDROID_NOFAKEBL` 启动项） |
 | `BOOTENTRIES` | 启动项列表，格式 `<名称>:<相对 efisp/ 的路径>` |
 
 `BDS.efi` 以原始方式刷入 `efisp` 分区（不放入文件系统）。
@@ -31,7 +30,7 @@
 ### 3.1 全新安装
 
 1. 通过 KernelSU 安装模块。提示时按 **音量上（是）**。
-   模块会提取并破解当前槽位 ABL，将 `boot.efi` / `LinuxLoader.efi` / `BOOTENTRIES` 放入 `/mnt/vendor/persist/efisp/`，并将 `BDS.efi` 刷入 `efisp`。
+   模块会提取并破解当前槽位 ABL，将 `boot.efi` / `BOOTENTRIES` 放入 `/mnt/vendor/persist/efisp/`，并将 `BDS.efi` 刷入 `efisp`。
 2. 重启到 **Recovery** 执行**格式化**。
    > ⚠️ 第一次重启可能出现崩溃，重试即可。
 3. 重新安装模块并按 **音量下（否）**，安装 OTA 更新补丁。
@@ -50,11 +49,10 @@
    - `ABL_original.efi` - 原始未破解 ABL
    - `BDS.efi` - 已附带
 2. 用 MT 管理器创建文件夹 `/mnt/vendor/persist/efisp`。
-3. 复制 `ABL.efi` 到该文件夹（可选：复制 `ABL_original.efi` 作为无假回锁启动项）。
+3. 复制 `ABL.efi` 到该文件夹。
 4. 创建 `BOOTENTRIES`，内容：
    ```
    ANDROID:ABL.efi
-   ANDROID_NOFAKEBL:ABL_original.efi
    ```
 5. `sync`
 6. 将 `BDS.efi` 刷入 `efisp` 分区：

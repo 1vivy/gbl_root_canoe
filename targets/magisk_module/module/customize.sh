@@ -262,12 +262,11 @@ while true; do
     fi
     mkdir -p "$EFISP_DIR" || { ui_print "$T_EFISP_DIR_FAIL"; abort "efisp mkdir failed"; }
     [ -f "$EFISP_DIR/boot.efi" ] && mv "$EFISP_DIR/boot.efi" "$EFISP_DIR/boot_backup.efi"
-    if ! cp $RUNTIME_DIR/patched.efi "$EFISP_DIR/boot.efi" || \
-       ! cp $RUNTIME_DIR/LinuxLoader.efi "$EFISP_DIR/LinuxLoader.efi"; then
+    if ! cp $RUNTIME_DIR/patched.efi "$EFISP_DIR/boot.efi"; then
       ui_print "$T_EFISP_WRITE_FAIL"
       abort "efisp write failed"
     fi
-    printf 'ANDROID:boot.efi\nANDROID_BACKUP:boot_backup.efi\nANDROID_NOFAKEBL:LinuxLoader.efi\n' > "$EFISP_DIR/BOOTENTRIES"
+    printf 'ANDROID:boot.efi\nANDROID_BACKUP:boot_backup.efi\n' > "$EFISP_DIR/BOOTENTRIES"
     sync
 
     ui_print "$T_FLASH_BDS"

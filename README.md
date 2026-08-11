@@ -88,5 +88,5 @@ Common commands include:
 ### 5. File Reference
 1. `BDS.efi`: The superfastboot BDS, flashed raw to the `efisp` partition.
 2. `boot.efi` / `ABL.efi`: The cracked ABL with fake re-lock (the module names it `boot.efi`; the toolkit names it `ABL.efi`), placed on `persist` under `efisp/`.
-3. `LinuxLoader.efi` / `ABL_original.efi`: The original unpatched ABL (the `ANDROID_NOFAKEBL` entry). For analysis; do not flash to `efisp`.
+3. `LinuxLoader.efi` / `ABL_original.efi`: The original unpatched ABL. For analysis; do not flash to `efisp`.
 4. `BOOTENTRIES`: Boot entry list, format `<name>:<path relative to efisp/>`.

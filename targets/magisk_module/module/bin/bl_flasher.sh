@@ -157,15 +157,13 @@ write_bootentries_to() {
   cat > "$1/BOOTENTRIES" <<'EOF'
 ANDROID:boot.efi
 ANDROID_BACKUP:boot_backup.efi
-ANDROID_NOFAKEBL:LinuxLoader.efi
 EOF
 }
 
 # Extract and crack the target-slot ABL, then lay out the \efisp boot root
-# (boot.efi = cracked ABL, boot_backup.efi = the previous one, LinuxLoader.efi =
-# the original unpatched ABL) and flash the BDS itself to the raw efisp
-# partition. The ABL loaded by the real bootloader is the BDS; the BDS then
-# chains to one of these entries.
+# (boot.efi = cracked ABL, boot_backup.efi = the previous one) and flash the
+# BDS itself to the raw efisp partition. The ABL loaded by the real bootloader
+# is the BDS; the BDS then chains to one of these entries.
 #
 # In debug mode the boot root is staged under $RUNTIME_DIR/efisp and nothing is
 # written to a partition.
@@ -210,8 +208,7 @@ update_efisp() {
     write_log "$TEXT_BACKUP_BOOT"
   fi
 
-  if ! cp $RUNTIME_DIR/patched.efi "$efisp_target/boot.efi" >> "$LOG_FILE" 2>&1 || \
-     ! cp $RUNTIME_DIR/LinuxLoader.efi "$efisp_target/LinuxLoader.efi" >> "$LOG_FILE" 2>&1; then
+  if ! cp $RUNTIME_DIR/patched.efi "$efisp_target/boot.efi" >> "$LOG_FILE" 2>&1; then
     write_log "$TEXT_EFISP_WRITE_FAILED"
     return 1
   fi

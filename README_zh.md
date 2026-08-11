@@ -87,5 +87,5 @@
 ### 5. 文件说明
 1. `BDS.efi`：superfastboot BDS，以原始方式刷入 `efisp` 分区。
 2. `boot.efi` / `ABL.efi`：带假回锁的破解 ABL（模块中名为 `boot.efi`；toolkit 中名为 `ABL.efi`），存放在 `persist` 的 `efisp/` 下。
-3. `LinuxLoader.efi` / `ABL_original.efi`：原始未破解 ABL（`ANDROID_NOFAKEBL` 启动项）。用于分析，**不要刷入 `efisp`**。
+3. `LinuxLoader.efi` / `ABL_original.efi`：原始未破解 ABL。用于分析，**不要刷入 `efisp`**。
 4. `BOOTENTRIES`：启动项列表，格式 `<名称>:<相对 efisp/ 的路径>`。

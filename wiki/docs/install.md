@@ -10,7 +10,6 @@ On this device the boot root is the `persist` partition (ext4, auto-mounted at `
 |------|---------|
 | `boot.efi` | Cracked ABL with fake re-lock (`ANDROID` entry) |
 | `boot_backup.efi` | Previous `boot.efi` (`ANDROID_BACKUP` entry) |
-| `LinuxLoader.efi` | Original unpatched ABL (`ANDROID_NOFAKEBL` entry) |
 | `BOOTENTRIES` | Boot entry list, format `<name>:<path relative to efisp/>` |
 
 `BDS.efi` is written raw to the `efisp` partition (not into a filesystem).
@@ -31,7 +30,7 @@ The ABL on the `abl` partition must contain the **GBL vulnerability** so it load
 ### 3.1 Fresh install
 
 1. Install the module via KernelSU. When prompted, press **Vol+ (YES)**.
-   The module extracts & cracks the current-slot ABL, places `boot.efi` / `LinuxLoader.efi` / `BOOTENTRIES` into `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`.
+   The module extracts & cracks the current-slot ABL, places `boot.efi` / `BOOTENTRIES` into `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`.
 2. Reboot to **Recovery** and **format data**.
    > ⚠️ The first reboot may crash — simply retry.
 3. Reinstall the module and press **Vol- (NO)** to install the OTA-update patch.
@@ -50,11 +49,10 @@ After each OTA, open the module WebUI and flash again to keep the BL version (re
    - `ABL_original.efi` — original unpatched ABL
    - `BDS.efi` — bundled
 2. Create the folder `/mnt/vendor/persist/efisp` (e.g. via MT Manager).
-3. Copy `ABL.efi` into it (optionally `ABL_original.efi` as the no-fake-BL entry).
+3. Copy `ABL.efi` into it.
 4. Create `BOOTENTRIES` with:
    ```
    ANDROID:ABL.efi
-   ANDROID_NOFAKEBL:ABL_original.efi
    ```
 5. `sync`
 6. Flash `BDS.efi` to the `efisp` partition:
