@@ -55,7 +55,11 @@ typedef enum {
   SfbEntryEfiFile = 0,
   /* Built-in entries; no backing file, handled in code. */
   SfbEntryFastboot,
-  SfbEntrySelector
+  SfbEntrySelector,
+  /* Power management actions offered at the end of the menu and on the
+   * fastboot mode screen. */
+  SfbEntryPowerOff,
+  SfbEntryRestart
 } SFB_ENTRY_KIND;
 
 typedef struct {
@@ -63,6 +67,9 @@ typedef struct {
   /* TRUE when the entry was restored from the custom-entry store record
    * rather than discovered by scanning. */
   BOOLEAN                   IsCustom;
+  /* TRUE for entries whose BOOTENTRIES name began with '$': they are listed and
+   * bootable, but selecting one never overwrites the saved default. */
+  BOOLEAN                   NoDefault;
   CHAR16                    Desc[SFB_DESC_CHARS];
   CHAR16                    Path[SFB_PATH_CHARS];
   /* FAT volume label the entry lives on; how a stored entry finds its way

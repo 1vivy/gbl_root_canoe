@@ -424,6 +424,10 @@ SfbAsciiRelPathToUnicode (IN CONST CHAR8 *Rel, OUT CHAR16 *Out, IN UINTN OutChar
  * Parse one BOOTENTRIES line "<name>:<root-relative path>" into a description
  * and an absolute volume path. Returns FALSE for blank/comment lines, a missing
  * separator, an empty name or an empty path.
+ *
+ * A leading '$' on the name marks a "no default" entry: *NoDefault is set TRUE
+ * and the marker is stripped from the returned name, so "$Tools:tools.efi" is
+ * displayed as "Tools" but, when launched, never replaces the saved default.
  */
 STATIC
 BOOLEAN
@@ -431,17 +435,29 @@ SfbParseBootEntryLine (IN CONST CHAR8 *Line,
                        OUT CHAR16     *Name,
                        IN UINTN       NameChars,
                        OUT CHAR16     *Path,
-                       IN UINTN       PathChars)
+                       IN UINTN       PathChars,
+                       OUT BOOLEAN    *NoDefault)
 {
   CONST CHAR8  *Colon = NULL;
   CONST CHAR8  *Ptr;
   UINTN        Count = 0;
+
+  if (NoDefault != NULL) {
+    *NoDefault = FALSE;
+  }
 
   while (*Line == ' ' || *Line == '\t') {
     Line++;
   }
   if (*Line == '\0' || *Line == '#') {
     return FALSE;
+  }
+
+  if (*Line == '$') {
+    if (NoDefault != NULL) {
+      *NoDefault = TRUE;
+    }
+    Line++;
   }
 
   for (Ptr = Line; *Ptr != '\0'; Ptr++) {
@@ -532,6 +548,7 @@ SfbAppendBootEntriesFile (IN OUT SFB_MENU_STATE *Menu,
     SFB_BOOT_ENTRY  *Slot;
     UINTN           Index;
     BOOLEAN         Duplicate = FALSE;
+    BOOLEAN         NoDefault = FALSE;
 
     if (Menu->Count >= SFB_MAX_ENTRIES) {
       DEBUG ((EFI_D_ERROR, "SFB: entry list full, BOOTENTRIES truncated\n"));
@@ -539,7 +556,7 @@ SfbAppendBootEntriesFile (IN OUT SFB_MENU_STATE *Menu,
     }
 
     if (!SfbParseBootEntryLine (Line, Name, SFB_DESC_CHARS, RelPath,
-                                SFB_PATH_CHARS)) {
+                                SFB_PATH_CHARS, &NoDefault)) {
       continue;
     }
 
@@ -555,6 +572,7 @@ SfbAppendBootEntriesFile (IN OUT SFB_MENU_STATE *Menu,
     if (EFI_ERROR (SfbMakeFileEntry (Volume, Path, Name, Slot))) {
       continue;
     }
+    Slot->NoDefault = NoDefault;
 
     for (Index = 0; Index < Menu->Count; Index++) {
       if (SfbSameDevicePath (Menu->Entry[Index].DevicePath, Slot->DevicePath)) {
@@ -739,6 +757,8 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu)
 
   SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Fastboot");
   SfbAppendBuiltIn (Menu, SfbEntrySelector, L"Enter EFI Program Selector");
+  SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power Off");
+  SfbAppendBuiltIn (Menu, SfbEntryRestart, L"Restart");
 
   SfbResolveDefault (Menu);
 }
@@ -980,9 +1000,11 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
 
   /*
    * Committing the default before the launch is deliberate: an image that boots
-   * successfully never comes back to do it afterwards.
+   * successfully never comes back to do it afterwards. A "no default" entry
+   * (marked '$' in BOOTENTRIES) is skipped so launching it leaves the saved
+   * default untouched.
    */
-  if (!Temporary) {
+  if (!Temporary && !Entry->NoDefault) {
     SfbSaveDefaultEntry (Entry);
   }
 

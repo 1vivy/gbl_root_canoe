@@ -15,6 +15,7 @@
 #include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
+#include <Library/ShutdownServices.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include <Protocol/SimpleTextIn.h>
@@ -222,6 +223,23 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name, IN BOOLEAN ClearScreen)
 }
 
 /*
+ * Announce a power action (Power Off / Restart) and leave the message on
+ * screen while the reset takes effect. Neither action returns, so the screen is
+ * the last thing the user sees.
+ */
+VOID
+SfbShowActionScreen (IN CONST CHAR16 *Text)
+{
+  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
+  gST->ConOut->ClearScreen (gST->ConOut);
+  gST->ConOut->EnableCursor (gST->ConOut, FALSE);
+
+  Print (L"%s\r\n", Text);
+
+  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
+}
+
+/*
  * Seconds to hold on the "Entering Boot Menu" screen before the menu starts
  * taking input. Long enough that a volume key held from power-on has been
  * released, so it does not immediately move the menu cursor.
@@ -332,6 +350,16 @@ SfbRunBootMenu (VOID)
       SfbRunFileBrowser ();
       /* The browser may have added a custom entry. */
       Rebuild = TRUE;
+      break;
+
+    case SfbEntryPowerOff:
+      SfbShowActionScreen (L"Powering off...");
+      ShutdownDevice ();
+      break;
+
+    case SfbEntryRestart:
+      SfbShowActionScreen (L"Restarting...");
+      RebootDevice (NORMAL_MODE);
       break;
 
     case SfbEntryEfiFile:

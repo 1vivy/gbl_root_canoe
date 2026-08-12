@@ -91,6 +91,7 @@ found at
 #include <Library/UefiLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Protocol/EFIUsbDevice.h>
+#include <Protocol/SimpleTextIn.h>
 
 #include "BootStats.h"
 #include "FastbootCmds.h"
@@ -393,6 +394,116 @@ EFI_STATUS HandleUsbEvents (VOID)
 }
 
 /* Initialize and start fastboot */
+/*
+ * On-device fastboot mode screen.
+ *
+ * While fastboot waits for a USB host it also offers two on-device actions -
+ * power off and restart - driven by the same volume/power keys as the boot
+ * menu. The USB event loop polls the console between transfers, so a host
+ * connecting and issuing commands is unaffected.
+ */
+VOID RebootDevice (UINT8 RebootReason);
+VOID ShutdownDevice (VOID);
+
+/* Reboot reason values, mirroring ShutdownServices.h's RebootReasonType. The
+ * header is deliberately not pulled in here just for these constants. */
+#define NORMAL_MODE  0x0
+
+#define FB_ACTION_ROWS  2
+
+STATIC CONST CHAR16 *mFbActionRow[FB_ACTION_ROWS] = {
+  L"Power Off",
+  L"Restart",
+};
+STATIC UINTN mFbActionCursor = 0;
+
+#define FB_ATTR_NORMAL    EFI_TEXT_ATTR (EFI_LIGHTGRAY, EFI_BLACK)
+#define FB_ATTR_SELECTED  EFI_TEXT_ATTR (EFI_BLACK, EFI_LIGHTGRAY)
+#define FB_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
+
+typedef enum {
+  FbActionNone = 0,
+  FbActionPowerOff,
+  FbActionRestart
+} FB_ACTION;
+
+STATIC
+VOID
+FastbootDrawModeScreen (VOID)
+{
+  UINTN  Index;
+
+  gST->ConOut->SetAttribute (gST->ConOut, FB_ATTR_TITLE);
+  gST->ConOut->ClearScreen (gST->ConOut);
+  gST->ConOut->EnableCursor (gST->ConOut, FALSE);
+
+  Print (L"FASTBOOT MODE\r\n\r\n");
+
+  for (Index = 0; Index < FB_ACTION_ROWS; Index++) {
+    gST->ConOut->SetAttribute (gST->ConOut,
+                               (Index == mFbActionCursor) ? FB_ATTR_SELECTED
+                                                           : FB_ATTR_NORMAL);
+    Print (L"%s %s\r\n",
+           (Index == mFbActionCursor) ? L">" : L" ",
+           mFbActionRow[Index]);
+  }
+
+  gST->ConOut->SetAttribute (gST->ConOut, FB_ATTR_NORMAL);
+  Print (L"\r\nVol Up/Down: move   Power: select\r\n");
+}
+
+STATIC
+VOID
+FastbootShowActionScreen (IN CONST CHAR16 *Text)
+{
+  gST->ConOut->SetAttribute (gST->ConOut, FB_ATTR_TITLE);
+  gST->ConOut->ClearScreen (gST->ConOut);
+  gST->ConOut->EnableCursor (gST->ConOut, FALSE);
+
+  Print (L"%s\r\n", Text);
+
+  gST->ConOut->SetAttribute (gST->ConOut, FB_ATTR_NORMAL);
+}
+
+/*
+ * Non-blocking console poll. Returns the action to take, or FbActionNone when
+ * no key is pending. Volume up/down move the highlight (and redraw); anything
+ * else counts as confirm, matching how the boot menu treats the power key.
+ */
+STATIC
+FB_ACTION
+FastbootPollActionKey (VOID)
+{
+  EFI_STATUS     Status;
+  EFI_INPUT_KEY  Key;
+
+  Status = gBS->CheckEvent (gST->ConIn->WaitForKey);
+  if (Status == EFI_NOT_READY || EFI_ERROR (Status)) {
+    return FbActionNone;
+  }
+
+  Status = gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
+  if (EFI_ERROR (Status)) {
+    return FbActionNone;
+  }
+
+  if (Key.ScanCode == SCAN_UP) {
+    mFbActionCursor = (mFbActionCursor == 0) ? FB_ACTION_ROWS - 1
+                                              : mFbActionCursor - 1;
+    FastbootDrawModeScreen ();
+    return FbActionNone;
+  }
+
+  if (Key.ScanCode == SCAN_DOWN) {
+    mFbActionCursor = (mFbActionCursor + 1 >= FB_ACTION_ROWS)
+                        ? 0 : mFbActionCursor + 1;
+    FastbootDrawModeScreen ();
+    return FbActionNone;
+  }
+
+  return (mFbActionCursor == 0) ? FbActionPowerOff : FbActionRestart;
+}
+
 EFI_STATUS FastbootInitialize (VOID)
 {
   EFI_STATUS Status = EFI_SUCCESS;
@@ -406,11 +517,38 @@ EFI_STATUS FastbootInitialize (VOID)
     return Status;
   }
   StoreRootDeviceType ();
+
+  /*
+   * Draw the on-device fastboot mode screen with the power/restart actions. A
+   * key held while entering fastboot (the power press that confirmed "Enter
+   * Fastboot") is released and drained first, with a brief pause, so it cannot
+   * fire a spurious confirm on the highlighted action row.
+   */
+  gBS->Stall (1000000);
+  gST->ConIn->Reset (gST->ConIn, FALSE);
+  mFbActionCursor = 0;
+  FastbootDrawModeScreen ();
+
   /* Wait for USB events in tight loop */
   while (1) {
     Status = HandleUsbEvents ();
     if (EFI_ERROR (Status) && (Status != EFI_ABORTED)) {
       DEBUG ((EFI_D_ERROR, "Error, failed to handle USB event\n"));
+      break;
+    }
+
+    switch (FastbootPollActionKey ()) {
+    case FbActionPowerOff:
+      FastbootShowActionScreen (L"Powering off...");
+      ShutdownDevice ();
+      return EFI_SUCCESS;
+
+    case FbActionRestart:
+      FastbootShowActionScreen (L"Restarting...");
+      RebootDevice (NORMAL_MODE);
+      return EFI_SUCCESS;
+
+    default:
       break;
     }
 
