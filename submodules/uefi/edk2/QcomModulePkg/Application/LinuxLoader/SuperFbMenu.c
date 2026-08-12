@@ -269,14 +269,15 @@ SfbShowEnteringMenu (VOID)
 
 STATIC
 VOID
-SfbDrawBootMenu (IN CONST SFB_MENU_STATE *Menu,
-                 IN UINTN                Cursor)
+SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
+             IN UINTN                Cursor,
+             IN CONST CHAR16         *Title)
 {
   UINTN  Start;
   UINTN  Index;
   UINTN  Last;
 
-  SfbBeginScreen (L"Boot Menu", NULL);
+  SfbBeginScreen (Title, NULL);
 
   if (Menu->Count == 0) {
     Print (L"  No boot entries found.\r\n");
@@ -290,9 +291,18 @@ SfbDrawBootMenu (IN CONST SFB_MENU_STATE *Menu,
 
   for (Index = Start; Index < Last; Index++) {
     CONST SFB_BOOT_ENTRY  *Entry = &Menu->Entry[Index];
-    SfbDrawRow ((BOOLEAN)(Index == Cursor),
-                (Index == Menu->DefaultIndex) ? L"*" : L" ",
-                Entry->Desc);
+    CONST CHAR16          *Marker = (Index == Menu->DefaultIndex) ? L"*" : L" ";
+
+    /* Submenu rows get a trailing '>' so it is obvious they open another list
+     * rather than launch an image. */
+    if (Entry->Kind == SfbEntrySubmenu) {
+      CHAR16  Text[SFB_DESC_CHARS + 4];
+
+      UnicodeSPrint (Text, sizeof (Text), L"%s >", Entry->Desc);
+      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
+    } else {
+      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Entry->Desc);
+    }
   }
 
   if (Last < Menu->Count) {
@@ -300,6 +310,97 @@ SfbDrawBootMenu (IN CONST SFB_MENU_STATE *Menu,
   }
 
   SfbEndScreen (L"Vol Up/Down: move   Power: select");
+}
+
+/*
+ * Run a submenu defined by the ENTRIES file at EntriesPath on Volume. The file
+ * is parsed exactly like the root BOOTENTRIES, and may itself contain further
+ * '%' submenu rows; Depth bounds the nesting so a chain of files that points at
+ * one another cannot recurse without limit. The submenu state is heap-allocated
+ * (a single SFB_MENU_STATE is ~17 KB) so deep nesting stays off the call stack.
+ *
+ * Returns when the user picks the trailing "Back" row, or when the file could
+ * not be built at all; the caller then redraws its own menu.
+ */
+STATIC
+VOID
+SfbRunSubMenu (IN EFI_HANDLE   Volume,
+               IN CONST CHAR16 *EntriesPath,
+               IN CONST CHAR16 *Title,
+               IN UINTN        Depth)
+{
+  SFB_MENU_STATE  *Menu = NULL;
+  UINTN           Cursor = 0;
+  BOOLEAN         Rebuild = TRUE;
+  SFB_KEY         Key;
+  EFI_STATUS      Status;
+
+  Menu = AllocateZeroPool (sizeof (*Menu));
+  if (Menu == NULL) {
+    return;
+  }
+  Menu->DefaultIndex = SFB_NO_INDEX;
+
+  while (TRUE) {
+    UINTN  Chosen;
+
+    if (Rebuild) {
+      SfbFreeMenu (Menu);
+      Status = SfbBuildSubMenu (Menu, Volume, EntriesPath);
+      if (EFI_ERROR (Status)) {
+        SfbReportStatus (Title, Status);
+        break;
+      }
+      Cursor = 0;
+      Rebuild = FALSE;
+    }
+
+    SfbDrawMenu (Menu, Cursor, Title);
+
+    /* Same input model as the root menu: volume keys move, power confirms. */
+    Key = SfbWaitForKey (0);
+
+    if (Key == SfbKeyUp || Key == SfbKeyDown) {
+      SfbMoveCursor (&Cursor, Menu->Count, Key);
+      continue;
+    }
+
+    if (Menu->Count == 0) {
+      continue;
+    }
+
+    Chosen = Cursor;
+    switch (Menu->Entry[Chosen].Kind) {
+    case SfbEntryBack:
+      goto done;
+
+    case SfbEntrySubmenu:
+      if (Depth >= SFB_MAX_SUBMENU_DEPTH) {
+        SfbReportStatus (L"Submenu too deep", EFI_BUFFER_TOO_SMALL);
+      } else {
+        SfbRunSubMenu (Menu->Entry[Chosen].Volume,
+                       Menu->Entry[Chosen].Path,
+                       Menu->Entry[Chosen].Desc,
+                       Depth + 1);
+      }
+      /* Media may have changed while the child menu was open. */
+      Rebuild = TRUE;
+      break;
+
+    case SfbEntryEfiFile:
+    default:
+      Status = SfbLaunchEntry (&Menu->Entry[Chosen], FALSE, TRUE);
+      if (EFI_ERROR (Status)) {
+        SfbReportStatus (L"Boot failed", Status);
+      }
+      Rebuild = TRUE;
+      break;
+    }
+  }
+
+done:
+  SfbFreeMenu (Menu);
+  FreePool (Menu);
 }
 
 BOOLEAN
@@ -324,7 +425,7 @@ SfbRunBootMenu (VOID)
       Rebuild = FALSE;
     }
 
-    SfbDrawBootMenu (&Menu, Cursor);
+    SfbDrawMenu (&Menu, Cursor, L"Boot Menu");
 
     /* The menu is purely interactive: it waits for a key indefinitely and
      * never launches anything unattended. */
@@ -349,6 +450,20 @@ SfbRunBootMenu (VOID)
     case SfbEntrySelector:
       SfbRunFileBrowser ();
       /* The browser may have added a custom entry. */
+      Rebuild = TRUE;
+      break;
+
+    case SfbEntrySubmenu:
+      SfbRunSubMenu (Menu.Entry[Chosen].Volume,
+                     Menu.Entry[Chosen].Path,
+                     Menu.Entry[Chosen].Desc,
+                     1);
+      /* Media may have changed while the submenu was open. */
+      Rebuild = TRUE;
+      break;
+
+    case SfbEntryBack:
+      /* Only submenus carry a Back row; the root menu never adds one. */
       Rebuild = TRUE;
       break;
 

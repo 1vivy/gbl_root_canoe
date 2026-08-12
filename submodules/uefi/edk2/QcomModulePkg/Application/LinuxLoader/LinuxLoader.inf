@@ -70,8 +70,6 @@
 
 [Sources]
 	LinuxLoader.c
-	hibernation/HibernationImageLoader.c
-	hibernation/Jumptokernel.s
 	SuperFbMenu.h
 	SuperFbFat.c
 	SuperFbStore.c

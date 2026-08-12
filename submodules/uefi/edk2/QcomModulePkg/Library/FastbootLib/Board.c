@@ -65,13 +65,11 @@
 
 #include "AutoGen.h"
 #include <Board.h>
-#include <Library/BootImage.h>
-#include <Library/UpdateCmdLine.h>
-#include <Library/UpdateDeviceTree.h>
 #include <Protocol/EFICardInfo.h>
 #include <Protocol/EFIPlatformInfoTypes.h>
 
 #include <LinuxLoaderLib.h>
+#define BOOT_IMG_MAX_PAGE_SIZE 4096
 
 STATIC struct BoardInfo platform_board_info;
 

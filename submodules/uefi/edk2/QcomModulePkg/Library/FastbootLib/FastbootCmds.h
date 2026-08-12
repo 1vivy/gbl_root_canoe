@@ -218,8 +218,6 @@ ANDROID_FASTBOOT_STATE FastbootCurrentState (VOID);
 
 EFI_STATUS
 UpdateDevInfo (CHAR16 *Pname, CHAR8 *ImgVersion);
-VOID
-GetDevInfo (DeviceInfo **DevinfoPtr);
 BOOLEAN IsFlashSplitNeeded (VOID);
 BOOLEAN FlashComplete (VOID);
 BOOLEAN IsDisableParallelDownloadFlash (VOID);

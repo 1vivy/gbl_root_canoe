@@ -25,11 +25,20 @@
  * Optional file in a volume's root directory listing extra boot entries, one
  * per line:
  *
- *   <name>:<path relative to the volume root>
+ *   <name>:<path relative to the boot root>
+ *   %<name>:<path to another ENTRIES file relative to the boot root>
  *
  * e.g. "MEMTEST:EFI/MEMTEST.EFI". Either '/' or '\' separates path components,
  * a leading separator is optional, blank lines and lines starting with '#' are
- * ignored. Entries here are listed alongside the auto-discovered boot loader.
+ * ignored. A '$' prefix on the name marks a "no default" entry. Entries here
+ * are listed alongside the auto-discovered boot loader.
+ *
+ * A line beginning with '%' names a submenu: the path points at another file in
+ * the same BOOTENTRIES format whose entries are shown when the row is selected.
+ * Paths inside that file are still relative to the boot root (the volume root
+ * for FAT32, \efisp for ext4), not to the submenu file's own directory, and the
+ * file may itself contain further '%' submenu rows, up to SFB_MAX_SUBMENU_DEPTH
+ * levels deep.
  */
 #define SFB_BOOTENTRIES_PATH  L"\\BOOTENTRIES"
 
@@ -48,14 +57,24 @@
 #define SFB_MAX_ENTRIES      24
 #define SFB_MAX_DIR_ENTRIES  128
 
+/* Deepest submenu nesting allowed. Bounds the recursion when a chain of
+ * ENTRIES files points at one another; beyond this the menu shows "too deep"
+ * rather than descending further. */
+#define SFB_MAX_SUBMENU_DEPTH  8
+
 #define SFB_NO_INDEX  ((UINTN)-1)
 
 typedef enum {
-  /* An EFI application living on a FAT32 volume. */
+  /* An EFI application living on a FAT32/ext4 volume. */
   SfbEntryEfiFile = 0,
+  /* A pointer to another ENTRIES file: selecting it opens that file as a
+   * submenu. Volume/Path name the ENTRIES file; Desc is the submenu title. */
+  SfbEntrySubmenu,
   /* Built-in entries; no backing file, handled in code. */
   SfbEntryFastboot,
   SfbEntrySelector,
+  /* "Back" row at the foot of a submenu: returns to the parent menu. */
+  SfbEntryBack,
   /* Power management actions offered at the end of the menu and on the
    * fastboot mode screen. */
   SfbEntryPowerOff,
@@ -224,6 +243,19 @@ SfbStoreRead (IN UINTN Slot, OUT CHAR8 *Out, IN UINTN OutBytes);
 
 VOID
 SfbBuildMenu (OUT SFB_MENU_STATE *Menu);
+
+/*
+ * Build a submenu from an ENTRIES file at EntriesPath (an absolute volume path
+ * on Volume) and append a trailing "Back" row. The ENTRIES file has the same
+ * format as BOOTENTRIES, and every path inside it is resolved relative to the
+ * same boot root (volume root for FAT32, \efisp for ext4). Returns
+ * EFI_INVALID_PARAMETER for a null Volume/path; EFI_SUCCESS otherwise (an empty
+ * or unreadable file simply yields a menu holding only "Back").
+ */
+EFI_STATUS
+SfbBuildSubMenu (OUT SFB_MENU_STATE *Menu,
+                 IN EFI_HANDLE      Volume,
+                 IN CONST CHAR16    *EntriesPath);
 
 VOID
 SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu);

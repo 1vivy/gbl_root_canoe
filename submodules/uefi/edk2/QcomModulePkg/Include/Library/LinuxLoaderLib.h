@@ -67,7 +67,6 @@
 
 #include <Uefi.h>
 
-#include "DeviceInfo.h"
 #include <Guid/FileInfo.h>
 #include <Guid/FileSystemInfo.h>
 #include <Guid/Gpt.h>
@@ -189,9 +188,6 @@ EFI_STATUS
 LoadImageFromPartition (VOID *ImageBuffer, UINT32 *ImageSize, CHAR16 *Pname);
 
 EFI_STATUS
-ReadWriteDeviceInfo (vb_device_state_op_t Mode, void *DevInfo, UINT32 Sz);
-
-EFI_STATUS
 GetNandMiscPartiGuid (EFI_GUID *Ptype);
 /**
   Returns a list of BlkIo handles based on required criteria
@@ -249,17 +245,5 @@ WriteBlockToPartition (EFI_BLOCK_IO_PROTOCOL *BlockIo,
                    IN VOID *Image);
 
 VOID StoreRootDeviceType (VOID);
-
-#ifdef AUDIO_FRAMEWORK
-STATIC inline CHAR8* GetAudioFw (VOID)
-{
- return AUDIO_FRAMEWORK;
-}
-#else
-STATIC inline CHAR8* GetAudioFw (VOID)
-{
- return "\0";
-}
-#endif
 
 #endif

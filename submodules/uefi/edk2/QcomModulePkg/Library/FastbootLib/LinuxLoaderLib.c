@@ -508,28 +508,6 @@ UINT64 GetTimerCountms (VOID)
   return Ms;
 }
 
-EFI_STATUS//sub_1842C
-ReadWriteDeviceInfo (vb_device_state_op_t Mode, void *DevInfo, UINT32 Sz)
-{
-  EFI_STATUS Status = EFI_INVALID_PARAMETER;
-  QCOM_VERIFIEDBOOT_PROTOCOL *VbIntf;
-
-  Status = gBS->LocateProtocol (&gEfiQcomVerifiedBootProtocolGuid, NULL,
-                                (VOID **)&VbIntf);
-  if (Status != EFI_SUCCESS) {
-    DEBUG ((EFI_D_ERROR, "Unable to locate VB protocol: %r\n", Status));
-    return Status;
-  }
-
-  Status = VbIntf->VBRwDeviceState (VbIntf, Mode, DevInfo, Sz);
-  if (Status != EFI_SUCCESS) {
-    DEBUG ((EFI_D_ERROR, "VBRwDevice failed with: %r\n", Status));
-    return Status;
-  }
-
-  return Status;
-}
-
 EFI_STATUS
 GetNandMiscPartiGuid (EFI_GUID *Ptype)
 {

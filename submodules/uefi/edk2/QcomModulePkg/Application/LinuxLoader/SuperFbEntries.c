@@ -428,6 +428,12 @@ SfbAsciiRelPathToUnicode (IN CONST CHAR8 *Rel, OUT CHAR16 *Out, IN UINTN OutChar
  * A leading '$' on the name marks a "no default" entry: *NoDefault is set TRUE
  * and the marker is stripped from the returned name, so "$Tools:tools.efi" is
  * displayed as "Tools" but, when launched, never replaces the saved default.
+ *
+ * A leading '%' instead of a name marks a submenu: *IsSubmenu is set TRUE and
+ * the path names another ENTRIES file (same format, paths still relative to the
+ * boot root) to open when the row is selected. The '%' and '$' markers are
+ * mutually exclusive: a submenu row is never a launch target, so "no default"
+ * does not apply to it.
  */
 STATIC
 BOOLEAN
@@ -436,7 +442,8 @@ SfbParseBootEntryLine (IN CONST CHAR8 *Line,
                        IN UINTN       NameChars,
                        OUT CHAR16     *Path,
                        IN UINTN       PathChars,
-                       OUT BOOLEAN    *NoDefault)
+                       OUT BOOLEAN    *NoDefault,
+                       OUT BOOLEAN    *IsSubmenu)
 {
   CONST CHAR8  *Colon = NULL;
   CONST CHAR8  *Ptr;
@@ -444,6 +451,9 @@ SfbParseBootEntryLine (IN CONST CHAR8 *Line,
 
   if (NoDefault != NULL) {
     *NoDefault = FALSE;
+  }
+  if (IsSubmenu != NULL) {
+    *IsSubmenu = FALSE;
   }
 
   while (*Line == ' ' || *Line == '\t') {
@@ -453,7 +463,12 @@ SfbParseBootEntryLine (IN CONST CHAR8 *Line,
     return FALSE;
   }
 
-  if (*Line == '$') {
+  if (*Line == '%') {
+    if (IsSubmenu != NULL) {
+      *IsSubmenu = TRUE;
+    }
+    Line++;
+  } else if (*Line == '$') {
     if (NoDefault != NULL) {
       *NoDefault = TRUE;
     }
@@ -507,33 +522,33 @@ SfbJoinRoot (IN CONST CHAR16 *RootPrefix,
 }
 
 /*
- * Read the optional <RootPrefix>\BOOTENTRIES file on Volume and add one menu
- * entry for each line that names a file present on the volume. Entries already
+ * Read the ENTRIES file at EntriesPath (an absolute volume path) on Volume and
+ * add one menu entry for each line that names a file present on the volume. A
+ * '%' line names a submenu and points at another ENTRIES file. Entries already
  * discovered (e.g. the auto-scanned boot loader, or an identical earlier line)
  * are not listed twice. RootPrefix (see SfbVolumeRootPrefix) is "" for FAT32
- * and "\efisp" for the ext4 persist volume, so the same logic serves both.
+ * and "\efisp" for the ext4 persist volume, so the same logic serves both; it
+ * is prepended to every root-relative path inside the file.
  */
 STATIC
 VOID
-SfbAppendBootEntriesFile (IN OUT SFB_MENU_STATE *Menu,
-                          IN EFI_HANDLE         Volume,
-                          IN EFI_FILE_PROTOCOL  *Root,
-                          IN CONST CHAR16       *RootPrefix)
+SfbAppendEntriesFile (IN OUT SFB_MENU_STATE *Menu,
+                      IN EFI_HANDLE         Volume,
+                      IN EFI_FILE_PROTOCOL  *Root,
+                      IN CONST CHAR16       *RootPrefix,
+                      IN CONST CHAR16       *EntriesPath)
 {
   CHAR8        *Buffer;
   UINTN        Size = 0;
   CONST CHAR8  *Cursor;
   CHAR8        Line[SFB_PATH_CHARS + SFB_DESC_CHARS + 4];
-  CHAR16       BootentriesPath[SFB_PATH_CHARS];
-
-  SfbJoinRoot (RootPrefix, SFB_BOOTENTRIES_PATH, BootentriesPath, SFB_PATH_CHARS);
 
   Buffer = AllocateZeroPool (SFB_LIST_MAX_BYTES + 1);
   if (Buffer == NULL) {
     return;
   }
 
-  if (EFI_ERROR (SfbReadFileBytes (Root, BootentriesPath, Buffer,
+  if (EFI_ERROR (SfbReadFileBytes (Root, EntriesPath, Buffer,
                                    SFB_LIST_MAX_BYTES, &Size))) {
     FreePool (Buffer);
     return;
@@ -549,26 +564,42 @@ SfbAppendBootEntriesFile (IN OUT SFB_MENU_STATE *Menu,
     UINTN           Index;
     BOOLEAN         Duplicate = FALSE;
     BOOLEAN         NoDefault = FALSE;
+    BOOLEAN         IsSubmenu = FALSE;
 
     if (Menu->Count >= SFB_MAX_ENTRIES) {
-      DEBUG ((EFI_D_ERROR, "SFB: entry list full, BOOTENTRIES truncated\n"));
+      DEBUG ((EFI_D_ERROR, "SFB: entry list full, ENTRIES truncated\n"));
       break;
     }
 
     if (!SfbParseBootEntryLine (Line, Name, SFB_DESC_CHARS, RelPath,
-                                SFB_PATH_CHARS, &NoDefault)) {
+                                SFB_PATH_CHARS, &NoDefault, &IsSubmenu)) {
       continue;
     }
 
     SfbJoinRoot (RootPrefix, RelPath, Path, SFB_PATH_CHARS);
 
     if (!SfbFileExists (Root, Path)) {
-      DEBUG ((EFI_D_INFO, "SFB: BOOTENTRIES '%s' -> '%s' not present\n",
+      DEBUG ((EFI_D_INFO, "SFB: ENTRIES '%s' -> '%s' not present\n",
               Name, Path));
       continue;
     }
 
     Slot = &Menu->Entry[Menu->Count];
+
+    if (IsSubmenu) {
+      /* No DevicePath: a submenu row is opened, not launched. The path points
+       * at the child ENTRIES file and is resolved relative to the same boot
+       * root as everything else in this file. */
+      ZeroMem (Slot, sizeof (*Slot));
+      Slot->Kind = SfbEntrySubmenu;
+      Slot->Volume = Volume;
+      StrnCpyS (Slot->Path, SFB_PATH_CHARS, Path, SFB_PATH_CHARS - 1);
+      StrnCpyS (Slot->Desc, SFB_DESC_CHARS, Name, SFB_DESC_CHARS - 1);
+      DEBUG ((EFI_D_INFO, "SFB: submenu entry '%s' -> '%s'\n", Name, Path));
+      Menu->Count++;
+      continue;
+    }
+
     if (EFI_ERROR (SfbMakeFileEntry (Volume, Path, Name, Slot))) {
       continue;
     }
@@ -585,7 +616,7 @@ SfbAppendBootEntriesFile (IN OUT SFB_MENU_STATE *Menu,
       continue;
     }
 
-    DEBUG ((EFI_D_INFO, "SFB: BOOTENTRIES entry '%s' -> '%s'\n", Name, Path));
+    DEBUG ((EFI_D_INFO, "SFB: ENTRIES entry '%s' -> '%s'\n", Name, Path));
     Menu->Count++;
   }
 
@@ -614,6 +645,7 @@ SfbScanVolumes (IN OUT SFB_MENU_STATE *Menu)
     CONST CHAR16       *RootPrefix;
     CHAR16             BootPath[SFB_PATH_CHARS];
     CHAR16             DescPath[SFB_PATH_CHARS];
+    CHAR16             BootentriesPath[SFB_PATH_CHARS];
     CHAR16             Desc[SFB_DESC_CHARS];
 
     if (Menu->Count >= SFB_MAX_ENTRIES) {
@@ -628,6 +660,8 @@ SfbScanVolumes (IN OUT SFB_MENU_STATE *Menu)
     RootPrefix = SfbVolumeRootPrefix (Volumes[Index]);
     SfbJoinRoot (RootPrefix, SFB_BOOT_FILE_PATH, BootPath, SFB_PATH_CHARS);
     SfbJoinRoot (RootPrefix, SFB_DESC_FILE_PATH, DescPath, SFB_PATH_CHARS);
+    SfbJoinRoot (RootPrefix, SFB_BOOTENTRIES_PATH, BootentriesPath,
+                 SFB_PATH_CHARS);
 
     Status = SfbOpenVolumeRoot (Volumes[Index], &Root);
     if (EFI_ERROR (Status) || Root == NULL) {
@@ -635,7 +669,8 @@ SfbScanVolumes (IN OUT SFB_MENU_STATE *Menu)
     }
 
     /* Entries listed explicitly in <RootPrefix>\BOOTENTRIES come first. */
-    SfbAppendBootEntriesFile (Menu, Volumes[Index], Root, RootPrefix);
+    SfbAppendEntriesFile (Menu, Volumes[Index], Root, RootPrefix,
+                          BootentriesPath);
 
     /*
      * Then the auto-discovered well-known boot loader, if the volume carries
@@ -774,6 +809,36 @@ SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu)
 
   Menu->Count = 0;
   Menu->DefaultIndex = SFB_NO_INDEX;
+}
+
+EFI_STATUS
+SfbBuildSubMenu (OUT SFB_MENU_STATE *Menu,
+                 IN EFI_HANDLE      Volume,
+                 IN CONST CHAR16    *EntriesPath)
+{
+  EFI_FILE_PROTOCOL  *Root = NULL;
+  CONST CHAR16       *RootPrefix;
+
+  ZeroMem (Menu, sizeof (*Menu));
+  Menu->DefaultIndex = SFB_NO_INDEX;
+
+  if (Volume == NULL || EntriesPath == NULL || EntriesPath[0] == L'\0') {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  /* The submenu shares the parent volume's boot root: every path inside the
+   * ENTRIES file is resolved relative to it, never to the file's own directory,
+   * so the same RootPrefix that served the parent menu serves the child. */
+  RootPrefix = SfbVolumeRootPrefix (Volume);
+  if (!EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) && Root != NULL) {
+    SfbAppendEntriesFile (Menu, Volume, Root, RootPrefix, EntriesPath);
+    Root->Close (Root);
+  }
+
+  /* Always offer a way out: an empty or unreadable file still leaves the user
+   * on a screen with a Back row. */
+  SfbAppendBuiltIn (Menu, SfbEntryBack, L"Back");
+  return EFI_SUCCESS;
 }
 
 /* ---- launching ---------------------------------------------------------- */

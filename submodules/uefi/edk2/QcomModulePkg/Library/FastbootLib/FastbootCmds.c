@@ -71,10 +71,9 @@ found at
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/Debug.h>
-#include <Library/DeviceInfo.h>
+#include <Uefi.h>
 #include <Library/DevicePathLib.h>
 #include <Library/MemoryAllocationLib.h>
-#include <Library/MenuKeysDetection.h>
 #include <Library/PartitionTableUpdate.h>
 #include <Library/PcdLib.h>
 #include <Library/PrintLib.h>
@@ -83,8 +82,6 @@ found at
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
-#include <Library/UnlockMenu.h>
-#include <Uefi.h>
 
 #include <Guid/EventGroup.h>
 
@@ -94,21 +91,54 @@ found at
 #include <Protocol/EFIUbiFlasher.h>
 #include <Protocol/SimpleTextIn.h>
 #include <Protocol/SimpleTextOut.h>
-#include <Protocol/EFIDisplayUtils.h>
 
 #include "AutoGen.h"
-#include "BootImage.h"
-#include "BootStats.h"
 #include "FastbootCmds.h"
 #include "FastbootMain.h"
 #include "LinuxLoaderLib.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
-#include "Recovery.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
 
-#ifdef ENABLE_UPDATE_PARTITIONS_CMDS
-#endif
+#define BOOT_NAME_SIZE 16
+#define BOOT_ARGS_SIZE 512
+#define BOOT_EXTRA_ARGS_SIZE 1024
+#define BOOT_MAGIC "ANDROID!"
+#define BOOT_MAGIC_SIZE 8
+struct boot_img_hdr_v0 {
+  CHAR8 magic[BOOT_MAGIC_SIZE];
+
+  UINT32 kernel_size; /* size in bytes */
+  UINT32 kernel_addr; /* physical load addr */
+
+  UINT32 ramdisk_size; /* size in bytes */
+  UINT32 ramdisk_addr; /* physical load addr */
+
+  UINT32 second_size; /* size in bytes */
+  UINT32 second_addr; /* physical load addr */
+
+  UINT32 tags_addr;  /* physical addr for kernel tags */
+  UINT32 page_size;  /* flash page size we assume */
+  UINT32 header_version; /* version for the boot image header */
+  UINT32 os_version; /* version << 11 | patch_level */
+
+  UINT8 name[BOOT_NAME_SIZE]; /* asciiz product name */
+
+  UINT8 cmdline[BOOT_ARGS_SIZE];
+
+  UINT32 id[8]; /* timestamp / checksum / sha1 / etc */
+
+  /* Supplemental command line data; kept here to maintain
+   * binary compatibility with older versions of mkbootimg
+   */
+  UINT8 extra_cmdline[BOOT_EXTRA_ARGS_SIZE];
+} __attribute__((packed));
+
+/*
+ * It is expected that callers would explicitly specify which version of the
+ * boot image header they need to use.
+ */
+typedef struct boot_img_hdr_v0 boot_img_hdr;
 
 STATIC FASTBOOT_VAR *Varlist;
 STATIC BOOLEAN Finished = FALSE;
@@ -1050,11 +1080,6 @@ HandleMetaImgFlash (IN CHAR16 *PartitionName,
       return Status;
     }
   }
-
-  Status = UpdateDevInfo (PartitionName, meta_header->img_version);
-  if (Status != EFI_SUCCESS) {
-    DEBUG ((EFI_D_ERROR, "Unable to Update DevInfo\n"));
-  }
   return Status;
 }
 
@@ -1954,58 +1979,6 @@ ReadFromPartition (EFI_GUID *Ptype, VOID **Msg, UINT32 Size)
   return (ReadFromPartitionOffset (Ptype, Msg, Size, 0));
 }
 
-EFI_STATUS
-WriteRecoveryMessage (CHAR8 *Command)
-{
-  EFI_STATUS Status = EFI_SUCCESS;
-  struct RecoveryMessage * Msg = NULL;
-  EFI_GUID Ptype = gEfiMiscPartitionGuid;
-  MemCardType CardType = UNKNOWN;
-  VOID *PartitionData = NULL;
-  UINT32 PageSize;
-
-  CardType = CheckRootDeviceType ();
-  if (CardType == NAND) {
-    Status = GetNandMiscPartiGuid (&Ptype);
-    if (Status != EFI_SUCCESS) {
-      return Status;
-    }
-  }
-
-  GetPageSize (&PageSize);
-
-  /* Get the first 2 pages of the misc partition */
-  Status = ReadFromPartition (&Ptype, (VOID **)&PartitionData, (PageSize * 2));
-
-  if (Status != EFI_SUCCESS) {
-    DEBUG ((EFI_D_ERROR, "Error Reading from misc partition: %r\n", Status));
-    return Status;
-  }
-
-  if (!PartitionData) {
-    DEBUG ((EFI_D_ERROR, "Error in loading Data from misc partition\n"));
-    return EFI_INVALID_PARAMETER;
-  }
-
-  /* If the device type is NAND then write the recovery message into page 1,
-   * Else write into the page 0
-   */
-
-  Msg = (CardType == NAND) ?
-           (struct RecoveryMessage *) ((CHAR8 *) PartitionData + PageSize) :
-           (struct RecoveryMessage *) PartitionData;
-
-  Status = AsciiStrnCpyS (Msg->Command, sizeof (Msg->Command),
-                                  Command, AsciiStrLen (Command));
-  if (Status == EFI_SUCCESS) {
-    Status =
-       WriteToPartition (&Ptype, Msg, sizeof (struct RecoveryMessage));
-   }
-
-  FreePool (PartitionData);
-  PartitionData = NULL;
-  return Status;
-}
 /* This function must be called to deallocate the USB buffers, as well
  * as the main Fastboot Buffer. Also Frees Variable data Structure
  */
@@ -2324,43 +2297,6 @@ CmdReboot (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
   FastbootFail ("Failed to reboot");
 }
 
-STATIC VOID
-CmdRebootRecovery (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
-{
-  EFI_STATUS Status = EFI_SUCCESS;
-
-  Status = WriteRecoveryMessage (RECOVERY_BOOT_RECOVERY);
-  if (Status != EFI_SUCCESS) {
-    FastbootFail ("Failed to reboot to recovery mode");
-    return;
-  }
-  DEBUG ((EFI_D_INFO, "rebooting the device to recovery\n"));
-  FastbootOkay ("");
-
-  RebootDevice (NORMAL_MODE);
-
-  // Shouldn't get here
-  FastbootFail ("Failed to reboot");
-}
-
-STATIC VOID
-CmdRebootFastboot (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
-{
-  EFI_STATUS Status = EFI_SUCCESS;
-  Status = WriteRecoveryMessage (RECOVERY_BOOT_FASTBOOT);
-  if (Status != EFI_SUCCESS) {
-    FastbootFail ("Failed to reboot to fastboot mode");
-    return;
-  }
-  DEBUG ((EFI_D_INFO, "rebooting the device to fastbootd\n"));
-  FastbootOkay ("");
-
-  RebootDevice (NORMAL_MODE);
-
-  // Shouldn't get here
-  FastbootFail ("Failed to reboot");
-}
-
 STATIC VOID UpdateGetVarVariable (VOID)
 {
 }
@@ -2422,7 +2358,6 @@ CmdGetVar (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
 
 #ifdef ENABLE_BOOT_CMD
 #define EFI_PE_SIGNATURE  0x5A4D
-
 STATIC BOOLEAN
 IsEfiInBootImg (boot_img_hdr *Hdr, UINT32 Size, VOID **EfiData, UINT32 *EfiSize)
 {
@@ -2437,7 +2372,7 @@ IsEfiInBootImg (boot_img_hdr *Hdr, UINT32 Size, VOID **EfiData, UINT32 *EfiSize)
     return FALSE;
   }
 
-  if (Hdr->header_version > BOOT_HEADER_VERSION_TWO) {
+  if (Hdr->header_version > 2) {
     /* v3/v4 header 的 kernel 紧跟在 header 后面，page_size 固定 4096 */
     PageSize = 4096;
   } else {
@@ -2512,378 +2447,6 @@ CmdBoot (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
   FastbootFail ("No EFI image found in boot.img");
 }
 #endif
-
-STATIC VOID
-CmdRebootBootloader (CONST CHAR8 *arg, VOID *data, UINT32 sz)
-{
-  DEBUG ((EFI_D_INFO, "Rebooting the device into bootloader mode\n"));
-  FastbootOkay ("");
-  RebootDevice (FASTBOOT_MODE);
-
-  // Shouldn't get here
-  FastbootFail ("Failed to reboot");
-}
-
-#if (defined(ENABLE_DEVICE_CRITICAL_LOCK_UNLOCK_CMDS) ||                       \
-     defined(ENABLE_UPDATE_PARTITIONS_CMDS))
-
-STATIC VOID
-SetDeviceUnlock (UINT32 Type, BOOLEAN State)
-{
-  BOOLEAN is_unlocked = FALSE;
-  char response[MAX_RSP_SIZE] = {0};
-
-
-  if (Type == UNLOCK)
-    is_unlocked = IsUnlocked ();
-  else if (Type == UNLOCK_CRITICAL)
-    is_unlocked = IsUnlockCritical ();
-  if (State == is_unlocked) {
-    AsciiSPrint (response, MAX_RSP_SIZE, "\tDevice already : %a",
-                 (State ? "unlocked!" : "locked!"));
-    FastbootFail (response);
-    return;
-  }
-
-    SetDeviceUnlockValue (Type, State);
-    FastbootOkay ("");
-    RebootDevice (NORMAL_MODE);
-}
-#endif
-
-#ifdef ENABLE_UPDATE_PARTITIONS_CMDS
-STATIC VOID
-CmdFlashingUnlock (CONST CHAR8 *arg, VOID *data, UINT32 sz)
-{
-  SetDeviceUnlock (UNLOCK, TRUE);
-}
-
-STATIC VOID
-CmdFlashingLock (CONST CHAR8 *arg, VOID *data, UINT32 sz)
-{
-  SetDeviceUnlock (UNLOCK, FALSE);
-}
-#endif
-
-#ifdef ENABLE_DEVICE_CRITICAL_LOCK_UNLOCK_CMDS
-STATIC VOID
-CmdFlashingLockCritical (CONST CHAR8 *arg, VOID *data, UINT32 sz)
-{
-  SetDeviceUnlock (UNLOCK_CRITICAL, FALSE);
-}
-
-STATIC VOID
-CmdFlashingUnLockCritical (CONST CHAR8 *arg, VOID *data, UINT32 sz)
-{
-  SetDeviceUnlock (UNLOCK_CRITICAL, TRUE);
-}
-#endif
-
-STATIC EFI_STATUS
-DisplaySetVariable (CHAR16 *VariableName, VOID *VariableValue, UINTN DataSize)
-{
-  EFI_STATUS Status = EFI_SUCCESS;
-  BOOLEAN RTVariable = FALSE;
-  EfiQcomDisplayUtilsProtocol *pDisplayUtilsProtocol = NULL;
-
-  Status = gBS->LocateProtocol (&gQcomDisplayUtilsProtocolGuid,
-                                NULL,
-                                (VOID **)&pDisplayUtilsProtocol);
-  if ((EFI_ERROR (Status)) ||
-      (pDisplayUtilsProtocol == NULL)) {
-    RTVariable = TRUE;
-  } else if (pDisplayUtilsProtocol->Revision <  0x20000) {
-    RTVariable = TRUE;
-  } else {
-    /* The display utils version for 0x20000 and above can support
-       display protocol to get and set variable */
-    Status = pDisplayUtilsProtocol->DisplayUtilsSetVariable (
-          VariableName,
-          (UINT8 *)VariableValue,
-          DataSize,
-          0);
-  }
-
-  if (RTVariable) {
-    Status = gRT->SetVariable (VariableName,
-                               &gQcomTokenSpaceGuid,
-                               EFI_VARIABLE_RUNTIME_ACCESS |
-                               EFI_VARIABLE_BOOTSERVICE_ACCESS |
-                               EFI_VARIABLE_NON_VOLATILE,
-                               DataSize,
-                               (VOID *)VariableValue);
-  }
-
-  if (Status == EFI_NOT_FOUND) {
-    // EFI_NOT_FOUND is not an error for retail case.
-    Status = EFI_SUCCESS;
-  } else if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_VERBOSE,
-        "Display set variable failed with status(%d)!\n", Status));
-  }
-
-  return Status;
-}
-
-STATIC EFI_STATUS
-DisplayGetVariable (CHAR16 *VariableName, VOID *VariableValue, UINTN *DataSize)
-{
-  EFI_STATUS Status = EFI_SUCCESS;
-  BOOLEAN RTVariable = FALSE;
-  EfiQcomDisplayUtilsProtocol *pDisplayUtilsProtocol = NULL;
-
-  Status = gBS->LocateProtocol (&gQcomDisplayUtilsProtocolGuid,
-                                NULL,
-                                (VOID **)&pDisplayUtilsProtocol);
-  if ((EFI_ERROR (Status)) ||
-      (pDisplayUtilsProtocol == NULL)) {
-    RTVariable = TRUE;
-  } else if (pDisplayUtilsProtocol->Revision <  0x20000) {
-    RTVariable = TRUE;
-  } else {
-    /* The display utils version for 0x20000 and above can support
-       display protocol to get and set variable */
-    Status = pDisplayUtilsProtocol->DisplayUtilsGetVariable (
-          VariableName,
-          (UINT8 *)VariableValue,
-          DataSize,
-          0);
-  }
-
-  if (RTVariable) {
-    Status = gRT->GetVariable (VariableName,
-                               &gQcomTokenSpaceGuid,
-                               NULL,
-                               DataSize,
-                               (VOID *)VariableValue);
-  }
-
-  if (Status == EFI_NOT_FOUND) {
-    // EFI_NOT_FOUND is not an error for retail case.
-    Status = EFI_SUCCESS;
-  } else if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_VERBOSE,
-        "Display get variable failed with status(%d)!\n", Status));
-  }
-
-  return Status;
-}
-
-STATIC VOID
-CmdOemSetHwFenceValue (CONST CHAR8 *arg, VOID *data, UINT32 Size)
-{
-  EFI_STATUS Status;
-  CHAR8 Resp[MAX_RSP_SIZE] = "Set HW fence value: ";
-  CHAR8 HwFenceValue[MAX_DISPLAY_PANEL_OVERRIDE] = " msm_hw_fence.enable=";
-  INTN Pos = 0;
-
-  for (Pos = 0; Pos < AsciiStrLen (arg); Pos++) {
-    if (arg[Pos] == ' ') {
-      arg++;
-      Pos--;
-    } else {
-      break;
-    }
-  }
-
-  AsciiStrnCatS (HwFenceValue,
-                 MAX_DISPLAY_PANEL_OVERRIDE,
-                 arg,
-                 AsciiStrLen (arg));
-
-  Status = gRT->SetVariable ((CHAR16 *)L"HwFenceConfiguration",
-                               &gQcomTokenSpaceGuid,
-                               EFI_VARIABLE_RUNTIME_ACCESS |
-                               EFI_VARIABLE_BOOTSERVICE_ACCESS |
-                               EFI_VARIABLE_NON_VOLATILE,
-                               AsciiStrLen (HwFenceValue),
-                               (VOID *)HwFenceValue);
-
-  if (EFI_ERROR (Status)) {
-    AsciiStrnCatS (Resp, sizeof (Resp), ": failed!", AsciiStrLen (": failed!"));
-    FastbootFail (Resp);
-  } else {
-    AsciiStrnCatS (Resp, sizeof (Resp), ": done", AsciiStrLen (": done"));
-    FastbootOkay (Resp);
-  }
-}
-
-STATIC VOID
-CmdOemSetGpuPreemptionValue (CONST CHAR8 *arg, VOID *data, UINT32 Size)
-{
-  EFI_STATUS Status;
-  CHAR8 Resp[MAX_RSP_SIZE] = "Set GPU HW Preemption: ";
-  CHAR8 GpuPreemptionValue[MAX_GPU_CONFIG_OVERRIDE] =
-          " msm_kgsl.preempt_enable=";
-  INTN Pos = 0;
-
-  for (Pos = 0; Pos < AsciiStrLen (arg); Pos++) {
-    if (arg[Pos] == ' ') {
-      arg++;
-      Pos--;
-    } else {
-      break;
-    }
-  }
-
-
-  AsciiStrnCatS (GpuPreemptionValue,
-                 MAX_GPU_CONFIG_OVERRIDE,
-                 arg,
-                 AsciiStrLen (arg));
-
-  Status = gRT->SetVariable ((CHAR16 *)L"GpuConfiguration",
-                               &gQcomTokenSpaceGuid,
-                               EFI_VARIABLE_RUNTIME_ACCESS |
-                               EFI_VARIABLE_BOOTSERVICE_ACCESS |
-                               EFI_VARIABLE_NON_VOLATILE,
-                               AsciiStrLen (GpuPreemptionValue),
-                               (VOID *)GpuPreemptionValue);
-
-  if (EFI_ERROR (Status)) {
-    AsciiStrnCatS (Resp, sizeof (Resp), ": failed!", AsciiStrLen (": failed!"));
-    FastbootFail (Resp);
-  } else {
-    AsciiStrnCatS (Resp, sizeof (Resp), ": done", AsciiStrLen (": done"));
-    FastbootOkay (Resp);
-  }
-}
-
-STATIC VOID
-CmdOemAudioFrameWork (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
-{
-  EFI_STATUS Status;
-
-  if (Arg[0] == ' ') {
-     Arg++;
-  }
-
-  Status = StoreAudioFrameWork (Arg, AsciiStrLen (Arg));
-  if (Status != EFI_SUCCESS) {
-    FastbootFail ("Failed to store Audio framework");
-  } else {
-    FastbootOkay ("");
-  }
-}
-
-STATIC VOID
-CmdOemSelectDisplayPanel (CONST CHAR8 *arg, VOID *data, UINT32 sz)
-{
-  EFI_STATUS Status;
-  CHAR8 resp[MAX_RSP_SIZE] = "Selecting Panel: ";
-  CHAR8 DisplayPanelStr[MAX_DISPLAY_PANEL_OVERRIDE] = "";
-  CHAR8 DisplayPanelStrExist[MAX_DISPLAY_PANEL_OVERRIDE] = "";
-  INTN Pos = 0;
-  UINTN CurStrLen = 0;
-  UINTN TotalStrLen = 0;
-  BOOLEAN Append = FALSE;
-
-  for (Pos = 0; Pos < AsciiStrLen (arg); Pos++) {
-    if (arg[Pos] == ' ') {
-      arg++;
-      Pos--;
-    } else if (arg[Pos] == ':') {
-      Append = TRUE;
-    } else {
-      break;
-    }
-  }
-
-  if (Append) {
-    CurStrLen = sizeof (DisplayPanelStrExist) / sizeof (CHAR8);
-
-    Status = DisplayGetVariable ((CHAR16 *)L"DisplayPanelOverride",
-                                 (VOID *)DisplayPanelStrExist,
-                                 &CurStrLen);
-    TotalStrLen = CurStrLen + AsciiStrLen (arg);
-
-    if ((EFI_SUCCESS == Status) &&
-        (0 != CurStrLen) &&
-        (TotalStrLen < MAX_DISPLAY_PANEL_OVERRIDE)) {
-      AsciiStrnCatS (DisplayPanelStr,
-                     MAX_DISPLAY_PANEL_OVERRIDE,
-                     DisplayPanelStrExist,
-                     CurStrLen);
-      DEBUG ((EFI_D_INFO, "existing panel name (%a)\n", DisplayPanelStr));
-    }
-  }
-
-  AsciiStrnCatS (DisplayPanelStr,
-                 MAX_DISPLAY_PANEL_OVERRIDE,
-                 arg,
-                 AsciiStrLen (arg));
-
-  /* Update the environment variable with the selected panel */
-  Status = DisplaySetVariable ((CHAR16 *)L"DisplayPanelOverride",
-                               (VOID *)DisplayPanelStr,
-                               AsciiStrLen (DisplayPanelStr));
-
-  if (EFI_ERROR (Status)) {
-    AsciiStrnCatS (resp, sizeof (resp), ": failed", AsciiStrLen (": failed"));
-    FastbootFail (resp);
-  } else {
-    AsciiStrnCatS (resp, sizeof (resp), ": done", AsciiStrLen (": done"));
-    FastbootOkay (resp);
-  }
-}
-
-#if HIBERNATION_SUPPORT_NO_AES
-STATIC VOID
-CmdGoldenSnapshot (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
-{
-  EFI_STATUS Status;
-  CHAR8 *Ptr = NULL;
-  CONST CHAR8 *Delim = " ";
-
-  if (Arg) {
-    /* Expect a string "enable" or "disable" */
-    if (((AsciiStrLen (Arg)) < 7)
-        ||
-        ((AsciiStrLen (Arg)) > 8) ) {
-      FastbootFail ("Invalid input entered");
-      return;
-    }
-    Ptr = AsciiStrStr (Arg, Delim);
-    Ptr++;
-  } else {
-    FastbootFail ("Invalid input entered");
-    return;
-  }
-
-  if (!AsciiStrCmp (Ptr, "enable")) {
-    /* Set a magic value 200 to denote if it is golden image */
-    Status = SetSnapshotGolden (200);
-  }
-  else if (!AsciiStrCmp (Ptr, "disable")) {
-    Status = SetSnapshotGolden (0);
-  }
-  else {
-    FastbootFail ("Invalid input entered");
-    return;
-  }
-
-  if (Status != EFI_SUCCESS) {
-    FastbootFail ("Failed to update golden-snapshot flag");
-  }
-  else {
-    FastbootOkay ("Golden-snaps
-      hot flag updated");
-  }
-   return;
-}
-#endif
-
-STATIC VOID
-CmdOemDevinfo (CONST CHAR8 *arg, VOID *data, UINT32 sz)
-{
-  CHAR8 DeviceInfo[MAX_RSP_SIZE];
-  AsciiSPrint (DeviceInfo, sizeof (DeviceInfo), "Device unlocked: %a",
-               IsUnlocked () ? "true" : "false");
-  FastbootInfo (DeviceInfo);
-  WaitForTransferComplete ();
-
-  FastbootOkay ("");
-}
 
 STATIC EFI_STATUS
 AcceptCmdTimerInit (IN UINT64 Size, IN CHAR8 *Data)
@@ -3153,15 +2716,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
       {"flash:", CmdFlash},
       {"erase:", CmdErase},
       {"fetch:", CmdFetch},
-      {"flashing unlock", CmdFlashingUnlock},
-      {"flashing lock", CmdFlashingLock},
-#endif
-/*
- *CAUTION(CRITICAL): Enabling these commands will allow changes to bootimage.
- */
-#ifdef ENABLE_DEVICE_CRITICAL_LOCK_UNLOCK_CMDS
-      {"flashing unlock_critical", CmdFlashingUnLockCritical},
-      {"flashing lock_critical", CmdFlashingLockCritical},
 #endif
 /*
  *CAUTION(CRITICAL): Enabling this command will allow boot with different
@@ -3170,34 +2724,20 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
 #ifdef ENABLE_BOOT_CMD
       {"boot", CmdBoot},
 #endif
-      {"oem select-display-panel", CmdOemSelectDisplayPanel},
-      {"oem set-hw-fence-value", CmdOemSetHwFenceValue},
-      {"oem set-gpu-preemption", CmdOemSetGpuPreemptionValue},
-      {"oem device-info", CmdOemDevinfo},
-#if HIBERNATION_SUPPORT_NO_AES
-      {"oem golden-snapshot", CmdGoldenSnapshot},
-#endif
       {"reboot", CmdReboot},
-      {"reboot-bootloader", CmdRebootBootloader},
       {"getvar:", CmdGetVar},
       {"download:", CmdDownload},
-      {"oem audio-framework", CmdOemAudioFrameWork},
   };
 
   /* Register the commands only for non-user builds */
   /* Publish getvar variables */
-  FastbootPublishVar ("kernel", "uefi");
   AsciiSPrint (MaxDownloadSizeStr,
                   sizeof (MaxDownloadSizeStr), "%ld", MaxDownLoadSize);
   FastbootPublishVar ("max-download-size", MaxDownloadSizeStr);
 
-  if (TRUE) {
-    FastbootPublishVar ("is-userspace", "no");
-  }
 
   AsciiSPrint (FullProduct, sizeof (FullProduct), "%a", PRODUCT_NAME);
   FastbootPublishVar ("product", FullProduct);
-  FastbootPublishVar ("secure", IsSecureBootEnabled () ? "yes" : "no");
 
   GetPartitionCount (&PartitionCount);
   Status = PublishGetVarPartitionInfo (PublishedPartInfo, PartitionCount);
@@ -3218,7 +2758,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
 
   AsciiSPrint (EraseBlkSizeStr, sizeof (EraseBlkSizeStr), " 0x%x", BlkSize);
   FastbootPublishVar ("erase-block-size", EraseBlkSizeStr);
-  FastbootPublishVar ("unlocked", IsUnlocked () ? "yes" : "no");
 
   AsciiSPrint (StrSocVersion, sizeof (StrSocVersion), "%x",
                 BoardPlatformChipVersion ());
@@ -3234,8 +2773,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   UINT32 FastbootCmdCnt = sizeof (cmd_list) / sizeof (cmd_list[0]);
   for (i = 1; i < FastbootCmdCnt; i++)
     FastbootRegister (cmd_list[i].name, cmd_list[i].cb);
-    FastbootRegister ("reboot-recovery", CmdRebootRecovery);
-    FastbootRegister ("reboot-fastboot", CmdRebootFastboot);
   return EFI_SUCCESS;
 }
 

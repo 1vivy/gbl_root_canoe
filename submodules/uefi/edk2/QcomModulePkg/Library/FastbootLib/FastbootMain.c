@@ -81,9 +81,7 @@ found at
 #include <Uefi.h>
 #include <Library/DebugLib.h>
 #include <Library/Debug.h>
-#include <Library/FastbootMenu.h>
 #include <Library/LinuxLoaderLib.h>
-#include <Library/MenuKeysDetection.h>
 #include <Library/PcdLib.h>
 #include <Library/StackCanary.h>
 #include <Library/UefiApplicationEntryPoint.h>
@@ -93,7 +91,6 @@ found at
 #include <Protocol/EFIUsbDevice.h>
 #include <Protocol/SimpleTextIn.h>
 
-#include "BootStats.h"
 #include "FastbootCmds.h"
 #include "FastbootMain.h"
 #include "UsbDescriptors.h"
