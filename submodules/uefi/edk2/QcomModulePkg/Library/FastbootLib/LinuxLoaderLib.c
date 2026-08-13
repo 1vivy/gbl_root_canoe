@@ -429,62 +429,6 @@ ToLower (CHAR8 *Str)
   }
 }
 
-/* Load image from partition to buffer */
-EFI_STATUS
-LoadImageFromPartition (VOID *ImageBuffer, UINT32 *ImageSize, CHAR16 *Pname)
-{
-  EFI_STATUS Status;
-  EFI_BLOCK_IO_PROTOCOL *BlkIo;
-  PartiSelectFilter HandleFilter;
-  HandleInfo HandleInfoList[1];
-  STATIC UINT32 MaxHandles;
-  STATIC UINT32 BlkIOAttrib = 0;
-  UINT64 LoadImageStartTime = GetTimerCountms ();
-
-  BlkIOAttrib = BLK_IO_SEL_PARTITIONED_MBR;
-  BlkIOAttrib |= BLK_IO_SEL_PARTITIONED_GPT;
-  BlkIOAttrib |= BLK_IO_SEL_MEDIA_TYPE_NON_REMOVABLE;
-  BlkIOAttrib |= BLK_IO_SEL_MATCH_PARTITION_LABEL;
-
-  HandleFilter.RootDeviceType = NULL;
-  HandleFilter.PartitionLabel = Pname;
-  HandleFilter.VolumeName = NULL;
-
-  MaxHandles = sizeof (HandleInfoList) / sizeof (*HandleInfoList);
-
-  Status =
-      GetBlkIOHandles (BlkIOAttrib, &HandleFilter, HandleInfoList, &MaxHandles);
-
-  if (Status == EFI_SUCCESS) {
-    if (MaxHandles == 0)
-      return EFI_NO_MEDIA;
-
-    if (MaxHandles != 1) {
-      // Unable to deterministically load from single partition
-      DEBUG (
-          (EFI_D_INFO, "ExecImgFromVolume(): multiple partitions found.\r\n"));
-      return EFI_LOAD_ERROR;
-    }
-  } else {
-    DEBUG ((EFI_D_ERROR,
-            "%s: GetBlkIOHandles failed: %r\n", __func__, Status));
-    return Status;
-  }
-
-  BlkIo = HandleInfoList[0].BlkIo;
-
-  Status = BlkIo->ReadBlocks (
-      BlkIo, BlkIo->Media->MediaId, 0,
-      ROUND_TO_PAGE (*ImageSize, BlkIo->Media->BlockSize - 1), ImageBuffer);
-
-  if (Status == EFI_SUCCESS) {
-    DEBUG ((DEBUG_INFO, "Loading Image %s Done : "
-          "%lu ms, Image size : %d Bytes\n",
-           Pname, GetTimerCountms () - LoadImageStartTime, *ImageSize));
-  }
-
-  return Status;
-}
 
 UINT64 GetTimerCountms (VOID)
 {
@@ -735,37 +679,6 @@ WriteToPartition (EFI_GUID *Ptype, VOID *Msg, UINT32 MsgSize)
   return Status;
 }
 
-BOOLEAN IsSecureBootEnabled (VOID)
-{
-  EFI_STATUS Status = EFI_INVALID_PARAMETER;
-  QCOM_VERIFIEDBOOT_PROTOCOL *VbIntf;
-  BOOLEAN IsSecure = FALSE;
-
-  // Initialize verified boot & Read Device Info
-  Status = gBS->LocateProtocol (&gEfiQcomVerifiedBootProtocolGuid, NULL,
-                                (VOID **)&VbIntf);
-  if (Status != EFI_SUCCESS) {
-    DEBUG ((EFI_D_ERROR, "Unable to locate VB protocol: %r\n", Status));
-    return FALSE;
-  }
-
-  Status = VbIntf->VBIsDeviceSecure (VbIntf, &IsSecure);
-  if (Status != EFI_SUCCESS) {
-    DEBUG ((EFI_D_ERROR, "Error Reading the secure state: %r\n", Status));
-    return FALSE;
-  }
-
-  return IsSecure;
-}
-
-EFI_STATUS
-ResetDeviceState (VOID)
-{
-
-    return EFI_SUCCESS;
-
-}
-
 EFI_STATUS
 ErasePartition (EFI_BLOCK_IO_PROTOCOL *BlockIo, EFI_HANDLE *Handle)
 {
@@ -846,36 +759,3 @@ GetBootDevice (CHAR8 *BootDevBuf, UINT32 Len)
   return Status;
 }
 
-/* Returns whether MDTP is active or not,
- * or whether it should be considered active for
- * bootloader flows. */
-EFI_STATUS
-IsMdtpActive (BOOLEAN *MdtpActive)
-{
-  EFI_STATUS Status = EFI_SUCCESS;
-  QCOM_MDTP_PROTOCOL *MdtpProtocol = NULL;
-  MDTP_SYSTEM_STATE MdtpState = MDTP_STATE_ACTIVE;
-
-  // Default value of MdtpActive is set to False
-  *MdtpActive = FALSE;
-
-  Status = gBS->LocateProtocol (&gQcomMdtpProtocolGuid, NULL,
-                                (VOID **)&MdtpProtocol);
-
-  if (EFI_ERROR (Status)) {
-    DEBUG (
-        (EFI_D_ERROR, "Failed to locate MDTP protocol, Status=%r\n", Status));
-    return Status;
-  }
-
-  Status = MdtpProtocol->MdtpGetState (MdtpProtocol, &MdtpState);
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "Failed to get mdtp state, Status=%r\n", Status));
-    return Status;
-  }
-
-  *MdtpActive = ((MdtpState != MDTP_STATE_DISABLED) &&
-                 (MdtpState != MDTP_STATE_INACTIVE));
-
-  return Status;
-}

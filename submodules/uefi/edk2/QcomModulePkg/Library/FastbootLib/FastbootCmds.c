@@ -1109,9 +1109,6 @@ FastbootErasePartition (IN CHAR16 *PartitionName)
     return Status;
   }
 
-  if (!(StrCmp (L"userdata", PartitionName)))
-    Status = ResetDeviceState ();
-
   return Status;
 }
 

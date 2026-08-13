@@ -1,0 +1,33 @@
+#/** @file
+#  Super-fastboot style console menu library for AndroidToolsPkg.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = AndroidToolsUi
+  FILE_GUID                      = 5B3E1A7C-D492-4E6F-B1C5-2A8D9017E0F3
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 0.1
+  LIBRARY_CLASS                  = AndroidToolsUi
+
+[Sources]
+  AndroidToolsUi.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  PrintLib
+  UefiBootServicesTableLib
+  UefiLib
+
+[Protocols]
+  gEfiSimpleTextInProtocolGuid

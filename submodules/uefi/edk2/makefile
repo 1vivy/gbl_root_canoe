@@ -343,7 +343,7 @@ ifeq "$(CLANG_NEED_EXTRA_DLINK_FLAGS)" "true"
 	export CLANG_EXTRA_DLINK_FLAGS := -Wl,--no-relax -Wl,--apply-dynamic-relocs
 endif
 
-.PHONY: all cleanall srpm
+.PHONY: all cleanall srpm tools tools-clean
 
 all: ABL_FV_ELF
 	$(call validate-cum-sign)
@@ -353,6 +353,28 @@ cleanall:
 	build -p $(WORKSPACE)/QcomModulePkg/QcomModulePkg.dsc -a $(ARCHITECTURE) -t $(TARGET_TOOLS) -b $(TARGET) -j build_modulepkg.log cleanall
 	rm -rf $(WORKSPACE)/QcomModulePkg/Bin64
 	rm -rf $(TARGET_EDK_TOOLS_BIN)
+
+# Standalone AndroidToolsPkg applications (RebootTools, ArbTools). These are
+# independent UEFI applications built from their own DSC; they do not touch the
+# main ABL firmware image. The output goes to Build/AndroidToolsPkg so it never
+# collides with the main QcomModulePkg output tree. Depends on the BaseTools
+# build mark so the C compiler tools exist.
+ANDROID_TOOLS_DSC := $(WORKSPACE)/AndroidToolsPkg/AndroidToolsPkg.dsc
+ANDROID_TOOLS_OUT := Build/AndroidToolsPkg/$(TARGET)_$(TARGET_TOOLS)/$(ARCHITECTURE)
+
+tools: $(EDK_TOOLS_PATH_MARK_FILE)
+	@. ./edksetup.sh BaseTools && \
+	build -p $(ANDROID_TOOLS_DSC) \
+	-a $(ARCHITECTURE) \
+	-t $(TARGET_TOOLS) \
+	-b $(TARGET) \
+	-j build_androidtools.log
+	@echo "AndroidToolsPkg built: $(ANDROID_TOOLS_OUT)"
+
+tools-clean:
+	@. ./edksetup.sh BaseTools && \
+	build -p $(ANDROID_TOOLS_DSC) -a $(ARCHITECTURE) -t $(TARGET_TOOLS) -b $(TARGET) -j build_androidtools.log cleanall
+	rm -rf $(WORKSPACE)/AndroidToolsPkg/Bin64
 
 $(EDK_TOOLS_PATH_MARK_FILE): $(EDK_TOOLS_SRC_FILE)
 	@$(call edk_tools_generate)

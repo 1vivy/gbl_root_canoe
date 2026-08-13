@@ -1,0 +1,38 @@
+#/** @file
+#  RebootTools UEFI application - reboot target picker.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = RebootTools
+  FILE_GUID                      = 7E2A9C14-3B61-4D88-9F25-1C0B6E4D2A77
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = RebootToolsEntry
+
+[Sources]
+  RebootTools.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+
+[LibraryClasses]
+  AndroidToolsUi
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  UefiLib
+
+[Guids]
+  gEfiMiscPartitionGuid
+
+[Protocols]
+  gEfiBlockIoProtocolGuid

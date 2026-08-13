@@ -1,0 +1,32 @@
+#/** @file
+#  AndroidToolsPkg - standalone UEFI tools (reboot + AVB rollback) launched
+#  from the super-fastboot boot menu. Self-contained: ports the r32 DeviceInfo
+#  and reboot/recovery code so it does not depend on the stripped QcomModulePkg
+#  build configuration.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  PACKAGE_NAME                   = AndroidToolsPkg
+  PACKAGE_GUID                   = 9A7C4B21-3E5D-4F2A-9C81-2B6E0AD7F104
+  PACKAGE_VERSION                = 0.1
+  DEC_SPECIFICATION              = 0x00010005
+
+[Includes]
+  Include
+
+[LibraryClasses]
+  ## Super-fastboot style console menu (volume up/down + power).
+  AndroidToolsUi|AndroidToolsPkg/Library/AndroidToolsUi/AndroidToolsUi.inf
+
+[Protocols]
+  ## Qualcomm Verified Boot protocol (produced by platform DXE at runtime).
+  gEfiQcomVerifiedBootProtocolGuid = { 0x8e5eff91, 0x21b6, 0x47d3, { 0xaf, 0x2b, 0xc1, 0x5a, 0x01, 0xe0, 0x20, 0xec } }
+
+[Guids]
+  ## misc partition type GUID. Installed as a protocol on the misc partition
+  ## handle by the platform partition driver, so LocateHandleBuffer(ByProtocol)
+  ## finds it without the full GPT enumerator.
+  gEfiMiscPartitionGuid = { 0x82ACC91F, 0x357C, 0x4A68, { 0x9C, 0x8F, 0x68, 0x9E, 0x1B, 0x1A, 0x23, 0xA1 } }

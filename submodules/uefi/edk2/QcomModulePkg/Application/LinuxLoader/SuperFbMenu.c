@@ -389,7 +389,7 @@ SfbRunSubMenu (IN EFI_HANDLE   Volume,
 
     case SfbEntryEfiFile:
     default:
-      Status = SfbLaunchEntry (&Menu->Entry[Chosen], FALSE, TRUE);
+      Status = SfbLaunchEntry (&Menu->Entry[Chosen], TRUE, TRUE);//Entries in submenu never defaults
       if (EFI_ERROR (Status)) {
         SfbReportStatus (L"Boot failed", Status);
       }
