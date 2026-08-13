@@ -149,21 +149,21 @@ current_pid() {
 # instead, so this check does not apply.
 persist_mounted() { grep -q " $PERSIST_MNT " /proc/mounts; }
 
-# Write the BOOTENTRIES file the superfastboot BDS parses. Each line is
-# "<name>:<path relative to the \efisp boot root>"; the BDS lists only entries
-# whose file actually exists, so ANDROID_BACKUP stays hidden until a previous
-# boot.efi has been backed up.
-write_bootentries_to() {
-  cat > "$1/BOOTENTRIES" <<'EOF'
-ANDROID:boot.efi
-ANDROID_BACKUP:boot_backup.efi
-EOF
+# Lay out the \efisp boot root from the bundled module efisp/ tree: BOOTENTRIES
+# (with its tools submenu link) plus the tools/ directory and its EFI applets.
+# Each BOOTENTRIES line is "<name>:<path relative to the \efisp boot root>"; the
+# BDS lists only entries whose file actually exists, so the backup entry stays
+# hidden until a previous boot.efi has been backed up. boot.efi / boot_backup.efi
+# are generated at runtime and are not part of the bundle, so they are preserved.
+place_efisp_tree_to() {
+  cp -r "$MODDIR/efisp/." "$1/" >> "$LOG_FILE" 2>&1
 }
 
 # Extract and crack the target-slot ABL, then lay out the \efisp boot root
-# (boot.efi = cracked ABL, boot_backup.efi = the previous one) and flash the
-# BDS itself to the raw efisp partition. The ABL loaded by the real bootloader
-# is the BDS; the BDS then chains to one of these entries.
+# (boot.efi = cracked ABL, boot_backup.efi = the previous one, BOOTENTRIES +
+# tools/ = bundled module efisp tree) and flash the BDS itself to the raw efisp
+# partition. The ABL loaded by the real bootloader is the BDS; the BDS then
+# chains to one of these entries.
 #
 # In debug mode the boot root is staged under $RUNTIME_DIR/efisp and nothing is
 # written to a partition.
@@ -212,7 +212,7 @@ update_efisp() {
     write_log "$TEXT_EFISP_WRITE_FAILED"
     return 1
   fi
-  write_bootentries_to "$efisp_target"
+  place_efisp_tree_to "$efisp_target"
   sync
   write_log "$TEXT_EFISP_FILES_OK"
 

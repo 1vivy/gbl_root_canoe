@@ -266,7 +266,7 @@ while true; do
       ui_print "$T_EFISP_WRITE_FAIL"
       abort "efisp write failed"
     fi
-    printf 'ANDROID:boot.efi\nANDROID_BACKUP:boot_backup.efi\n' > "$EFISP_DIR/BOOTENTRIES"
+    cp -r "$MODPATH/efisp/." "$EFISP_DIR/" || { ui_print "$T_EFISP_WRITE_FAIL"; abort "efisp write failed"; }
     sync
 
     ui_print "$T_FLASH_BDS"
