@@ -5,7 +5,7 @@ copy_resources:
 	mkdir -p build/toolkit/bin
 	cp -r resources/* build/toolkit/
 submodule_uefi: copy_resources
-	cd ../../submodules/uefi && make build
+	cd ../../submodules/uefi && make build && make tools
 	cp ../../submodules/uefi/build/BDS.efi ./build/toolkit/BDS.efi
 	cp ../../submodules/uefi/build/ArbTools.efi ./build/toolkit/efisp/tools/ArbTools.efi
 	cp ../../submodules/uefi/build/BLTools.efi ./build/toolkit/efisp/tools/BLTools.efi
