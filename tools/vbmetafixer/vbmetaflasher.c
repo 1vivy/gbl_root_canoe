@@ -269,7 +269,7 @@ static int run_backup(const char *exe_dir) {
     fflush(stdout);
     getchar();
 
-    snprintf(cmd, sizeof(cmd), "\"%s\" -o \"%s\"", backup_bin, vbmetas_dir);
+    snprintf(cmd, sizeof(cmd), "\"\"%s\" -o \"%s\"\"", backup_bin, vbmetas_dir);
     printf("\n");
     int ret = system(cmd);
     if (ret != 0) {
@@ -304,7 +304,7 @@ static int check_and_run_backup(const char *exe_dir) {
 
 static int flash_partition(const char *partition, const char *image_path) {
     char cmd[MAX_CMD_LEN];
-    snprintf(cmd, sizeof(cmd), "%s flash %s \"%s\"", fastboot_path, partition, image_path);
+    snprintf(cmd, sizeof(cmd), "\"\"%s\" flash %s \"%s\"\"", fastboot_path, partition, image_path);
     printf("$ %s\n", cmd);
     int ret = system(cmd);
     if (ret != 0)
@@ -332,10 +332,18 @@ static void usage(const char *prog) {
     printf("Slot suffixes (_a, _b, _ab) are stripped to find matching vbmeta backup.\n");
 }
 
+static void wait_exit(void) {
+    printf("\nPress Enter to exit...");
+    fflush(stdout);
+    getchar();
+    getchar();
+}
+
 int main(int argc, char **argv) {
     char exe_dir[MAX_PATH_LEN];
     if (get_exe_dir(exe_dir, sizeof(exe_dir)) != 0) {
         fprintf(stderr, "Failed to determine executable directory\n");
+        wait_exit();
         return 1;
     }
     printf("Working directory: %s\n", exe_dir);
@@ -365,8 +373,11 @@ int main(int argc, char **argv) {
     }
 
     /* backup check */
-    if (check_and_run_backup(exe_dir) != 0)
+    if (check_and_run_backup(exe_dir) != 0) {
+        fprintf(stderr, "Backup failed, aborting\n");
+        wait_exit();
         return 1;
+    }
 
     /* get partition */
     char partition_buf[MAX_INPUT_LEN];
@@ -374,6 +385,7 @@ int main(int argc, char **argv) {
         read_line("Partition name (e.g. boot_a, boot_ab): ", partition_buf, sizeof(partition_buf));
         if (partition_buf[0] == '\0') {
             fprintf(stderr, "No partition specified\n");
+            wait_exit();
             return 1;
         }
         partition_arg = partition_buf;
@@ -385,6 +397,7 @@ int main(int argc, char **argv) {
         read_line("Image file path: ", image_buf, sizeof(image_buf));
         if (image_buf[0] == '\0') {
             fprintf(stderr, "No image specified\n");
+            wait_exit();
             return 1;
         }
         image_arg = image_buf;
@@ -392,6 +405,7 @@ int main(int argc, char **argv) {
 
     if (!file_exists(image_arg)) {
         fprintf(stderr, "Image file not found: %s\n", image_arg);
+        wait_exit();
         return 1;
     }
 
@@ -422,6 +436,7 @@ int main(int argc, char **argv) {
         if (transplant_vbmeta(vbmeta_path, image_arg, temp_image) != 0) {
             fprintf(stderr, "VBMeta transplant failed, aborting\n");
             remove(temp_image);
+            wait_exit();
             return 1;
         }
 
@@ -439,8 +454,13 @@ int main(int argc, char **argv) {
     if (temp_image[0])
         remove(temp_image);
 
-    if (ret == 0)
+    if (ret == 0) {
         printf("\nFlash complete!\n");
+    } else {
+        fprintf(stderr, "\nFlash FAILED. Fastboot may have been rejected "
+                        "(locked bootloader or wrong device). See messages above.\n");
+    }
 
+    wait_exit();
     return ret;
 }
