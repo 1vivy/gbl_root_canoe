@@ -2,6 +2,7 @@ const IMAGE_NAMES = ["abl"];
 
 const state = {
   confirmStep: 0,
+  pendingAction: null,
   moduleDir: "",
   scriptPath: "",
   status: null,
@@ -22,6 +23,12 @@ const i18n = {
     imageCount: "镜像数量",
     taskStatus: "任务状态",
     flash: "刷写到另一槽位",
+    bdsTools: "仅更新BDS和Tools",
+    confirmBdsTools: "确认更新 BDS/Tools",
+    modalBdsStep1: "将把 BDS.efi 刷入 efisp 分区，并用模块自带的 efisp 文件夹（BOOTENTRIES 与 tools）替换 persist 上的启动根目录。不会改动 ABL 与 boot.efi。",
+    modalBdsStep2: "第二次确认: 这是高风险写入操作，错误的 BDS 或 efisp 写入可能导致无法进入启动菜单。确认后将立即开始。",
+    toastStartBdsTools: "BDS/Tools 更新任务已启动",
+    toastBdsToolsDone: "BDS/Tools 更新完成",
     clearLog: "清空日志",
     updateEfisp: "更新 efisp（默认开启）",
     debugMode: "调试模式（仅处理不刷写，efisp 目录使用模块 tmp/efisp）",
@@ -74,6 +81,12 @@ const i18n = {
     imageCount: "Image Count",
     taskStatus: "Task Status",
     flash: "Flash To Other Slot",
+    bdsTools: "Update BDS & Tools Only",
+    confirmBdsTools: "Confirm BDS/Tools Update",
+    modalBdsStep1: "Will flash BDS.efi to the efisp partition and replace the persist boot root with the bundled efisp folder (BOOTENTRIES and tools). The ABL and boot.efi are not touched.",
+    modalBdsStep2: "2nd Confirm: This is a high-risk write. A wrong BDS or efisp write may prevent the boot menu from loading. It starts immediately after confirm.",
+    toastStartBdsTools: "BDS/Tools update started",
+    toastBdsToolsDone: "BDS/Tools update completed",
     clearLog: "Clear Log",
     updateEfisp: "Update efisp (on by default)",
     debugMode: "Debug Mode (process only, no flash; efisp dir uses module tmp/efisp)",
@@ -128,6 +141,7 @@ const elements = {
   imageTableBody: document.getElementById("imageTableBody"),
   logOutput: document.getElementById("logOutput"),
   flashButton: document.getElementById("flashButton"),
+  bdsToolsButton: document.getElementById("bdsToolsButton"),
   clearLogButton: document.getElementById("clearLogButton"),
   refreshButton: document.getElementById("refreshButton"),
   confirmModal: document.getElementById("confirmModal"),
@@ -283,6 +297,7 @@ function renderStatus(status) {
   else if (st === "warning" || run) elements.stateChip.classList.add("chip-warn");
   elements.slotChip.textContent = (cur !== "-" && tar !== "-") ? `${state.lang === "zh" ? "当前" : "Current"} ${cur} → ${state.lang === "zh" ? "目标" : "Target"} ${tar}` : t.slotUnknown;
   elements.flashButton.disabled = run || cur === "-" || tar === "-";
+  elements.bdsToolsButton.disabled = run;
   elements.clearLogButton.disabled = run;
   renderTable(cur, tar);
 }
@@ -321,39 +336,62 @@ function refreshLog() {
 
 function closeConfirmModal() {
   state.confirmStep = 0;
+  state.pendingAction = null;
   elements.confirmModal.classList.add("hidden");
   elements.confirmModal.setAttribute("aria-hidden", "true");
   elements.nextConfirmButton.textContent = i18n[state.lang].continue;
 }
 
-function openConfirmModal() {
+function openConfirmModal(action) {
   const t = i18n[state.lang];
-  const tar = state.status?.TARGET_SLOT || "?";
-  const efisp = elements.updateEfispCheckbox?.checked;
-  const dbg = elements.debugModeCheckbox?.checked;
+  state.pendingAction = action;
   state.confirmStep = 1;
-  let msg = dbg ? t.modalStep1Debug : t.modalStep1Normal(tar);
-  if (!dbg) {
-    msg += efisp ? t.withEfisp : t.noEfisp;
-    msg += t.confirmSlot;
+  if (action === "bds-tools") {
+    document.querySelector("#modalTitle").textContent = t.confirmBdsTools;
+    elements.confirmText.textContent = t.modalBdsStep1;
+    elements.nextConfirmButton.textContent = t.continue;
+  } else {
+    document.querySelector("#modalTitle").textContent = t.confirmFlash;
+    const tar = state.status?.TARGET_SLOT || "?";
+    const efisp = elements.updateEfispCheckbox?.checked;
+    const dbg = elements.debugModeCheckbox?.checked;
+    let msg = dbg ? t.modalStep1Debug : t.modalStep1Normal(tar);
+    if (!dbg) {
+      msg += efisp ? t.withEfisp : t.noEfisp;
+      msg += t.confirmSlot;
+    }
+    elements.confirmText.textContent = msg;
+    elements.nextConfirmButton.textContent = dbg ? (state.lang === "zh" ? "开始调试" : "Start Debug") : t.continue;
   }
-  elements.confirmText.textContent = msg;
-  elements.nextConfirmButton.textContent = dbg ? (state.lang === "zh" ? "开始调试" : "Start Debug") : t.continue;
   elements.confirmModal.classList.remove("hidden");
   elements.confirmModal.setAttribute("aria-hidden", "false");
 }
 
 function handleConfirmProgress() {
   const t = i18n[state.lang];
-  const dbg = elements.debugModeCheckbox?.checked;
-  if (state.confirmStep === 1 && !dbg) {
-    state.confirmStep = 2;
-    elements.confirmText.textContent = t.modalStep2;
-    elements.nextConfirmButton.textContent = state.lang === "zh" ? "确认刷写" : "Confirm Flash";
+  if (state.confirmStep === 1) {
+    if (state.pendingAction === "bds-tools") {
+      state.confirmStep = 2;
+      elements.confirmText.textContent = t.modalBdsStep2;
+      elements.nextConfirmButton.textContent = state.lang === "zh" ? "开始更新" : "Start Update";
+      return;
+    }
+    const dbg = elements.debugModeCheckbox?.checked;
+    if (!dbg) {
+      state.confirmStep = 2;
+      elements.confirmText.textContent = t.modalStep2;
+      elements.nextConfirmButton.textContent = state.lang === "zh" ? "确认刷写" : "Confirm Flash";
+      return;
+    }
+    // debug: single-step confirm, proceed directly
+    closeConfirmModal();
+    startFlash();
     return;
   }
+  const action = state.pendingAction;
   closeConfirmModal();
-  startFlash();
+  if (action === "bds-tools") startBdsTools();
+  else startFlash();
 }
 
 function startFlash() {
@@ -367,6 +405,19 @@ function startFlash() {
     else if (out.STARTED === "1") toast(dbg ? t.toastStartDebug : t.toastStartFlash);
     else if (out.FINISHED === "success") toast(dbg ? t.toastDebugDone : t.toastFlashDone);
     else if (out.FINISHED === "warning") toast(t.toastBlDone);
+    else if (out.FINISHED === "error") toast(t.toastFailed);
+    else toast(t.toastStartError);
+  } catch (e) { toast(`${t.startFail}: ${e.message}`); }
+  manualRefresh();
+}
+
+function startBdsTools() {
+  const t = i18n[state.lang];
+  try {
+    const out = parseKeyValueOutput(runScript("start", "update-bds-tools"));
+    if (out.ALREADY_RUNNING) toast(t.toastRunning);
+    else if (out.STARTED === "1") toast(t.toastStartBdsTools);
+    else if (out.FINISHED === "success") toast(t.toastBdsToolsDone);
     else if (out.FINISHED === "error") toast(t.toastFailed);
     else toast(t.toastStartError);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
@@ -414,12 +465,14 @@ async function init() {
     elements.stateChip.className = "chip chip-danger";
     elements.taskMessage.textContent = e.message;
     elements.flashButton.disabled = true;
+    elements.bdsToolsButton.disabled = true;
     elements.clearLogButton.disabled = true;
     return;
   }
 
   elements.refreshButton.addEventListener("click", manualRefresh);
-  elements.flashButton.addEventListener("click", openConfirmModal);
+  elements.flashButton.addEventListener("click", () => openConfirmModal("flash"));
+  elements.bdsToolsButton.addEventListener("click", () => openConfirmModal("bds-tools"));
   elements.clearLogButton.addEventListener("click", clearLog);
   elements.cancelConfirmButton.addEventListener("click", closeConfirmModal);
   elements.nextConfirmButton.addEventListener("click", handleConfirmProgress);

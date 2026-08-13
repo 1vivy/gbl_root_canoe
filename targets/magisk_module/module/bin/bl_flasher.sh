@@ -33,6 +33,11 @@ if [ "$LANG" = "zh" ]; then
   TEXT_EFISP_SET_RW_FAILED="efisp 分区设置可写失败"
   TEXT_EFISP_FLASH_FAILED="efisp 刷写失败"
   TEXT_EFISP_FLASH_OK="efisp 刷写完成"
+  TEXT_UPDATING_BDS_TOOLS="正在更新 BDS 与 Tools"
+  TEXT_BDS_TOOLS_OK="BDS 与 Tools 更新完成"
+  TEXT_BDS_TOOLS_FAIL="BDS 与 Tools 更新失败"
+  TEXT_BDS_OLD_VER="你的假回锁是旧版，请OTA最新完整包并在重启前选择刷写到下一槽"
+  TEXT_BDS_NOT_INSTALLED="你还没有安装假回锁，请重新安装模块选择全新安装"
   TEXT_GBL_VULN="检测到GBL漏洞，跳过BL刷写"
   TEXT_GBL_VULN_SKIP="已跳过BL刷写"
   TEXT_GBL_DETECT_FAILED="漏洞检测失败，继续流程"
@@ -63,6 +68,11 @@ else
   TEXT_EFISP_SET_RW_FAILED="efisp setrw failed"
   TEXT_EFISP_FLASH_FAILED="efisp flash failed"
   TEXT_EFISP_FLASH_OK="efisp flash ok"
+  TEXT_UPDATING_BDS_TOOLS="Updating BDS and Tools"
+  TEXT_BDS_TOOLS_OK="BDS and Tools update complete"
+  TEXT_BDS_TOOLS_FAIL="BDS and Tools update failed"
+  TEXT_BDS_OLD_VER="Your fake-lock is an old version. Please OTA the latest full package and select 'Flash to other slot' before rebooting."
+  TEXT_BDS_NOT_INSTALLED="Fake-lock is not installed yet. Please reinstall the module and choose a fresh install."
   TEXT_GBL_VULN="GBL vuln detected, skip BL flash"
   TEXT_GBL_VULN_SKIP="Skipped BL flash"
   TEXT_GBL_DETECT_FAILED="Vuln check failed"
@@ -252,6 +262,70 @@ detect_gbl_vulnerability() {
   return 2
 }
 
+# True if the raw efisp partition begins with an MZ (PE/EFI) image header, i.e.
+# a BDS or other EFI app has been flashed to it.
+efisp_has_mz() {
+  [ -b "$BY_NAME_DIR/efisp" ] || return 1
+  [ "$(dd if="$BY_NAME_DIR/efisp" bs=2 count=1 2>/dev/null)" = "MZ" ]
+}
+
+# True if the current-slot ABL carries the GBL exploit (so it would load the
+# BDS off efisp). Returns false when the slot cannot be detected.
+gbl_exploit_present() {
+  current_slot=$(detect_current_slot) || return 1
+  abl=$(partition_path abl "$current_slot")
+  detect_gbl_vulnerability "$abl"
+  [ $? -eq 0 ]
+}
+
+# Flash BDS.efi raw to the efisp partition, then replace the \efisp boot root's
+# bundled tree (BOOTENTRIES + tools/) with the module efisp/ bundle. No ABL is
+# cracked and no slot copy happens; the runtime-generated boot.efi /
+# boot_backup.efi are not in the bundle, so the merge copy preserves them.
+#
+# Refuses unless boot.efi is already present (the new boot root is laid out);
+# otherwise the refresh would leave the BDS with nothing to chain to. When it is
+# missing, an MZ image on the raw efisp partition plus a working GBL exploit
+# means an older fake-lock install, anything else means never installed.
+#
+# Returns 0 on success, 2 when aborted with a user-facing message already
+# written, 1 on other errors.
+update_bds_tools() {
+  if ! persist_mounted; then
+    write_log "$TEXT_PERSIST_NOT_MOUNTED"
+    return 1
+  fi
+
+  if [ ! -f "$EFISP_DIR/boot.efi" ]; then
+    if efisp_has_mz && gbl_exploit_present; then
+      write_state error "$TEXT_BDS_OLD_VER"
+    else
+      write_state error "$TEXT_BDS_NOT_INSTALLED"
+    fi
+    return 2
+  fi
+
+  mkdir -p "$EFISP_DIR" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
+
+  # 1. Flash the BDS itself to the raw efisp partition.
+  if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$LOG_FILE" 2>&1; then
+    write_log "$TEXT_EFISP_SET_RW_FAILED"
+    return 1
+  fi
+  if ! dd if="$BDS_EFI" of="$BY_NAME_DIR/efisp" bs=4M conv=fsync >> "$LOG_FILE" 2>&1; then
+    write_log "$TEXT_EFISP_FLASH_FAILED"
+    return 1
+  fi
+  sync
+  write_log "$TEXT_EFISP_FLASH_OK"
+
+  # 2. Replace the boot-root tree (BOOTENTRIES + tools/) with the bundled one.
+  place_efisp_tree_to "$EFISP_DIR"
+  sync
+  write_log "$TEXT_EFISP_FILES_OK"
+  return 0
+}
+
 cleanup_lock() { rm -rf "$LOCK_DIR" "$PID_FILE"; }
 
 print_status() {
@@ -289,6 +363,22 @@ run_flash() {
   echo $$ > "$PID_FILE"
   trap cleanup_lock EXIT INT TERM HUP
   : > "$LOG_FILE"
+
+  # BDS + Tools only: flash BDS to the raw efisp partition and refresh the
+  # bundled efisp/ tree on the persist boot root. No ABL crack, no slot copy.
+  if [ "$mode" = "update-bds-tools" ]; then
+    write_state running "$TEXT_UPDATING_BDS_TOOLS"
+    update_bds_tools
+    res=$?
+    if [ $res -eq 0 ]; then
+      write_state success "$TEXT_BDS_TOOLS_OK"
+    elif [ $res -eq 2 ]; then
+      : # aborted, user-facing message already written
+    else
+      write_state error "$TEXT_BDS_TOOLS_FAIL"
+    fi
+    exit 0
+  fi
 
   current_slot=$(detect_current_slot)
   target_slot=$(other_slot "$current_slot")
