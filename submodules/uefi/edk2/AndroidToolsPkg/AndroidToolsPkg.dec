@@ -1,8 +1,8 @@
 #/** @file
-#  AndroidToolsPkg - standalone UEFI tools (reboot + AVB rollback) launched
-#  from the super-fastboot boot menu. Self-contained: ports the r32 DeviceInfo
-#  and reboot/recovery code so it does not depend on the stripped QcomModulePkg
-#  build configuration.
+#  AndroidToolsPkg - standalone UEFI tools (reboot, AVB rollback, bootloader
+#  unlock state) launched from the super-fastboot boot menu. Self-contained:
+#  ports the r32 DeviceInfo and reboot/recovery code so it does not depend on
+#  the stripped QcomModulePkg build configuration.
 #
 #  Copyright (c) 2026, contributors to the canoe ABL tree.
 #  SPDX-License-Identifier: BSD-3-Clause

@@ -19,7 +19,8 @@ build:
 	cp edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ./build/BDS.efi
 	@echo "BDS built successfully: build/BDS.efi"
 
-# Build the standalone AndroidToolsPkg applications (RebootTools, ArbTools).
+# Build the standalone AndroidToolsPkg applications (RebootTools, ArbTools,
+# BLTools).
 # These are independent UEFI apps launched from the boot menu; they do not
 # affect the main BDS image. Passes the same toolchain env as `build` so the
 # CLANG35 toolchain and BaseTools resolve identically.
@@ -32,18 +33,19 @@ tools:
   		REMOVE_CARVEOUT_REGION=1 QSPA_BOOTCONFIG_ENABLE=1 USER_BUILD_VARIANT=0 TEST_ADAPTER=1 \
   		PREBUILT_HOST_TOOLS="BUILD_CC=clang BUILD_CXX=clang++ LDPATH=-fuse-ld=lld BUILD_AR=llvm-ar"' || true
 	@TOOLS_DIR=edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64; \
-	if [ ! -f $$TOOLS_DIR/RebootTools.efi ] || [ ! -f $$TOOLS_DIR/ArbTools.efi ]; then \
+	if [ ! -f $$TOOLS_DIR/RebootTools.efi ] || [ ! -f $$TOOLS_DIR/ArbTools.efi ] || [ ! -f $$TOOLS_DIR/BLTools.efi ]; then \
 		echo "AndroidToolsPkg build failed"; \
 		exit 1; \
 	fi
 	mkdir -p ./build
 	cp edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64/RebootTools.efi ./build/RebootTools.efi
 	cp edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64/ArbTools.efi ./build/ArbTools.efi
-	@echo "AndroidTools built successfully: build/RebootTools.efi build/ArbTools.efi"
+	cp edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64/BLTools.efi ./build/BLTools.efi
+	@echo "AndroidTools built successfully: build/RebootTools.efi build/ArbTools.efi build/BLTools.efi"
 
 tools-clean:
 	bash -c 'cd edk2 && . ./edksetup.sh && make tools-clean TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
   		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- \
   		PREBUILT_HOST_TOOLS="BUILD_CC=clang BUILD_CXX=clang++ LDPATH=-fuse-ld=lld BUILD_AR=llvm-ar"' || true
-	rm -f ./build/RebootTools.efi ./build/ArbTools.efi || true
+	rm -f ./build/RebootTools.efi ./build/ArbTools.efi ./build/BLTools.efi || true
 

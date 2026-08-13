@@ -1,0 +1,40 @@
+#/** @file
+#  BLTools UEFI application - bootloader unlock state control.
+#
+#  Toggles the is_unlocked / is_unlock_critical flags in the DeviceInfo blob,
+#  enforcing that unlock_critical=true implies unlock=true. Reads/writes the
+#  whole blob through the Verified Boot protocol (VBRwDeviceState), the same
+#  path ArbTools uses for the rollback index.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = BLTools
+  FILE_GUID                      = 9F4A2C7B-3D8E-4B1F-A6C5-0E2D7B8F1A93
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = BlToolsEntry
+
+[Sources]
+  BLTools.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+
+[LibraryClasses]
+  AndroidToolsUi
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+
+[Protocols]
+  gEfiQcomVerifiedBootProtocolGuid
