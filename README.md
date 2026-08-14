@@ -2,6 +2,8 @@
 
 [中文版](README_zh.md)
 
+> ⚠️ **This project has been archived.** This is the final version — the patching engine is stable across multiple vendors and ABL versions, the core logic no longer changes, and active maintenance has ended. The code still works; forks are welcome. See [ARCHIVE.md](ARCHIVE.md) for details.
+
 `gbl_root_canoe` is an EDK2-based workspace for patching the EFI applications within Qualcomm ABL (Android Bootloader) images. It leverages a GBL (Generic Bootloader Loader) vulnerability so the real ABL loads an embedded **superfastboot BDS** off the raw `efisp` partition. The BDS then scans a compatible partition (ext4/fat32) for boot entries and chains to the selected one - primarily to achieve a **Fake Locked Bootloader** state on Snapdragon 8 Gen 5 / 8 Elite (Gen 5) devices to bypass bootloader unlock detection.
 
 `BDS.efi` is written raw to the `efisp` partition; the cracked ABL (`boot.efi`) and the boot entry list (`BOOTENTRIES`) live on the `persist` partition under its `efisp/` directory.
