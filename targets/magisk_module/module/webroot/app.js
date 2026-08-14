@@ -8,6 +8,7 @@ const state = {
   status: null,
   pollTimer: null,
   prevStatusRaw: "",
+  prevState: "idle",
   lang: "zh"
 };
 
@@ -24,14 +25,21 @@ const i18n = {
     taskStatus: "任务状态",
     flash: "刷写到另一槽位",
     bdsTools: "仅更新BDS和Tools",
+    patchPart: "修补分区",
     confirmBdsTools: "确认更新 BDS/Tools",
+    confirmPatchPart: "确认修补分区",
     modalBdsStep1: "将把 BDS.efi 刷入 efisp 分区，并用模块自带的 efisp 文件夹（BOOTENTRIES 与 tools）替换 persist 上的启动根目录。不会改动 ABL 与 boot.efi。",
     modalBdsStep2: "第二次确认: 这是高风险写入操作，错误的 BDS 或 efisp 写入可能导致无法进入启动菜单。确认后将立即开始。",
+    modalPatchStep1: "将对当前活动槽位执行勾选的修补操作。调试模式下不会执行实际修补。",
+    modalPatchStep2: "第二次确认：修补分区属于高风险操作，错误会导致系统无法启动，确认后立即执行。",
     toastStartBdsTools: "BDS/Tools 更新任务已启动",
     toastBdsToolsDone: "BDS/Tools 更新完成",
     clearLog: "清空日志",
     updateEfisp: "更新 efisp（默认开启）",
     debugMode: "调试模式（仅处理不刷写，efisp 目录使用模块 tmp/efisp）",
+    lblPatchVendorBoot: "修补 vendor_boot 分区",
+    lblPatchSuper: "修补 super 分区",
+    patchMutualTip: "vendor_boot 和 super 仅可选择一项",
     warning: "刷写对象是 bootloader 相关分区，风险较高。开始前请确认镜像与机型严格匹配。",
     imageMap: "镜像映射",
     partition: "分区名",
@@ -42,27 +50,31 @@ const i18n = {
     log: "实时日志",
     autoPoll: "自动轮询最近 200 行",
     risk: "高风险操作",
-    confirmFlash: "确认刷写",
+    confirmFlash: "确认操作",
     cancel: "取消",
     continue: "继续",
     waitingStatus: "等待检测",
     slotUnknown: "槽位未知",
     logWaiting: "等待日志输出...",
-    toastRunning: "已有刷写任务在运行",
+    toastRunning: "已有任务在运行",
     toastStartDebug: "调试任务已启动",
     toastStartFlash: "刷写任务已启动",
+    toastStartPatch: "分区修补任务已启动",
     toastDebugDone: "调试完成",
     toastFlashDone: "刷写已完成",
+    toastPatchDone: "分区修补完成",
     toastBlDone: "BL 刷写完成，但 efisp 未更新",
-    toastFailed: "任务已结束（失败）",
+    toastFailed: "任务执行失败",
     toastStartError: "任务启动失败",
     toastLogBusy: "任务运行中，暂时不能清空日志",
     toastLogCleared: "日志已清空",
     modalStep1Debug: "调试模式：将执行所有处理流程但不刷写分区，生成的文件保存在 tmp 目录。",
     modalStep1Normal: (slot) => `第一次确认: 将把当前槽位的 BL 分区拷贝到槽位 ${slot}`,
-    modalStep2: "第二次确认: 这是高风险写入操作，错误操作可能导致目标槽位无法启动。确认后将立即开始刷写。",
+    modalStep1PatchOnly: (slot, name) => `第一次确认: 仅对目标槽位 ${slot} 执行 ${name} 修补，不刷写 ABL、不更新 efisp。`,
+    modalStep2: "第二次确认: 这是高风险写入操作，错误操作可能导致目标槽位无法启动。确认后将立即开始。",
     withEfisp: "，并更新 efisp。",
     noEfisp: "，不更新 efisp。",
+    withPatch: (name) => `，同步对目标槽位执行 ${name} 修补`,
     confirmSlot: "请确认槽位无误。",
     taskRunning:"任务运行中",
     waitOperate:"等待操作",
@@ -82,14 +94,21 @@ const i18n = {
     taskStatus: "Task Status",
     flash: "Flash To Other Slot",
     bdsTools: "Update BDS & Tools Only",
+    patchPart: "Patch Partitions",
     confirmBdsTools: "Confirm BDS/Tools Update",
+    confirmPatchPart: "Confirm Partition Patch",
     modalBdsStep1: "Will flash BDS.efi to the efisp partition and replace the persist boot root with the bundled efisp folder (BOOTENTRIES and tools). The ABL and boot.efi are not touched.",
     modalBdsStep2: "2nd Confirm: This is a high-risk write. A wrong BDS or efisp write may prevent the boot menu from loading. It starts immediately after confirm.",
+    modalPatchStep1: "Will patch the active slot with selected options. No actual patch in debug mode.",
+    modalPatchStep2: "2nd Confirm: Partition patching is high-risk, bad patch may cause boot failure. Start immediately after confirm.",
     toastStartBdsTools: "BDS/Tools update started",
     toastBdsToolsDone: "BDS/Tools update completed",
     clearLog: "Clear Log",
     updateEfisp: "Update efisp (on by default)",
     debugMode: "Debug Mode (process only, no flash; efisp dir uses module tmp/efisp)",
+    lblPatchVendorBoot: "Patch vendor_boot partition",
+    lblPatchSuper: "Patch super partition",
+    patchMutualTip: "Only one of vendor_boot / super can be selected",
     warning: "Flashing bootloader partitions is high risk. Verify images match your device before starting.",
     imageMap: "Image Mapping",
     partition: "Partition",
@@ -100,17 +119,19 @@ const i18n = {
     log: "Live Log",
     autoPoll: "Auto poll last 200 lines",
     risk: "HIGH RISK",
-    confirmFlash: "Confirm Flash",
+    confirmFlash: "Confirm Action",
     cancel: "Cancel",
     continue: "Continue",
     waitingStatus: "Waiting",
     slotUnknown: "Slot Unknown",
     logWaiting: "Waiting for log...",
-    toastRunning: "Flash task is already running",
+    toastRunning: "Task is already running",
     toastStartDebug: "Debug task started",
     toastStartFlash: "Flash task started",
+    toastStartPatch: "Partition patch task started",
     toastDebugDone: "Debug completed",
     toastFlashDone: "Flash completed",
+    toastPatchDone: "Partition patch completed",
     toastBlDone: "BL flashed, but efisp not updated",
     toastFailed: "Task finished (failed)",
     toastStartError: "Failed to start task",
@@ -118,9 +139,11 @@ const i18n = {
     toastLogCleared: "Log cleared",
     modalStep1Debug: "Debug Mode: All processes run without flashing partitions. Files saved to tmp directory.",
     modalStep1Normal: (slot) => `1st Confirm: Copy BL partition from current slot to ${slot}`,
+    modalStep1PatchOnly: (slot, name) => `1st Confirm: Patch ${name} on target slot ${slot} only. No ABL flash, no efisp update.`,
     modalStep2: "2nd Confirm: This is a high-risk write operation. Wrong action may brick the target slot. Flash will start immediately after confirm.",
     withEfisp: ", and update efisp.",
     noEfisp: ", efisp not updated.",
+    withPatch: (name) => `, apply ${name} patch to target slot`,
     confirmSlot: "Please confirm slot is correct.",
     taskRunning:"Task Running",
     waitOperate:"Waiting",
@@ -142,6 +165,7 @@ const elements = {
   logOutput: document.getElementById("logOutput"),
   flashButton: document.getElementById("flashButton"),
   bdsToolsButton: document.getElementById("bdsToolsButton"),
+  patchPartButton: document.getElementById("patchPartButton"),
   clearLogButton: document.getElementById("clearLogButton"),
   refreshButton: document.getElementById("refreshButton"),
   confirmModal: document.getElementById("confirmModal"),
@@ -150,6 +174,9 @@ const elements = {
   cancelConfirmButton: document.getElementById("cancelConfirmButton"),
   updateEfispCheckbox: document.getElementById("updateEfispCheckbox"),
   debugModeCheckbox: document.getElementById("debugModeCheckbox"),
+  patchVendorBootCheckbox: document.getElementById("patchVendorBootCheckbox"),
+  patchSuperCheckbox: document.getElementById("patchSuperCheckbox"),
+  patchMutualTip: document.getElementById("patchMutualTip"),
   pageTitle: document.getElementById("pageTitle")
 };
 
@@ -167,6 +194,9 @@ function applyLanguage(lang) {
   document.querySelector("#lblTaskStatus").textContent = t.taskStatus;
   document.querySelector("#lblUpdateEfisp").textContent = t.updateEfisp;
   document.querySelector("#lblDebugMode").textContent = t.debugMode;
+  document.querySelector("#lblPatchVendorBoot").textContent = t.lblPatchVendorBoot;
+  document.querySelector("#lblPatchSuper").textContent = t.lblPatchSuper;
+  elements.patchMutualTip.textContent = t.patchMutualTip;
   document.querySelector("#lblWarning").textContent = t.warning;
   document.querySelector("#lblImageMap").textContent = t.imageMap;
   document.querySelector("#tblPartition").textContent = t.partition;
@@ -298,8 +328,29 @@ function renderStatus(status) {
   elements.slotChip.textContent = (cur !== "-" && tar !== "-") ? `${state.lang === "zh" ? "当前" : "Current"} ${cur} → ${state.lang === "zh" ? "目标" : "Target"} ${tar}` : t.slotUnknown;
   elements.flashButton.disabled = run || cur === "-" || tar === "-";
   elements.bdsToolsButton.disabled = run;
+  elements.patchPartButton.disabled = run;
   elements.clearLogButton.disabled = run;
   renderTable(cur, tar);
+}
+
+function handleStateChange(prev, curr) {
+  const t = i18n[state.lang];
+  if (prev === "running" && curr !== "running") {
+    refreshLog();
+    if (curr === "success") {
+      const msg = state.status?.MESSAGE || "";
+      if (msg.includes("修补") || msg.includes("patch")) toast(t.toastPatchDone);
+      else if (msg.includes("调试")) toast(t.toastDebugDone);
+      else if (msg.includes("BDS")) toast(t.toastBdsToolsDone);
+      else if (msg.includes("全部完成")) toast(t.toastFlashDone);
+      else toast(t.toastFlashDone);
+    } else if (curr === "warning") {
+      toast(t.toastBlDone);
+    } else if (curr === "error") {
+      toast(t.toastFailed);
+    }
+  }
+  state.prevState = curr;
 }
 
 function refreshStatus() {
@@ -313,7 +364,9 @@ function refreshStatus() {
     }else if(s.USER_LANG === "zh"){
       applyLanguage("zh");
     }
+    const oldState = state.prevState;
     renderStatus(s);
+    handleStateChange(oldState, s.STATE || "idle");
     return s;
   } catch (e) {
     const t = i18n[state.lang];
@@ -342,6 +395,21 @@ function closeConfirmModal() {
   elements.nextConfirmButton.textContent = i18n[state.lang].continue;
 }
 
+function getPatchArgString() {
+  const parts = [];
+  if (elements.patchVendorBootCheckbox.checked) parts.push("vendor_boot=1");
+  if (elements.patchSuperCheckbox.checked) parts.push("super=1");
+  if (elements.debugModeCheckbox.checked) parts.push("debug=1");
+  return parts.join(",");
+}
+
+function getSelectedPatchName() {
+  const t = i18n[state.lang];
+  if (elements.patchVendorBootCheckbox.checked) return "vendor_boot";
+  if (elements.patchSuperCheckbox.checked) return "super";
+  return "";
+}
+
 function openConfirmModal(action) {
   const t = i18n[state.lang];
   state.pendingAction = action;
@@ -350,16 +418,30 @@ function openConfirmModal(action) {
     document.querySelector("#modalTitle").textContent = t.confirmBdsTools;
     elements.confirmText.textContent = t.modalBdsStep1;
     elements.nextConfirmButton.textContent = t.continue;
+  } else if (action === "patch-part") {
+    document.querySelector("#modalTitle").textContent = t.confirmPatchPart;
+    elements.confirmText.textContent = t.modalPatchStep1;
+    elements.nextConfirmButton.textContent = t.continue;
   } else {
     document.querySelector("#modalTitle").textContent = t.confirmFlash;
     const tar = state.status?.TARGET_SLOT || "?";
     const efisp = elements.updateEfispCheckbox?.checked;
     const dbg = elements.debugModeCheckbox?.checked;
-    let msg = dbg ? t.modalStep1Debug : t.modalStep1Normal(tar);
-    if (!dbg) {
+    const patchName = getSelectedPatchName();
+    let msg = "";
+
+    // 仅修补模式：不更新efisp且勾选了修补
+    if (!efisp && patchName) {
+      msg = t.modalStep1PatchOnly(tar, patchName);
+    } else if (dbg) {
+      msg = t.modalStep1Debug;
+    } else {
+      msg = t.modalStep1Normal(tar);
       msg += efisp ? t.withEfisp : t.noEfisp;
+      if (patchName) msg += t.withPatch(patchName);
       msg += t.confirmSlot;
     }
+
     elements.confirmText.textContent = msg;
     elements.nextConfirmButton.textContent = dbg ? (state.lang === "zh" ? "开始调试" : "Start Debug") : t.continue;
   }
@@ -375,15 +457,19 @@ function handleConfirmProgress() {
       elements.confirmText.textContent = t.modalBdsStep2;
       elements.nextConfirmButton.textContent = state.lang === "zh" ? "开始更新" : "Start Update";
       return;
+    } else if(state.pendingAction === "patch-part"){
+      state.confirmStep = 2;
+      elements.confirmText.textContent = t.modalPatchStep2;
+      elements.nextConfirmButton.textContent = state.lang === "zh" ? "确认修补" : "Confirm Patch";
+      return;
     }
     const dbg = elements.debugModeCheckbox?.checked;
     if (!dbg) {
       state.confirmStep = 2;
       elements.confirmText.textContent = t.modalStep2;
-      elements.nextConfirmButton.textContent = state.lang === "zh" ? "确认刷写" : "Confirm Flash";
+      elements.nextConfirmButton.textContent = state.lang === "zh" ? "确认执行" : "Confirm";
       return;
     }
-    // debug: single-step confirm, proceed directly
     closeConfirmModal();
     startFlash();
     return;
@@ -391,6 +477,7 @@ function handleConfirmProgress() {
   const action = state.pendingAction;
   closeConfirmModal();
   if (action === "bds-tools") startBdsTools();
+  else if(action === "patch-part") startPatchPart();
   else startFlash();
 }
 
@@ -398,13 +485,32 @@ function startFlash() {
   const t = i18n[state.lang];
   const efisp = elements.updateEfispCheckbox?.checked;
   const dbg = elements.debugModeCheckbox?.checked;
-  let mode = dbg ? "debug" : (efisp ? "update-efisp" : "skip-efisp");
+  let baseMode = dbg ? "debug" : (efisp ? "update-efisp" : "skip-efisp");
+
+  const patchArgs = getPatchArgString();
+  const fullMode = patchArgs ? `${baseMode},${patchArgs}` : baseMode;
+
   try {
-    const out = parseKeyValueOutput(runScript("start", mode));
+    const out = parseKeyValueOutput(runScript("start", fullMode));
     if (out.ALREADY_RUNNING) toast(t.toastRunning);
     else if (out.STARTED === "1") toast(dbg ? t.toastStartDebug : t.toastStartFlash);
     else if (out.FINISHED === "success") toast(dbg ? t.toastDebugDone : t.toastFlashDone);
     else if (out.FINISHED === "warning") toast(t.toastBlDone);
+    else if (out.FINISHED === "error") toast(t.toastFailed);
+    else toast(t.toastStartError);
+  } catch (e) { toast(`${t.startFail}: ${e.message}`); }
+  manualRefresh();
+}
+
+function startPatchPart() {
+  const t = i18n[state.lang];
+  const argStr = getPatchArgString();
+
+  try {
+    const out = parseKeyValueOutput(runScript("start-patch", argStr));
+    if (out.ALREADY_RUNNING) toast(t.toastRunning);
+    else if (out.STARTED === "1") toast(t.toastStartPatch);
+    else if (out.FINISHED === "success") toast(t.toastPatchDone);
     else if (out.FINISHED === "error") toast(t.toastFailed);
     else toast(t.toastStartError);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
@@ -453,19 +559,35 @@ function manualRefresh() {
   schedulePoll(state.status?.RUNNING === "1" ? 3000 : 8000);
 }
 
+function initPatchCheckboxMutual() {
+  elements.patchVendorBootCheckbox.addEventListener("change", () => {
+    if (elements.patchVendorBootCheckbox.checked) {
+      elements.patchSuperCheckbox.checked = false;
+    }
+  });
+  elements.patchSuperCheckbox.addEventListener("change", () => {
+    if (elements.patchSuperCheckbox.checked) {
+      elements.patchVendorBootCheckbox.checked = false;
+    }
+  });
+}
+
 async function init() {
   try {
     const info = moduleInfo();
     if(!info) return;
     state.moduleDir = info.moduleDir;
     state.scriptPath = `${state.moduleDir}/bin/bl_flasher.sh`;
+    initPatchCheckboxMutual();
     refreshStatus();
+    refreshLog();
   } catch (e) {
     elements.stateChip.textContent = state.lang === "zh" ? "WebUI 初始化失败" : "WebUI Init Failed";
     elements.stateChip.className = "chip chip-danger";
     elements.taskMessage.textContent = e.message;
     elements.flashButton.disabled = true;
     elements.bdsToolsButton.disabled = true;
+    elements.patchPartButton.disabled = true;
     elements.clearLogButton.disabled = true;
     return;
   }
@@ -473,6 +595,7 @@ async function init() {
   elements.refreshButton.addEventListener("click", manualRefresh);
   elements.flashButton.addEventListener("click", () => openConfirmModal("flash"));
   elements.bdsToolsButton.addEventListener("click", () => openConfirmModal("bds-tools"));
+  elements.patchPartButton.addEventListener("click", () => openConfirmModal("patch-part"));
   elements.clearLogButton.addEventListener("click", clearLog);
   elements.cancelConfirmButton.addEventListener("click", closeConfirmModal);
   elements.nextConfirmButton.addEventListener("click", handleConfirmProgress);

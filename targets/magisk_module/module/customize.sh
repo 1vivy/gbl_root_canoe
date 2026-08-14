@@ -22,22 +22,31 @@ echo "$LANG" > "$MODPATH/lang.txt"
 ksud module config set user_lang "$LANG" 2>/dev/null
 sleep 1
 
-cat > "$MODPATH/module.prop" <<EOF
-id=fake_bl_efisp
-version=5.0
-versionCode=12
-author=zaomi
-EOF
 
 if [ "$LANG" = "zh" ]; then
   echo "name=假回锁" >> "$MODPATH/module.prop"
   echo "description=自动刷新bl相关分区到非活动槽位" >> "$MODPATH/module.prop"
 else
   echo "name=Fake BL EFISP" >> "$MODPATH/module.prop"
-  echo "description=Automatically flash BL-related partitions to inactive slot" >> "$MODPATH/module.prop"
+  echo "description=Automatically flash BL‑related partitions to inactive slot" >> "$MODPATH/module.prop"
 fi
 
 if [ "$LANG" = "zh" ]; then
+  T_OPT_MENU="====================================="
+  T_OPT_ASK="是否启用额外修补功能(vendor_boot/super)?"
+  T_OPT_UP_YES="音量上 = 启用修补"
+  T_OPT_DOWN_SKIP="音量下 = 跳过修补"
+  T_OPT_CHOICE1="请选择修补类型"
+  T_OPT_VB="音量上：仅修补 vendor_boot"
+  T_OPT_SUPER="音量下：移除super分区验证"
+  T_OPT_RUN_VB="- 开始执行vendor_boot修补..."
+  T_OPT_RUN_SUPER="- 开始执行移除super验证..."
+  T_OPT_FINISH_VB="vendor_boot修补执行完成"
+  T_OPT_FINISH_SUPER="super验证移除执行完成！"
+  T_OPT_SUPER_NOTE="【重要提示】移除super验证已内置vendor_boot修补；操作后请勿修改 system、system_dlkm、vendor 分区！"
+  T_OPT_SKIP="已跳过额外修补步骤"
+  T_BIN_FAIL="执行失败！"
+
   T_VERIFY="- 正在验证设备型号"
   T_DEVICE_OK="- 设备验证完成："
   T_PERM="- 正在设置权限"
@@ -77,6 +86,21 @@ if [ "$LANG" = "zh" ]; then
   T_SEL_NO="选择了否，正在安装OTA更新模块"
   T_DONE_NO="安装完成，请重启系统即可"
 else
+  T_OPT_MENU="====================================="
+  T_OPT_ASK="Enable extra patch functions?"
+  T_OPT_UP_YES="Vol+ = Enable patches"
+  T_OPT_DOWN_SKIP="Vol‑ = Skip patches"
+  T_OPT_CHOICE1="Select patch mode"
+  T_OPT_VB="Vol+ : Patch vendor_boot only"
+  T_OPT_SUPER="Vol‑ : Remove super partition verification"
+  T_OPT_RUN_VB="- Running vendor_boot patch binary..."
+  T_OPT_RUN_SUPER="- Running super verification remove binary..."
+  T_OPT_FINISH_VB="vendor_boot patch finished"
+  T_OPT_FINISH_SUPER="Super verification removal finished!"
+  T_OPT_SUPER_NOTE="【WARNING】Super patch includes vendor_boot patch. DO NOT modify system,system_dlkm,vendor partitions afterward!"
+  T_OPT_SKIP="Extra patch skipped"
+  T_BIN_FAIL="Binary execution failed!"
+
   T_VERIFY="- Verifying device model"
   T_DEVICE_OK="- Device verified:"
   T_PERM="- Setting permissions"
@@ -85,7 +109,7 @@ else
   T_CHECK_EXP="Detecting exploit..."
   T_INSTALL_CHOICE="Is this your first time installing Fake BL EFISP?"
   T_VOL_UP="Vol+ = YES (Fresh install, requires format)"
-  T_VOL_DOWN="Vol- = NO (If installed before or just formatted)"
+  T_VOL_DOWN="Vol‑ = NO (If installed before or just formatted)"
   T_TIP_YES="If YES: efisp boot entries placed on persist and BDS flashed to efisp, reboot to recovery and format data, then reinstall this module and select NO"
   T_TIP_NO="If NO: OTA patch will be installed, after each OTA, flash this module again to keep BL version"
   T_SEL_YES="Selected YES, installing patched efisp"
@@ -94,7 +118,7 @@ else
   T_NO_GBL="Current ABL lacks the GBL vulnerability"
   T_ABLREPO_CONFIRM="An older ABL with the GBL vuln is available in the ABL repo. Download and downgrade the abl partition?"
   T_ABLREPO_CONFIRM_YES="Vol+ = download and downgrade"
-  T_ABLREPO_CONFIRM_NO="Vol- = cancel"
+  T_ABLREPO_CONFIRM_NO="Vol‑ = cancel"
   T_ABLREPO_DECLINED="Downgrade cancelled, aborting"
   T_ABLREPO_LOCAL="Found ABL in local module"
   T_ABLREPO_LOCAL_BAD="Local ABL verification failed, trying cloud"
@@ -103,9 +127,9 @@ else
   T_ABLREPO_FAIL="ABL repo lookup failed. Manually flash an older ABL with the GBL vulnerability to the abl partition, then retry"
   T_ABLREPO_DOWNGRADE="Downgrading the abl partition..."
   T_ABLREPO_OK="abl partition downgraded"
-  T_ABL_SETRW_FAIL="Failed to set abl to read-write"
+  T_ABL_SETRW_FAIL="Failed to set abl to read‑write"
   T_ABL_FLASH_FAIL="Failed to flash abl partition"
-  T_SETRW_FAIL="Failed to set efisp to read-write"
+  T_SETRW_FAIL="Failed to set efisp to read‑write"
   T_FLASH_FAIL="Failed to flash efisp"
   T_PERSIST_NOT_MOUNTED="persist is not mounted at /mnt/vendor/persist"
   T_EFISP_DIR_FAIL="efisp boot dir create failed"
@@ -129,6 +153,7 @@ set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
 set_perm "$MODPATH/module.prop" 0 0 0644
 set_perm "$MODPATH/customize.sh" 0 0 0755
 
+# ========== 修改1：槽位检测函数前移，提前定义 ==========
 detect_current_slot() {
   case "$(getprop ro.boot.slot_suffix 2>/dev/null)" in
     _a) echo _a ;;
@@ -137,6 +162,75 @@ detect_current_slot() {
   esac
 }
 
+ui_print ""
+ui_print "$T_OPT_MENU"
+ui_print "$T_OPT_ASK"
+ui_print "$T_OPT_UP_YES"
+ui_print "$T_OPT_DOWN_SKIP"
+
+EXTRA_PATCH_MODE=""
+while true; do
+  keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
+  if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+    ui_print "$T_OPT_CHOICE1"
+    ui_print "$T_OPT_VB"
+    ui_print "$T_OPT_SUPER"
+    while true; do
+      keyevent2=$(timeout 0.5 getevent -l 2>/dev/null)
+      if echo "$keyevent2" | grep -q "KEY_VOLUMEUP"; then
+        EXTRA_PATCH_MODE="vendor_boot"
+        break
+      elif echo "$keyevent2" | grep -q "KEY_VOLUMEDOWN"; then
+        EXTRA_PATCH_MODE="super"
+        break
+      fi
+    done
+    break
+  elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+    EXTRA_PATCH_MODE="skip"
+    ui_print "$T_OPT_SKIP"
+    break
+  fi
+done
+
+# ========== 修改2：执行修补前获取当前槽位，提取a/b字母 ==========
+current_slot_suffix=$(detect_current_slot)
+if [ -z "$current_slot_suffix" ]; then
+  ui_print "$T_NO_SLOT"
+  abort "slot detection failed"
+fi
+slot_letter=${current_slot_suffix#_}  # 去掉下划线前缀，得到纯字母 a 或 b
+
+# 调用bin目录下二进制，传入当前槽位参数
+if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
+  ui_print "$T_OPT_RUN_VB"
+  ui_print "- 当前槽位: $slot_letter"
+  if [ -x "$MODPATH/bin/patch_vendor_boot" ]; then
+    "$MODPATH/bin/patch_vendor_boot" "$slot_letter"  # ========== 修改3：传入槽位参数 ==========
+    ret=$?
+    if [ $ret -ne 0 ];then
+      ui_print "$T_BIN_FAIL (vendor_boot ret:$ret)"
+    fi
+  else
+    ui_print "$T_BIN_FAIL: patch_vendor_boot binary not found!"
+  fi
+  ui_print "$T_OPT_FINISH_VB"
+elif [ "$EXTRA_PATCH_MODE" = "super" ]; then
+  ui_print "$T_OPT_RUN_SUPER"
+  ui_print "- 当前槽位: $slot_letter"
+  if [ -x "$MODPATH/bin/patch_super" ]; then
+    "$MODPATH/bin/patch_super" "$slot_letter"  # ========== 修改4：传入槽位参数 ==========
+    ret=$?
+    if [ $ret -ne 0 ];then
+      ui_print "$T_BIN_FAIL (super ret:$ret)"
+    fi
+  else
+    ui_print "$T_BIN_FAIL: patch_super binary not found!"
+  fi
+  ui_print "$T_OPT_FINISH_SUPER"
+  ui_print "$T_OPT_SUPER_NOTE"
+fi
+
 BY_NAME_DIR=/dev/block/by-name
 RUNTIME_DIR=$MODPATH/tmp
 PERSIST_MNT=/mnt/vendor/persist
@@ -144,7 +238,7 @@ EFISP_DIR=$PERSIST_MNT/efisp
 ABLREPO_URL="https://raw.githubusercontent.com/superturtlee/gbl_root_canoe/main/ablrepo"
 mkdir -p $RUNTIME_DIR
 
-# Verify $1 against the sha256 in $2 (first whitespace-delimited token).
+# Verify $1 against the sha256 in $2 (first whitespace‑delimited token).
 verify_sha256() {
   [ -f "$1" ] && [ -f "$2" ] || return 1
   expected=$(cut -d' ' -f1 "$2" | tr -d '[:space:]')
@@ -238,7 +332,7 @@ while true; do
         abort "abl repo lookup failed"
       fi
       # Downgrade ONLY the abl partition so it has the vuln to load BDS. Do NOT
-      # rebuild boot.efi from this image: some systems need the high-version
+      # rebuild boot.efi from this image: some systems need the high‑version
       # LinuxLoader from the current partition to boot, so boot.efi (already
       # built above from the running ABL) stays untouched. The repo ABL is
       # trusted to carry the vuln.
@@ -290,7 +384,7 @@ while true; do
   fi
 done
 
-# ablrepo is bundled only for install-time ABL downgrade lookup. Remove it so
-# the device-side module dir (/data/adb/modules/fake_bl_efisp) stays lean after
-# installation; the cloud URL remains available for later re-downloads.
+# ablrepo is bundled only for install‑time ABL downgrade lookup. Remove it so
+# the device‑side module dir (/data/adb/modules/fake_bl_efisp) stays lean after
+# installation; the cloud URL remains available for later re‑downloads.
 rm -rf "$MODPATH/ablrepo"
