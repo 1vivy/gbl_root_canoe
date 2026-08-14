@@ -7,6 +7,9 @@ if [ -z "$MODDIR" ]; then
   exit 1
 fi
 
+export MODPATH=$MODDIR
+export BINDIR=$MODDIR/bin
+
 LANG=zh
 if [ -f "$MODDIR/lang.txt" ]; then
   USER_LANG=$(cat "$MODDIR/lang.txt" | tr -d '[:space:]')
@@ -50,6 +53,18 @@ if [ "$LANG" = "zh" ]; then
   TEXT_ALL_OK_NO_EFISP="全部完成（不含efisp）"
   TEXT_BUSY="任务正在运行"
   TEXT_LOG_CLEARED="日志已清空"
+  TEXT_PATCH_START="开始执行分区修补"
+  TEXT_PATCH_VENDORBOOT_START="修补 vendor_boot"
+  TEXT_PATCH_VENDORBOOT_DONE="vendor_boot 修补完成"
+  TEXT_PATCH_SUPER_START="修补 super 分区"
+  TEXT_PATCH_SUPER_DONE="super 修补完成"
+  TEXT_PATCH_DEBUG_SAVE="调试模式：跳过实际刷写"
+  TEXT_PATCH_NO_SELECTED="未勾选任何需要修补的分区"
+  TEXT_PATCH_ERR="分区修补出错"
+  TEXT_PATCH_DONE="分区修补全部完成"
+  TEXT_BIN_NOT_FOUND="二进制文件未找到"
+  TEXT_PATCH_ARGS="修补参数"
+  TEXT_BIN_RUN_INFO="执行二进制"
 else
   TEXT_IDLE="Waiting"
   TEXT_NO_SLOT="Cannot detect current slot"
@@ -85,6 +100,18 @@ else
   TEXT_ALL_OK_NO_EFISP="All done (no efisp)"
   TEXT_BUSY="Task running"
   TEXT_LOG_CLEARED="Log cleared"
+  TEXT_PATCH_START="Start partition patching"
+  TEXT_PATCH_VENDORBOOT_START="Patch vendor_boot"
+  TEXT_PATCH_VENDORBOOT_DONE="vendor_boot patched"
+  TEXT_PATCH_SUPER_START="Patch super partition"
+  TEXT_PATCH_SUPER_DONE="super patched"
+  TEXT_PATCH_DEBUG_SAVE="Debug mode: skip actual flash"
+  TEXT_PATCH_NO_SELECTED="No partition selected for patching"
+  TEXT_PATCH_ERR="Partition patch error"
+  TEXT_PATCH_DONE="Partition patch finished"
+  TEXT_BIN_NOT_FOUND="Binary not found"
+  TEXT_PATCH_ARGS="Patch args"
+  TEXT_BIN_RUN_INFO="Run binary"
 fi
 
 RUNTIME_DIR="$MODDIR/tmp"
@@ -151,47 +178,21 @@ current_pid() {
   return 1
 }
 
-# The ext4 persist partition is auto-mounted by init at /mnt/vendor/persist
-# (read-write), and the superfastboot BDS reads its \efisp directory as the boot
-# root. Refuse to proceed when it is not mounted: writing under an unmounted
-# /mnt/vendor/persist would land on the root filesystem and the BDS would never
-# see it. In debug mode the boot root is staged under the module tmp dir
-# instead, so this check does not apply.
 persist_mounted() { grep -q " $PERSIST_MNT " /proc/mounts; }
 
-# Lay out the \efisp boot root from the bundled module efisp/ tree: BOOTENTRIES
-# (with its tools submenu link) plus the tools/ directory and its EFI applets.
-# Each BOOTENTRIES line is "<name>:<path relative to the \efisp boot root>"; the
-# BDS lists only entries whose file actually exists, so the backup entry stays
-# hidden until a previous boot.efi has been backed up. boot.efi / boot_backup.efi
-# are generated at runtime and are not part of the bundle, so they are preserved.
 place_efisp_tree_to() {
   cp -r "$MODDIR/efisp/." "$1/" >> "$LOG_FILE" 2>&1
 }
 
-# Extract and crack the target-slot ABL, then lay out the \efisp boot root
-# (boot.efi = cracked ABL, boot_backup.efi = the previous one, BOOTENTRIES +
-# tools/ = bundled module efisp tree) and flash the BDS itself to the raw efisp
-# partition. The ABL loaded by the real bootloader is the BDS; the BDS then
-# chains to one of these entries.
-#
-# In debug mode the boot root is staged under $RUNTIME_DIR/efisp and nothing is
-# written to a partition.
-#
-# Returns 2 when the GBL vulnerability is present (the real ABL will load the
-# BDS off efisp, so no slot copy is needed), 0 when it is absent (fall back to
-# copying the ABL to the inactive slot), or 1 on error.
 update_efisp() {
   abl=$1
   is_debug=$2
   rm -f $RUNTIME_DIR/*
   $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$abl" >> "$LOG_FILE" 2>&1
-  $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> $RUNTIME_DIR/patch.log 2>&1
+  $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> "$RUNTIME_DIR/patch.log" 2>&1
   cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"
   [ -f $RUNTIME_DIR/patched.efi ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
 
-  # The optional GBL patch (efisp -> nulls rename) succeeds only when the ABL
-  # actually loads efisp; its warning is therefore the vuln indicator.
   if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
     gbl_vuln=0
   else
@@ -211,11 +212,9 @@ update_efisp() {
 
   mkdir -p "$efisp_target" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
 
-  # Keep the previous boot.efi around as a one-level backup. Skipped in debug,
-  # where the staging dir is freshly emptied.
   if [ "$is_debug" != "yes" ] && [ -f "$efisp_target/boot.efi" ]; then
     mv "$efisp_target/boot.efi" "$efisp_target/boot_backup.efi" >> "$LOG_FILE" 2>&1
-    write_log "$TEXT_BACKUP_BOOT"
+    write_log "$TEXT_BACKUP_BOOK"
   fi
 
   if ! cp $RUNTIME_DIR/patched.efi "$efisp_target/boot.efi" >> "$LOG_FILE" 2>&1; then
@@ -251,7 +250,7 @@ update_efisp() {
 detect_gbl_vulnerability() {
   rm -f $RUNTIME_DIR/*
   $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$1" >> "$LOG_FILE" 2>&1
-  $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> $RUNTIME_DIR/patch.log 2>&1
+  $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> "$RUNTIME_DIR/patch.log" 2>&1
   cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"
   [ -f $RUNTIME_DIR/patched.efi ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
   if ! grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
@@ -262,15 +261,11 @@ detect_gbl_vulnerability() {
   return 2
 }
 
-# True if the raw efisp partition begins with an MZ (PE/EFI) image header, i.e.
-# a BDS or other EFI app has been flashed to it.
 efisp_has_mz() {
   [ -b "$BY_NAME_DIR/efisp" ] || return 1
   [ "$(dd if="$BY_NAME_DIR/efisp" bs=2 count=1 2>/dev/null)" = "MZ" ]
 }
 
-# True if the current-slot ABL carries the GBL exploit (so it would load the
-# BDS off efisp). Returns false when the slot cannot be detected.
 gbl_exploit_present() {
   current_slot=$(detect_current_slot) || return 1
   abl=$(partition_path abl "$current_slot")
@@ -278,18 +273,6 @@ gbl_exploit_present() {
   [ $? -eq 0 ]
 }
 
-# Flash BDS.efi raw to the efisp partition, then replace the \efisp boot root's
-# bundled tree (BOOTENTRIES + tools/) with the module efisp/ bundle. No ABL is
-# cracked and no slot copy happens; the runtime-generated boot.efi /
-# boot_backup.efi are not in the bundle, so the merge copy preserves them.
-#
-# Refuses unless boot.efi is already present (the new boot root is laid out);
-# otherwise the refresh would leave the BDS with nothing to chain to. When it is
-# missing, an MZ image on the raw efisp partition plus a working GBL exploit
-# means an older fake-lock install, anything else means never installed.
-#
-# Returns 0 on success, 2 when aborted with a user-facing message already
-# written, 1 on other errors.
 update_bds_tools() {
   if ! persist_mounted; then
     write_log "$TEXT_PERSIST_NOT_MOUNTED"
@@ -307,7 +290,6 @@ update_bds_tools() {
 
   mkdir -p "$EFISP_DIR" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
 
-  # 1. Flash the BDS itself to the raw efisp partition.
   if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$LOG_FILE" 2>&1; then
     write_log "$TEXT_EFISP_SET_RW_FAILED"
     return 1
@@ -319,7 +301,6 @@ update_bds_tools() {
   sync
   write_log "$TEXT_EFISP_FLASH_OK"
 
-  # 2. Replace the boot-root tree (BOOTENTRIES + tools/) with the bundled one.
   place_efisp_tree_to "$EFISP_DIR"
   sync
   write_log "$TEXT_EFISP_FILES_OK"
@@ -364,8 +345,6 @@ run_flash() {
   trap cleanup_lock EXIT INT TERM HUP
   : > "$LOG_FILE"
 
-  # BDS + Tools only: flash BDS to the raw efisp partition and refresh the
-  # bundled efisp/ tree on the persist boot root. No ABL crack, no slot copy.
   if [ "$mode" = "update-bds-tools" ]; then
     write_state running "$TEXT_UPDATING_BDS_TOOLS"
     update_bds_tools
@@ -373,7 +352,7 @@ run_flash() {
     if [ $res -eq 0 ]; then
       write_state success "$TEXT_BDS_TOOLS_OK"
     elif [ $res -eq 2 ]; then
-      : # aborted, user-facing message already written
+      :
     else
       write_state error "$TEXT_BDS_TOOLS_FAIL"
     fi
@@ -433,6 +412,98 @@ run_flash() {
   fi
 }
 
+run_patch() {
+  arg_str="$1"
+
+  ensure_runtime
+  mkdir "$LOCK_DIR" 2>/dev/null || { write_log "$TEXT_BUSY"; exit 1; }
+  echo $$ > "$PID_FILE"
+  trap cleanup_lock EXIT INT TERM HUP
+  : > "$LOG_FILE"
+
+  write_state running "$TEXT_PATCH_START"
+  write_log "$TEXT_PATCH_START"
+  write_log "$TEXT_PATCH_ARGS: $arg_str"
+
+  arg_super=0
+  arg_vendor_boot=0
+  arg_debug=0
+
+  echo "$arg_str" | grep -q "super=1" && arg_super=1
+  echo "$arg_str" | grep -q "vendor_boot=1" && arg_vendor_boot=1
+  echo "$arg_str" | grep -q "debug=1" && arg_debug=1
+
+  if [ "$arg_super" != "1" ] && [ "$arg_vendor_boot" != "1" ]; then
+    write_state error "$TEXT_PATCH_NO_SELECTED"
+    write_log "$TEXT_PATCH_NO_SELECTED"
+    exit 0
+  fi
+
+  cd "$BINDIR"
+
+  if [ "$arg_vendor_boot" = "1" ]; then
+    write_log "$TEXT_PATCH_VENDORBOOT_START"
+    if [ "$arg_debug" = "1" ]; then
+      write_log "$TEXT_PATCH_DEBUG_SAVE"
+    else
+      if [ -x "$BINDIR/patch_vendor_boot" ]; then
+        write_log "$TEXT_BIN_RUN_INFO: patch_vendor_boot"
+        "$BINDIR/patch_vendor_boot" >> "$LOG_FILE" 2>&1
+        ret=$?
+        if [ $ret -ne 0 ]; then
+          write_log "$TEXT_PATCH_ERR (ret:$ret)"
+          write_state error "$TEXT_PATCH_ERR"
+          exit 1
+        fi
+      else
+        write_log "$TEXT_BIN_NOT_FOUND: patch_vendor_boot"
+        write_state error "$TEXT_BIN_NOT_FOUND"
+        exit 1
+      fi
+    fi
+    write_log "$TEXT_PATCH_VENDORBOOT_DONE"
+  fi
+
+  if [ "$arg_super" = "1" ]; then
+    write_log "$TEXT_PATCH_SUPER_START"
+    if [ "$arg_debug" = "1" ]; then
+      write_log "$TEXT_PATCH_DEBUG_SAVE"
+    else
+      if [ -x "$BINDIR/patch_super" ]; then
+        write_log "$TEXT_BIN_RUN_INFO: patch_super"
+        "$BINDIR/patch_super" >> "$LOG_FILE" 2>&1
+        ret=$?
+        if [ $ret -ne 0 ]; then
+          write_log "$TEXT_PATCH_ERR (ret:$ret)"
+          write_state error "$TEXT_PATCH_ERR"
+          exit 1
+        fi
+      else
+        write_log "$TEXT_BIN_NOT_FOUND: patch_super"
+        write_state error "$TEXT_BIN_NOT_FOUND"
+        exit 1
+      fi
+    fi
+    write_log "$TEXT_PATCH_SUPER_DONE"
+  fi
+
+  write_state success "$TEXT_PATCH_DONE"
+  exit 0
+}
+
+start_patch() {
+  ensure_runtime
+  [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
+  nohup sh "$0" patch "$1" >/dev/null 2>&1 &
+  sleep 1
+  if [ -n "$(current_pid)" ]; then
+    emit "STARTED=1"
+  else
+    st=$(read_line "$STATE_FILE")
+    [ -n "$st" ] && emit "FINISHED=$st" || emit "STARTED=0"
+  fi
+}
+
 start_flash() {
   ensure_runtime
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
@@ -461,6 +532,8 @@ case "$1" in
   status) print_status ;;
   flash) run_flash "$2" ;;
   start) start_flash "$2" ;;
+  patch) run_patch "$2" ;;
+  start-patch) start_patch "$2" ;;
   log) print_log ;;
   tail) tail_log ;;
   clear-log) clear_log ;;
