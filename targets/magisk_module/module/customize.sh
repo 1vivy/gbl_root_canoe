@@ -22,12 +22,6 @@ echo "$LANG" > "$MODPATH/lang.txt"
 ksud module config set user_lang "$LANG" 2>/dev/null
 sleep 1
 
-cat > "$MODPATH/module.prop" <<EOF
-id=fake_bl_efisp
-version=5.0
-versionCode=12
-author=zaomi
-EOF
 
 if [ "$LANG" = "zh" ]; then
   echo "name=假回锁" >> "$MODPATH/module.prop"
