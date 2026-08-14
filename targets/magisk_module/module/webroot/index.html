@@ -51,6 +51,7 @@
       <div class="action-strip">
         <button class="primary-button" id="flashButton" type="button" data-i18n="flash">刷写到另一槽位</button>
         <button class="ghost-button" id="bdsToolsButton" type="button" data-i18n="bdsTools">仅更新BDS和Tools</button>
+        <button class="ghost-button" id="patchPartButton" type="button" data-i18n="patchPart">修补分区</button>
         <button class="ghost-button" id="clearLogButton" type="button" data-i18n="clearLog">清空日志</button>
       </div>
 
@@ -62,6 +63,16 @@
       <label class="option-check" for="debugModeCheckbox">
         <input id="debugModeCheckbox" type="checkbox" />
         <span id="lblDebugMode">调试模式（仅处理不刷写，生成的文件保存在 tmp 目录）</span>
+      </label>
+
+      <label class="option-check" for="patchVendorBootCheckbox">
+        <input id="patchVendorBootCheckbox" type="checkbox" />
+        <span id="lblPatchVendorBoot">修补 vendor_boot 分区</span>
+      </label>
+
+      <label class="option-check" for="patchSuperCheckbox">
+        <input id="patchSuperCheckbox" type="checkbox" />
+        <span id="lblPatchSuper">修补 super 分区</span>
       </label>
 
       <p class="warning-copy" id="lblWarning">
