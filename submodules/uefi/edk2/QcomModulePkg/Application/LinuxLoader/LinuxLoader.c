@@ -83,11 +83,6 @@
 #define MAX_NUM_FS 10
 #define DEFAULT_STACK_CHK_GUARD 0xc0c0c0c0
 
-#if HIBERNATION_SUPPORT_NO_AES
-VOID BootIntoHibernationImage (BootInfo *Info,
-                               BOOLEAN *SetRotAndBootStateAndVBH);
-#endif
-
 /**
   Linux Loader Application EntryPoint
 
