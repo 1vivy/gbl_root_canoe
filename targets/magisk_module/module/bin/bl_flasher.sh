@@ -62,9 +62,9 @@ if [ "$LANG" = "zh" ]; then
   TEXT_PATCH_NO_SELECTED="未勾选任何需要修补的分区"
   TEXT_PATCH_ERR="分区修补出错"
   TEXT_PATCH_DONE="分区修补全部完成"
-  TEXT_BIN_NOT_FOUND="二进制文件未找到"
+  TEXT_BIN_NOT_FOUND="修补文件未找到"
   TEXT_PATCH_ARGS="修补参数"
-  TEXT_BIN_RUN_INFO="执行二进制"
+  TEXT_BIN_RUN_INFO="执行中"
 else
   TEXT_IDLE="Waiting"
   TEXT_NO_SLOT="Cannot detect current slot"
