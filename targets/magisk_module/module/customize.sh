@@ -153,6 +153,15 @@ set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
 set_perm "$MODPATH/module.prop" 0 0 0644
 set_perm "$MODPATH/customize.sh" 0 0 0755
 
+# ========== 修改1：槽位检测函数前移，提前定义 ==========
+detect_current_slot() {
+  case "$(getprop ro.boot.slot_suffix 2>/dev/null)" in
+    _a) echo _a ;;
+    _b) echo _b ;;
+    *) return 1 ;;
+  esac
+}
+
 ui_print ""
 ui_print "$T_OPT_MENU"
 ui_print "$T_OPT_ASK"
@@ -184,11 +193,20 @@ while true; do
   fi
 done
 
-# 调用bin目录下二进制，不再调用shell脚本
+# ========== 修改2：执行修补前获取当前槽位，提取a/b字母 ==========
+current_slot_suffix=$(detect_current_slot)
+if [ -z "$current_slot_suffix" ]; then
+  ui_print "$T_NO_SLOT"
+  abort "slot detection failed"
+fi
+slot_letter=${current_slot_suffix#_}  # 去掉下划线前缀，得到纯字母 a 或 b
+
+# 调用bin目录下二进制，传入当前槽位参数
 if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
   ui_print "$T_OPT_RUN_VB"
+  ui_print "- 当前槽位: $slot_letter"
   if [ -x "$MODPATH/bin/patch_vendor_boot" ]; then
-    "$MODPATH/bin/patch_vendor_boot"
+    "$MODPATH/bin/patch_vendor_boot" "$slot_letter"  # ========== 修改3：传入槽位参数 ==========
     ret=$?
     if [ $ret -ne 0 ];then
       ui_print "$T_BIN_FAIL (vendor_boot ret:$ret)"
@@ -199,8 +217,9 @@ if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
   ui_print "$T_OPT_FINISH_VB"
 elif [ "$EXTRA_PATCH_MODE" = "super" ]; then
   ui_print "$T_OPT_RUN_SUPER"
+  ui_print "- 当前槽位: $slot_letter"
   if [ -x "$MODPATH/bin/patch_super" ]; then
-    "$MODPATH/bin/patch_super"
+    "$MODPATH/bin/patch_super" "$slot_letter"  # ========== 修改4：传入槽位参数 ==========
     ret=$?
     if [ $ret -ne 0 ];then
       ui_print "$T_BIN_FAIL (super ret:$ret)"
@@ -211,14 +230,6 @@ elif [ "$EXTRA_PATCH_MODE" = "super" ]; then
   ui_print "$T_OPT_FINISH_SUPER"
   ui_print "$T_OPT_SUPER_NOTE"
 fi
-
-detect_current_slot() {
-  case "$(getprop ro.boot.slot_suffix 2>/dev/null)" in
-    _a) echo _a ;;
-    _b) echo _b ;;
-    *) return 1 ;;
-  esac
-}
 
 BY_NAME_DIR=/dev/block/by-name
 RUNTIME_DIR=$MODPATH/tmp
