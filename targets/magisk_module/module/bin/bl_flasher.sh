@@ -23,6 +23,7 @@ if [ "$LANG" = "zh" ]; then
   TEXT_NO_SLOT="无法识别当前槽位"
   TEXT_NO_TARGET_SLOT="无法计算目标槽位"
   TEXT_FLASHING="正在将镜像刷写到槽位"
+  TEXT_PATCH_ONLY="仅对目标槽位执行分区修补"
   TEXT_DEBUG_MODE="调试模式：仅处理不刷写，efisp 目录使用模块 tmp/efisp"
   TEXT_DEBUG_DONE="调试完成，文件保存在"
   TEXT_DEBUG_FAILED="调试过程中出错"
@@ -50,7 +51,7 @@ if [ "$LANG" = "zh" ]; then
   TEXT_FLASH_PART="刷写"
   TEXT_FLASH_OK="完成"
   TEXT_ALL_OK="全部完成（含efisp）"
-  TEXT_ALL_OK_NO_EFISP="全部完成（不含efisp）"
+  TEXT_ALL_OK_NO_EFISP="分区修补完成（未刷写ABL）"
   TEXT_BUSY="任务正在运行"
   TEXT_LOG_CLEARED="日志已清空"
   TEXT_PATCH_START="开始执行分区修补"
@@ -60,16 +61,19 @@ if [ "$LANG" = "zh" ]; then
   TEXT_PATCH_SUPER_DONE="super 修补完成"
   TEXT_PATCH_DEBUG_SAVE="调试模式：跳过实际刷写"
   TEXT_PATCH_NO_SELECTED="未勾选任何需要修补的分区"
+  TEXT_PATCH_BOTH_ERR="不能同时修补 vendor_boot 和 super"
   TEXT_PATCH_ERR="分区修补出错"
   TEXT_PATCH_DONE="分区修补全部完成"
   TEXT_BIN_NOT_FOUND="修补文件未找到"
   TEXT_PATCH_ARGS="修补参数"
   TEXT_BIN_RUN_INFO="执行中"
+  TEXT_PATCH_SLOT="目标槽位"
 else
   TEXT_IDLE="Waiting"
   TEXT_NO_SLOT="Cannot detect current slot"
   TEXT_NO_TARGET_SLOT="Cannot detect target slot"
   TEXT_FLASHING="Flashing to slot"
+  TEXT_PATCH_ONLY="Patch target slot partitions only"
   TEXT_DEBUG_MODE="Debug Mode: process only, no flash; efisp dir uses module tmp/efisp"
   TEXT_DEBUG_DONE="Debug done"
   TEXT_DEBUG_FAILED="Debug error"
@@ -97,7 +101,7 @@ else
   TEXT_FLASH_PART="Flashing"
   TEXT_FLASH_OK="done"
   TEXT_ALL_OK="All done (with efisp)"
-  TEXT_ALL_OK_NO_EFISP="All done (no efisp)"
+  TEXT_ALL_OK_NO_EFISP="Partition patch complete (ABL not flashed)"
   TEXT_BUSY="Task running"
   TEXT_LOG_CLEARED="Log cleared"
   TEXT_PATCH_START="Start partition patching"
@@ -107,11 +111,13 @@ else
   TEXT_PATCH_SUPER_DONE="super patched"
   TEXT_PATCH_DEBUG_SAVE="Debug mode: skip actual flash"
   TEXT_PATCH_NO_SELECTED="No partition selected for patching"
+  TEXT_PATCH_BOTH_ERR="Cannot patch vendor_boot and super at the same time"
   TEXT_PATCH_ERR="Partition patch error"
   TEXT_PATCH_DONE="Partition patch finished"
   TEXT_BIN_NOT_FOUND="Binary not found"
   TEXT_PATCH_ARGS="Patch args"
   TEXT_BIN_RUN_INFO="Run binary"
+  TEXT_PATCH_SLOT="Target slot"
 fi
 
 RUNTIME_DIR="$MODDIR/tmp"
@@ -168,6 +174,10 @@ other_slot() {
   esac
 }
 
+slot_suffix_to_letter() {
+  echo "${1#_}"
+}
+
 partition_path() { echo "$BY_NAME_DIR/$1$2"; }
 
 current_pid() {
@@ -214,7 +224,7 @@ update_efisp() {
 
   if [ "$is_debug" != "yes" ] && [ -f "$efisp_target/boot.efi" ]; then
     mv "$efisp_target/boot.efi" "$efisp_target/boot_backup.efi" >> "$LOG_FILE" 2>&1
-    write_log "$TEXT_BACKUP_BOOK"
+    write_log "$TEXT_BACKUP_BOOT"
   fi
 
   if ! cp $RUNTIME_DIR/patched.efi "$efisp_target/boot.efi" >> "$LOG_FILE" 2>&1; then
@@ -331,12 +341,109 @@ USER_LANG=$LANG"
   emit "$out"
 }
 
+# 返回值：0=成功 1=失败/互斥错误 2=未选择任何修补项
+exec_patch_by_args() {
+  arg_str="$1"
+  slot_override="$2"
+
+  arg_super=0
+  arg_vendor_boot=0
+  arg_debug=0
+  echo "$arg_str" | grep -q "super=1" && arg_super=1
+  echo "$arg_str" | grep -q "vendor_boot=1" && arg_vendor_boot=1
+  echo "$arg_str" | grep -q "debug=1" && arg_debug=1
+
+  if [ "$arg_super" = "1" ] && [ "$arg_vendor_boot" = "1" ]; then
+    write_log "$TEXT_PATCH_BOTH_ERR"
+    return 1
+  fi
+
+  if [ "$arg_super" != "1" ] && [ "$arg_vendor_boot" != "1" ]; then
+    write_log "$TEXT_PATCH_NO_SELECTED"
+    return 2
+  fi
+
+  if [ -n "$slot_override" ]; then
+    target_slot_suffix="$slot_override"
+  else
+    target_slot_suffix=$(detect_current_slot)
+    [ -z "$target_slot_suffix" ] && { write_log "$TEXT_NO_SLOT"; return 1; }
+  fi
+  slot_letter=$(slot_suffix_to_letter "$target_slot_suffix")
+  write_log "$TEXT_PATCH_SLOT: $slot_letter"
+
+  _old_pwd="$PWD"
+  cd "$BINDIR"
+
+  if [ "$arg_vendor_boot" = "1" ]; then
+    write_log "$TEXT_PATCH_VENDORBOOT_START"
+    if [ "$arg_debug" = "1" ]; then
+      write_log "$TEXT_PATCH_DEBUG_SAVE"
+    else
+      if [ -x "$BINDIR/patch_vendor_boot" ]; then
+        write_log "$TEXT_BIN_RUN_INFO: patch_vendor_boot $slot_letter"
+        "$BINDIR/patch_vendor_boot" "$slot_letter" >> "$LOG_FILE" 2>&1
+        ret=$?
+        if [ $ret -ne 0 ]; then
+          write_log "$TEXT_PATCH_ERR (ret:$ret)"
+          cd "$_old_pwd"
+          return 1
+        fi
+      else
+        write_log "$TEXT_BIN_NOT_FOUND: patch_vendor_boot"
+        cd "$_old_pwd"
+        return 1
+      fi
+    fi
+    write_log "$TEXT_PATCH_VENDORBOOT_DONE"
+  fi
+
+  if [ "$arg_super" = "1" ]; then
+    write_log "$TEXT_PATCH_SUPER_START"
+    if [ "$arg_debug" = "1" ]; then
+      write_log "$TEXT_PATCH_DEBUG_SAVE"
+    else
+      if [ -x "$BINDIR/patch_super" ]; then
+        write_log "$TEXT_BIN_RUN_INFO: patch_super $slot_letter"
+        "$BINDIR/patch_super" "$slot_letter" >> "$LOG_FILE" 2>&1
+        ret=$?
+        if [ $ret -ne 0 ]; then
+          write_log "$TEXT_PATCH_ERR (ret:$ret)"
+          cd "$_old_pwd"
+          return 1
+        fi
+      else
+        write_log "$TEXT_BIN_NOT_FOUND: patch_super"
+        cd "$_old_pwd"
+        return 1
+      fi
+    fi
+    write_log "$TEXT_PATCH_SUPER_DONE"
+  fi
+
+  cd "$_old_pwd"
+  return 0
+}
+
 run_flash() {
-  mode=$1
+  mode_full="$1"
   debug=no
-  if [ "$mode" = "debug" ]; then
+
+  # ========== 修复1：改用 shell 参数扩展解析，兼容所有 Android 环境 ==========
+  case "$mode_full" in
+    *,*)
+      base_mode="${mode_full%%,*}"
+      patch_args="${mode_full#*,}"
+      ;;
+    *)
+      base_mode="$mode_full"
+      patch_args=""
+      ;;
+  esac
+
+  if [ "$base_mode" = "debug" ]; then
     debug=yes
-    mode=update-efisp
+    base_mode=update-efisp
   fi
 
   ensure_runtime
@@ -345,7 +452,7 @@ run_flash() {
   trap cleanup_lock EXIT INT TERM HUP
   : > "$LOG_FILE"
 
-  if [ "$mode" = "update-bds-tools" ]; then
+  if [ "$base_mode" = "update-bds-tools" ]; then
     write_state running "$TEXT_UPDATING_BDS_TOOLS"
     update_bds_tools
     res=$?
@@ -363,13 +470,44 @@ run_flash() {
   target_slot=$(other_slot "$current_slot")
   [ -z "$current_slot" ] && { write_state error "$TEXT_NO_SLOT"; exit 1; }
   [ -z "$target_slot" ] && { write_state error "$TEXT_NO_TARGET_SLOT"; exit 1; }
-  write_state running "$TEXT_FLASHING $target_slot"
 
+  # skip-efisp 模式：仅修补分区，不碰 ABL/efisp
+  if [ "$base_mode" = "skip-efisp" ]; then
+    write_state running "$TEXT_PATCH_ONLY"
+    write_log "$TEXT_PATCH_ONLY"
+
+    if [ -z "$patch_args" ]; then
+      write_state error "$TEXT_PATCH_NO_SELECTED"
+      exit 0
+    fi
+
+    exec_patch_by_args "$patch_args" "$target_slot"
+    res=$?
+    if [ $res -eq 0 ]; then
+      write_state success "$TEXT_ALL_OK_NO_EFISP"
+    elif [ $res -eq 2 ]; then
+      write_state error "$TEXT_PATCH_NO_SELECTED"
+    else
+      write_state error "$TEXT_PATCH_ERR"
+    fi
+    exit 0
+  fi
+
+  # update-efisp 模式：刷 ABL + 更新 efisp + 可选修补
+  write_state running "$TEXT_FLASHING $target_slot"
   abl=$(partition_path abl "$target_slot")
 
   if [ "$debug" = "yes" ]; then
     update_efisp "$abl" yes
-    if [ $? -eq 0 ]; then
+    efisp_res=$?
+    
+    patch_res=0
+    if [ -n "$patch_args" ]; then
+      exec_patch_by_args "$patch_args" "$target_slot"
+      patch_res=$?
+    fi
+
+    if [ $efisp_res -eq 0 ] && [ $patch_res -ne 1 ]; then
       write_state success "$TEXT_DEBUG_DONE $RUNTIME_DIR"
     else
       write_state error "$TEXT_DEBUG_FAILED"
@@ -378,37 +516,50 @@ run_flash() {
   fi
 
   efisp_fail=0
-  if [ "$mode" = "update-efisp" ]; then
-    update_efisp "$abl" no
-    res=$?
-    if [ $res -eq 1 ]; then
-      efisp_fail=1
-      write_state running "$TEXT_EFISP_WARN"
-    elif [ $res -eq 2 ]; then
-      write_state success "$TEXT_GBL_VULN_SKIP"
-      exit 0
-    fi
-  else
-    detect_gbl_vulnerability "$abl"
-    res=$?
-    [ $res -eq 0 ] && { write_state success "$TEXT_GBL_VULN_SKIP"; exit 0; }
+  skip_abl_flash=0
+  update_efisp "$abl" no
+  res=$?
+  if [ $res -eq 1 ]; then
+    efisp_fail=1
+    write_state running "$TEXT_EFISP_WARN"
+  elif [ $res -eq 2 ]; then
+    # ========== 修复2：有漏洞仅跳过ABL刷写，继续执行修补 ==========
+    skip_abl_flash=1
+    write_log "$TEXT_GBL_VULN_SKIP"
   fi
 
-  for part in $IMAGE_NAMES; do
-    dst=$(partition_path "$part" "$target_slot")
-    src=$(partition_path "$part" "$current_slot")
-    blockdev --setrw "$dst" >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_SET_RW_FAILED"; exit 1; }
-    dd if="$src" of="$dst" bs=4M conv=fsync >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_FLASH_PART failed"; exit 1; }
-    sync
-    write_log "$TEXT_FLASH_PART $part -> $dst $TEXT_FLASH_OK"
-  done
+  # 刷写 ABL 到目标槽位（无漏洞时执行）
+  if [ "$skip_abl_flash" != "1" ]; then
+    for part in $IMAGE_NAMES; do
+      dst=$(partition_path "$part" "$target_slot")
+      src=$(partition_path "$part" "$current_slot")
+      blockdev --setrw "$dst" >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_SET_RW_FAILED"; exit 1; }
+      dd if="$src" of="$dst" bs=4M conv=fsync >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_FLASH_PART failed"; exit 1; }
+      sync
+      write_log "$TEXT_FLASH_PART $part -> $dst $TEXT_FLASH_OK"
+    done
+  fi
 
-  if [ $efisp_fail -eq 1 ]; then
-    write_state warning "BL done, efisp failed"
-  elif [ "$mode" = "update-efisp" ]; then
-    write_state success "$TEXT_ALL_OK"
+  # 执行目标槽位修补
+  patch_fail=0
+  if [ -n "$patch_args" ]; then
+    write_log "$TEXT_PATCH_START (target slot)"
+    exec_patch_by_args "$patch_args" "$target_slot"
+    if [ $? -ne 0 ]; then
+      patch_fail=1
+      write_log "$TEXT_PATCH_ERR on target slot"
+    fi
+  fi
+
+  # 最终状态判定
+  if [ $efisp_fail -eq 1 ] || [ $patch_fail -eq 1 ]; then
+    write_state warning "BL done, partial failed"
+  elif [ "$skip_abl_flash" = "1" ] && [ -n "$patch_args" ]; then
+    write_state success "$TEXT_PATCH_DONE"
+  elif [ "$skip_abl_flash" = "1" ]; then
+    write_state success "$TEXT_GBL_VULN_SKIP"
   else
-    write_state success "$TEXT_ALL_OK_NO_EFISP"
+    write_state success "$TEXT_ALL_OK"
   fi
 }
 
@@ -425,66 +576,15 @@ run_patch() {
   write_log "$TEXT_PATCH_START"
   write_log "$TEXT_PATCH_ARGS: $arg_str"
 
-  arg_super=0
-  arg_vendor_boot=0
-  arg_debug=0
+  exec_patch_by_args "$arg_str"
+  res=$?
 
-  echo "$arg_str" | grep -q "super=1" && arg_super=1
-  echo "$arg_str" | grep -q "vendor_boot=1" && arg_vendor_boot=1
-  echo "$arg_str" | grep -q "debug=1" && arg_debug=1
-
-  if [ "$arg_super" != "1" ] && [ "$arg_vendor_boot" != "1" ]; then
+  if [ $res -eq 1 ]; then
+    write_state error "$TEXT_PATCH_BOTH_ERR"
+    exit 1
+  elif [ $res -eq 2 ]; then
     write_state error "$TEXT_PATCH_NO_SELECTED"
-    write_log "$TEXT_PATCH_NO_SELECTED"
     exit 0
-  fi
-
-  cd "$BINDIR"
-
-  if [ "$arg_vendor_boot" = "1" ]; then
-    write_log "$TEXT_PATCH_VENDORBOOT_START"
-    if [ "$arg_debug" = "1" ]; then
-      write_log "$TEXT_PATCH_DEBUG_SAVE"
-    else
-      if [ -x "$BINDIR/patch_vendor_boot" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_vendor_boot"
-        "$BINDIR/patch_vendor_boot" >> "$LOG_FILE" 2>&1
-        ret=$?
-        if [ $ret -ne 0 ]; then
-          write_log "$TEXT_PATCH_ERR (ret:$ret)"
-          write_state error "$TEXT_PATCH_ERR"
-          exit 1
-        fi
-      else
-        write_log "$TEXT_BIN_NOT_FOUND: patch_vendor_boot"
-        write_state error "$TEXT_BIN_NOT_FOUND"
-        exit 1
-      fi
-    fi
-    write_log "$TEXT_PATCH_VENDORBOOT_DONE"
-  fi
-
-  if [ "$arg_super" = "1" ]; then
-    write_log "$TEXT_PATCH_SUPER_START"
-    if [ "$arg_debug" = "1" ]; then
-      write_log "$TEXT_PATCH_DEBUG_SAVE"
-    else
-      if [ -x "$BINDIR/patch_super" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_super"
-        "$BINDIR/patch_super" >> "$LOG_FILE" 2>&1
-        ret=$?
-        if [ $ret -ne 0 ]; then
-          write_log "$TEXT_PATCH_ERR (ret:$ret)"
-          write_state error "$TEXT_PATCH_ERR"
-          exit 1
-        fi
-      else
-        write_log "$TEXT_BIN_NOT_FOUND: patch_super"
-        write_state error "$TEXT_BIN_NOT_FOUND"
-        exit 1
-      fi
-    fi
-    write_log "$TEXT_PATCH_SUPER_DONE"
   fi
 
   write_state success "$TEXT_PATCH_DONE"
