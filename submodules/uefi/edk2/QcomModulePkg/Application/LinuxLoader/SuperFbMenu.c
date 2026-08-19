@@ -105,7 +105,6 @@ SfbWaitForKey (IN UINT32 TimeoutMs)
 
 /* ---- drawing ------------------------------------------------------------ */
 
-/* 从UEFI路径中提取纯文件名（取最后一个反斜杠之后的内容） */
 STATIC CONST CHAR16*
 SfbGetFileName (IN CONST CHAR16 *Path)
 {
@@ -117,7 +116,6 @@ SfbGetFileName (IN CONST CHAR16 *Path)
   return FileName;
 }
 
-/* 不区分大小写比较宽字符串（UEFI路径大小写不敏感） */
 STATIC BOOLEAN
 SfbStrCaseEqual (IN CONST CHAR16 *Str1, IN CONST CHAR16 *Str2)
 {
@@ -245,7 +243,6 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name,
   }
   gST->ConOut->EnableCursor (gST->ConOut, FALSE);
 
-  /* boot.efi 隐藏启动提示文字，其余启动项正常显示 */
   if (FilePath != NULL) {
     CONST CHAR16 *FileName = SfbGetFileName (FilePath);
     if (!SfbStrCaseEqual (FileName, L"boot.efi")) {
