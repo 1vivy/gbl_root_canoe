@@ -38,7 +38,10 @@ if [ ! -f "$SRC/native/src/Android.mk" ]; then
     native/src/external/zlib \
     native/src/external/zopfli \
     native/src/external/cxx-rs \
-    native/src/external/crt0
+    native/src/external/crt0 \
+    native/src/external/selinux \
+    native/src/external/lsplt \
+    native/src/external/system_properties
   cd "$ROOT"
 fi
 
