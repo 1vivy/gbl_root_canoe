@@ -169,27 +169,26 @@ static bool file_exists(const char *filename) {
 }
 
 static int filter_file(const char *filepath, const char *key) {
-    FILE *src = fopen(filepath, "r");
-    if (!src) return 0;
+    std::string content = full_read(filepath);
+    if (content.empty()) return 0;
 
-    char tmp_path[512];
-    ssprintf(tmp_path, sizeof(tmp_path), "%s.tmp", filepath);
-    FILE *dst = fopen(tmp_path, "w");
-    if (!dst) {
-        fclose(src);
-        return 0;
-    }
-
-    char line[BUF_SIZE];
-    while (fgets(line, sizeof(line), src)) {
-        if (strstr(line, key) == NULL) {
-            fputs(line, dst);
+    std::string out;
+    size_t pos = 0;
+    while (pos < content.size()) {
+        size_t nl = content.find('\n', pos);
+        if (nl == std::string::npos) nl = content.size();
+        std::string_view line(content.data() + pos, nl - pos);
+        if (!str_contains(line, std::string_view(key))) {
+            out.append(line);
+            out += '\n';
         }
+        pos = nl + 1;
     }
 
-    fclose(src);
-    fclose(dst);
-    rename(tmp_path, filepath);
+    int fd = open(filepath, O_WRONLY | O_TRUNC);
+    if (fd < 0) return 0;
+    write(fd, out.data(), out.size());
+    close(fd);
     return 1;
 }
 
@@ -202,35 +201,31 @@ static void write_fstab_file() {
 }
 
 static void update_header_cmdline(const char *header_path, const char *param) {
-    FILE *fp = fopen(header_path, "r");
-    if (!fp) return;
+    std::string content = full_read(header_path);
+    if (content.empty() || str_contains(content, std::string_view(param))) return;
 
-    char buffer[BUF_SIZE * 2] = {0};
-    char line[BUF_SIZE];
-    int found = 0;
+    std::string out;
+    size_t pos = 0;
+    while (pos < content.size()) {
+        size_t nl = content.find('\n', pos);
+        if (nl == std::string::npos) nl = content.size();
+        size_t len = nl - pos;
+        if (len > 0 && content[pos + len - 1] == '\r') len--;
+        std::string_view line(content.data() + pos, len);
 
-    while (fgets(line, sizeof(line), fp)) {
-        if (strstr(line, param) != NULL) {
-            found = 1;
+        out.append(line);
+        if (str_starts(line, "cmdline=")) {
+            out += ' ';
+            out += param;
         }
-        if (strncmp(line, "cmdline=", 8) == 0) {
-            line[strcspn(line, "\r\n")] = 0;
-            if (strstr(line, param) == NULL) {
-                ssprintf(line + strlen(line), sizeof(line) - strlen(line), " %s\n", param);
-            } else {
-                strcat(line, "\n");
-            }
-        }
-        strcat(buffer, line);
+        out += '\n';
+        pos = nl + 1;
     }
-    fclose(fp);
 
-    if (!found) {
-        fp = fopen(header_path, "w");
-        if (fp) {
-            fputs(buffer, fp);
-            fclose(fp);
-        }
+    int fd = open(header_path, O_WRONLY | O_TRUNC);
+    if (fd >= 0) {
+        write(fd, out.data(), out.size());
+        close(fd);
     }
 }
 
@@ -252,25 +247,25 @@ int patch_vendor_boot(int argc, char *argv[]) {
     int super_mode = 0;
 
     if (argc > 0 && !parse_slot(argv[0], slot)) {
-        printf("[!] 无效的参数: %s\n", argv[0]);
+        fprintf(stderr, "[!] 无效的参数: %s\n", argv[0]);
     }
     if (argc > 1 && strcmp(argv[1], "super") == 0) {
         super_mode = 1;
     }
 
     if (strlen(slot) == 0) {
-        printf("[!] 未指定有效槽位 (a/b)\n");
+        fprintf(stderr, "[!] 未指定有效槽位 (a/b)\n");
         return 1;
     }
 
-    printf("[+] 目标槽位: %s\n", slot);
-    printf("[+] 请等待...\n");
+    fprintf(stderr, "[+] 目标槽位: %s\n", slot);
+    fprintf(stderr, "[+] 请等待...\n");
 
     char blk_path[128];
     ssprintf(blk_path, sizeof(blk_path), "/dev/block/by-name/vendor_boot%s", slot);
 
     if (copy_file(blk_path, "vendor_boot.img") != 0 || !file_exists("vendor_boot.img")) {
-        printf("[!] 提取 vendor_boot%s 失败！\n", slot);
+        fprintf(stderr, "[!] 提取 vendor_boot%s 失败！\n", slot);
         return 1;
     }
 
@@ -284,7 +279,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
         target_cpio = "ramdisk.cpio";
     }
     if (!file_exists(target_cpio)) {
-        printf("[!] 解包失败或未找到 ramdisk\n");
+        fprintf(stderr, "[!] 解包失败或未找到 ramdisk\n");
         return 1;
     }
 
@@ -310,7 +305,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
         rust::cpio_commands(2, cpio_argv);
         unlink("tmp_modules.load.recovery");
     } else {
-        printf("[!] 未找到 modules.load.recovery 文件\n");
+        fprintf(stderr, "[!] 未找到 modules.load.recovery 文件\n");
         return 1;
     }
 
@@ -330,11 +325,11 @@ int patch_vendor_boot(int argc, char *argv[]) {
 
     if (file_exists("new_vendor_boot.img")) {
         if (write_to_block("new_vendor_boot.img", blk_path) != 0) {
-            printf("[!] 写入 vendor_boot%s 失败！\n", slot);
+            fprintf(stderr, "[!] 写入 vendor_boot%s 失败！\n", slot);
             return 1;
         }
 
-        printf("[+] 【槽位 %s 处理完成】\n", slot);
+        fprintf(stderr, "[+] 【槽位 %s 处理完成】\n", slot);
 
         // 清理临时文件
         rm_rf("vendor_ramdisk");
@@ -351,7 +346,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
         unlink("new_vendor_boot.img");
         unlink("fstab.qcom");
     } else {
-        printf("[!] 打包 new_vendor_boot.img 失败\n");
+        fprintf(stderr, "[!] 打包 new_vendor_boot.img 失败\n");
         return 1;
     }
 
