@@ -390,9 +390,9 @@ exec_patch_by_args() {
     if [ "$arg_debug" = "1" ]; then
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
-      if [ -x "$BINDIR/patch_partition" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_partition $slot_letter"
-        "$BINDIR/patch_partition" "$slot_letter" vendor_boot >> "$LOG_FILE" 2>&1
+      if [ -x "$BINDIR/patch_tools" ]; then
+        write_log "$TEXT_BIN_RUN_INFO: patch_tools $slot_letter"
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>&1
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -400,7 +400,7 @@ exec_patch_by_args() {
           return 1
         fi
       else
-        write_log "$TEXT_BIN_NOT_FOUND: patch_partition"
+        write_log "$TEXT_BIN_NOT_FOUND: patch_tools"
         cd "$_old_pwd"
         return 1
       fi
@@ -413,9 +413,9 @@ exec_patch_by_args() {
     if [ "$arg_debug" = "1" ]; then
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
-      if [ -x "$BINDIR/patch_partition" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_partition $slot_letter"
-        "$BINDIR/patch_partition" "$slot_letter" super >> "$LOG_FILE" 2>&1
+      if [ -x "$BINDIR/patch_tools" ]; then
+        write_log "$TEXT_BIN_RUN_INFO: patch_tools $slot_letter"
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>&1
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -423,7 +423,7 @@ exec_patch_by_args() {
           return 1
         fi
       else
-        write_log "$TEXT_BIN_NOT_FOUND: patch_partition"
+        write_log "$TEXT_BIN_NOT_FOUND: patch_tools"
         cd "$_old_pwd"
         return 1
       fi

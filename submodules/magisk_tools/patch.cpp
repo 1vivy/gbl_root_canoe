@@ -1,3 +1,6 @@
+// 从 Magisk v28.1 magiskboot 扩展的 vendor_boot 修补逻辑
+// 集成进 magiskboot，直接调用 unpack/repack API + rust::cpio_commands，
+// 不依赖外部 mboot 二进制。支持 vendor_boot header v4（vendor_ramdisk）。
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,6 +8,10 @@
 #include <sys/stat.h>
 #include <limits.h>
 #include <ctype.h>
+#include <strings.h>
+
+#include "magiskboot.hpp"
+#include "boot-rs.hpp"
 
 #define BUF_SIZE 4096
 
@@ -114,27 +121,12 @@ static const char *fstab_content =
 "/dev/block/bootdevice/by-name/spunvm                    /mnt/vendor/spunvm     vfat    noatime,nosuid,nodev,context=u:object_r:vendor_spunvm_file:s0   wait,check,formattable\n"
 "/dev/block/bootdevice/by-name/soccp                     /vendor_soccp_firmware vfat    ro,shortname=lower,uid=0,gid=1000,dmask=227,fmask=337,context=u:object_r:vendor_soccp_file:s0 wait,slotselect\n";
 
-void get_script_dir(char *out_path, size_t size) {
-    char exe_path[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
-    if (len != -1) {
-        exe_path[len] = '\0';
-        char *last_slash = strrchr(exe_path, '/');
-        if (last_slash) {
-            *last_slash = '\0';
-            strncpy(out_path, exe_path, size);
-            return;
-        }
-    }
-    getcwd(out_path, size);
-}
-
-int file_exists(const char *filename) {
+static bool file_exists(const char *filename) {
     struct stat buffer;
     return (stat(filename, &buffer) == 0);
 }
 
-int filter_file(const char *filepath, const char *key) {
+static int filter_file(const char *filepath, const char *key) {
     FILE *src = fopen(filepath, "r");
     if (!src) return 0;
 
@@ -159,7 +151,7 @@ int filter_file(const char *filepath, const char *key) {
     return 1;
 }
 
-void write_fstab_file() {
+static void write_fstab_file() {
     FILE *fp = fopen("fstab.qcom", "w");
     if (fp) {
         fputs(fstab_content, fp);
@@ -167,7 +159,7 @@ void write_fstab_file() {
     }
 }
 
-void update_header_cmdline(const char *header_path, const char *param) {
+static void update_header_cmdline(const char *header_path, const char *param) {
     FILE *fp = fopen(header_path, "r");
     if (!fp) return;
 
@@ -200,7 +192,7 @@ void update_header_cmdline(const char *header_path, const char *param) {
     }
 }
 
-int parse_slot(const char *arg, char *out_slot) {
+static int parse_slot(const char *arg, char *out_slot) {
     if (!arg) return 0;
     if (strcasecmp(arg, "a") == 0 || strcasecmp(arg, "_a") == 0) {
         strcpy(out_slot, "_a");
@@ -213,47 +205,26 @@ int parse_slot(const char *arg, char *out_slot) {
     return 0;
 }
 
-int main(int argc, char *argv[]) {
+int patch_vendor_boot(int argc, char *argv[]) {
     char slot[16] = {0};
     int super_mode = 0;
 
-    if (argc > 1) {
-        if (!parse_slot(argv[1], slot)) {
-            printf("[!] 无效的参数: %s\n", argv[1]);
-        }
+    if (argc > 0 && !parse_slot(argv[0], slot)) {
+        printf("[!] 无效的参数: %s\n", argv[0]);
     }
-    if (argc > 2 && strcmp(argv[2], "super") == 0) {
+    if (argc > 1 && strcmp(argv[1], "super") == 0) {
         super_mode = 1;
     }
 
     if (strlen(slot) == 0) {
-        char input_buf[32] = {0};
-        while (1) {
-            printf("[?] 请选择要修补的槽位 (a/b): ");
-            if (fgets(input_buf, sizeof(input_buf), stdin) != NULL) {
-                char *p = input_buf;
-                while (isspace(*p)) p++;
-                p[strcspn(p, "\r\n")] = 0;
-
-                if (parse_slot(p, slot)) {
-                    break;
-                }
-            }
-            printf("[!] 输入无效，请输入 'a' 或 'b'\n");
-        }
+        printf("[!] 未指定有效槽位 (a/b)\n");
+        return 1;
     }
 
     printf("[+] 目标槽位: %s\n", slot);
     printf("[+] 请等待...\n");
 
-    char script_dir[PATH_MAX];
-    get_script_dir(script_dir, sizeof(script_dir));
-
-    char mboot_bin[PATH_MAX];
-    snprintf(mboot_bin, sizeof(mboot_bin), "%s/mboot", script_dir);
-    chmod(mboot_bin, 0755);
-
-    char cmd[BUF_SIZE];
+    char cmd[BUF_SIZE * 4];
     snprintf(cmd, sizeof(cmd), "dd if=/dev/block/by-name/vendor_boot%s of=vendor_boot.img bs=4M >/dev/null 2>&1", slot);
     system(cmd);
 
@@ -262,28 +233,40 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    snprintf(cmd, sizeof(cmd), "\"%s\" unpack -h vendor_boot.img >/dev/null 2>&1", mboot_bin);
-    system(cmd);
+    // 解包 vendor_boot（-h 模式：dump header，供 repack 解析）
+    unpack("vendor_boot.img", false, true);
 
+    // vendor_boot header v4：默认 vendor ramdisk 解包到 vendor_ramdisk/ramdisk.cpio
+    // 更早版本：ramdisk.cpio
     const char *target_cpio = "vendor_ramdisk/ramdisk.cpio";
     if (!file_exists(target_cpio)) {
-        printf("[!] 解包失败或未找到 %s\n", target_cpio);
+        target_cpio = "ramdisk.cpio";
+    }
+    if (!file_exists(target_cpio)) {
+        printf("[!] 解包失败或未找到 ramdisk\n");
         return 1;
     }
 
-    snprintf(cmd, sizeof(cmd), "\"%s\" cpio \"%s\" \"extract lib/modules/modules.load.recovery tmp_modules.load.recovery\" >/dev/null 2>&1", mboot_bin, target_cpio);
-    system(cmd);
-
+    // 提取 modules.load.recovery（兼容两种路径）
+    const char *entry = "lib/modules/modules.load.recovery";
+    char cpio_cmd[512];
+    snprintf(cpio_cmd, sizeof(cpio_cmd), "extract %s tmp_modules.load.recovery", entry);
+    {
+        const char *cpio_argv[] = {target_cpio, cpio_cmd};
+        rust::cpio_commands(2, cpio_argv);
+    }
     if (!file_exists("tmp_modules.load.recovery")) {
-        snprintf(cmd, sizeof(cmd), "\"%s\" cpio \"%s\" \"extract modules.load.recovery tmp_modules.load.recovery\" >/dev/null 2>&1", mboot_bin, target_cpio);
-        system(cmd);
+        entry = "modules.load.recovery";
+        snprintf(cpio_cmd, sizeof(cpio_cmd), "extract %s tmp_modules.load.recovery", entry);
+        const char *cpio_argv[] = {target_cpio, cpio_cmd};
+        rust::cpio_commands(2, cpio_argv);
     }
 
     if (file_exists("tmp_modules.load.recovery")) {
         filter_file("tmp_modules.load.recovery", "oplus_secure_guard_new");
-
-        snprintf(cmd, sizeof(cmd), "\"%s\" cpio \"%s\" \"add 0777 lib/modules/modules.load.recovery tmp_modules.load.recovery\" >/dev/null 2>&1", mboot_bin, target_cpio);
-        system(cmd);
+        snprintf(cpio_cmd, sizeof(cpio_cmd), "add 0644 %s tmp_modules.load.recovery", entry);
+        const char *cpio_argv[] = {target_cpio, cpio_cmd};
+        rust::cpio_commands(2, cpio_argv);
         unlink("tmp_modules.load.recovery");
     } else {
         printf("[!] 未找到 modules.load.recovery 文件\n");
@@ -292,16 +275,17 @@ int main(int argc, char *argv[]) {
 
     if (super_mode) {
         write_fstab_file();
-        snprintf(cmd, sizeof(cmd), "\"%s\" cpio \"%s\" \"add 0777 first_stage_ramdisk/fstab.qcom fstab.qcom\" >/dev/null 2>&1", mboot_bin, target_cpio);
-        system(cmd);
+        const char *cpio_argv[] = {target_cpio, "add 0644 first_stage_ramdisk/fstab.qcom fstab.qcom"};
+        rust::cpio_commands(2, cpio_argv);
     }
 
+    // 修改 header cmdline
     if (file_exists("header")) {
         update_header_cmdline("header", "module_blacklist=oplus_secure_guard_new");
     }
 
-    snprintf(cmd, sizeof(cmd), "\"%s\" repack vendor_boot.img new_vendor_boot.img >/dev/null 2>&1", mboot_bin);
-    system(cmd);
+    // 重新打包
+    repack("vendor_boot.img", "new_vendor_boot.img");
 
     if (file_exists("new_vendor_boot.img")) {
         snprintf(cmd, sizeof(cmd), "dd if=new_vendor_boot.img of=/dev/block/by-name/vendor_boot%s bs=4M conv=fsync >/dev/null 2>&1", slot);
@@ -309,7 +293,7 @@ int main(int argc, char *argv[]) {
 
         printf("[+] 【槽位 %s 处理完成】\n", slot);
 
-        system("rm -rf vendor_ramdisk bootconfig dtb header kernel vendor_boot.img new_vendor_boot.img fstab.qcom 2>/dev/null");
+        system("rm -rf vendor_ramdisk ramdisk.cpio bootconfig dtb header kernel kernel_dtb second extra recovery_dtbo vendor_boot.img new_vendor_boot.img fstab.qcom 2>/dev/null");
     } else {
         printf("[!] 打包 new_vendor_boot.img 失败\n");
         return 1;

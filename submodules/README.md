@@ -7,4 +7,4 @@ extracts the ABL firmware volume (extractfv)
 # patcher
 core patching engine (patch_abl)
 # magisk_tools
-partition patching tools for the magisk module (patch_super, patch_vendor_boot) and the bundled mboot binary
+partition patching tools for the magisk module (patch_tools: magiskboot built from source with vendor_boot/super patching integrated)
