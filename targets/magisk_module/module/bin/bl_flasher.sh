@@ -146,6 +146,16 @@ ensure_runtime() {
   [ -f "$UPDATED_FILE" ] || timestamp > "$UPDATED_FILE"
 }
 
+clean_workdir() {
+  for _f in "$RUNTIME_DIR"/*; do
+    [ -e "$_f" ] || continue
+    case "$(basename "$_f")" in
+      flash.pid|state|message|updated|flash.log|flash.lock) ;;
+      *) rm -rf "$_f" ;;
+    esac
+  done
+}
+
 write_state() {
   ensure_runtime
   echo "$1" > "$STATE_FILE"
@@ -197,7 +207,7 @@ place_efisp_tree_to() {
 update_efisp() {
   abl=$1
   is_debug=$2
-  rm -f $RUNTIME_DIR/*
+  clean_workdir
   $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$abl" >> "$LOG_FILE" 2>&1
   $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> "$RUNTIME_DIR/patch.log" 2>&1
   cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"
@@ -258,7 +268,7 @@ update_efisp() {
 }
 
 detect_gbl_vulnerability() {
-  rm -f $RUNTIME_DIR/*
+  clean_workdir
   $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$1" >> "$LOG_FILE" 2>&1
   $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> "$RUNTIME_DIR/patch.log" 2>&1
   cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"

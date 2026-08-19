@@ -9,6 +9,7 @@ const state = {
   pollTimer: null,
   prevStatusRaw: "",
   prevState: "idle",
+  taskStarted: false,
   lang: "zh"
 };
 
@@ -335,7 +336,8 @@ function renderStatus(status) {
 
 function handleStateChange(prev, curr) {
   const t = i18n[state.lang];
-  if (prev === "running" && curr !== "running") {
+  if ((prev === "running" || state.taskStarted) && curr !== "running") {
+    state.taskStarted = false;
     refreshLog();
     if (curr === "success") {
       const msg = state.status?.MESSAGE || "";
@@ -493,7 +495,7 @@ function startFlash() {
   try {
     const out = parseKeyValueOutput(runScript("start", fullMode));
     if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") toast(dbg ? t.toastStartDebug : t.toastStartFlash);
+    else if (out.STARTED === "1") { state.taskStarted = true; toast(dbg ? t.toastStartDebug : t.toastStartFlash); }
     else if (out.FINISHED === "success") toast(dbg ? t.toastDebugDone : t.toastFlashDone);
     else if (out.FINISHED === "warning") toast(t.toastBlDone);
     else if (out.FINISHED === "error") toast(t.toastFailed);
@@ -509,7 +511,7 @@ function startPatchPart() {
   try {
     const out = parseKeyValueOutput(runScript("start-patch", argStr));
     if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") toast(t.toastStartPatch);
+    else if (out.STARTED === "1") { state.taskStarted = true; toast(t.toastStartPatch); }
     else if (out.FINISHED === "success") toast(t.toastPatchDone);
     else if (out.FINISHED === "error") toast(t.toastFailed);
     else toast(t.toastStartError);
@@ -522,7 +524,7 @@ function startBdsTools() {
   try {
     const out = parseKeyValueOutput(runScript("start", "update-bds-tools"));
     if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") toast(t.toastStartBdsTools);
+    else if (out.STARTED === "1") { state.taskStarted = true; toast(t.toastStartBdsTools); }
     else if (out.FINISHED === "success") toast(t.toastBdsToolsDone);
     else if (out.FINISHED === "error") toast(t.toastFailed);
     else toast(t.toastStartError);
