@@ -16,6 +16,9 @@ submodule_patcher: copy_resources
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/module/bin/extractfv
-build: submodule_uefi submodule_patcher submodule_ablfvextractor
+submodule_magisk_tools: copy_resources
+	cd ../../submodules/magisk_tools && make build_android
+	cp ../../submodules/magisk_tools/build/patch_tools ./build/module/bin/patch_tools
+build: submodule_uefi submodule_patcher submodule_ablfvextractor submodule_magisk_tools
 	# zip
 	cd build/module && zip -r ../module_android.zip ./

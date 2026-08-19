@@ -205,27 +205,27 @@ slot_letter=${current_slot_suffix#_}  # 去掉下划线前缀，得到纯字母 
 if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
   ui_print "$T_OPT_RUN_VB"
   ui_print "- 当前槽位: $slot_letter"
-  if [ -x "$MODPATH/bin/patch_vendor_boot" ]; then
-    "$MODPATH/bin/patch_vendor_boot" "$slot_letter"  # ========== 修改3：传入槽位参数 ==========
+  if [ -x "$MODPATH/bin/patch_tools" ]; then
+    "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter"  # ========== 修改3：传入槽位参数 ==========
     ret=$?
     if [ $ret -ne 0 ];then
       ui_print "$T_BIN_FAIL (vendor_boot ret:$ret)"
     fi
   else
-    ui_print "$T_BIN_FAIL: patch_vendor_boot binary not found!"
+    ui_print "$T_BIN_FAIL: patch_tools binary not found!"
   fi
   ui_print "$T_OPT_FINISH_VB"
 elif [ "$EXTRA_PATCH_MODE" = "super" ]; then
   ui_print "$T_OPT_RUN_SUPER"
   ui_print "- 当前槽位: $slot_letter"
-  if [ -x "$MODPATH/bin/patch_super" ]; then
-    "$MODPATH/bin/patch_super" "$slot_letter"  # ========== 修改4：传入槽位参数 ==========
+  if [ -x "$MODPATH/bin/patch_tools" ]; then
+    "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter" super  # ========== 修改4：传入槽位参数 ==========
     ret=$?
     if [ $ret -ne 0 ];then
       ui_print "$T_BIN_FAIL (super ret:$ret)"
     fi
   else
-    ui_print "$T_BIN_FAIL: patch_super binary not found!"
+    ui_print "$T_BIN_FAIL: patch_tools binary not found!"
   fi
   ui_print "$T_OPT_FINISH_SUPER"
   ui_print "$T_OPT_SUPER_NOTE"
