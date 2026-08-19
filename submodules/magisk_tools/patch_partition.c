@@ -215,11 +215,15 @@ int parse_slot(const char *arg, char *out_slot) {
 
 int main(int argc, char *argv[]) {
     char slot[16] = {0};
+    int super_mode = 0;
 
     if (argc > 1) {
         if (!parse_slot(argv[1], slot)) {
             printf("[!] 无效的参数: %s\n", argv[1]);
         }
+    }
+    if (argc > 2 && strcmp(argv[2], "super") == 0) {
+        super_mode = 1;
     }
 
     if (strlen(slot) == 0) {
@@ -286,9 +290,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    write_fstab_file();
-    snprintf(cmd, sizeof(cmd), "\"%s\" cpio \"%s\" \"add 0777 first_stage_ramdisk/fstab.qcom fstab.qcom\" >/dev/null 2>&1", mboot_bin, target_cpio);
-    system(cmd);
+    if (super_mode) {
+        write_fstab_file();
+        snprintf(cmd, sizeof(cmd), "\"%s\" cpio \"%s\" \"add 0777 first_stage_ramdisk/fstab.qcom fstab.qcom\" >/dev/null 2>&1", mboot_bin, target_cpio);
+        system(cmd);
+    }
 
     if (file_exists("header")) {
         update_header_cmdline("header", "module_blacklist=oplus_secure_guard_new");

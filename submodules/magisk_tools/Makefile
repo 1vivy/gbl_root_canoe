@@ -5,8 +5,13 @@ CFLAGS := -O2
 clean:
 	rm -rf build || true
 
-build_android:
+build_android: build/patch_partition_android build/mboot
+
+build/patch_partition_android: patch_partition.c
 	mkdir -p build
-	$(CC) $(CFLAGS) -o build/patch_super_android patch_super.c
-	$(CC) $(CFLAGS) -o build/patch_vendor_boot_android patch_vendor_boot.c
-	cp mboot build/mboot
+	$(CC) $(CFLAGS) -o $@ $<
+
+build/mboot: build_mboot.sh
+	sh build_mboot.sh $(NDK)
+
+.PHONY: clean build_android

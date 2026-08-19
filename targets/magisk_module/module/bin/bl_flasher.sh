@@ -136,7 +136,7 @@ export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin:$PATH
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 read_line() { [ -f "$1" ] && head -n1 "$1"; }
-emit() { echo -n "$1" | tr '\n' '\t'; }
+emit() { printf "%s\n" "$1"; }
 
 ensure_runtime() {
   mkdir -p "$RUNTIME_DIR"
@@ -390,9 +390,9 @@ exec_patch_by_args() {
     if [ "$arg_debug" = "1" ]; then
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
-      if [ -x "$BINDIR/patch_vendor_boot" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_vendor_boot $slot_letter"
-        "$BINDIR/patch_vendor_boot" "$slot_letter" >> "$LOG_FILE" 2>&1
+      if [ -x "$BINDIR/patch_partition" ]; then
+        write_log "$TEXT_BIN_RUN_INFO: patch_partition $slot_letter"
+        "$BINDIR/patch_partition" "$slot_letter" vendor_boot >> "$LOG_FILE" 2>&1
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -400,7 +400,7 @@ exec_patch_by_args() {
           return 1
         fi
       else
-        write_log "$TEXT_BIN_NOT_FOUND: patch_vendor_boot"
+        write_log "$TEXT_BIN_NOT_FOUND: patch_partition"
         cd "$_old_pwd"
         return 1
       fi
@@ -413,9 +413,9 @@ exec_patch_by_args() {
     if [ "$arg_debug" = "1" ]; then
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
-      if [ -x "$BINDIR/patch_super" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_super $slot_letter"
-        "$BINDIR/patch_super" "$slot_letter" >> "$LOG_FILE" 2>&1
+      if [ -x "$BINDIR/patch_partition" ]; then
+        write_log "$TEXT_BIN_RUN_INFO: patch_partition $slot_letter"
+        "$BINDIR/patch_partition" "$slot_letter" super >> "$LOG_FILE" 2>&1
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -423,7 +423,7 @@ exec_patch_by_args() {
           return 1
         fi
       else
-        write_log "$TEXT_BIN_NOT_FOUND: patch_super"
+        write_log "$TEXT_BIN_NOT_FOUND: patch_partition"
         cd "$_old_pwd"
         return 1
       fi
@@ -627,8 +627,8 @@ start_flash() {
   fi
 }
 
-print_log() { cat "$LOG_FILE" | tr '\n' '\t'; }
-tail_log() { tail -n200 "$LOG_FILE" | tr '\n' '\t'; }
+print_log() { cat "$LOG_FILE"; }
+tail_log() { tail -n200 "$LOG_FILE"; }
 
 clear_log() {
   ensure_runtime

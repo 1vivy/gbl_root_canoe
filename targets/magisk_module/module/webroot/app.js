@@ -272,7 +272,11 @@ function extractStdout(raw) {
 function exec(command) {
   const bridge = getKsuBridge();
   if (!bridge?.exec) return "";
-  return extractStdout(bridge.exec(command)).replace(/\t/g, "\n");
+  try {
+    return extractStdout(bridge.exec(command));
+  } catch (e) {
+    return "";
+  }
 }
 
 function runScript(action, arg) {
@@ -358,6 +362,7 @@ function handleStateChange(prev, curr) {
 function refreshStatus() {
   try {
     const raw = runScript("status");
+    if (!raw) return state.status;
     if (raw === state.prevStatusRaw) return state.status;
     state.prevStatusRaw = raw;
     const s = parseKeyValueOutput(raw);
@@ -371,11 +376,8 @@ function refreshStatus() {
     handleStateChange(oldState, s.STATE || "idle");
     return s;
   } catch (e) {
-    const t = i18n[state.lang];
-    elements.stateChip.textContent = t.statusReadFail;
-    elements.stateChip.className = "chip chip-danger";
-    elements.taskMessage.textContent = e.message;
-    return null;
+    console.error("refreshStatus failed:", e);
+    return state.status;
   }
 }
 
