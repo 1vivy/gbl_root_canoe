@@ -237,7 +237,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
      * Volume Up (the official recovery key slot) opens the boot menu; no Volume
      * Up within the window launches the saved default entry.
      */
-    MenuRequested = WaitForVolumeUpKey (3000);
+    MenuRequested = WaitForVolumeUpKey (1000);
     DEBUG ((EFI_D_INFO, "SFB: power-on volume-up detected=%u\n", MenuRequested));
 
     /*
