@@ -9,11 +9,74 @@
 #include <limits.h>
 #include <ctype.h>
 #include <strings.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <sys/ioctl.h>
 
 #include "magiskboot.hpp"
 #include "boot-rs.hpp"
 
 #define BUF_SIZE 4096
+
+#define BLKFLSBUF 0x1261  /* _IO(0x12, 97) flush block device buffers */
+
+// 复制 src 到 dst（普通文件，dst 截断）
+static int copy_file(const char *src, const char *dst) {
+    int sfd = open(src, O_RDONLY);
+    if (sfd < 0) return -1;
+    int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dfd < 0) { close(sfd); return -1; }
+    char buf[65536];
+    ssize_t n;
+    int ret = 0;
+    while ((n = read(sfd, buf, sizeof(buf))) > 0) {
+        if (write(dfd, buf, (size_t) n) != n) { ret = -1; break; }
+    }
+    if (n < 0) ret = -1;
+    close(sfd);
+    close(dfd);
+    return ret;
+}
+
+// 写 src 到块设备 blkdev，并 flush buffer（等价 dd conv=fsync）
+static int write_to_block(const char *src, const char *blkdev) {
+    int sfd = open(src, O_RDONLY);
+    if (sfd < 0) return -1;
+    int dfd = open(blkdev, O_WRONLY);
+    if (dfd < 0) { close(sfd); return -1; }
+    char buf[65536];
+    ssize_t n;
+    int ret = 0;
+    while ((n = read(sfd, buf, sizeof(buf))) > 0) {
+        if (write(dfd, buf, (size_t) n) != n) { ret = -1; break; }
+    }
+    if (n < 0) ret = -1;
+    if (ret == 0) ioctl(dfd, BLKFLSBUF, 0);
+    close(sfd);
+    close(dfd);
+    return ret;
+}
+
+// 递归删除文件/目录（等价 rm -rf）
+static void rm_rf(const char *path) {
+    struct stat st;
+    if (lstat(path, &st) < 0) return;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        if (d) {
+            struct dirent *e;
+            while ((e = readdir(d)) != NULL) {
+                if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+                    continue;
+                char sub[512];
+                ssprintf(sub, sizeof(sub), "%s/%s", path, e->d_name);
+                rm_rf(sub);
+            }
+            closedir(d);
+        }
+    }
+    remove(path);
+}
 
 static const char *fstab_content =
 "# Copyright (c) 2019-2020 The Linux Foundation. All rights reserved.\n"
@@ -224,11 +287,10 @@ int patch_vendor_boot(int argc, char *argv[]) {
     printf("[+] 目标槽位: %s\n", slot);
     printf("[+] 请等待...\n");
 
-    char cmd[BUF_SIZE * 4];
-    ssprintf(cmd, sizeof(cmd), "dd if=/dev/block/by-name/vendor_boot%s of=vendor_boot.img bs=4M >/dev/null 2>&1", slot);
-    system(cmd);
+    char blk_path[128];
+    ssprintf(blk_path, sizeof(blk_path), "/dev/block/by-name/vendor_boot%s", slot);
 
-    if (!file_exists("vendor_boot.img")) {
+    if (copy_file(blk_path, "vendor_boot.img") != 0 || !file_exists("vendor_boot.img")) {
         printf("[!] 提取 vendor_boot%s 失败！\n", slot);
         return 1;
     }
@@ -288,12 +350,27 @@ int patch_vendor_boot(int argc, char *argv[]) {
     repack("vendor_boot.img", "new_vendor_boot.img");
 
     if (file_exists("new_vendor_boot.img")) {
-        ssprintf(cmd, sizeof(cmd), "dd if=new_vendor_boot.img of=/dev/block/by-name/vendor_boot%s bs=4M conv=fsync >/dev/null 2>&1", slot);
-        system(cmd);
+        if (write_to_block("new_vendor_boot.img", blk_path) != 0) {
+            printf("[!] 写入 vendor_boot%s 失败！\n", slot);
+            return 1;
+        }
 
         printf("[+] 【槽位 %s 处理完成】\n", slot);
 
-        system("rm -rf vendor_ramdisk ramdisk.cpio bootconfig dtb header kernel kernel_dtb second extra recovery_dtbo vendor_boot.img new_vendor_boot.img fstab.qcom 2>/dev/null");
+        // 清理临时文件
+        rm_rf("vendor_ramdisk");
+        unlink("ramdisk.cpio");
+        unlink("bootconfig");
+        unlink("dtb");
+        unlink("header");
+        unlink("kernel");
+        unlink("kernel_dtb");
+        unlink("second");
+        unlink("extra");
+        unlink("recovery_dtbo");
+        unlink("vendor_boot.img");
+        unlink("new_vendor_boot.img");
+        unlink("fstab.qcom");
     } else {
         printf("[!] 打包 new_vendor_boot.img 失败\n");
         return 1;
