@@ -131,7 +131,7 @@ static int filter_file(const char *filepath, const char *key) {
     if (!src) return 0;
 
     char tmp_path[512];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", filepath);
+    ssprintf(tmp_path, sizeof(tmp_path), "%s.tmp", filepath);
     FILE *dst = fopen(tmp_path, "w");
     if (!dst) {
         fclose(src);
@@ -174,7 +174,7 @@ static void update_header_cmdline(const char *header_path, const char *param) {
         if (strncmp(line, "cmdline=", 8) == 0) {
             line[strcspn(line, "\r\n")] = 0;
             if (strstr(line, param) == NULL) {
-                snprintf(line + strlen(line), sizeof(line) - strlen(line), " %s\n", param);
+                ssprintf(line + strlen(line), sizeof(line) - strlen(line), " %s\n", param);
             } else {
                 strcat(line, "\n");
             }
@@ -225,7 +225,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
     printf("[+] 请等待...\n");
 
     char cmd[BUF_SIZE * 4];
-    snprintf(cmd, sizeof(cmd), "dd if=/dev/block/by-name/vendor_boot%s of=vendor_boot.img bs=4M >/dev/null 2>&1", slot);
+    ssprintf(cmd, sizeof(cmd), "dd if=/dev/block/by-name/vendor_boot%s of=vendor_boot.img bs=4M >/dev/null 2>&1", slot);
     system(cmd);
 
     if (!file_exists("vendor_boot.img")) {
@@ -250,21 +250,21 @@ int patch_vendor_boot(int argc, char *argv[]) {
     // 提取 modules.load.recovery（兼容两种路径）
     const char *entry = "lib/modules/modules.load.recovery";
     char cpio_cmd[512];
-    snprintf(cpio_cmd, sizeof(cpio_cmd), "extract %s tmp_modules.load.recovery", entry);
+    ssprintf(cpio_cmd, sizeof(cpio_cmd), "extract %s tmp_modules.load.recovery", entry);
     {
         const char *cpio_argv[] = {target_cpio, cpio_cmd};
         rust::cpio_commands(2, cpio_argv);
     }
     if (!file_exists("tmp_modules.load.recovery")) {
         entry = "modules.load.recovery";
-        snprintf(cpio_cmd, sizeof(cpio_cmd), "extract %s tmp_modules.load.recovery", entry);
+        ssprintf(cpio_cmd, sizeof(cpio_cmd), "extract %s tmp_modules.load.recovery", entry);
         const char *cpio_argv[] = {target_cpio, cpio_cmd};
         rust::cpio_commands(2, cpio_argv);
     }
 
     if (file_exists("tmp_modules.load.recovery")) {
         filter_file("tmp_modules.load.recovery", "oplus_secure_guard_new");
-        snprintf(cpio_cmd, sizeof(cpio_cmd), "add 0644 %s tmp_modules.load.recovery", entry);
+        ssprintf(cpio_cmd, sizeof(cpio_cmd), "add 0644 %s tmp_modules.load.recovery", entry);
         const char *cpio_argv[] = {target_cpio, cpio_cmd};
         rust::cpio_commands(2, cpio_argv);
         unlink("tmp_modules.load.recovery");
@@ -288,7 +288,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
     repack("vendor_boot.img", "new_vendor_boot.img");
 
     if (file_exists("new_vendor_boot.img")) {
-        snprintf(cmd, sizeof(cmd), "dd if=new_vendor_boot.img of=/dev/block/by-name/vendor_boot%s bs=4M conv=fsync >/dev/null 2>&1", slot);
+        ssprintf(cmd, sizeof(cmd), "dd if=new_vendor_boot.img of=/dev/block/by-name/vendor_boot%s bs=4M conv=fsync >/dev/null 2>&1", slot);
         system(cmd);
 
         printf("[+] 【槽位 %s 处理完成】\n", slot);
