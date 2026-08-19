@@ -1061,7 +1061,7 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
    * done for a menu-driven launch; an unattended default boot leaves the screen
    * (e.g. the boot splash) untouched.
    */
-  SfbShowBootingScreen (Entry->Desc, ClearScreen);
+  SfbShowBootingScreen (Entry->Desc, Entry->Path, ClearScreen);
 
   /*
    * Committing the default before the launch is deliberate: an image that boots
@@ -1129,4 +1129,3 @@ SfbLaunchDefaultEntry (VOID)
 
   return HasDefault;
 }
-

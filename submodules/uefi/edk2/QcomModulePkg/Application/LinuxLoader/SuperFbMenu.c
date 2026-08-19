@@ -105,6 +105,30 @@ SfbWaitForKey (IN UINT32 TimeoutMs)
 
 /* ---- drawing ------------------------------------------------------------ */
 
+STATIC CONST CHAR16*
+SfbGetFileName (IN CONST CHAR16 *Path)
+{
+  CONST CHAR16 *FileName = Path;
+  while (*Path != L'\0') {
+    if (*Path == L'\\') FileName = Path + 1;
+    Path++;
+  }
+  return FileName;
+}
+
+STATIC BOOLEAN
+SfbStrCaseEqual (IN CONST CHAR16 *Str1, IN CONST CHAR16 *Str2)
+{
+  while (*Str1 && *Str2) {
+    CHAR16 c1 = (*Str1 >= L'a' && *Str1 <= L'z') ? *Str1 - 0x20 : *Str1;
+    CHAR16 c2 = (*Str2 >= L'a' && *Str2 <= L'z') ? *Str2 - 0x20 : *Str2;
+    if (c1 != c2) return FALSE;
+    Str1++;
+    Str2++;
+  }
+  return *Str1 == L'\0' && *Str2 == L'\0';
+}
+
 VOID
 SfbBeginScreen (IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle)
 {
@@ -204,7 +228,9 @@ SfbShowFastbootMode (VOID)
  * screen through the load.
  */
 VOID
-SfbShowBootingScreen (IN CONST CHAR16 *Name, IN BOOLEAN ClearScreen)
+SfbShowBootingScreen (IN CONST CHAR16 *Name,
+                      IN CONST CHAR16 *FilePath,
+                      IN BOOLEAN       ClearScreen)
 {
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
   /*
@@ -217,7 +243,14 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name, IN BOOLEAN ClearScreen)
   }
   gST->ConOut->EnableCursor (gST->ConOut, FALSE);
 
-  Print (L"Booting %s\r\n", (Name != NULL && Name[0] != L'\0') ? Name : L"...");
+  if (FilePath != NULL) {
+    CONST CHAR16 *FileName = SfbGetFileName (FilePath);
+    if (!SfbStrCaseEqual (FileName, L"boot.efi")) {
+      Print (L"Booting %s\r\n", (Name != NULL && Name[0] != L'\0') ? Name : L"...");
+    }
+  } else {
+    Print (L"Booting %s\r\n", (Name != NULL && Name[0] != L'\0') ? Name : L"...");
+  }
 
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
 }
