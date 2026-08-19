@@ -18,7 +18,6 @@
 
 #define BUF_SIZE 4096
 
-#define BLKFLSBUF 0x1261  /* _IO(0x12, 97) flush block device buffers */
 
 // 复制 src 到 dst（普通文件，dst 截断）
 static int copy_file(const char *src, const char *dst) {
@@ -57,26 +56,6 @@ static int write_to_block(const char *src, const char *blkdev) {
     return ret;
 }
 
-// 递归删除文件/目录（等价 rm -rf）
-static void rm_rf(const char *path) {
-    struct stat st;
-    if (lstat(path, &st) < 0) return;
-    if (S_ISDIR(st.st_mode)) {
-        DIR *d = opendir(path);
-        if (d) {
-            struct dirent *e;
-            while ((e = readdir(d)) != NULL) {
-                if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
-                    continue;
-                char sub[512];
-                ssprintf(sub, sizeof(sub), "%s/%s", path, e->d_name);
-                rm_rf(sub);
-            }
-            closedir(d);
-        }
-    }
-    remove(path);
-}
 
 static const char *fstab_content =
 "# Copyright (c) 2019-2020 The Linux Foundation. All rights reserved.\n"
