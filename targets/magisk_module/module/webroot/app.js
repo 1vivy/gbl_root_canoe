@@ -9,6 +9,7 @@ const state = {
   scriptPath: "",
   status: null,
   pollTimer: null,
+  pollInFlight: false,
   prevStatusRaw: "",
   taskStarted: false,
   activeTaskId: "",
@@ -249,7 +250,11 @@ function moduleInfo() {
 async function runScript(action, arg) {
   const parts = [`MODDIR=${shellQuote(state.moduleDir)}`, "sh", shellQuote(state.scriptPath), action];
   if (arg) parts.push(shellQuote(arg));
-  const { errno, stdout, stderr } = await ksuExec(parts.join(" "));
+  const command = parts.join(" ");
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("KernelSU exec timeout")), 8000);
+  });
+  const { errno, stdout, stderr } = await Promise.race([ksuExec(command), timeout]);
   if (errno !== 0) throw new Error(stderr || `Command failed: ${errno}`);
   return stdout || "";
 }
@@ -347,22 +352,17 @@ async function refreshStatus() {
     if (s.USER_LANG === "en") applyLanguage("en");
     else if (s.USER_LANG === "zh") applyLanguage("zh");
 
-    const previousStatus = state.status;
-    const wasRunning = previousStatus?.RUNNING === "1";
     renderStatus(s);
 
     const isRunning = s.RUNNING === "1";
     const taskId = s.TASK_ID || "";
     const terminalState = ["success", "warning", "error"].includes(s.STATE);
     if (!isRunning && terminalState && state.activeTaskId && taskId === state.activeTaskId) {
-      await refreshLog();
       clearPendingTask();
       if (taskId !== state.completionNotifiedTaskId) {
         state.completionNotifiedTaskId = taskId;
         notifyTaskFinished(s.STATE);
       }
-    } else if (wasRunning && !isRunning) {
-      await refreshLog();
     }
     return s;
   } catch (e) {
@@ -476,6 +476,17 @@ function handleConfirmProgress() {
   else startFlash();
 }
 
+function showTaskStarting(message, taskId) {
+  renderStatus({
+    ...(state.status || {}),
+    RUNNING: "1",
+    STATE: "running",
+    MESSAGE: message,
+    TASK_ID: taskId || state.activeTaskId,
+    UPDATED_AT: new Date().toLocaleString()
+  });
+}
+
 function handleStartResult(out, startedMessage) {
   const t = i18n[state.lang];
   if (out.ALREADY_RUNNING) {
@@ -484,7 +495,10 @@ function handleStartResult(out, startedMessage) {
   }
   if (out.STARTED === "1" || out.FINISHED) {
     rememberPendingTask(out.TASK_ID || "");
-    if (out.STARTED === "1") toast(startedMessage);
+    if (out.STARTED === "1") {
+      showTaskStarting(startedMessage, out.TASK_ID || "");
+      toast(startedMessage);
+    }
     return;
   }
   toast(t.toastStartError);
@@ -534,24 +548,29 @@ async function clearLog() {
 }
 
 async function poll() {
-  const s = await refreshStatus();
-  if (s?.RUNNING === "1") await refreshLog();
-  schedulePoll(s?.RUNNING === "1" ? 3000 : 8000);
+  if (state.pollInFlight) return;
+  state.pollInFlight = true;
+  try {
+    const s = await refreshStatus();
+    if (s?.RUNNING === "1" || ["success", "warning", "error"].includes(s?.STATE)) {
+      await refreshLog();
+    }
+  } catch (e) {
+    console.error("poll failed:", e);
+  } finally {
+    state.pollInFlight = false;
+  }
 }
 
-function schedulePoll(ms) {
-  clearTimeout(state.pollTimer);
-  state.pollTimer = setTimeout(poll, ms);
+function startPolling() {
+  if (state.pollTimer !== null) clearInterval(state.pollTimer);
+  state.pollTimer = setInterval(poll, 1000);
 }
 
 async function manualRefresh() {
-  clearTimeout(state.pollTimer);
   state.prevStatusRaw = "";
-  await refreshStatus();
-  await refreshLog();
-  schedulePoll(state.status?.RUNNING === "1" ? 3000 : 8000);
+  await poll();
 }
-
 function initPatchCheckboxMutual() {
   elements.patchVendorBootCheckbox.addEventListener("change", () => {
     if (elements.patchVendorBootCheckbox.checked) {
@@ -600,7 +619,7 @@ async function init() {
   elements.nextConfirmButton.addEventListener("click", handleConfirmProgress);
   elements.confirmModal.addEventListener("click", e => e.target === elements.confirmModal && closeConfirmModal());
 
-  schedulePoll(3000);
+  startPolling();
 }
 
 init();

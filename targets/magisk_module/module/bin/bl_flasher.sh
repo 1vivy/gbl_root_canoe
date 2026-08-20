@@ -608,6 +608,7 @@ start_patch() {
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
   task_id="$(date +%s)-$$"
   echo "$task_id" > "$TASK_FILE"
+  write_state running "$TEXT_PATCH_START"
   setsid sh "$0" patch "$1" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
@@ -623,6 +624,13 @@ start_flash() {
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
   task_id="$(date +%s)-$$"
   echo "$task_id" > "$TASK_FILE"
+  case "$1" in
+    update-bds-tools*) _start_msg="$TEXT_UPDATING_BDS_TOOLS" ;;
+    skip-efisp*) _start_msg="$TEXT_PATCH_ONLY" ;;
+    debug*) _start_msg="$TEXT_DEBUG_MODE" ;;
+    *) _start_msg="$TEXT_FLASHING" ;;
+  esac
+  write_state running "$_start_msg"
   setsid sh "$0" flash "$1" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
