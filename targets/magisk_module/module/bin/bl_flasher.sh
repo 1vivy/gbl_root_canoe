@@ -645,11 +645,7 @@ start_flash() {
 }
 
 print_log() { cat "$LOG_FILE"; }
-tail_log() {
-  print_status | tr -d '\n'
-  printf '@LOG@'
-  tail -n200 "$LOG_FILE" | awk '{printf "%s@NL@", $0}'
-}
+tail_log() { tail -n200 "$LOG_FILE" | awk '{printf "%s@NL@", $0}'; }
 
 clear_log() {
   ensure_runtime

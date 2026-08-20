@@ -14,6 +14,7 @@ const state = {
   taskStarted: false,
   activeTaskId: "",
   completionNotifiedTaskId: "",
+  terminalTaskId: "",
   lang: "zh"
 };
 
@@ -345,9 +346,10 @@ function clearPendingTask() {
 
 function applyStatus(s) {
   if (!s?.STATE) return s;
+  const taskId = s.TASK_ID || "";
+  if (s.RUNNING === "1" && taskId && taskId === state.terminalTaskId) return state.status;
   renderStatus(s);
   const isRunning = s.RUNNING === "1";
-  const taskId = s.TASK_ID || "";
   const terminalState = ["success", "warning", "error"].includes(s.STATE);
   if (!isRunning && terminalState && state.activeTaskId && taskId === state.activeTaskId) {
     clearPendingTask();
@@ -372,27 +374,41 @@ async function refreshStatus() {
     console.error("refreshStatus failed:", e);
     return state.status;
   }
+
+}
+
+function applyTerminalLog(log) {
+  const lines = log.split("\n").map(line => line.trim()).filter(Boolean);
+  const last = lines[lines.length - 1] || "";
+  const message = last.replace(/^\[[^\]]+\]\s*/, "");
+  const completed = /^(分区修补任务已完成|Partition patch task completed|刷写任务已完成|Flash task completed|BDS 与 Tools 更新任务已完成|BDS and Tools update task completed|调试任务已完成|Debug task completed|已跳过BL刷写|Skipped BL flash)/.test(message);
+  if (!completed) return;
+  const taskId = state.activeTaskId || state.status?.TASK_ID || "";
+  state.terminalTaskId = taskId;
+  const timestamp = last.match(/^\[([^\]]+)\]/)?.[1] || state.status?.UPDATED_AT || "-";
+  applyStatus({
+    ...(state.status || {}),
+    RUNNING: "0",
+    PID: "",
+    STATE: "success",
+    MESSAGE: message,
+    UPDATED_AT: timestamp,
+    TASK_ID: taskId
+  });
 }
 
 async function refreshLog() {
   try {
-    const raw = await runScript("tail", "200");
-    const marker = raw.indexOf("@LOG@");
-    let logRaw = raw;
-    if (marker >= 0) {
-      const snapshot = parseKeyValueOutput(raw.slice(0, marker));
-      if (snapshot.USER_LANG === "en") applyLanguage("en");
-      else if (snapshot.USER_LANG === "zh") applyLanguage("zh");
-      applyStatus(snapshot);
-      logRaw = raw.slice(marker + 5);
-    }
-    const log = logRaw.trim().replace(/@NL@/g, String.fromCharCode(10));
+    const raw = (await runScript("tail", "200")).trim();
+    const log = raw.replace(/@NL@/g, String.fromCharCode(10));
     elements.logOutput.textContent = log || i18n[state.lang].logWaiting;
     elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
+    applyTerminalLog(log);
   } catch (e) {
     elements.logOutput.textContent = `${state.lang === "zh" ? "日志读取失败" : "Log Read Failed"}: ${e.message}`;
   }
 }
+
 function closeConfirmModal() {
   state.confirmStep = 0;
   state.pendingAction = null;
@@ -562,10 +578,8 @@ async function poll() {
   if (state.pollInFlight) return;
   state.pollInFlight = true;
   try {
-    const s = await refreshStatus();
-    if (s?.RUNNING === "1" || ["success", "warning", "error"].includes(s?.STATE)) {
-      await refreshLog();
-    }
+    await refreshLog();
+    await refreshStatus();
   } catch (e) {
     console.error("poll failed:", e);
   } finally {
