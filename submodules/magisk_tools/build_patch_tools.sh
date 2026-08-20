@@ -6,7 +6,8 @@ set -e
 
 MAGISK_VER="v28.1"
 ONDK_VER="r27.4"
-ROOT="$(pwd)"
+ROOT="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
 BUILD="$ROOT/build"
 SRC="$BUILD/magisk-src"
 ONDK="$BUILD/ondk"
@@ -17,7 +18,8 @@ if [ ! -x "$ONDK/ndk-build" ]; then
   mkdir -p "$BUILD"
   wget -q --timeout=120 --tries=3 \
     "https://github.com/topjohnwu/ondk/releases/download/$ONDK_VER/ondk-$ONDK_VER-linux.tar.xz" \
-    -O "$BUILD/ondk.tar.xz"
+    -O "$BUILD/ondk.tar.xz.tmp"
+  mv "$BUILD/ondk.tar.xz.tmp" "$BUILD/ondk.tar.xz"
   tar -xf "$BUILD/ondk.tar.xz" -C "$BUILD"
   mv "$BUILD/ondk-$ONDK_VER" "$ONDK"
   rm -f "$BUILD/ondk.tar.xz"
@@ -30,7 +32,7 @@ if [ ! -f "$SRC/native/src/Android.mk" ]; then
   git clone --depth 1 --branch "$MAGISK_VER" \
     https://github.com/topjohnwu/Magisk.git "$SRC"
   cd "$SRC"
-  git submodule update --init --depth 1 \
+  git submodule update --init --depth 1 --jobs "$JOBS" \
     native/src/external/libcxx \
     native/src/external/lz4 \
     native/src/external/bzip2 \
@@ -83,7 +85,7 @@ echo "[patch_tools] 编译 Rust boot-rs ..."
 cd "$JNI"
 export PATH="$ONDK/toolchains/rust/bin:$PATH"
 export CARGO_BUILD_RUSTC="$ONDK/toolchains/rust/bin/rustc"
-export CARGO_BUILD_RUSTFLAGS="-Z threads=8"
+export CARGO_BUILD_RUSTFLAGS="-Z threads=$JOBS"
 "$ONDK/toolchains/rust/bin/cargo" build -p magiskboot -r --target aarch64-linux-android
 mkdir -p "$SRC/native/out/arm64-v8a"
 cp "$SRC/native/out/rust/aarch64-linux-android/release/libmagiskboot.a" \
@@ -92,7 +94,7 @@ cp "$SRC/native/out/rust/aarch64-linux-android/release/libmagiskboot.a" \
 # 9) 编译 magiskboot（C++ + Rust 静态链接，含 patch_vendor）
 echo "[patch_tools] 编译 magiskboot（含 patch_vendor）..."
 cd "$SRC/native"
-"$ONDK/ndk-build" B_BOOT=1 B_CRT0=1 NDK_PROJECT_PATH=. NDK_APPLICATION_MK=src/Application.mk APP_ABI=arm64-v8a -j"$(nproc)"
+"$ONDK/ndk-build" B_BOOT=1 B_CRT0=1 NDK_PROJECT_PATH=. NDK_APPLICATION_MK=src/Application.mk APP_ABI=arm64-v8a -j"$JOBS"
 cd "$ROOT"
 
 mkdir -p build

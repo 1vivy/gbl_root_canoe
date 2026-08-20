@@ -1,61 +1,91 @@
 // 从 Magisk v28.1 magiskboot 扩展的 vendor_boot 修补逻辑
 // 集成进 magiskboot，直接调用 unpack/repack API + rust::cpio_commands，
 // 不依赖外部 mboot 二进制。支持 vendor_boot header v4（vendor_ramdisk）。
-#include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <limits.h>
-#include <ctype.h>
 #include <strings.h>
 #include <fcntl.h>
-#include <dirent.h>
 #include <sys/ioctl.h>
 
 #include "magiskboot.hpp"
 #include "boot-rs.hpp"
 
-#define BUF_SIZE 4096
 
 
-// 复制 src 到 dst（普通文件，dst 截断）
-static int copy_file(const char *src, const char *dst) {
-    int sfd = open(src, O_RDONLY);
-    if (sfd < 0) return -1;
-    int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (dfd < 0) { close(sfd); return -1; }
-    char buf[65536];
-    ssize_t n;
-    int ret = 0;
-    while ((n = read(sfd, buf, sizeof(buf))) > 0) {
-        if (write(dfd, buf, (size_t) n) != n) { ret = -1; break; }
+static bool write_all(int fd, const void *data, size_t size) {
+    auto *p = static_cast<const char *>(data);
+    while (size) {
+        ssize_t written = write(fd, p, size);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) return false;
+        p += written;
+        size -= static_cast<size_t>(written);
     }
-    if (n < 0) ret = -1;
-    close(sfd);
-    close(dfd);
-    return ret;
+    return true;
 }
 
-// 写 src 到块设备 blkdev，并 flush buffer（等价 dd conv=fsync）
-static int write_to_block(const char *src, const char *blkdev) {
+static bool copy_file(const char *src, const char *dst, bool flush = false) {
     int sfd = open(src, O_RDONLY);
-    if (sfd < 0) return -1;
-    int dfd = open(blkdev, O_WRONLY);
-    if (dfd < 0) { close(sfd); return -1; }
-    char buf[65536];
-    ssize_t n;
-    int ret = 0;
-    while ((n = read(sfd, buf, sizeof(buf))) > 0) {
-        if (write(dfd, buf, (size_t) n) != n) { ret = -1; break; }
+    if (sfd < 0) return false;
+    int dfd = open(dst, O_WRONLY | (flush ? 0 : O_CREAT | O_TRUNC), 0644);
+    if (dfd < 0) {
+        close(sfd);
+        return false;
     }
-    if (n < 0) ret = -1;
-    if (ret == 0) ioctl(dfd, BLKFLSBUF, 0);
-    close(sfd);
-    close(dfd);
-    return ret;
+
+    char buf[65536];
+    bool ok = true;
+    for (;;) {
+        ssize_t n = read(sfd, buf, sizeof(buf));
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) {
+            if (n < 0) ok = false;
+            break;
+        }
+        if (!write_all(dfd, buf, static_cast<size_t>(n))) {
+            ok = false;
+            break;
+        }
+    }
+    if (flush && ok) ok = fsync(dfd) == 0;
+    if (flush && ok) ioctl(dfd, BLKFLSBUF, 0);
+    if (close(sfd) != 0) ok = false;
+    if (close(dfd) != 0) ok = false;
+    return ok;
 }
 
+class WorkDir {
+public:
+    WorkDir() {
+        if (!getcwd(original_, sizeof(original_))) return;
+        int len = snprintf(path_, sizeof(path_), "%s/.patch_tools.XXXXXX", original_);
+        if (len <= 0 || static_cast<size_t>(len) >= sizeof(path_)) return;
+        if (!mkdtemp(path_)) return;
+        if (chdir(path_) != 0) {
+            rmdir(path_);
+            return;
+        }
+        ready_ = true;
+    }
+
+    ~WorkDir() {
+        if (!ready_) return;
+        chdir(original_);
+        rm_rf(path_);
+    }
+
+    explicit operator bool() const { return ready_; }
+
+private:
+    char original_[PATH_MAX]{};
+    char path_[PATH_MAX]{};
+    bool ready_ = false;
+};
 
 static const char *fstab_content =
 "# Copyright (c) 2019-2020 The Linux Foundation. All rights reserved.\n"
@@ -164,190 +194,159 @@ static const char *fstab_content =
 "/dev/block/bootdevice/by-name/soccp                     /vendor_soccp_firmware vfat    ro,shortname=lower,uid=0,gid=1000,dmask=227,fmask=337,context=u:object_r:vendor_soccp_file:s0 wait,slotselect\n";
 
 static bool file_exists(const char *filename) {
-    struct stat buffer;
-    return (stat(filename, &buffer) == 0);
+    struct stat st;
+    return stat(filename, &st) == 0;
 }
 
-static int filter_file(const char *filepath, const char *key) {
-    std::string content = full_read(filepath);
-    if (content.empty()) return 0;
+static bool write_file(const char *path, const void *data, size_t size) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return false;
+    bool ok = write_all(fd, data, size);
+    if (close(fd) != 0) ok = false;
+    return ok;
+}
+
+static bool filter_file(const char *path, std::string_view key) {
+    std::string content = full_read(path);
+    if (content.empty()) return true;
 
     std::string out;
-    size_t pos = 0;
-    while (pos < content.size()) {
+    out.reserve(content.size());
+    for (size_t pos = 0; pos < content.size();) {
         size_t nl = content.find('\n', pos);
         if (nl == std::string::npos) nl = content.size();
         std::string_view line(content.data() + pos, nl - pos);
-        if (!str_contains(line, std::string_view(key))) {
+        if (!str_contains(line, key)) {
             out.append(line);
             out += '\n';
         }
         pos = nl + 1;
     }
-
-    int fd = open(filepath, O_WRONLY | O_TRUNC);
-    if (fd < 0) return 0;
-    write(fd, out.data(), out.size());
-    close(fd);
-    return 1;
+    return out == content || write_file(path, out.data(), out.size());
 }
 
-static void write_fstab_file() {
-    FILE *fp = fopen("fstab.qcom", "w");
-    if (fp) {
-        fputs(fstab_content, fp);
-        fclose(fp);
-    }
-}
-
-static void update_header_cmdline(const char *header_path, const char *param) {
-    std::string content = full_read(header_path);
-    if (content.empty() || str_contains(content, std::string_view(param))) return;
+static bool update_header_cmdline(const char *path, std::string_view param) {
+    std::string content = full_read(path);
+    if (content.empty()) return true;
+    if (str_contains(content, param)) return true;
 
     std::string out;
-    size_t pos = 0;
-    while (pos < content.size()) {
+    out.reserve(content.size() + param.size() + 1);
+    bool found = false;
+    for (size_t pos = 0; pos < content.size();) {
         size_t nl = content.find('\n', pos);
         if (nl == std::string::npos) nl = content.size();
         size_t len = nl - pos;
-        if (len > 0 && content[pos + len - 1] == '\r') len--;
+        if (len && content[pos + len - 1] == '\r') --len;
         std::string_view line(content.data() + pos, len);
-
         out.append(line);
         if (str_starts(line, "cmdline=")) {
             out += ' ';
             out += param;
+            found = true;
         }
         out += '\n';
         pos = nl + 1;
     }
-
-    int fd = open(header_path, O_WRONLY | O_TRUNC);
-    if (fd >= 0) {
-        write(fd, out.data(), out.size());
-        close(fd);
-    }
+    return !found || write_file(path, out.data(), out.size());
 }
 
-static int parse_slot(const char *arg, char *out_slot) {
-    if (!arg) return 0;
-    if (strcasecmp(arg, "a") == 0 || strcasecmp(arg, "_a") == 0) {
-        strcpy(out_slot, "_a");
-        return 1;
-    }
-    if (strcasecmp(arg, "b") == 0 || strcasecmp(arg, "_b") == 0) {
-        strcpy(out_slot, "_b");
-        return 1;
-    }
-    return 0;
+static bool cpio_command(const char *archive, const char *command) {
+    const char *args[] = {archive, command};
+    return rust::cpio_commands(2, args);
+}
+
+static const char *parse_slot(const char *arg) {
+    if (!arg) return nullptr;
+    if (!strcasecmp(arg, "a") || !strcasecmp(arg, "_a")) return "_a";
+    if (!strcasecmp(arg, "b") || !strcasecmp(arg, "_b")) return "_b";
+    return nullptr;
+}
+
+static bool extract_entry(const char *archive, const char *entry) {
+    unlink("tmp_modules.load.recovery");
+    char command[256];
+    snprintf(command, sizeof(command), "extract %s tmp_modules.load.recovery", entry);
+    return cpio_command(archive, command) && file_exists("tmp_modules.load.recovery");
 }
 
 int patch_vendor_boot(int argc, char *argv[]) {
-    char slot[16] = {0};
-    int super_mode = 0;
-
-    if (argc > 0 && !parse_slot(argv[0], slot)) {
-        fprintf(stdout, "[!] 无效的参数: %s\n", argv[0]);
-    }
-    if (argc > 1 && strcmp(argv[1], "super") == 0) {
-        super_mode = 1;
-    }
-
-    if (strlen(slot) == 0) {
+    const char *slot = argc > 0 ? parse_slot(argv[0]) : nullptr;
+    if (!slot) {
+        if (argc > 0) fprintf(stdout, "[!] 无效的参数: %s\n", argv[0]);
         fprintf(stdout, "[!] 未指定有效槽位 (a/b)\n");
         return 1;
     }
-
+    bool super_mode = argc > 1 && strcmp(argv[1], "super") == 0;
     fprintf(stdout, "[+] 开始修补 %s%s\n", super_mode ? "super" : "vendor_boot", slot);
 
-    char blk_path[128];
-    ssprintf(blk_path, sizeof(blk_path), "/dev/block/by-name/vendor_boot%s", slot);
-
-    if (copy_file(blk_path, "vendor_boot.img") != 0 || !file_exists("vendor_boot.img")) {
+    char block_path[128];
+    snprintf(block_path, sizeof(block_path), "/dev/block/by-name/vendor_boot%s", slot);
+    WorkDir workdir;
+    if (!workdir) {
+        fprintf(stdout, "[!] 创建临时目录失败！\n");
+        return 1;
+    }
+    if (!copy_file(block_path, "vendor_boot.img")) {
         fprintf(stdout, "[!] 提取 vendor_boot%s 失败！\n", slot);
         return 1;
     }
-
-    // 解包 vendor_boot（-h 模式：dump header，供 repack 解析）
-    unpack("vendor_boot.img", false, true);
-
-    // vendor_boot header v4：默认 vendor ramdisk 解包到 vendor_ramdisk/ramdisk.cpio
-    // 更早版本：ramdisk.cpio
-    const char *target_cpio = "vendor_ramdisk/ramdisk.cpio";
-    if (!file_exists(target_cpio)) {
-        target_cpio = "ramdisk.cpio";
+    if (unpack("vendor_boot.img", false, true) != 0) {
+        fprintf(stdout, "[!] 解包 vendor_boot%s 失败！\n", slot);
+        return 1;
     }
+
+    const char *target_cpio = file_exists("vendor_ramdisk/ramdisk.cpio")
+            ? "vendor_ramdisk/ramdisk.cpio" : "ramdisk.cpio";
     if (!file_exists(target_cpio)) {
         fprintf(stdout, "[!] 解包失败或未找到 ramdisk\n");
         return 1;
     }
 
-    // 提取 modules.load.recovery（兼容两种路径）
     const char *entry = "lib/modules/modules.load.recovery";
-    char cpio_cmd[512];
-    ssprintf(cpio_cmd, sizeof(cpio_cmd), "extract %s tmp_modules.load.recovery", entry);
-    {
-        const char *cpio_argv[] = {target_cpio, cpio_cmd};
-        rust::cpio_commands(2, cpio_argv);
-    }
-    if (!file_exists("tmp_modules.load.recovery")) {
+    if (!extract_entry(target_cpio, entry)) {
         entry = "modules.load.recovery";
-        ssprintf(cpio_cmd, sizeof(cpio_cmd), "extract %s tmp_modules.load.recovery", entry);
-        const char *cpio_argv[] = {target_cpio, cpio_cmd};
-        rust::cpio_commands(2, cpio_argv);
+        if (!extract_entry(target_cpio, entry)) {
+            fprintf(stdout, "[!] 未找到 modules.load.recovery 文件\n");
+            return 1;
+        }
+    }
+    if (!filter_file("tmp_modules.load.recovery", "oplus_secure_guard_new")) {
+        fprintf(stdout, "[!] 修改 modules.load.recovery 失败\n");
+        return 1;
     }
 
-    if (file_exists("tmp_modules.load.recovery")) {
-        filter_file("tmp_modules.load.recovery", "oplus_secure_guard_new");
-        ssprintf(cpio_cmd, sizeof(cpio_cmd), "add 0644 %s tmp_modules.load.recovery", entry);
-        const char *cpio_argv[] = {target_cpio, cpio_cmd};
-        rust::cpio_commands(2, cpio_argv);
-        unlink("tmp_modules.load.recovery");
-    } else {
-        fprintf(stdout, "[!] 未找到 modules.load.recovery 文件\n");
+    char command[256];
+    snprintf(command, sizeof(command), "add 0644 %s tmp_modules.load.recovery", entry);
+    if (!cpio_command(target_cpio, command)) {
+        fprintf(stdout, "[!] 写回 modules.load.recovery 失败\n");
         return 1;
     }
 
     if (super_mode) {
-        write_fstab_file();
-        const char *cpio_argv[] = {target_cpio, "add 0644 first_stage_ramdisk/fstab.qcom fstab.qcom"};
-        rust::cpio_commands(2, cpio_argv);
-    }
-
-    // 修改 header cmdline
-    if (file_exists("header")) {
-        update_header_cmdline("header", "module_blacklist=oplus_secure_guard_new");
-    }
-
-    // 重新打包
-    repack("vendor_boot.img", "new_vendor_boot.img");
-
-    if (file_exists("new_vendor_boot.img")) {
-        if (write_to_block("new_vendor_boot.img", blk_path) != 0) {
-            fprintf(stdout, "[!] 写入 vendor_boot%s 失败！\n", slot);
+        if (!write_file("fstab.qcom", fstab_content, strlen(fstab_content)) ||
+            !cpio_command(target_cpio, "add 0644 first_stage_ramdisk/fstab.qcom fstab.qcom")) {
+            fprintf(stdout, "[!] 写入 fstab.qcom 失败\n");
             return 1;
         }
+    }
 
-        fprintf(stdout, "[+] 修补完成: %s%s\n", super_mode ? "super" : "vendor_boot", slot);
-
-        // 清理临时文件
-        rm_rf("vendor_ramdisk");
-        unlink("ramdisk.cpio");
-        unlink("bootconfig");
-        unlink("dtb");
-        unlink("header");
-        unlink("kernel");
-        unlink("kernel_dtb");
-        unlink("second");
-        unlink("extra");
-        unlink("recovery_dtbo");
-        unlink("vendor_boot.img");
-        unlink("new_vendor_boot.img");
-        unlink("fstab.qcom");
-    } else {
-        fprintf(stdout, "[!] 打包 new_vendor_boot.img 失败\n");
+    if (file_exists("header") &&
+        !update_header_cmdline("header", "module_blacklist=oplus_secure_guard_new")) {
+        fprintf(stdout, "[!] 修改 vendor_boot cmdline 失败\n");
         return 1;
     }
 
+    repack("vendor_boot.img", "new_vendor_boot.img");
+    if (!file_exists("new_vendor_boot.img")) {
+        fprintf(stdout, "[!] 打包 new_vendor_boot.img 失败\n");
+        return 1;
+    }
+    if (!copy_file("new_vendor_boot.img", block_path, true)) {
+        fprintf(stdout, "[!] 写入 vendor_boot%s 失败！\n", slot);
+        return 1;
+    }
+
+    fprintf(stdout, "[+] 修补完成: %s%s\n", super_mode ? "super" : "vendor_boot", slot);
     return 0;
 }
