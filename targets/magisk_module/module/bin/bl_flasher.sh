@@ -340,14 +340,7 @@ print_status() {
   _msg=$(read_line "$MESSAGE_FILE")
   _upd=$(read_line "$UPDATED_FILE")
 
-  out="CURRENT_SLOT=$current_slot
-TARGET_SLOT=$target_slot
-RUNNING=$running
-PID=$pid
-STATE=$_state
-MESSAGE=$_msg
-UPDATED_AT=$_upd
-USER_LANG=$LANG"
+  out="CURRENT_SLOT=$current_slot|TARGET_SLOT=$target_slot|RUNNING=$running|PID=$pid|STATE=$_state|MESSAGE=$_msg|UPDATED_AT=$_upd|USER_LANG=$LANG"
   emit "$out"
 }
 
@@ -634,7 +627,7 @@ start_flash() {
 }
 
 print_log() { cat "$LOG_FILE"; }
-tail_log() { tail -n200 "$LOG_FILE"; }
+tail_log() { tail -n200 "$LOG_FILE" | awk '{printf "%s@NL@", $0}'; }
 
 clear_log() {
   ensure_runtime

@@ -306,7 +306,7 @@ function runScript(action, arg) {
 
 function parseKeyValueOutput(output) {
   const info = {};
-  for (const line of output.split(/\r?\n/)) {
+  for (const line of output.split(/[\r\n|]+/)) {
     if (!line) continue;
     const eq = line.indexOf("=");
     if (eq > 0) info[line.slice(0, eq)] = line.slice(eq + 1);
@@ -402,7 +402,8 @@ function refreshStatus() {
 
 function refreshLog() {
   try {
-    const log = runScript("tail", "200").trim();
+    const raw = runScript("tail", "200").trim();
+    const log = raw.replace(/@NL@/g, String.fromCharCode(10));
     elements.logOutput.textContent = log || i18n[state.lang].logWaiting;
     elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
   } catch (e) {
