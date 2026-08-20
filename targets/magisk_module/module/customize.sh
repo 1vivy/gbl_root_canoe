@@ -150,6 +150,7 @@ ui_print "$T_PERM"
 
 set_perm_recursive "$MODPATH/bin" 0 0 0755 0755
 set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
+set_perm "$MODPATH/webroot/api" 0 0 0755
 set_perm "$MODPATH/module.prop" 0 0 0644
 set_perm "$MODPATH/customize.sh" 0 0 0755
 

@@ -231,13 +231,30 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function httpGet(action, arg) {
+  try {
+    const q = arg != null && arg !== "" ? `&arg=${encodeURIComponent(arg)}` : "";
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", `api?a=${encodeURIComponent(action)}${q}`, false);
+    xhr.send(null);
+    return xhr.status >= 200 && xhr.status < 300 ? xhr.responseText : "";
+  } catch (e) {
+    return "";
+  }
+}
+
 function toast(message) {
   getKsuBridge()?.toast?.(message);
 }
 
 function moduleInfo() {
   const bridge = getKsuBridge();
-  if (!bridge) throw new Error("No Webui");
+  if (!bridge) {
+    const raw = httpGet("info");
+    const info = parseKeyValueOutput(raw);
+    if (info.MODDIR) return { moduleDir: info.MODDIR };
+    throw new Error("No Webui");
+  }
 
   if (bridge.moduleInfo) {
     const raw = bridge.moduleInfo();
@@ -279,6 +296,9 @@ function exec(command) {
 }
 
 function runScript(action, arg) {
+  if (!getKsuBridge()?.exec) {
+    return httpGet(action, arg);
+  }
   const parts = [`MODDIR=${shellQuote(state.moduleDir)}`, "sh", shellQuote(state.scriptPath), action];
   if (arg) parts.push(shellQuote(arg));
   return exec(parts.join(" "));
