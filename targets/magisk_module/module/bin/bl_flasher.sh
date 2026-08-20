@@ -402,7 +402,7 @@ exec_patch_by_args() {
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
       if [ -x "$BINDIR/patch_tools" ]; then
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>&1
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>/dev/null
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -424,7 +424,7 @@ exec_patch_by_args() {
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
       if [ -x "$BINDIR/patch_tools" ]; then
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>&1
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>/dev/null
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
