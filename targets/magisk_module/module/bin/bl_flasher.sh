@@ -209,14 +209,27 @@ place_efisp_tree_to() {
   cp -r "$MODDIR/efisp/." "$1/" >> "$LOG_FILE" 2>&1
 }
 
+build_patched_efi() {
+  abl="$1"
+  rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" "$RUNTIME_DIR/patch.log"
+  if ! "$MODDIR/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl" >> "$LOG_FILE" 2>&1; then
+    write_log "$TEXT_EXTRACT_FAILED"
+    return 1
+  fi
+  if ! "$MODDIR/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" > "$RUNTIME_DIR/patch.log" 2>&1; then
+    cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
+    write_log "$TEXT_PATCH_FAILED"
+    return 1
+  fi
+  cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
+  [ -s "$RUNTIME_DIR/patched.efi" ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
+}
+
 update_efisp() {
   abl=$1
   is_debug=$2
   clean_workdir
-  $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$abl" >> "$LOG_FILE" 2>&1
-  $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> "$RUNTIME_DIR/patch.log" 2>&1
-  cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"
-  [ -f $RUNTIME_DIR/patched.efi ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
+  build_patched_efi "$abl" || return 1
 
   if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
     gbl_vuln=0
@@ -238,7 +251,7 @@ update_efisp() {
   mkdir -p "$efisp_target" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
 
   if [ "$is_debug" != "yes" ] && [ -f "$efisp_target/boot.efi" ]; then
-    mv "$efisp_target/boot.efi" "$efisp_target/boot_backup.efi" >> "$LOG_FILE" 2>&1
+    mv "$efisp_target/boot.efi" "$efisp_target/boot_backup.efi" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
     write_log "$TEXT_BACKUP_BOOT"
   fi
 
@@ -246,7 +259,7 @@ update_efisp() {
     write_log "$TEXT_EFISP_WRITE_FAILED"
     return 1
   fi
-  place_efisp_tree_to "$efisp_target"
+  place_efisp_tree_to "$efisp_target" || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
   sync
   write_log "$TEXT_EFISP_FILES_OK"
 
@@ -274,10 +287,7 @@ update_efisp() {
 
 detect_gbl_vulnerability() {
   clean_workdir
-  $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$1" >> "$LOG_FILE" 2>&1
-  $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> "$RUNTIME_DIR/patch.log" 2>&1
-  cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"
-  [ -f $RUNTIME_DIR/patched.efi ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
+  build_patched_efi "$1" || return 1
   if ! grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
     write_log "$TEXT_GBL_VULN"
     return 0
@@ -326,7 +336,7 @@ update_bds_tools() {
   sync
   write_log "$TEXT_EFISP_FLASH_OK"
 
-  place_efisp_tree_to "$EFISP_DIR"
+  place_efisp_tree_to "$EFISP_DIR" || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
   sync
   write_log "$TEXT_EFISP_FILES_OK"
   return 0
@@ -384,7 +394,7 @@ exec_patch_by_args() {
   slot_letter=$(slot_suffix_to_letter "$target_slot_suffix")
 
   _old_pwd="$PWD"
-  cd "$BINDIR"
+  cd "$BINDIR" || { write_log "$TEXT_BIN_NOT_FOUND: $BINDIR"; return 1; }
 
   if [ "$arg_vendor_boot" = "1" ]; then
     write_log "$TEXT_PATCH_VENDORBOOT_START"
@@ -392,7 +402,7 @@ exec_patch_by_args() {
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
       if [ -x "$BINDIR/patch_tools" ]; then
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>/dev/null
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>&1
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -414,7 +424,7 @@ exec_patch_by_args() {
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
       if [ -x "$BINDIR/patch_tools" ]; then
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>/dev/null
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>&1
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
