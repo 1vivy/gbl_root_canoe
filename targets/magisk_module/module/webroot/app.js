@@ -9,6 +9,9 @@ const state = {
   pollTimer: null,
   prevStatusRaw: "",
   taskStarted: false,
+  activeTaskId: "",
+  completionNotifiedTaskId: "",
+  inPageToastTimer: null,
   lang: "zh"
 };
 
@@ -244,7 +247,14 @@ function httpGet(action, arg) {
 }
 
 function toast(message) {
-  getKsuBridge()?.toast?.(message);
+  const bridge = getKsuBridge();
+  if (bridge?.toast) bridge.toast(message);
+  const notice = document.getElementById("toastNotice");
+  if (!notice) return;
+  notice.textContent = message;
+  notice.classList.add("visible");
+  clearTimeout(state.inPageToastTimer);
+  state.inPageToastTimer = setTimeout(() => notice.classList.remove("visible"), 4500);
 }
 
 function moduleInfo() {
@@ -357,28 +367,17 @@ function renderStatus(status) {
   renderTable(cur, tar);
 }
 
-function handleStateChange(wasRunning, isRunning, stateStr) {
+function notifyTaskFinished(stateStr) {
   const t = i18n[state.lang];
-  if (wasRunning && !isRunning) {
-    state.taskStarted = false;
-    refreshLog();
-    if (stateStr === "success") {
-      const msg = state.status?.MESSAGE || "";
-      if (msg.includes("修补") || msg.includes("patch")) toast(t.toastPatchDone);
-      else if (msg.includes("调试")) toast(t.toastDebugDone);
-      else if (msg.includes("BDS")) toast(t.toastBdsToolsDone);
-      else if (msg.includes("全部完成")) toast(t.toastFlashDone);
-      else toast(t.toastFlashDone);
-    } else if (stateStr === "warning") {
-      toast(t.toastBlDone);
-    } else if (stateStr === "error") {
-      toast(t.toastFailed);
-    }
-  } else if (!wasRunning && isRunning) {
-    state.taskStarted = true;
-  }
+  const msg = state.status?.MESSAGE || "";
+  if (stateStr === "success") {
+    if (msg.includes("修补") || msg.includes("patch")) toast(t.toastPatchDone);
+    else if (msg.includes("调试")) toast(t.toastDebugDone);
+    else if (msg.includes("BDS")) toast(t.toastBdsToolsDone);
+    else toast(t.toastFlashDone);
+  } else if (stateStr === "warning") toast(t.toastBlDone);
+  else if (stateStr === "error") toast(t.toastFailed);
 }
-
 function refreshStatus() {
   try {
     const raw = runScript("status");
@@ -390,9 +389,21 @@ function refreshStatus() {
     }else if(s.USER_LANG === "zh"){
       applyLanguage("zh");
     }
-    const wasRunning = state.status?.RUNNING === "1";
     renderStatus(s);
-    handleStateChange(wasRunning, s.RUNNING === "1", s.STATE || "idle");
+    const wasRunning = state.status?.RUNNING === "1";
+    const isRunning = s.RUNNING === "1";
+    const taskId = s.TASK_ID || "";
+    if (isRunning) {
+      state.taskStarted = true;
+      if (taskId) state.activeTaskId = taskId;
+    } else if (state.taskStarted && (!state.activeTaskId || !taskId || taskId === state.activeTaskId)) {
+      state.taskStarted = false;
+      refreshLog();
+      if (taskId !== state.completionNotifiedTaskId) {
+        state.completionNotifiedTaskId = taskId;
+        notifyTaskFinished(s.STATE || "idle");
+      }
+    } else if (wasRunning && !isRunning) refreshLog();
     return s;
   } catch (e) {
     console.error("refreshStatus failed:", e);
@@ -517,7 +528,7 @@ function startFlash() {
   try {
     const out = parseKeyValueOutput(runScript("start", fullMode));
     if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") { state.taskStarted = true; toast(dbg ? t.toastStartDebug : t.toastStartFlash); }
+    else if (out.STARTED === "1") { state.taskStarted = true; state.activeTaskId = out.TASK_ID || ""; toast(dbg ? t.toastStartDebug : t.toastStartFlash); }
     else if (out.FINISHED === "success") toast(dbg ? t.toastDebugDone : t.toastFlashDone);
     else if (out.FINISHED === "warning") toast(t.toastBlDone);
     else if (out.FINISHED === "error") toast(t.toastFailed);
@@ -533,7 +544,7 @@ function startPatchPart() {
   try {
     const out = parseKeyValueOutput(runScript("start-patch", argStr));
     if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") { state.taskStarted = true; toast(t.toastStartPatch); }
+    else if (out.STARTED === "1") { state.taskStarted = true; state.activeTaskId = out.TASK_ID || ""; toast(t.toastStartPatch); }
     else if (out.FINISHED === "success") toast(t.toastPatchDone);
     else if (out.FINISHED === "error") toast(t.toastFailed);
     else toast(t.toastStartError);
@@ -546,7 +557,7 @@ function startBdsTools() {
   try {
     const out = parseKeyValueOutput(runScript("start", "update-bds-tools"));
     if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") { state.taskStarted = true; toast(t.toastStartBdsTools); }
+    else if (out.STARTED === "1") { state.taskStarted = true; state.activeTaskId = out.TASK_ID || ""; toast(t.toastStartBdsTools); }
     else if (out.FINISHED === "success") toast(t.toastBdsToolsDone);
     else if (out.FINISHED === "error") toast(t.toastFailed);
     else toast(t.toastStartError);

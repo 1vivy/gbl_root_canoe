@@ -130,6 +130,7 @@ LOG_FILE="$RUNTIME_DIR/flash.log"
 STATE_FILE="$RUNTIME_DIR/state"
 MESSAGE_FILE="$RUNTIME_DIR/message"
 UPDATED_FILE="$RUNTIME_DIR/updated"
+TASK_FILE="$RUNTIME_DIR/task_id"
 PID_FILE="$RUNTIME_DIR/flash.pid"
 LOCK_DIR="$RUNTIME_DIR/flash.lock"
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin:$PATH
@@ -144,6 +145,7 @@ ensure_runtime() {
   [ -f "$STATE_FILE" ] || echo idle > "$STATE_FILE"
   [ -f "$MESSAGE_FILE" ] || echo "$TEXT_IDLE" > "$MESSAGE_FILE"
   [ -f "$UPDATED_FILE" ] || timestamp > "$UPDATED_FILE"
+  [ -f "$TASK_FILE" ] || echo 0 > "$TASK_FILE"
 }
 
 clean_workdir() {
@@ -339,8 +341,9 @@ print_status() {
   _state=$(read_line "$STATE_FILE")
   _msg=$(read_line "$MESSAGE_FILE")
   _upd=$(read_line "$UPDATED_FILE")
+  _task=$(read_line "$TASK_FILE")
 
-  out="CURRENT_SLOT=$current_slot|TARGET_SLOT=$target_slot|RUNNING=$running|PID=$pid|STATE=$_state|MESSAGE=$_msg|UPDATED_AT=$_upd|USER_LANG=$LANG"
+  out="CURRENT_SLOT=$current_slot|TARGET_SLOT=$target_slot|RUNNING=$running|PID=$pid|STATE=$_state|MESSAGE=$_msg|UPDATED_AT=$_upd|TASK_ID=$_task|USER_LANG=$LANG"
   emit "$out"
 }
 
@@ -603,10 +606,12 @@ run_patch() {
 start_patch() {
   ensure_runtime
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
+  task_id="$(date +%s)-$$"
+  echo "$task_id" > "$TASK_FILE"
   setsid sh "$0" patch "$1" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
-    emit "STARTED=1"
+    emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
     [ -n "$st" ] && emit "FINISHED=$st" || emit "STARTED=0"
@@ -616,10 +621,12 @@ start_patch() {
 start_flash() {
   ensure_runtime
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
+  task_id="$(date +%s)-$$"
+  echo "$task_id" > "$TASK_FILE"
   setsid sh "$0" flash "$1" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
-    emit "STARTED=1"
+    emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
     [ -n "$st" ] && emit "FINISHED=$st" || emit "STARTED=0"
