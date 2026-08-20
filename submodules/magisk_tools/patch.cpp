@@ -52,7 +52,6 @@ static bool copy_file(const char *src, const char *dst, bool flush = false) {
             break;
         }
     }
-    if (flush && ok) ok = fsync(dfd) == 0;
     if (flush && ok) ioctl(dfd, BLKFLSBUF, 0);
     if (close(sfd) != 0) ok = false;
     if (close(dfd) != 0) ok = false;
@@ -63,9 +62,18 @@ class WorkDir {
 public:
     WorkDir() {
         if (!getcwd(original_, sizeof(original_))) return;
-        int len = snprintf(path_, sizeof(path_), "%s/.patch_tools.XXXXXX", original_);
-        if (len <= 0 || static_cast<size_t>(len) >= sizeof(path_)) return;
-        if (!mkdtemp(path_)) return;
+        bool created = false;
+        for (unsigned int attempt = 0; attempt < 100; ++attempt) {
+            int len = ssprintf(path_, sizeof(path_), "%s/.patch_tools.%d.%u",
+                               original_, getpid(), attempt);
+            if (len <= 0 || static_cast<size_t>(len) >= sizeof(path_)) return;
+            if (mkdir(path_, 0700) == 0) {
+                created = true;
+                break;
+            }
+            if (errno != EEXIST) return;
+        }
+        if (!created) return;
         if (chdir(path_) != 0) {
             rmdir(path_);
             return;
@@ -266,7 +274,7 @@ static const char *parse_slot(const char *arg) {
 static bool extract_entry(const char *archive, const char *entry) {
     unlink("tmp_modules.load.recovery");
     char command[256];
-    snprintf(command, sizeof(command), "extract %s tmp_modules.load.recovery", entry);
+    ssprintf(command, sizeof(command), "extract %s tmp_modules.load.recovery", entry);
     return cpio_command(archive, command) && file_exists("tmp_modules.load.recovery");
 }
 
@@ -281,7 +289,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
     fprintf(stdout, "[+] 开始修补 %s%s\n", super_mode ? "super" : "vendor_boot", slot);
 
     char block_path[128];
-    snprintf(block_path, sizeof(block_path), "/dev/block/by-name/vendor_boot%s", slot);
+    ssprintf(block_path, sizeof(block_path), "/dev/block/by-name/vendor_boot%s", slot);
     WorkDir workdir;
     if (!workdir) {
         fprintf(stdout, "[!] 创建临时目录失败！\n");
@@ -317,7 +325,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
     }
 
     char command[256];
-    snprintf(command, sizeof(command), "add 0644 %s tmp_modules.load.recovery", entry);
+    ssprintf(command, sizeof(command), "add 0644 %s tmp_modules.load.recovery", entry);
     if (!cpio_command(target_cpio, command)) {
         fprintf(stdout, "[!] 写回 modules.load.recovery 失败\n");
         return 1;
