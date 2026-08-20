@@ -614,7 +614,7 @@ start_patch() {
     emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
-    [ -n "$st" ] && emit "FINISHED=$st" || emit "STARTED=0"
+    [ -n "$st" ] && emit "FINISHED=$st|TASK_ID=$task_id" || emit "STARTED=0"
   fi
 }
 
@@ -629,7 +629,7 @@ start_flash() {
     emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
-    [ -n "$st" ] && emit "FINISHED=$st" || emit "STARTED=0"
+    [ -n "$st" ] && emit "FINISHED=$st|TASK_ID=$task_id" || emit "STARTED=0"
   fi
 }
 
