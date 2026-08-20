@@ -12,7 +12,7 @@ export BINDIR=$MODDIR/bin
 
 LANG=zh
 if [ -f "$MODDIR/lang.txt" ]; then
-  USER_LANG=$(cat "$MODDIR/lang.txt" | tr -d '[:space:]')
+  USER_LANG=$(tr -d '[:space:]' < "$MODDIR/lang.txt")
   if [ "$USER_LANG" = "en" ]; then
     LANG=en
   fi
@@ -134,24 +134,27 @@ TASK_FILE="$RUNTIME_DIR/task_id"
 PID_FILE="$RUNTIME_DIR/flash.pid"
 LOCK_DIR="$RUNTIME_DIR/flash.lock"
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin:$PATH
+RUNTIME_READY=0
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
-read_line() { [ -f "$1" ] && head -n1 "$1"; }
+read_line() { [ -f "$1" ] && IFS= read -r _line < "$1" && printf "%s\n" "$_line"; }
 emit() { printf "%s\n" "$1"; }
 
 ensure_runtime() {
+  [ "$RUNTIME_READY" = "1" ] && return
   mkdir -p "$RUNTIME_DIR"
   [ -f "$LOG_FILE" ] || : > "$LOG_FILE"
   [ -f "$STATE_FILE" ] || echo idle > "$STATE_FILE"
   [ -f "$MESSAGE_FILE" ] || echo "$TEXT_IDLE" > "$MESSAGE_FILE"
   [ -f "$UPDATED_FILE" ] || timestamp > "$UPDATED_FILE"
   [ -f "$TASK_FILE" ] || echo 0 > "$TASK_FILE"
+  RUNTIME_READY=1
 }
 
 clean_workdir() {
   for _f in "$RUNTIME_DIR"/*; do
     [ -e "$_f" ] || continue
-    case "$(basename "$_f")" in
+    case "${_f##*/}" in
       flash.pid|state|message|updated|task_id|flash.log|flash.lock) ;;
       *) rm -rf "$_f" ;;
     esac
@@ -194,7 +197,7 @@ partition_path() { echo "$BY_NAME_DIR/$1$2"; }
 
 current_pid() {
   [ -f "$PID_FILE" ] || return 1
-  pid=$(cat "$PID_FILE" | tr -d '[:space:]')
+  pid=$(tr -d '[:space:]' < "$PID_FILE")
   kill -0 "$pid" 2>/dev/null && echo "$pid" && return 0
   rm -f "$PID_FILE"
   return 1
@@ -358,9 +361,9 @@ exec_patch_by_args() {
   arg_super=0
   arg_vendor_boot=0
   arg_debug=0
-  echo "$arg_str" | grep -q "super=1" && arg_super=1
-  echo "$arg_str" | grep -q "vendor_boot=1" && arg_vendor_boot=1
-  echo "$arg_str" | grep -q "debug=1" && arg_debug=1
+  case ",$arg_str," in *,super=1,*) arg_super=1 ;; esac
+  case ",$arg_str," in *,vendor_boot=1,*) arg_vendor_boot=1 ;; esac
+  case ",$arg_str," in *,debug=1,*) arg_debug=1 ;; esac
 
   if [ "$arg_super" = "1" ] && [ "$arg_vendor_boot" = "1" ]; then
     write_log "$TEXT_PATCH_BOTH_ERR"

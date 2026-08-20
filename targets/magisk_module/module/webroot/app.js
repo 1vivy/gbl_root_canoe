@@ -10,7 +10,9 @@ const state = {
   status: null,
   pollTimer: null,
   pollInFlight: false,
+  pollCount: 0,
   prevStatusRaw: "",
+  prevLogRaw: "",
   taskStarted: false,
   activeTaskId: "",
   completionNotifiedTaskId: "",
@@ -365,6 +367,7 @@ async function refreshStatus() {
   try {
     const raw = await runScript("status");
     if (!raw) return state.status;
+    if (raw === state.prevStatusRaw) return state.status;
     state.prevStatusRaw = raw;
     const s = parseKeyValueOutput(raw);
     if (s.USER_LANG === "en") applyLanguage("en");
@@ -409,6 +412,8 @@ function applyTerminalLog(log) {
 async function refreshLog() {
   try {
     const raw = (await runScript("tail", "200")).trim();
+    if (raw === state.prevLogRaw) return;
+    state.prevLogRaw = raw;
     const log = raw.replace(/@NL@/g, String.fromCharCode(10));
     elements.logOutput.textContent = log || i18n[state.lang].logWaiting;
     elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
@@ -583,27 +588,37 @@ async function clearLog() {
   await manualRefresh();
 }
 
-async function poll() {
+function schedulePoll(delay) {
+  if (state.pollTimer !== null) clearTimeout(state.pollTimer);
+  state.pollTimer = null;
+  if (delay !== null && !document.hidden) state.pollTimer = setTimeout(poll, delay);
+}
+
+async function poll(forceStatus = false) {
   if (state.pollInFlight) return;
   state.pollInFlight = true;
   try {
     await refreshLog();
-    await refreshStatus();
+    const running = state.taskStarted || state.status?.RUNNING === "1";
+    if (forceStatus || !running || state.pollCount++ % 3 === 0) await refreshStatus();
   } catch (e) {
     console.error("poll failed:", e);
   } finally {
     state.pollInFlight = false;
+    const running = state.taskStarted || state.status?.RUNNING === "1";
+    schedulePoll(running ? 1000 : 8000);
   }
 }
 
 function startPolling() {
-  if (state.pollTimer !== null) clearInterval(state.pollTimer);
-  state.pollTimer = setInterval(poll, 1000);
+  schedulePoll(0);
 }
 
 async function manualRefresh() {
   state.prevStatusRaw = "";
-  await poll();
+  state.prevLogRaw = "";
+  schedulePoll(null);
+  await poll(true);
 }
 function initPatchCheckboxMutual() {
   elements.patchVendorBootCheckbox.addEventListener("change", () => {
@@ -644,7 +659,8 @@ async function init() {
   elements.flashButton.addEventListener("click", () => openConfirmModal("flash"));
   elements.bdsToolsButton.addEventListener("click", () => openConfirmModal("bds-tools"));
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) manualRefresh();
+    if (document.hidden) schedulePoll(null);
+    else manualRefresh();
   });
 
   elements.patchPartButton.addEventListener("click", () => openConfirmModal("patch-part"));
