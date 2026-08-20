@@ -344,7 +344,7 @@ function clearPendingTask() {
   try { localStorage.removeItem("blFlasherPendingTaskId"); } catch {}
 }
 
-function applyStatus(s) {
+function applyStatus(s, notify = true) {
   if (!s?.STATE) return s;
   const taskId = s.TASK_ID || "";
   if (s.RUNNING === "1" && taskId && taskId === state.terminalTaskId) return state.status;
@@ -353,7 +353,7 @@ function applyStatus(s) {
   const terminalState = ["success", "warning", "error"].includes(s.STATE);
   if (!isRunning && terminalState && state.activeTaskId && taskId === state.activeTaskId) {
     clearPendingTask();
-    if (taskId !== state.completionNotifiedTaskId) {
+    if (notify && taskId !== state.completionNotifiedTaskId) {
       state.completionNotifiedTaskId = taskId;
       notifyTaskFinished(s.STATE);
     }
@@ -379,22 +379,31 @@ async function refreshStatus() {
 
 function applyTerminalLog(log) {
   const lines = log.split("\n").map(line => line.trim()).filter(Boolean);
+  const messages = lines.map(line => line.replace(/^\[[^\]]+\]\s*/, ""));
   const last = lines[lines.length - 1] || "";
-  const message = last.replace(/^\[[^\]]+\]\s*/, "");
-  const completed = /^(分区修补任务已完成|Partition patch task completed|刷写任务已完成|Flash task completed|BDS 与 Tools 更新任务已完成|BDS and Tools update task completed|调试任务已完成|Debug task completed|已跳过BL刷写|Skipped BL flash)/.test(message);
-  if (!completed) return;
+  const message = messages[messages.length - 1] || "";
+  const dedicatedPatch = messages.some(item => /^(分区修补任务运行中|Partition patch task running)$/.test(item));
+  const taskCompleted = /^(分区修补任务已完成|Partition patch task completed|刷写任务已完成|Flash task completed|BDS 与 Tools 更新任务已完成|BDS and Tools update task completed|调试任务已完成|Debug task completed|已跳过BL刷写|Skipped BL flash)/.test(message);
+  const patchCompleted = dedicatedPatch && /^(vendor_boot 修补完成|super 修补完成|vendor_boot patched|super patched)$/.test(message);
+  if (!taskCompleted && !patchCompleted) return;
   const taskId = state.activeTaskId || state.status?.TASK_ID || "";
-  state.terminalTaskId = taskId;
+  const notificationKey = taskId || last;
+  const shouldNotify = state.completionNotifiedTaskId !== notificationKey;
+  if (taskId) state.terminalTaskId = taskId;
   const timestamp = last.match(/^\[([^\]]+)\]/)?.[1] || state.status?.UPDATED_AT || "-";
   applyStatus({
     ...(state.status || {}),
     RUNNING: "0",
     PID: "",
     STATE: "success",
-    MESSAGE: message,
+    MESSAGE: patchCompleted ? (state.lang === "zh" ? "分区修补任务已完成" : "Partition patch task completed") : message,
     UPDATED_AT: timestamp,
     TASK_ID: taskId
-  });
+  }, false);
+  if (shouldNotify) {
+    state.completionNotifiedTaskId = notificationKey;
+    notifyTaskFinished("success");
+  }
 }
 
 async function refreshLog() {
