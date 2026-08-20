@@ -4,14 +4,21 @@ ui_print "  Please select language / 请选择语言"
 ui_print "  Vol+ = Chinese  |  Vol- = English"
 ui_print "============================================="
 
+read_volume_key() {
+  case "$(timeout 0.5 getevent -l 2>/dev/null)" in
+    *KEY_VOLUMEUP*) echo up ;;
+    *KEY_VOLUMEDOWN*) echo down ;;
+  esac
+}
+
 LANG="zh"
 while true; do
-  keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
-  if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+  keyevent=$(read_volume_key)
+  if [ "$keyevent" = "up" ]; then
     LANG="zh"
     ui_print "[已选择中文 / Chinese selected]"
     break
-  elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+  elif [ "$keyevent" = "down" ]; then
     LANG="en"
     ui_print "[English selected / 已选择英文]"
     break
@@ -20,7 +27,6 @@ done
 
 echo "$LANG" > "$MODPATH/lang.txt"
 ksud module config set user_lang "$LANG" 2>/dev/null
-sleep 1
 
 
 if [ "$LANG" = "zh" ]; then
@@ -171,23 +177,23 @@ ui_print "$T_OPT_DOWN_SKIP"
 
 EXTRA_PATCH_MODE=""
 while true; do
-  keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
-  if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+  keyevent=$(read_volume_key)
+  if [ "$keyevent" = "up" ]; then
     ui_print "$T_OPT_CHOICE1"
     ui_print "$T_OPT_VB"
     ui_print "$T_OPT_SUPER"
     while true; do
-      keyevent2=$(timeout 0.5 getevent -l 2>/dev/null)
-      if echo "$keyevent2" | grep -q "KEY_VOLUMEUP"; then
+      keyevent2=$(read_volume_key)
+      if [ "$keyevent2" = "up" ]; then
         EXTRA_PATCH_MODE="vendor_boot"
         break
-      elif echo "$keyevent2" | grep -q "KEY_VOLUMEDOWN"; then
+      elif [ "$keyevent2" = "down" ]; then
         EXTRA_PATCH_MODE="super"
         break
       fi
     done
     break
-  elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+  elif [ "$keyevent" = "down" ]; then
     EXTRA_PATCH_MODE="skip"
     ui_print "$T_OPT_SKIP"
     break
@@ -296,8 +302,8 @@ ui_print "$T_TIP_YES"
 ui_print "$T_TIP_NO"
 
 while true; do
-  keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
-  if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+  keyevent=$(read_volume_key)
+  if [ "$keyevent" = "up" ]; then
     ui_print "$T_SEL_YES"
     if [ -z "$current_slot" ]; then
       ui_print "$T_NO_SLOT"
@@ -317,10 +323,10 @@ while true; do
       ui_print "$T_ABLREPO_CONFIRM_NO"
       repo_confirm=""
       while [ -z "$repo_confirm" ]; do
-        keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
-        if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+        keyevent=$(read_volume_key)
+        if [ "$keyevent" = "up" ]; then
           repo_confirm=yes
-        elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+        elif [ "$keyevent" = "down" ]; then
           repo_confirm=no
         fi
       done
@@ -377,7 +383,7 @@ while true; do
     ui_print "$T_DONE_YES"
     rm -rf $RUNTIME_DIR
     break
-  elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+  elif [ "$keyevent" = "down" ]; then
     ui_print "$T_SEL_NO"
     ui_print "$T_DONE_NO"
     rm -rf $RUNTIME_DIR

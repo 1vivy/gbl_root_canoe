@@ -163,6 +163,13 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
         return -1;
     }
 
+    if (target_size < AVB_FOOTER_SIZE || vbmeta_size > target_size - AVB_FOOTER_SIZE) {
+        fprintf(stderr, "Target image is too small for VBMeta and footer\n");
+        free(vbmeta_data);
+        free(target_data);
+        return -1;
+    }
+
     uint64_t original_size;
     uint64_t existing_offset, existing_size;
     if (read_avb_footer(target_data, target_size,
@@ -177,50 +184,36 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
 
     uint64_t vbmeta_offset = original_size;
     uint64_t footer_offset = target_size - AVB_FOOTER_SIZE;
-    uint64_t required = original_size + vbmeta_size + AVB_FOOTER_SIZE;
 
-    if (required > target_size) {
-        fprintf(stderr, "Insufficient space: need %llu, have %llu\n",
-                (unsigned long long)required, (unsigned long long)target_size);
+    if (original_size > footer_offset || vbmeta_size > footer_offset - original_size) {
+        fprintf(stderr, "Insufficient space for VBMeta and footer (image: %llu bytes)\n",
+                (unsigned long long)target_size);
         free(vbmeta_data);
         free(target_data);
         return -1;
     }
 
-    uint8_t *output = calloc(1, target_size);
-    if (!output) {
-        free(vbmeta_data);
-        free(target_data);
-        return -1;
-    }
-
-    memcpy(output, target_data, (size_t)original_size);
-    memcpy(output + vbmeta_offset, vbmeta_data, vbmeta_size);
-    create_avb_footer(output + footer_offset, original_size, vbmeta_offset, vbmeta_size);
-
-    free(target_data);
+    memset(target_data + original_size, 0, target_size - (size_t)original_size);
+    memcpy(target_data + vbmeta_offset, vbmeta_data, vbmeta_size);
+    create_avb_footer(target_data + footer_offset, original_size, vbmeta_offset, vbmeta_size);
     free(vbmeta_data);
 
-    if (write_file(output_path, output, target_size) != 0) {
+    if (write_file(output_path, target_data, target_size) != 0) {
         fprintf(stderr, "Failed to write transplanted image: %s\n", output_path);
-        free(output);
+        free(target_data);
         return -1;
     }
 
-    /* verify */
     uint64_t v_orig, v_off, v_sz;
-    if (read_avb_footer(output, target_size, &v_orig, &v_off, &v_sz)) {
-        if (v_off + v_sz <= target_size &&
-            memcmp(output + v_off, AVB_MAGIC, 4) == 0) {
-            printf("  VBMeta transplant verified OK\n");
-        } else {
-            fprintf(stderr, "  VBMeta transplant verification failed\n");
-            free(output);
-            return -1;
-        }
+    if (!read_avb_footer(target_data, target_size, &v_orig, &v_off, &v_sz) ||
+        v_off > target_size || v_sz > target_size - v_off ||
+        memcmp(target_data + v_off, AVB_MAGIC, 4) != 0) {
+        fprintf(stderr, "  VBMeta transplant verification failed\n");
+        free(target_data);
+        return -1;
     }
-
-    free(output);
+    printf("  VBMeta transplant verified OK\n");
+    free(target_data);
     return 0;
 }
 
