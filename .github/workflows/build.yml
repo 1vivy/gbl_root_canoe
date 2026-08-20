@@ -2,8 +2,6 @@ name: Build CI
 
 on:
   push:
-    tags:
-      - 'v*' # 只在推送 v 开头 tag 时执行发布 release
     branches: [ main ]
   pull_request:
   workflow_call:
@@ -93,34 +91,3 @@ jobs:
       with:
         name: vbmetafixer_android
         path: artifacts/vbmetafixer_android/*
-
-    # ========== 新增：发布到 GitHub Release ==========
-    - name: Package all artifacts for release
-      if: startsWith(github.ref, 'refs/tags/v')
-      run: |
-        # 把各个产物分别打包成独立zip，方便release下载
-        zip -r toolkit_linux.zip artifacts/toolkit_linux/
-        zip -r toolkit_windows.zip artifacts/toolkit_windows/
-        zip -r toolkit_android.zip artifacts/toolkit_android/
-        zip -r magisk_module.zip artifacts/magisk_module/
-        zip -r vbmetafixer_linux.zip artifacts/vbmetafixer_linux/
-        zip -r vbmetafixer_windows.zip artifacts/vbmetafixer_windows/
-        zip -r vbmetafixer_android.zip artifacts/vbmetafixer_android/
-
-    - name: Create GitHub Release
-      if: startsWith(github.ref, 'refs/tags/v')
-      uses: softprops/action-gh-release@v2
-      with:
-        files: |
-          toolkit_linux.zip
-          toolkit_windows.zip
-          toolkit_android.zip
-          magisk_module.zip
-          vbmetafixer_linux.zip
-          vbmetafixer_windows.zip
-          vbmetafixer_android.zip
-        generate_release_notes: true
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

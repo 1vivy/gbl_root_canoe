@@ -152,7 +152,7 @@ clean_workdir() {
   for _f in "$RUNTIME_DIR"/*; do
     [ -e "$_f" ] || continue
     case "$(basename "$_f")" in
-      flash.pid|state|message|updated|flash.log|flash.lock) ;;
+      flash.pid|state|message|updated|task_id|flash.log|flash.lock) ;;
       *) rm -rf "$_f" ;;
     esac
   done
