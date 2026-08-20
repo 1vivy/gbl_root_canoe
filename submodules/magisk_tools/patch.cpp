@@ -247,25 +247,24 @@ int patch_vendor_boot(int argc, char *argv[]) {
     int super_mode = 0;
 
     if (argc > 0 && !parse_slot(argv[0], slot)) {
-        fprintf(stderr, "[!] 无效的参数: %s\n", argv[0]);
+        fprintf(stdout, "[!] 无效的参数: %s\n", argv[0]);
     }
     if (argc > 1 && strcmp(argv[1], "super") == 0) {
         super_mode = 1;
     }
 
     if (strlen(slot) == 0) {
-        fprintf(stderr, "[!] 未指定有效槽位 (a/b)\n");
+        fprintf(stdout, "[!] 未指定有效槽位 (a/b)\n");
         return 1;
     }
 
-    fprintf(stderr, "[+] 目标槽位: %s\n", slot);
-    fprintf(stderr, "[+] 请等待...\n");
+    fprintf(stdout, "[+] 开始修补 %s%s\n", super_mode ? "super" : "vendor_boot", slot);
 
     char blk_path[128];
     ssprintf(blk_path, sizeof(blk_path), "/dev/block/by-name/vendor_boot%s", slot);
 
     if (copy_file(blk_path, "vendor_boot.img") != 0 || !file_exists("vendor_boot.img")) {
-        fprintf(stderr, "[!] 提取 vendor_boot%s 失败！\n", slot);
+        fprintf(stdout, "[!] 提取 vendor_boot%s 失败！\n", slot);
         return 1;
     }
 
@@ -279,7 +278,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
         target_cpio = "ramdisk.cpio";
     }
     if (!file_exists(target_cpio)) {
-        fprintf(stderr, "[!] 解包失败或未找到 ramdisk\n");
+        fprintf(stdout, "[!] 解包失败或未找到 ramdisk\n");
         return 1;
     }
 
@@ -305,7 +304,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
         rust::cpio_commands(2, cpio_argv);
         unlink("tmp_modules.load.recovery");
     } else {
-        fprintf(stderr, "[!] 未找到 modules.load.recovery 文件\n");
+        fprintf(stdout, "[!] 未找到 modules.load.recovery 文件\n");
         return 1;
     }
 
@@ -325,11 +324,11 @@ int patch_vendor_boot(int argc, char *argv[]) {
 
     if (file_exists("new_vendor_boot.img")) {
         if (write_to_block("new_vendor_boot.img", blk_path) != 0) {
-            fprintf(stderr, "[!] 写入 vendor_boot%s 失败！\n", slot);
+            fprintf(stdout, "[!] 写入 vendor_boot%s 失败！\n", slot);
             return 1;
         }
 
-        fprintf(stderr, "[+] 【槽位 %s 处理完成】\n", slot);
+        fprintf(stdout, "[+] 修补完成: %s%s\n", super_mode ? "super" : "vendor_boot", slot);
 
         // 清理临时文件
         rm_rf("vendor_ramdisk");
@@ -346,7 +345,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
         unlink("new_vendor_boot.img");
         unlink("fstab.qcom");
     } else {
-        fprintf(stderr, "[!] 打包 new_vendor_boot.img 失败\n");
+        fprintf(stdout, "[!] 打包 new_vendor_boot.img 失败\n");
         return 1;
     }
 

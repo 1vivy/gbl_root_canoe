@@ -22,10 +22,10 @@ if [ "$LANG" = "zh" ]; then
   TEXT_IDLE="等待操作"
   TEXT_NO_SLOT="无法识别当前槽位"
   TEXT_NO_TARGET_SLOT="无法计算目标槽位"
-  TEXT_FLASHING="正在将镜像刷写到槽位"
-  TEXT_PATCH_ONLY="仅对目标槽位执行分区修补"
+  TEXT_FLASHING="刷写任务运行中，目标槽位"
+  TEXT_PATCH_ONLY="分区修补任务运行中"
   TEXT_DEBUG_MODE="调试模式：仅处理不刷写，efisp 目录使用模块 tmp/efisp"
-  TEXT_DEBUG_DONE="调试完成，文件保存在"
+  TEXT_DEBUG_DONE="调试任务已完成，文件保存在"
   TEXT_DEBUG_FAILED="调试过程中出错"
   TEXT_EXTRACT_FAILED="ABL 提取失败"
   TEXT_PATCH_FAILED="补丁应用失败"
@@ -37,8 +37,8 @@ if [ "$LANG" = "zh" ]; then
   TEXT_EFISP_SET_RW_FAILED="efisp 分区设置可写失败"
   TEXT_EFISP_FLASH_FAILED="efisp 刷写失败"
   TEXT_EFISP_FLASH_OK="efisp 刷写完成"
-  TEXT_UPDATING_BDS_TOOLS="正在更新 BDS 与 Tools"
-  TEXT_BDS_TOOLS_OK="BDS 与 Tools 更新完成"
+  TEXT_UPDATING_BDS_TOOLS="BDS 与 Tools 更新任务运行中"
+  TEXT_BDS_TOOLS_OK="BDS 与 Tools 更新任务已完成"
   TEXT_BDS_TOOLS_FAIL="BDS 与 Tools 更新失败"
   TEXT_BDS_OLD_VER="你的假回锁是旧版，请OTA最新完整包并在重启前选择刷写到下一槽"
   TEXT_BDS_NOT_INSTALLED="你还没有安装假回锁，请重新安装模块选择全新安装"
@@ -50,11 +50,11 @@ if [ "$LANG" = "zh" ]; then
   TEXT_SET_RW_FAILED="分区设置可写失败"
   TEXT_FLASH_PART="刷写"
   TEXT_FLASH_OK="完成"
-  TEXT_ALL_OK="全部完成（含efisp）"
-  TEXT_ALL_OK_NO_EFISP="分区修补完成（未刷写ABL）"
+  TEXT_ALL_OK="刷写任务已完成（含 efisp）"
+  TEXT_ALL_OK_NO_EFISP="分区修补任务已完成（未刷写 ABL）"
   TEXT_BUSY="任务正在运行"
   TEXT_LOG_CLEARED="日志已清空"
-  TEXT_PATCH_START="开始执行分区修补"
+  TEXT_PATCH_START="分区修补任务运行中"
   TEXT_PATCH_VENDORBOOT_START="修补 vendor_boot"
   TEXT_PATCH_VENDORBOOT_DONE="vendor_boot 修补完成"
   TEXT_PATCH_SUPER_START="修补 super 分区"
@@ -63,7 +63,7 @@ if [ "$LANG" = "zh" ]; then
   TEXT_PATCH_NO_SELECTED="未勾选任何需要修补的分区"
   TEXT_PATCH_BOTH_ERR="不能同时修补 vendor_boot 和 super"
   TEXT_PATCH_ERR="分区修补出错"
-  TEXT_PATCH_DONE="分区修补全部完成"
+  TEXT_PATCH_DONE="分区修补任务已完成"
   TEXT_BIN_NOT_FOUND="修补文件未找到"
   TEXT_PATCH_ARGS="修补参数"
   TEXT_BIN_RUN_INFO="执行中"
@@ -72,10 +72,10 @@ else
   TEXT_IDLE="Waiting"
   TEXT_NO_SLOT="Cannot detect current slot"
   TEXT_NO_TARGET_SLOT="Cannot detect target slot"
-  TEXT_FLASHING="Flashing to slot"
-  TEXT_PATCH_ONLY="Patch target slot partitions only"
+  TEXT_FLASHING="Flash task running, target slot"
+  TEXT_PATCH_ONLY="Partition patch task running"
   TEXT_DEBUG_MODE="Debug Mode: process only, no flash; efisp dir uses module tmp/efisp"
-  TEXT_DEBUG_DONE="Debug done"
+  TEXT_DEBUG_DONE="Debug task completed"
   TEXT_DEBUG_FAILED="Debug error"
   TEXT_EXTRACT_FAILED="ABL extract failed"
   TEXT_PATCH_FAILED="Patch failed"
@@ -87,8 +87,8 @@ else
   TEXT_EFISP_SET_RW_FAILED="efisp setrw failed"
   TEXT_EFISP_FLASH_FAILED="efisp flash failed"
   TEXT_EFISP_FLASH_OK="efisp flash ok"
-  TEXT_UPDATING_BDS_TOOLS="Updating BDS and Tools"
-  TEXT_BDS_TOOLS_OK="BDS and Tools update complete"
+  TEXT_UPDATING_BDS_TOOLS="BDS and Tools update task running"
+  TEXT_BDS_TOOLS_OK="BDS and Tools update task completed"
   TEXT_BDS_TOOLS_FAIL="BDS and Tools update failed"
   TEXT_BDS_OLD_VER="Your fake-lock is an old version. Please OTA the latest full package and select 'Flash to other slot' before rebooting."
   TEXT_BDS_NOT_INSTALLED="Fake-lock is not installed yet. Please reinstall the module and choose a fresh install."
@@ -100,11 +100,11 @@ else
   TEXT_SET_RW_FAILED="setrw failed"
   TEXT_FLASH_PART="Flashing"
   TEXT_FLASH_OK="done"
-  TEXT_ALL_OK="All done (with efisp)"
-  TEXT_ALL_OK_NO_EFISP="Partition patch complete (ABL not flashed)"
+  TEXT_ALL_OK="Flash task completed (with efisp)"
+  TEXT_ALL_OK_NO_EFISP="Partition patch task completed (ABL not flashed)"
   TEXT_BUSY="Task running"
   TEXT_LOG_CLEARED="Log cleared"
-  TEXT_PATCH_START="Start partition patching"
+  TEXT_PATCH_START="Partition patch task running"
   TEXT_PATCH_VENDORBOOT_START="Patch vendor_boot"
   TEXT_PATCH_VENDORBOOT_DONE="vendor_boot patched"
   TEXT_PATCH_SUPER_START="Patch super partition"
@@ -113,7 +113,7 @@ else
   TEXT_PATCH_NO_SELECTED="No partition selected for patching"
   TEXT_PATCH_BOTH_ERR="Cannot patch vendor_boot and super at the same time"
   TEXT_PATCH_ERR="Partition patch error"
-  TEXT_PATCH_DONE="Partition patch finished"
+  TEXT_PATCH_DONE="Partition patch task completed"
   TEXT_BIN_NOT_FOUND="Binary not found"
   TEXT_PATCH_ARGS="Patch args"
   TEXT_BIN_RUN_INFO="Run binary"
@@ -130,6 +130,7 @@ LOG_FILE="$RUNTIME_DIR/flash.log"
 STATE_FILE="$RUNTIME_DIR/state"
 MESSAGE_FILE="$RUNTIME_DIR/message"
 UPDATED_FILE="$RUNTIME_DIR/updated"
+TASK_FILE="$RUNTIME_DIR/task_id"
 PID_FILE="$RUNTIME_DIR/flash.pid"
 LOCK_DIR="$RUNTIME_DIR/flash.lock"
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin:$PATH
@@ -144,13 +145,14 @@ ensure_runtime() {
   [ -f "$STATE_FILE" ] || echo idle > "$STATE_FILE"
   [ -f "$MESSAGE_FILE" ] || echo "$TEXT_IDLE" > "$MESSAGE_FILE"
   [ -f "$UPDATED_FILE" ] || timestamp > "$UPDATED_FILE"
+  [ -f "$TASK_FILE" ] || echo 0 > "$TASK_FILE"
 }
 
 clean_workdir() {
   for _f in "$RUNTIME_DIR"/*; do
     [ -e "$_f" ] || continue
     case "$(basename "$_f")" in
-      flash.pid|state|message|updated|flash.log|flash.lock) ;;
+      flash.pid|state|message|updated|task_id|flash.log|flash.lock) ;;
       *) rm -rf "$_f" ;;
     esac
   done
@@ -333,21 +335,18 @@ print_status() {
   ensure_runtime
   current_slot=$(detect_current_slot)
   target_slot=$(other_slot "$current_slot")
-  running=0
-  pid=$(current_pid)
-  [ -n "$pid" ] && running=1
   _state=$(read_line "$STATE_FILE")
+  running=0
+  pid=""
+  case "$_state" in
+    success|warning|error) ;;
+    *) pid=$(current_pid); [ -n "$pid" ] && running=1 ;;
+  esac
   _msg=$(read_line "$MESSAGE_FILE")
   _upd=$(read_line "$UPDATED_FILE")
+  _task=$(read_line "$TASK_FILE")
 
-  out="CURRENT_SLOT=$current_slot
-TARGET_SLOT=$target_slot
-RUNNING=$running
-PID=$pid
-STATE=$_state
-MESSAGE=$_msg
-UPDATED_AT=$_upd
-USER_LANG=$LANG"
+  out="CURRENT_SLOT=$current_slot|TARGET_SLOT=$target_slot|RUNNING=$running|PID=$pid|STATE=$_state|MESSAGE=$_msg|UPDATED_AT=$_upd|TASK_ID=$_task|USER_LANG=$LANG"
   emit "$out"
 }
 
@@ -380,7 +379,6 @@ exec_patch_by_args() {
     [ -z "$target_slot_suffix" ] && { write_log "$TEXT_NO_SLOT"; return 1; }
   fi
   slot_letter=$(slot_suffix_to_letter "$target_slot_suffix")
-  write_log "$TEXT_PATCH_SLOT: $slot_letter"
 
   _old_pwd="$PWD"
   cd "$BINDIR"
@@ -391,8 +389,7 @@ exec_patch_by_args() {
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
       if [ -x "$BINDIR/patch_tools" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_tools $slot_letter"
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>&1
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>/dev/null
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -414,8 +411,7 @@ exec_patch_by_args() {
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
       if [ -x "$BINDIR/patch_tools" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_tools $slot_letter"
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>&1
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>/dev/null
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -487,6 +483,7 @@ run_flash() {
     write_log "$TEXT_PATCH_ONLY"
 
     if [ -z "$patch_args" ]; then
+    write_log "$TEXT_PATCH_NO_SELECTED"
       write_state error "$TEXT_PATCH_NO_SELECTED"
       exit 0
     fi
@@ -496,6 +493,7 @@ run_flash() {
     if [ $res -eq 0 ]; then
       write_state success "$TEXT_ALL_OK_NO_EFISP"
     elif [ $res -eq 2 ]; then
+    write_log "$TEXT_PATCH_NO_SELECTED"
       write_state error "$TEXT_PATCH_NO_SELECTED"
     else
       write_state error "$TEXT_PATCH_ERR"
@@ -563,12 +561,16 @@ run_flash() {
 
   # 最终状态判定
   if [ $efisp_fail -eq 1 ] || [ $patch_fail -eq 1 ]; then
+    write_log "BL done, partial failed"
     write_state warning "BL done, partial failed"
   elif [ "$skip_abl_flash" = "1" ] && [ -n "$patch_args" ]; then
+    write_log "$TEXT_PATCH_DONE"
     write_state success "$TEXT_PATCH_DONE"
   elif [ "$skip_abl_flash" = "1" ]; then
+    write_log "$TEXT_GBL_VULN_SKIP"
     write_state success "$TEXT_GBL_VULN_SKIP"
   else
+    write_log "$TEXT_ALL_OK"
     write_state success "$TEXT_ALL_OK"
   fi
 }
@@ -590,13 +592,16 @@ run_patch() {
   res=$?
 
   if [ $res -eq 1 ]; then
+    write_log "$TEXT_PATCH_BOTH_ERR"
     write_state error "$TEXT_PATCH_BOTH_ERR"
     exit 1
   elif [ $res -eq 2 ]; then
+    write_log "$TEXT_PATCH_NO_SELECTED"
     write_state error "$TEXT_PATCH_NO_SELECTED"
     exit 0
   fi
 
+    write_log "$TEXT_PATCH_DONE"
   write_state success "$TEXT_PATCH_DONE"
   exit 0
 }
@@ -604,31 +609,43 @@ run_patch() {
 start_patch() {
   ensure_runtime
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
-  nohup sh "$0" patch "$1" >/dev/null 2>&1 &
+  task_id="$(date +%s)-$$"
+  echo "$task_id" > "$TASK_FILE"
+  write_state running "$TEXT_PATCH_START"
+  setsid sh "$0" patch "$1" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
-    emit "STARTED=1"
+    emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
-    [ -n "$st" ] && emit "FINISHED=$st" || emit "STARTED=0"
+    [ -n "$st" ] && emit "FINISHED=$st|TASK_ID=$task_id" || emit "STARTED=0"
   fi
 }
 
 start_flash() {
   ensure_runtime
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
-  nohup sh "$0" flash "$1" >/dev/null 2>&1 &
+  task_id="$(date +%s)-$$"
+  echo "$task_id" > "$TASK_FILE"
+  case "$1" in
+    update-bds-tools*) _start_msg="$TEXT_UPDATING_BDS_TOOLS" ;;
+    skip-efisp*) _start_msg="$TEXT_PATCH_ONLY" ;;
+    debug*) _start_msg="$TEXT_DEBUG_MODE" ;;
+    *) _start_msg="$TEXT_FLASHING" ;;
+  esac
+  write_state running "$_start_msg"
+  setsid sh "$0" flash "$1" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
-    emit "STARTED=1"
+    emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
-    [ -n "$st" ] && emit "FINISHED=$st" || emit "STARTED=0"
+    [ -n "$st" ] && emit "FINISHED=$st|TASK_ID=$task_id" || emit "STARTED=0"
   fi
 }
 
 print_log() { cat "$LOG_FILE"; }
-tail_log() { tail -n200 "$LOG_FILE"; }
+tail_log() { tail -n200 "$LOG_FILE" | awk '{printf "%s@NL@", $0}'; }
 
 clear_log() {
   ensure_runtime

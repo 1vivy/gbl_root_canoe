@@ -1,3 +1,5 @@
+import { exec as ksuExec, moduleInfo as ksuModuleInfo, toast } from "./kernelsu.js";
+
 const IMAGE_NAMES = ["abl"];
 
 const state = {
@@ -7,9 +9,12 @@ const state = {
   scriptPath: "",
   status: null,
   pollTimer: null,
+  pollInFlight: false,
   prevStatusRaw: "",
-  prevState: "idle",
   taskStarted: false,
+  activeTaskId: "",
+  completionNotifiedTaskId: "",
+  terminalTaskId: "",
   lang: "zh"
 };
 
@@ -34,7 +39,7 @@ const i18n = {
     modalPatchStep1: "将对当前活动槽位执行勾选的修补操作。调试模式下不会执行实际修补。",
     modalPatchStep2: "第二次确认：修补分区属于高风险操作，错误会导致系统无法启动，确认后立即执行。",
     toastStartBdsTools: "BDS/Tools 更新任务已启动",
-    toastBdsToolsDone: "BDS/Tools 更新完成",
+    toastBdsToolsDone: "BDS/Tools 更新任务运行成功",
     clearLog: "清空日志",
     updateEfisp: "更新 efisp（默认开启）",
     debugMode: "调试模式（仅处理不刷写，efisp 目录使用模块 tmp/efisp）",
@@ -61,12 +66,17 @@ const i18n = {
     toastStartDebug: "调试任务已启动",
     toastStartFlash: "刷写任务已启动",
     toastStartPatch: "分区修补任务已启动",
-    toastDebugDone: "调试完成",
-    toastFlashDone: "刷写已完成",
-    toastPatchDone: "分区修补完成",
+    toastDebugDone: "调试任务运行成功",
+    toastFlashDone: "刷写任务运行成功",
+    toastPatchDone: "分区修补任务运行成功",
     toastBlDone: "BL 刷写完成，但 efisp 未更新",
     toastFailed: "任务执行失败",
     toastStartError: "任务启动失败",
+    statusIdle: "状态: idle",
+    statusRunning: "状态: running",
+    statusSuccess: "状态: success",
+    statusWarning: "状态: warning",
+    statusError: "状态: error",
     toastLogBusy: "任务运行中，暂时不能清空日志",
     toastLogCleared: "日志已清空",
     modalStep1Debug: "调试模式：将执行所有处理流程但不刷写分区，生成的文件保存在 tmp 目录。",
@@ -103,7 +113,7 @@ const i18n = {
     modalPatchStep1: "Will patch the active slot with selected options. No actual patch in debug mode.",
     modalPatchStep2: "2nd Confirm: Partition patching is high-risk, bad patch may cause boot failure. Start immediately after confirm.",
     toastStartBdsTools: "BDS/Tools update started",
-    toastBdsToolsDone: "BDS/Tools update completed",
+    toastBdsToolsDone: "BDS/Tools update task succeeded",
     clearLog: "Clear Log",
     updateEfisp: "Update efisp (on by default)",
     debugMode: "Debug Mode (process only, no flash; efisp dir uses module tmp/efisp)",
@@ -130,11 +140,16 @@ const i18n = {
     toastStartDebug: "Debug task started",
     toastStartFlash: "Flash task started",
     toastStartPatch: "Partition patch task started",
-    toastDebugDone: "Debug completed",
-    toastFlashDone: "Flash completed",
-    toastPatchDone: "Partition patch completed",
+    toastDebugDone: "Debug task succeeded",
+    toastFlashDone: "Flash task succeeded",
+    toastPatchDone: "Partition patch task succeeded",
     toastBlDone: "BL flashed, but efisp not updated",
     toastFailed: "Task finished (failed)",
+    statusIdle: "Status: idle",
+    statusRunning: "Status: running",
+    statusSuccess: "Status: success",
+    statusWarning: "Status: warning",
+    statusError: "Status: error",
     toastStartError: "Failed to start task",
     toastLogBusy: "Cannot clear log while task is running",
     toastLogCleared: "Log cleared",
@@ -224,70 +239,29 @@ function applyLanguage(lang) {
   });
 }
 
-function getKsuBridge() {
-  return globalThis.ksu || window.ksu || null;
-}
-
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-function toast(message) {
-  getKsuBridge()?.toast?.(message);
-}
-
 function moduleInfo() {
-  const bridge = getKsuBridge();
-  if (!bridge) throw new Error("No Webui");
-
-  if (bridge.moduleInfo) {
-    const raw = bridge.moduleInfo();
-    return typeof raw === "string" ? JSON.parse(raw) : raw;
-  }
-
-  const found = extractStdout(
-    bridge.exec(
-      'for d in /data/adb/modules/*/; do [ -f "${d}bin/bl_flasher.sh" ] && printf "%s" "${d%/}" && break; done'
-    )
-  ).trim();
-  if (!found) throw new Error("Module Not Found");
-  return { moduleDir: found };
+  const raw = ksuModuleInfo();
+  return typeof raw === "string" ? JSON.parse(raw) : raw;
 }
 
-function extractStdout(raw) {
-  if (raw == null) return "";
-  if (typeof raw === "string") {
-    try {
-      const obj = JSON.parse(raw);
-      if (typeof obj?.stdout === "string") return obj.stdout;
-      if (typeof obj?.out === "string") return obj.out;
-    } catch {}
-    return raw;
-  }
-  if (typeof raw?.stdout === "string") return raw.stdout;
-  if (typeof raw?.out === "string") return raw.out;
-  return String(raw);
-}
-
-function exec(command) {
-  const bridge = getKsuBridge();
-  if (!bridge?.exec) return "";
-  try {
-    return extractStdout(bridge.exec(command));
-  } catch (e) {
-    return "";
-  }
-}
-
-function runScript(action, arg) {
+async function runScript(action, arg) {
   const parts = [`MODDIR=${shellQuote(state.moduleDir)}`, "sh", shellQuote(state.scriptPath), action];
   if (arg) parts.push(shellQuote(arg));
-  return exec(parts.join(" "));
+  const command = parts.join(" ");
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("KernelSU exec timeout")), 8000);
+  });
+  const { errno, stdout, stderr } = await Promise.race([ksuExec(command), timeout]);
+  if (errno !== 0) throw new Error(stderr || `Command failed: ${errno}`);
+  return stdout || "";
 }
-
 function parseKeyValueOutput(output) {
   const info = {};
-  for (const line of output.split(/\r?\n/)) {
+  for (const line of output.split(/[\r\n|]+/)) {
     if (!line) continue;
     const eq = line.indexOf("=");
     if (eq > 0) info[line.slice(0, eq)] = line.slice(eq + 1);
@@ -319,13 +293,21 @@ function renderStatus(status) {
   const tar = status.TARGET_SLOT || "-";
   const run = status.RUNNING === "1";
   const st = status.STATE || "idle";
-  const msg = status.MESSAGE || t.waitOperate;
+  const visibleState = run ? "running" : st;
+  const msg = status.MESSAGE || (visibleState === "idle" ? "idle" : t.waitOperate);
+  const statusLabels = {
+    idle: t.statusIdle,
+    running: t.statusRunning,
+    success: t.statusSuccess,
+    warning: t.statusWarning,
+    error: t.statusError
+  };
   elements.currentSlot.textContent = cur;
   elements.targetSlot.textContent = tar;
   elements.imageCount.textContent = IMAGE_NAMES.length;
   elements.taskMessage.textContent = msg;
   elements.updatedAt.textContent = status.UPDATED_AT || "-";
-  elements.stateChip.textContent = run ? t.taskRunning : `${state.lang === "zh" ? "状态" : "Status"}: ${st}`;
+  elements.stateChip.textContent = statusLabels[visibleState] || `${state.lang === "zh" ? "状态" : "Status"}: ${visibleState}`;
   elements.stateChip.className = "chip";
   if (st === "success") elements.stateChip.classList.add("chip-success");
   else if (st === "error") elements.stateChip.classList.add("chip-danger");
@@ -337,55 +319,100 @@ function renderStatus(status) {
   elements.clearLogButton.disabled = run;
   renderTable(cur, tar);
 }
-
-function handleStateChange(prev, curr) {
+function notifyTaskFinished(stateStr) {
   const t = i18n[state.lang];
-  if ((prev === "running" || state.taskStarted) && curr !== "running") {
-    state.taskStarted = false;
-    refreshLog();
-    if (curr === "success") {
-      const msg = state.status?.MESSAGE || "";
-      if (msg.includes("修补") || msg.includes("patch")) toast(t.toastPatchDone);
-      else if (msg.includes("调试")) toast(t.toastDebugDone);
-      else if (msg.includes("BDS")) toast(t.toastBdsToolsDone);
-      else if (msg.includes("全部完成")) toast(t.toastFlashDone);
-      else toast(t.toastFlashDone);
-    } else if (curr === "warning") {
-      toast(t.toastBlDone);
-    } else if (curr === "error") {
-      toast(t.toastFailed);
-    }
-  }
-  state.prevState = curr;
+  const msg = state.status?.MESSAGE || "";
+  const normalized = msg.toLowerCase();
+  if (stateStr === "success") {
+    if (msg.includes("修补") || normalized.includes("patch")) toast(t.toastPatchDone);
+    else if (msg.includes("调试") || normalized.includes("debug")) toast(t.toastDebugDone);
+    else if (normalized.includes("bds")) toast(t.toastBdsToolsDone);
+    else toast(t.toastFlashDone);
+  } else if (stateStr === "warning") toast(t.toastBlDone);
+  else if (stateStr === "error") toast(t.toastFailed);
+}
+function rememberPendingTask(taskId) {
+  if (!taskId) return;
+  state.taskStarted = true;
+  state.activeTaskId = taskId;
+  try { localStorage.setItem("blFlasherPendingTaskId", taskId); } catch {}
 }
 
-function refreshStatus() {
+function clearPendingTask() {
+  state.taskStarted = false;
+  state.activeTaskId = "";
+  try { localStorage.removeItem("blFlasherPendingTaskId"); } catch {}
+}
+
+function applyStatus(s, notify = true) {
+  if (!s?.STATE) return s;
+  const taskId = s.TASK_ID || "";
+  if (s.RUNNING === "1" && taskId && taskId === state.terminalTaskId) return state.status;
+  renderStatus(s);
+  const isRunning = s.RUNNING === "1";
+  const terminalState = ["success", "warning", "error"].includes(s.STATE);
+  if (!isRunning && terminalState && state.activeTaskId && taskId === state.activeTaskId) {
+    clearPendingTask();
+    if (notify && taskId !== state.completionNotifiedTaskId) {
+      state.completionNotifiedTaskId = taskId;
+      notifyTaskFinished(s.STATE);
+    }
+  }
+  return s;
+}
+
+async function refreshStatus() {
   try {
-    const raw = runScript("status");
+    const raw = await runScript("status");
     if (!raw) return state.status;
-    if (raw === state.prevStatusRaw) return state.status;
     state.prevStatusRaw = raw;
     const s = parseKeyValueOutput(raw);
-    if(s.USER_LANG === "en"){
-      applyLanguage("en");
-    }else if(s.USER_LANG === "zh"){
-      applyLanguage("zh");
-    }
-    const oldState = state.prevState;
-    renderStatus(s);
-    handleStateChange(oldState, s.STATE || "idle");
-    return s;
+    if (s.USER_LANG === "en") applyLanguage("en");
+    else if (s.USER_LANG === "zh") applyLanguage("zh");
+    return applyStatus(s);
   } catch (e) {
     console.error("refreshStatus failed:", e);
     return state.status;
   }
+
 }
 
-function refreshLog() {
+function applyTerminalLog(log) {
+  const lines = log.split("\n").map(line => line.trim()).filter(Boolean);
+  const messages = lines.map(line => line.replace(/^\[[^\]]+\]\s*/, ""));
+  const last = lines[lines.length - 1] || "";
+  const message = messages[messages.length - 1] || "";
+  const dedicatedPatch = messages.some(item => /^(分区修补任务运行中|Partition patch task running)$/.test(item));
+  const taskCompleted = /^(分区修补任务已完成|Partition patch task completed|刷写任务已完成|Flash task completed|BDS 与 Tools 更新任务已完成|BDS and Tools update task completed|调试任务已完成|Debug task completed|已跳过BL刷写|Skipped BL flash)/.test(message);
+  const patchCompleted = dedicatedPatch && /^(vendor_boot 修补完成|super 修补完成|vendor_boot patched|super patched)$/.test(message);
+  if (!taskCompleted && !patchCompleted) return;
+  const taskId = state.activeTaskId || state.status?.TASK_ID || "";
+  const notificationKey = taskId || last;
+  const shouldNotify = state.completionNotifiedTaskId !== notificationKey;
+  if (taskId) state.terminalTaskId = taskId;
+  const timestamp = last.match(/^\[([^\]]+)\]/)?.[1] || state.status?.UPDATED_AT || "-";
+  applyStatus({
+    ...(state.status || {}),
+    RUNNING: "0",
+    PID: "",
+    STATE: "success",
+    MESSAGE: patchCompleted ? (state.lang === "zh" ? "分区修补任务已完成" : "Partition patch task completed") : message,
+    UPDATED_AT: timestamp,
+    TASK_ID: taskId
+  }, false);
+  if (shouldNotify) {
+    state.completionNotifiedTaskId = notificationKey;
+    notifyTaskFinished("success");
+  }
+}
+
+async function refreshLog() {
   try {
-    const log = runScript("tail", "200").trim();
+    const raw = (await runScript("tail", "200")).trim();
+    const log = raw.replace(/@NL@/g, String.fromCharCode(10));
     elements.logOutput.textContent = log || i18n[state.lang].logWaiting;
     elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
+    applyTerminalLog(log);
   } catch (e) {
     elements.logOutput.textContent = `${state.lang === "zh" ? "日志读取失败" : "Log Read Failed"}: ${e.message}`;
   }
@@ -485,84 +512,99 @@ function handleConfirmProgress() {
   else startFlash();
 }
 
-function startFlash() {
+function showTaskStarting(message, taskId) {
+  renderStatus({
+    ...(state.status || {}),
+    RUNNING: "1",
+    STATE: "running",
+    MESSAGE: message,
+    TASK_ID: taskId || state.activeTaskId,
+    UPDATED_AT: new Date().toLocaleString()
+  });
+}
+
+function handleStartResult(out, startedMessage) {
+  const t = i18n[state.lang];
+  if (out.ALREADY_RUNNING) {
+    toast(t.toastRunning);
+    return;
+  }
+  if (out.STARTED === "1" || out.FINISHED) {
+    rememberPendingTask(out.TASK_ID || "");
+    if (out.STARTED === "1") {
+      showTaskStarting(startedMessage, out.TASK_ID || "");
+      toast(startedMessage);
+    }
+    return;
+  }
+  toast(t.toastStartError);
+}
+
+async function startFlash() {
   const t = i18n[state.lang];
   const efisp = elements.updateEfispCheckbox?.checked;
   const dbg = elements.debugModeCheckbox?.checked;
-  let baseMode = dbg ? "debug" : (efisp ? "update-efisp" : "skip-efisp");
-
+  const baseMode = dbg ? "debug" : (efisp ? "update-efisp" : "skip-efisp");
   const patchArgs = getPatchArgString();
   const fullMode = patchArgs ? `${baseMode},${patchArgs}` : baseMode;
 
   try {
-    const out = parseKeyValueOutput(runScript("start", fullMode));
-    if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") { state.taskStarted = true; toast(dbg ? t.toastStartDebug : t.toastStartFlash); }
-    else if (out.FINISHED === "success") toast(dbg ? t.toastDebugDone : t.toastFlashDone);
-    else if (out.FINISHED === "warning") toast(t.toastBlDone);
-    else if (out.FINISHED === "error") toast(t.toastFailed);
-    else toast(t.toastStartError);
+    const out = parseKeyValueOutput(await runScript("start", fullMode));
+    handleStartResult(out, dbg ? t.toastStartDebug : t.toastStartFlash);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
-  manualRefresh();
+  await manualRefresh();
 }
 
-function startPatchPart() {
+async function startPatchPart() {
   const t = i18n[state.lang];
-  const argStr = getPatchArgString();
-
   try {
-    const out = parseKeyValueOutput(runScript("start-patch", argStr));
-    if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") { state.taskStarted = true; toast(t.toastStartPatch); }
-    else if (out.FINISHED === "success") toast(t.toastPatchDone);
-    else if (out.FINISHED === "error") toast(t.toastFailed);
-    else toast(t.toastStartError);
+    const out = parseKeyValueOutput(await runScript("start-patch", getPatchArgString()));
+    handleStartResult(out, t.toastStartPatch);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
-  manualRefresh();
+  await manualRefresh();
 }
 
-function startBdsTools() {
+async function startBdsTools() {
   const t = i18n[state.lang];
   try {
-    const out = parseKeyValueOutput(runScript("start", "update-bds-tools"));
-    if (out.ALREADY_RUNNING) toast(t.toastRunning);
-    else if (out.STARTED === "1") { state.taskStarted = true; toast(t.toastStartBdsTools); }
-    else if (out.FINISHED === "success") toast(t.toastBdsToolsDone);
-    else if (out.FINISHED === "error") toast(t.toastFailed);
-    else toast(t.toastStartError);
+    const out = parseKeyValueOutput(await runScript("start", "update-bds-tools"));
+    handleStartResult(out, t.toastStartBdsTools);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
-  manualRefresh();
+  await manualRefresh();
 }
 
-function clearLog() {
+async function clearLog() {
   const t = i18n[state.lang];
   try {
-    const out = parseKeyValueOutput(runScript("clear-log"));
+    const out = parseKeyValueOutput(await runScript("clear-log"));
     if (out.BUSY === "1") { toast(t.toastLogBusy); return; }
     toast(t.toastLogCleared);
   } catch (e) { toast(`${state.lang === "zh" ? "清空失败" : "Clear Failed"}: ${e.message}`); }
-  manualRefresh();
+  await manualRefresh();
 }
 
-function poll() {
-  const s = refreshStatus();
-  if (s?.RUNNING === "1") refreshLog();
-  schedulePoll(s?.RUNNING === "1" ? 3000 : 8000);
+async function poll() {
+  if (state.pollInFlight) return;
+  state.pollInFlight = true;
+  try {
+    await refreshLog();
+    await refreshStatus();
+  } catch (e) {
+    console.error("poll failed:", e);
+  } finally {
+    state.pollInFlight = false;
+  }
 }
 
-function schedulePoll(ms) {
-  clearTimeout(state.pollTimer);
-  state.pollTimer = setTimeout(poll, ms);
+function startPolling() {
+  if (state.pollTimer !== null) clearInterval(state.pollTimer);
+  state.pollTimer = setInterval(poll, 1000);
 }
 
-function manualRefresh() {
-  clearTimeout(state.pollTimer);
+async function manualRefresh() {
   state.prevStatusRaw = "";
-  refreshStatus();
-  refreshLog();
-  schedulePoll(state.status?.RUNNING === "1" ? 3000 : 8000);
+  await poll();
 }
-
 function initPatchCheckboxMutual() {
   elements.patchVendorBootCheckbox.addEventListener("change", () => {
     if (elements.patchVendorBootCheckbox.checked) {
@@ -583,8 +625,10 @@ async function init() {
     state.moduleDir = info.moduleDir;
     state.scriptPath = `${state.moduleDir}/bin/bl_flasher.sh`;
     initPatchCheckboxMutual();
-    refreshStatus();
-    refreshLog();
+    try { state.activeTaskId = localStorage.getItem("blFlasherPendingTaskId") || ""; } catch {}
+    state.taskStarted = Boolean(state.activeTaskId);
+    await refreshStatus();
+    await refreshLog();
   } catch (e) {
     elements.stateChip.textContent = state.lang === "zh" ? "WebUI 初始化失败" : "WebUI Init Failed";
     elements.stateChip.className = "chip chip-danger";
@@ -599,13 +643,17 @@ async function init() {
   elements.refreshButton.addEventListener("click", manualRefresh);
   elements.flashButton.addEventListener("click", () => openConfirmModal("flash"));
   elements.bdsToolsButton.addEventListener("click", () => openConfirmModal("bds-tools"));
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) manualRefresh();
+  });
+
   elements.patchPartButton.addEventListener("click", () => openConfirmModal("patch-part"));
   elements.clearLogButton.addEventListener("click", clearLog);
   elements.cancelConfirmButton.addEventListener("click", closeConfirmModal);
   elements.nextConfirmButton.addEventListener("click", handleConfirmProgress);
   elements.confirmModal.addEventListener("click", e => e.target === elements.confirmModal && closeConfirmModal());
 
-  schedulePoll(3000);
+  startPolling();
 }
 
 init();
