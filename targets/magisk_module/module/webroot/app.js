@@ -11,7 +11,6 @@ const state = {
   taskStarted: false,
   activeTaskId: "",
   completionNotifiedTaskId: "",
-  inPageToastTimer: null,
   lang: "zh"
 };
 
@@ -36,7 +35,7 @@ const i18n = {
     modalPatchStep1: "将对当前活动槽位执行勾选的修补操作。调试模式下不会执行实际修补。",
     modalPatchStep2: "第二次确认：修补分区属于高风险操作，错误会导致系统无法启动，确认后立即执行。",
     toastStartBdsTools: "BDS/Tools 更新任务已启动",
-    toastBdsToolsDone: "BDS/Tools 更新完成",
+    toastBdsToolsDone: "BDS/Tools 更新任务运行成功",
     clearLog: "清空日志",
     updateEfisp: "更新 efisp（默认开启）",
     debugMode: "调试模式（仅处理不刷写，efisp 目录使用模块 tmp/efisp）",
@@ -63,12 +62,17 @@ const i18n = {
     toastStartDebug: "调试任务已启动",
     toastStartFlash: "刷写任务已启动",
     toastStartPatch: "分区修补任务已启动",
-    toastDebugDone: "调试完成",
-    toastFlashDone: "刷写已完成",
-    toastPatchDone: "分区修补完成",
+    toastDebugDone: "调试任务运行成功",
+    toastFlashDone: "刷写任务运行成功",
+    toastPatchDone: "分区修补任务运行成功",
     toastBlDone: "BL 刷写完成，但 efisp 未更新",
     toastFailed: "任务执行失败",
     toastStartError: "任务启动失败",
+    statusIdle: "状态: idle",
+    statusRunning: "状态: running",
+    statusSuccess: "状态: success",
+    statusWarning: "状态: warning",
+    statusError: "状态: error",
     toastLogBusy: "任务运行中，暂时不能清空日志",
     toastLogCleared: "日志已清空",
     modalStep1Debug: "调试模式：将执行所有处理流程但不刷写分区，生成的文件保存在 tmp 目录。",
@@ -105,7 +109,7 @@ const i18n = {
     modalPatchStep1: "Will patch the active slot with selected options. No actual patch in debug mode.",
     modalPatchStep2: "2nd Confirm: Partition patching is high-risk, bad patch may cause boot failure. Start immediately after confirm.",
     toastStartBdsTools: "BDS/Tools update started",
-    toastBdsToolsDone: "BDS/Tools update completed",
+    toastBdsToolsDone: "BDS/Tools update task succeeded",
     clearLog: "Clear Log",
     updateEfisp: "Update efisp (on by default)",
     debugMode: "Debug Mode (process only, no flash; efisp dir uses module tmp/efisp)",
@@ -132,11 +136,16 @@ const i18n = {
     toastStartDebug: "Debug task started",
     toastStartFlash: "Flash task started",
     toastStartPatch: "Partition patch task started",
-    toastDebugDone: "Debug completed",
-    toastFlashDone: "Flash completed",
-    toastPatchDone: "Partition patch completed",
+    toastDebugDone: "Debug task succeeded",
+    toastFlashDone: "Flash task succeeded",
+    toastPatchDone: "Partition patch task succeeded",
     toastBlDone: "BL flashed, but efisp not updated",
     toastFailed: "Task finished (failed)",
+    statusIdle: "Status: idle",
+    statusRunning: "Status: running",
+    statusSuccess: "Status: success",
+    statusWarning: "Status: warning",
+    statusError: "Status: error",
     toastStartError: "Failed to start task",
     toastLogBusy: "Cannot clear log while task is running",
     toastLogCleared: "Log cleared",
@@ -247,14 +256,7 @@ function httpGet(action, arg) {
 }
 
 function toast(message) {
-  const bridge = getKsuBridge();
-  if (bridge?.toast) bridge.toast(message);
-  const notice = document.getElementById("toastNotice");
-  if (!notice) return;
-  notice.textContent = message;
-  notice.classList.add("visible");
-  clearTimeout(state.inPageToastTimer);
-  state.inPageToastTimer = setTimeout(() => notice.classList.remove("visible"), 4500);
+  getKsuBridge()?.toast?.(message);
 }
 
 function moduleInfo() {
@@ -348,13 +350,21 @@ function renderStatus(status) {
   const tar = status.TARGET_SLOT || "-";
   const run = status.RUNNING === "1";
   const st = status.STATE || "idle";
-  const msg = status.MESSAGE || t.waitOperate;
+  const visibleState = run ? "running" : st;
+  const msg = status.MESSAGE || (visibleState === "idle" ? "idle" : t.waitOperate);
+  const statusLabels = {
+    idle: t.statusIdle,
+    running: t.statusRunning,
+    success: t.statusSuccess,
+    warning: t.statusWarning,
+    error: t.statusError
+  };
   elements.currentSlot.textContent = cur;
   elements.targetSlot.textContent = tar;
   elements.imageCount.textContent = IMAGE_NAMES.length;
-  elements.taskMessage.textContent = msg;
+  elements.taskMessage.textContent = visibleState === "idle" ? "idle" : `${visibleState} · ${msg}`;
   elements.updatedAt.textContent = status.UPDATED_AT || "-";
-  elements.stateChip.textContent = run ? t.taskRunning : `${state.lang === "zh" ? "状态" : "Status"}: ${st}`;
+  elements.stateChip.textContent = statusLabels[visibleState] || `${state.lang === "zh" ? "状态" : "Status"}: ${visibleState}`;
   elements.stateChip.className = "chip";
   if (st === "success") elements.stateChip.classList.add("chip-success");
   else if (st === "error") elements.stateChip.classList.add("chip-danger");
@@ -389,8 +399,9 @@ function refreshStatus() {
     }else if(s.USER_LANG === "zh"){
       applyLanguage("zh");
     }
+    const previousStatus = state.status;
+    const wasRunning = previousStatus?.RUNNING === "1";
     renderStatus(s);
-    const wasRunning = state.status?.RUNNING === "1";
     const isRunning = s.RUNNING === "1";
     const taskId = s.TASK_ID || "";
     if (isRunning) {
