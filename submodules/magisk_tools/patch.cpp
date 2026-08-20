@@ -7,7 +7,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <limits.h>
 #include <strings.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -61,11 +60,10 @@ static bool copy_file(const char *src, const char *dst, bool flush = false) {
 class WorkDir {
 public:
     WorkDir() {
-        if (!getcwd(original_, sizeof(original_))) return;
         bool created = false;
         for (unsigned int attempt = 0; attempt < 100; ++attempt) {
-            int len = ssprintf(path_, sizeof(path_), "%s/.patch_tools.%d.%u",
-                               original_, getpid(), attempt);
+            int len = ssprintf(path_, sizeof(path_), ".patch_tools.%d.%u",
+                               getpid(), attempt);
             if (len <= 0 || static_cast<size_t>(len) >= sizeof(path_)) return;
             if (mkdir(path_, 0700) == 0) {
                 created = true;
@@ -83,15 +81,13 @@ public:
 
     ~WorkDir() {
         if (!ready_) return;
-        chdir(original_);
-        rm_rf(path_);
+        if (chdir("..") == 0) rm_rf(path_);
     }
 
     explicit operator bool() const { return ready_; }
 
 private:
-    char original_[PATH_MAX]{};
-    char path_[PATH_MAX]{};
+    char path_[64]{};
     bool ready_ = false;
 };
 

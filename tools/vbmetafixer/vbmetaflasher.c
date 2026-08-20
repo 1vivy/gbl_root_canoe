@@ -146,12 +146,22 @@ static void create_avb_footer(uint8_t *footer,
     put_be64(footer + 28, vbmeta_size);
 }
 
+static int verify_avb_header(const uint8_t *data, size_t len) {
+    return len >= AVB_VBMETA_IMAGE_HEADER_SIZE &&
+           memcmp(data, AVB_MAGIC, 4) == 0 ? 0 : -1;
+}
+
 static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
                               const char *output_path) {
     size_t vbmeta_size;
     uint8_t *vbmeta_data = read_file(vbmeta_path, &vbmeta_size);
     if (!vbmeta_data) {
         fprintf(stderr, "Failed to read vbmeta: %s\n", vbmeta_path);
+        return -1;
+    }
+    if (verify_avb_header(vbmeta_data, vbmeta_size) != 0) {
+        fprintf(stderr, "Invalid source VBMeta header: %s\n", vbmeta_path);
+        free(vbmeta_data);
         return -1;
     }
 
@@ -207,7 +217,7 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
     uint64_t v_orig, v_off, v_sz;
     if (!read_avb_footer(target_data, target_size, &v_orig, &v_off, &v_sz) ||
         v_off > target_size || v_sz > target_size - v_off ||
-        memcmp(target_data + v_off, AVB_MAGIC, 4) != 0) {
+        verify_avb_header(target_data + v_off, (size_t)v_sz) != 0) {
         fprintf(stderr, "  VBMeta transplant verification failed\n");
         free(target_data);
         return -1;
@@ -215,6 +225,16 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
     printf("  VBMeta transplant verified OK\n");
     free(target_data);
     return 0;
+}
+
+static int valid_partition_name(const char *partition) {
+    if (!partition || !*partition) return 0;
+    for (const unsigned char *p = (const unsigned char *)partition; *p; ++p) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || *p == '.'))
+            return 0;
+    }
+    return 1;
 }
 
 /* ---- partition name helpers ---- */
@@ -396,6 +416,11 @@ int main(int argc, char **argv) {
         image_arg = image_buf;
     }
 
+    if (!valid_partition_name(partition_arg)) {
+        fprintf(stderr, "Invalid partition name: %s\n", partition_arg);
+        wait_exit();
+        return 1;
+    }
     if (!file_exists(image_arg)) {
         fprintf(stderr, "Image file not found: %s\n", image_arg);
         wait_exit();
