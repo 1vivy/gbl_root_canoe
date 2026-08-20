@@ -380,7 +380,6 @@ exec_patch_by_args() {
     [ -z "$target_slot_suffix" ] && { write_log "$TEXT_NO_SLOT"; return 1; }
   fi
   slot_letter=$(slot_suffix_to_letter "$target_slot_suffix")
-  write_log "$TEXT_PATCH_SLOT: $slot_letter"
 
   _old_pwd="$PWD"
   cd "$BINDIR"
@@ -391,8 +390,7 @@ exec_patch_by_args() {
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
       if [ -x "$BINDIR/patch_tools" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_tools $slot_letter"
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>&1
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>/dev/null
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -414,8 +412,7 @@ exec_patch_by_args() {
       write_log "$TEXT_PATCH_DEBUG_SAVE"
     else
       if [ -x "$BINDIR/patch_tools" ]; then
-        write_log "$TEXT_BIN_RUN_INFO: patch_tools $slot_letter"
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>&1
+        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>/dev/null
         ret=$?
         if [ $ret -ne 0 ]; then
           write_log "$TEXT_PATCH_ERR (ret:$ret)"
@@ -487,6 +484,7 @@ run_flash() {
     write_log "$TEXT_PATCH_ONLY"
 
     if [ -z "$patch_args" ]; then
+    write_log "$TEXT_PATCH_NO_SELECTED"
       write_state error "$TEXT_PATCH_NO_SELECTED"
       exit 0
     fi
@@ -496,6 +494,7 @@ run_flash() {
     if [ $res -eq 0 ]; then
       write_state success "$TEXT_ALL_OK_NO_EFISP"
     elif [ $res -eq 2 ]; then
+    write_log "$TEXT_PATCH_NO_SELECTED"
       write_state error "$TEXT_PATCH_NO_SELECTED"
     else
       write_state error "$TEXT_PATCH_ERR"
@@ -563,12 +562,16 @@ run_flash() {
 
   # 最终状态判定
   if [ $efisp_fail -eq 1 ] || [ $patch_fail -eq 1 ]; then
+    write_log "BL done, partial failed"
     write_state warning "BL done, partial failed"
   elif [ "$skip_abl_flash" = "1" ] && [ -n "$patch_args" ]; then
+    write_log "$TEXT_PATCH_DONE"
     write_state success "$TEXT_PATCH_DONE"
   elif [ "$skip_abl_flash" = "1" ]; then
+    write_log "$TEXT_GBL_VULN_SKIP"
     write_state success "$TEXT_GBL_VULN_SKIP"
   else
+    write_log "$TEXT_ALL_OK"
     write_state success "$TEXT_ALL_OK"
   fi
 }
@@ -590,13 +593,16 @@ run_patch() {
   res=$?
 
   if [ $res -eq 1 ]; then
+    write_log "$TEXT_PATCH_BOTH_ERR"
     write_state error "$TEXT_PATCH_BOTH_ERR"
     exit 1
   elif [ $res -eq 2 ]; then
+    write_log "$TEXT_PATCH_NO_SELECTED"
     write_state error "$TEXT_PATCH_NO_SELECTED"
     exit 0
   fi
 
+    write_log "$TEXT_PATCH_DONE"
   write_state success "$TEXT_PATCH_DONE"
   exit 0
 }

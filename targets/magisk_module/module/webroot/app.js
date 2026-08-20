@@ -8,7 +8,6 @@ const state = {
   status: null,
   pollTimer: null,
   prevStatusRaw: "",
-  prevState: "idle",
   taskStarted: false,
   lang: "zh"
 };
@@ -338,32 +337,32 @@ function renderStatus(status) {
   renderTable(cur, tar);
 }
 
-function handleStateChange(prev, curr) {
+function handleStateChange(wasRunning, isRunning, stateStr) {
   const t = i18n[state.lang];
-  if ((prev === "running" || state.taskStarted) && curr !== "running") {
+  if (wasRunning && !isRunning) {
     state.taskStarted = false;
     refreshLog();
-    if (curr === "success") {
+    if (stateStr === "success") {
       const msg = state.status?.MESSAGE || "";
       if (msg.includes("修补") || msg.includes("patch")) toast(t.toastPatchDone);
       else if (msg.includes("调试")) toast(t.toastDebugDone);
       else if (msg.includes("BDS")) toast(t.toastBdsToolsDone);
       else if (msg.includes("全部完成")) toast(t.toastFlashDone);
       else toast(t.toastFlashDone);
-    } else if (curr === "warning") {
+    } else if (stateStr === "warning") {
       toast(t.toastBlDone);
-    } else if (curr === "error") {
+    } else if (stateStr === "error") {
       toast(t.toastFailed);
     }
+  } else if (!wasRunning && isRunning) {
+    state.taskStarted = true;
   }
-  state.prevState = curr;
 }
 
 function refreshStatus() {
   try {
     const raw = runScript("status");
     if (!raw) return state.status;
-    if (raw === state.prevStatusRaw) return state.status;
     state.prevStatusRaw = raw;
     const s = parseKeyValueOutput(raw);
     if(s.USER_LANG === "en"){
@@ -371,9 +370,9 @@ function refreshStatus() {
     }else if(s.USER_LANG === "zh"){
       applyLanguage("zh");
     }
-    const oldState = state.prevState;
+    const wasRunning = state.status?.RUNNING === "1";
     renderStatus(s);
-    handleStateChange(oldState, s.STATE || "idle");
+    handleStateChange(wasRunning, s.RUNNING === "1", s.STATE || "idle");
     return s;
   } catch (e) {
     console.error("refreshStatus failed:", e);
