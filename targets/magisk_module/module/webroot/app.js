@@ -343,6 +343,22 @@ function clearPendingTask() {
   try { localStorage.removeItem("blFlasherPendingTaskId"); } catch {}
 }
 
+function applyStatus(s) {
+  if (!s?.STATE) return s;
+  renderStatus(s);
+  const isRunning = s.RUNNING === "1";
+  const taskId = s.TASK_ID || "";
+  const terminalState = ["success", "warning", "error"].includes(s.STATE);
+  if (!isRunning && terminalState && state.activeTaskId && taskId === state.activeTaskId) {
+    clearPendingTask();
+    if (taskId !== state.completionNotifiedTaskId) {
+      state.completionNotifiedTaskId = taskId;
+      notifyTaskFinished(s.STATE);
+    }
+  }
+  return s;
+}
+
 async function refreshStatus() {
   try {
     const raw = await runScript("status");
@@ -351,20 +367,7 @@ async function refreshStatus() {
     const s = parseKeyValueOutput(raw);
     if (s.USER_LANG === "en") applyLanguage("en");
     else if (s.USER_LANG === "zh") applyLanguage("zh");
-
-    renderStatus(s);
-
-    const isRunning = s.RUNNING === "1";
-    const taskId = s.TASK_ID || "";
-    const terminalState = ["success", "warning", "error"].includes(s.STATE);
-    if (!isRunning && terminalState && state.activeTaskId && taskId === state.activeTaskId) {
-      clearPendingTask();
-      if (taskId !== state.completionNotifiedTaskId) {
-        state.completionNotifiedTaskId = taskId;
-        notifyTaskFinished(s.STATE);
-      }
-    }
-    return s;
+    return applyStatus(s);
   } catch (e) {
     console.error("refreshStatus failed:", e);
     return state.status;
@@ -373,15 +376,23 @@ async function refreshStatus() {
 
 async function refreshLog() {
   try {
-    const raw = (await runScript("tail", "200")).trim();
-    const log = raw.replace(/@NL@/g, String.fromCharCode(10));
+    const raw = await runScript("tail", "200");
+    const marker = raw.indexOf("@LOG@");
+    let logRaw = raw;
+    if (marker >= 0) {
+      const snapshot = parseKeyValueOutput(raw.slice(0, marker));
+      if (snapshot.USER_LANG === "en") applyLanguage("en");
+      else if (snapshot.USER_LANG === "zh") applyLanguage("zh");
+      applyStatus(snapshot);
+      logRaw = raw.slice(marker + 5);
+    }
+    const log = logRaw.trim().replace(/@NL@/g, String.fromCharCode(10));
     elements.logOutput.textContent = log || i18n[state.lang].logWaiting;
     elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
   } catch (e) {
     elements.logOutput.textContent = `${state.lang === "zh" ? "日志读取失败" : "Log Read Failed"}: ${e.message}`;
   }
 }
-
 function closeConfirmModal() {
   state.confirmStep = 0;
   state.pendingAction = null;

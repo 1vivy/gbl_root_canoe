@@ -335,10 +335,13 @@ print_status() {
   ensure_runtime
   current_slot=$(detect_current_slot)
   target_slot=$(other_slot "$current_slot")
-  running=0
-  pid=$(current_pid)
-  [ -n "$pid" ] && running=1
   _state=$(read_line "$STATE_FILE")
+  running=0
+  pid=""
+  case "$_state" in
+    success|warning|error) ;;
+    *) pid=$(current_pid); [ -n "$pid" ] && running=1 ;;
+  esac
   _msg=$(read_line "$MESSAGE_FILE")
   _upd=$(read_line "$UPDATED_FILE")
   _task=$(read_line "$TASK_FILE")
@@ -642,7 +645,11 @@ start_flash() {
 }
 
 print_log() { cat "$LOG_FILE"; }
-tail_log() { tail -n200 "$LOG_FILE" | awk '{printf "%s@NL@", $0}'; }
+tail_log() {
+  print_status | tr -d '\n'
+  printf '@LOG@'
+  tail -n200 "$LOG_FILE" | awk '{printf "%s@NL@", $0}'
+}
 
 clear_log() {
   ensure_runtime
