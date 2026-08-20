@@ -1,3 +1,5 @@
+import { exec as ksuExec, moduleInfo as ksuModuleInfo, toast } from "./kernelsu.js";
+
 const IMAGE_NAMES = ["abl"];
 
 const state = {
@@ -235,87 +237,22 @@ function applyLanguage(lang) {
   });
 }
 
-function getKsuBridge() {
-  return globalThis.ksu || window.ksu || null;
-}
-
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-function httpGet(action, arg) {
-  try {
-    const q = arg != null && arg !== "" ? `&arg=${encodeURIComponent(arg)}` : "";
-    const xhr = new XMLHttpRequest();
-    xhr.open("GET", `api?a=${encodeURIComponent(action)}${q}`, false);
-    xhr.send(null);
-    return xhr.status >= 200 && xhr.status < 300 ? xhr.responseText : "";
-  } catch (e) {
-    return "";
-  }
-}
-
-function toast(message) {
-  getKsuBridge()?.toast?.(message);
-}
-
 function moduleInfo() {
-  const bridge = getKsuBridge();
-  if (!bridge) {
-    const raw = httpGet("info");
-    const info = parseKeyValueOutput(raw);
-    if (info.MODDIR) return { moduleDir: info.MODDIR };
-    throw new Error("No Webui");
-  }
-
-  if (bridge.moduleInfo) {
-    const raw = bridge.moduleInfo();
-    return typeof raw === "string" ? JSON.parse(raw) : raw;
-  }
-
-  const found = extractStdout(
-    bridge.exec(
-      'for d in /data/adb/modules/*/; do [ -f "${d}bin/bl_flasher.sh" ] && printf "%s" "${d%/}" && break; done'
-    )
-  ).trim();
-  if (!found) throw new Error("Module Not Found");
-  return { moduleDir: found };
+  const raw = ksuModuleInfo();
+  return typeof raw === "string" ? JSON.parse(raw) : raw;
 }
 
-function extractStdout(raw) {
-  if (raw == null) return "";
-  if (typeof raw === "string") {
-    try {
-      const obj = JSON.parse(raw);
-      if (typeof obj?.stdout === "string") return obj.stdout;
-      if (typeof obj?.out === "string") return obj.out;
-    } catch {}
-    return raw;
-  }
-  if (typeof raw?.stdout === "string") return raw.stdout;
-  if (typeof raw?.out === "string") return raw.out;
-  return String(raw);
-}
-
-function exec(command) {
-  const bridge = getKsuBridge();
-  if (!bridge?.exec) return "";
-  try {
-    return extractStdout(bridge.exec(command));
-  } catch (e) {
-    return "";
-  }
-}
-
-function runScript(action, arg) {
-  if (!getKsuBridge()?.exec) {
-    return httpGet(action, arg);
-  }
+async function runScript(action, arg) {
   const parts = [`MODDIR=${shellQuote(state.moduleDir)}`, "sh", shellQuote(state.scriptPath), action];
   if (arg) parts.push(shellQuote(arg));
-  return exec(parts.join(" "));
+  const { errno, stdout, stderr } = await ksuExec(parts.join(" "));
+  if (errno !== 0) throw new Error(stderr || `Command failed: ${errno}`);
+  return stdout || "";
 }
-
 function parseKeyValueOutput(output) {
   const info = {};
   for (const line of output.split(/[\r\n|]+/)) {
@@ -401,9 +338,9 @@ function clearPendingTask() {
   try { localStorage.removeItem("blFlasherPendingTaskId"); } catch {}
 }
 
-function refreshStatus() {
+async function refreshStatus() {
   try {
-    const raw = runScript("status");
+    const raw = await runScript("status");
     if (!raw) return state.status;
     state.prevStatusRaw = raw;
     const s = parseKeyValueOutput(raw);
@@ -418,14 +355,14 @@ function refreshStatus() {
     const taskId = s.TASK_ID || "";
     const terminalState = ["success", "warning", "error"].includes(s.STATE);
     if (!isRunning && terminalState && state.activeTaskId && taskId === state.activeTaskId) {
-      refreshLog();
+      await refreshLog();
       clearPendingTask();
       if (taskId !== state.completionNotifiedTaskId) {
         state.completionNotifiedTaskId = taskId;
         notifyTaskFinished(s.STATE);
       }
     } else if (wasRunning && !isRunning) {
-      refreshLog();
+      await refreshLog();
     }
     return s;
   } catch (e) {
@@ -434,9 +371,9 @@ function refreshStatus() {
   }
 }
 
-function refreshLog() {
+async function refreshLog() {
   try {
-    const raw = runScript("tail", "200").trim();
+    const raw = (await runScript("tail", "200")).trim();
     const log = raw.replace(/@NL@/g, String.fromCharCode(10));
     elements.logOutput.textContent = log || i18n[state.lang].logWaiting;
     elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
@@ -553,7 +490,7 @@ function handleStartResult(out, startedMessage) {
   toast(t.toastStartError);
 }
 
-function startFlash() {
+async function startFlash() {
   const t = i18n[state.lang];
   const efisp = elements.updateEfispCheckbox?.checked;
   const dbg = elements.debugModeCheckbox?.checked;
@@ -562,43 +499,43 @@ function startFlash() {
   const fullMode = patchArgs ? `${baseMode},${patchArgs}` : baseMode;
 
   try {
-    const out = parseKeyValueOutput(runScript("start", fullMode));
+    const out = parseKeyValueOutput(await runScript("start", fullMode));
     handleStartResult(out, dbg ? t.toastStartDebug : t.toastStartFlash);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
-  manualRefresh();
+  await manualRefresh();
 }
 
-function startPatchPart() {
+async function startPatchPart() {
   const t = i18n[state.lang];
   try {
-    const out = parseKeyValueOutput(runScript("start-patch", getPatchArgString()));
+    const out = parseKeyValueOutput(await runScript("start-patch", getPatchArgString()));
     handleStartResult(out, t.toastStartPatch);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
-  manualRefresh();
+  await manualRefresh();
 }
 
-function startBdsTools() {
+async function startBdsTools() {
   const t = i18n[state.lang];
   try {
-    const out = parseKeyValueOutput(runScript("start", "update-bds-tools"));
+    const out = parseKeyValueOutput(await runScript("start", "update-bds-tools"));
     handleStartResult(out, t.toastStartBdsTools);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
-  manualRefresh();
+  await manualRefresh();
 }
 
-function clearLog() {
+async function clearLog() {
   const t = i18n[state.lang];
   try {
-    const out = parseKeyValueOutput(runScript("clear-log"));
+    const out = parseKeyValueOutput(await runScript("clear-log"));
     if (out.BUSY === "1") { toast(t.toastLogBusy); return; }
     toast(t.toastLogCleared);
   } catch (e) { toast(`${state.lang === "zh" ? "清空失败" : "Clear Failed"}: ${e.message}`); }
-  manualRefresh();
+  await manualRefresh();
 }
 
-function poll() {
-  const s = refreshStatus();
-  if (s?.RUNNING === "1") refreshLog();
+async function poll() {
+  const s = await refreshStatus();
+  if (s?.RUNNING === "1") await refreshLog();
   schedulePoll(s?.RUNNING === "1" ? 3000 : 8000);
 }
 
@@ -607,11 +544,11 @@ function schedulePoll(ms) {
   state.pollTimer = setTimeout(poll, ms);
 }
 
-function manualRefresh() {
+async function manualRefresh() {
   clearTimeout(state.pollTimer);
   state.prevStatusRaw = "";
-  refreshStatus();
-  refreshLog();
+  await refreshStatus();
+  await refreshLog();
   schedulePoll(state.status?.RUNNING === "1" ? 3000 : 8000);
 }
 
@@ -637,8 +574,8 @@ async function init() {
     initPatchCheckboxMutual();
     try { state.activeTaskId = localStorage.getItem("blFlasherPendingTaskId") || ""; } catch {}
     state.taskStarted = Boolean(state.activeTaskId);
-    refreshStatus();
-    refreshLog();
+    await refreshStatus();
+    await refreshLog();
   } catch (e) {
     elements.stateChip.textContent = state.lang === "zh" ? "WebUI 初始化失败" : "WebUI Init Failed";
     elements.stateChip.className = "chip chip-danger";
