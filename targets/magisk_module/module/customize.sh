@@ -4,14 +4,21 @@ ui_print "  Please select language / 请选择语言"
 ui_print "  Vol+ = Chinese  |  Vol- = English"
 ui_print "============================================="
 
+read_volume_key() {
+  case "$(timeout 0.5 getevent -l 2>/dev/null)" in
+    *KEY_VOLUMEUP*) echo up ;;
+    *KEY_VOLUMEDOWN*) echo down ;;
+  esac
+}
+
 LANG="zh"
 while true; do
-  keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
-  if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+  keyevent=$(read_volume_key)
+  if [ "$keyevent" = "up" ]; then
     LANG="zh"
     ui_print "[已选择中文 / Chinese selected]"
     break
-  elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+  elif [ "$keyevent" = "down" ]; then
     LANG="en"
     ui_print "[English selected / 已选择英文]"
     break
@@ -20,7 +27,6 @@ done
 
 echo "$LANG" > "$MODPATH/lang.txt"
 ksud module config set user_lang "$LANG" 2>/dev/null
-sleep 1
 
 
 if [ "$LANG" = "zh" ]; then
@@ -171,23 +177,23 @@ ui_print "$T_OPT_DOWN_SKIP"
 
 EXTRA_PATCH_MODE=""
 while true; do
-  keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
-  if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+  keyevent=$(read_volume_key)
+  if [ "$keyevent" = "up" ]; then
     ui_print "$T_OPT_CHOICE1"
     ui_print "$T_OPT_VB"
     ui_print "$T_OPT_SUPER"
     while true; do
-      keyevent2=$(timeout 0.5 getevent -l 2>/dev/null)
-      if echo "$keyevent2" | grep -q "KEY_VOLUMEUP"; then
+      keyevent2=$(read_volume_key)
+      if [ "$keyevent2" = "up" ]; then
         EXTRA_PATCH_MODE="vendor_boot"
         break
-      elif echo "$keyevent2" | grep -q "KEY_VOLUMEDOWN"; then
+      elif [ "$keyevent2" = "down" ]; then
         EXTRA_PATCH_MODE="super"
         break
       fi
     done
     break
-  elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+  elif [ "$keyevent" = "down" ]; then
     EXTRA_PATCH_MODE="skip"
     ui_print "$T_OPT_SKIP"
     break
@@ -206,27 +212,29 @@ slot_letter=${current_slot_suffix#_}  # 去掉下划线前缀，得到纯字母 
 if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
   ui_print "$T_OPT_RUN_VB"
   ui_print "- 当前槽位: $slot_letter"
-  if [ -x "$MODPATH/bin/patch_tools" ]; then
-    "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter"  # ========== 修改3：传入槽位参数 ==========
-    ret=$?
-    if [ $ret -ne 0 ];then
-      ui_print "$T_BIN_FAIL (vendor_boot ret:$ret)"
-    fi
-  else
+  if [ ! -x "$MODPATH/bin/patch_tools" ]; then
     ui_print "$T_BIN_FAIL: patch_tools binary not found!"
+    abort "patch_tools missing"
+  fi
+  "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter"
+  ret=$?
+  if [ "$ret" -ne 0 ]; then
+    ui_print "$T_BIN_FAIL (vendor_boot ret:$ret)"
+    abort "vendor_boot patch failed"
   fi
   ui_print "$T_OPT_FINISH_VB"
 elif [ "$EXTRA_PATCH_MODE" = "super" ]; then
   ui_print "$T_OPT_RUN_SUPER"
   ui_print "- 当前槽位: $slot_letter"
-  if [ -x "$MODPATH/bin/patch_tools" ]; then
-    "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter" super  # ========== 修改4：传入槽位参数 ==========
-    ret=$?
-    if [ $ret -ne 0 ];then
-      ui_print "$T_BIN_FAIL (super ret:$ret)"
-    fi
-  else
+  if [ ! -x "$MODPATH/bin/patch_tools" ]; then
     ui_print "$T_BIN_FAIL: patch_tools binary not found!"
+    abort "patch_tools missing"
+  fi
+  "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter" super
+  ret=$?
+  if [ "$ret" -ne 0 ]; then
+    ui_print "$T_BIN_FAIL (super ret:$ret)"
+    abort "super patch failed"
   fi
   ui_print "$T_OPT_FINISH_SUPER"
   ui_print "$T_OPT_SUPER_NOTE"
@@ -296,17 +304,18 @@ ui_print "$T_TIP_YES"
 ui_print "$T_TIP_NO"
 
 while true; do
-  keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
-  if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+  keyevent=$(read_volume_key)
+  if [ "$keyevent" = "up" ]; then
     ui_print "$T_SEL_YES"
     if [ -z "$current_slot" ]; then
       ui_print "$T_NO_SLOT"
       abort "slot detection failed"
     fi
     abl_part="$BY_NAME_DIR/abl$current_slot"
-    $MODPATH/bin/extractfv -o $RUNTIME_DIR -v "$abl_part" >> $RUNTIME_DIR/extract.log 2>&1
-    $MODPATH/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> $RUNTIME_DIR/patch.log 2>&1
-    if [ ! -f $RUNTIME_DIR/patched.efi ]; then
+    rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi"
+    if ! "$MODPATH/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl_part" >> "$RUNTIME_DIR/extract.log" 2>&1 ||
+       ! "$MODPATH/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" >> "$RUNTIME_DIR/patch.log" 2>&1 ||
+       [ ! -s "$RUNTIME_DIR/patched.efi" ]; then
       ui_print "$T_PATCH_FAIL"
       abort "patch failed"
     fi
@@ -317,10 +326,10 @@ while true; do
       ui_print "$T_ABLREPO_CONFIRM_NO"
       repo_confirm=""
       while [ -z "$repo_confirm" ]; do
-        keyevent=$(timeout 0.5 getevent -l 2>/dev/null)
-        if echo "$keyevent" | grep -q "KEY_VOLUMEUP"; then
+        keyevent=$(read_volume_key)
+        if [ "$keyevent" = "up" ]; then
           repo_confirm=yes
-        elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+        elif [ "$keyevent" = "down" ]; then
           repo_confirm=no
         fi
       done
@@ -377,7 +386,7 @@ while true; do
     ui_print "$T_DONE_YES"
     rm -rf $RUNTIME_DIR
     break
-  elif echo "$keyevent" | grep -q "KEY_VOLUMEDOWN"; then
+  elif [ "$keyevent" = "down" ]; then
     ui_print "$T_SEL_NO"
     ui_print "$T_DONE_NO"
     rm -rf $RUNTIME_DIR

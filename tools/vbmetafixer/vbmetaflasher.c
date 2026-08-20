@@ -146,6 +146,11 @@ static void create_avb_footer(uint8_t *footer,
     put_be64(footer + 28, vbmeta_size);
 }
 
+static int verify_avb_header(const uint8_t *data, size_t len) {
+    return len >= AVB_VBMETA_IMAGE_HEADER_SIZE &&
+           memcmp(data, AVB_MAGIC, 4) == 0 ? 0 : -1;
+}
+
 static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
                               const char *output_path) {
     size_t vbmeta_size;
@@ -154,12 +159,24 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
         fprintf(stderr, "Failed to read vbmeta: %s\n", vbmeta_path);
         return -1;
     }
+    if (verify_avb_header(vbmeta_data, vbmeta_size) != 0) {
+        fprintf(stderr, "Invalid source VBMeta header: %s\n", vbmeta_path);
+        free(vbmeta_data);
+        return -1;
+    }
 
     size_t target_size;
     uint8_t *target_data = read_file(source_image, &target_size);
     if (!target_data) {
         fprintf(stderr, "Failed to read source image: %s\n", source_image);
         free(vbmeta_data);
+        return -1;
+    }
+
+    if (target_size < AVB_FOOTER_SIZE || vbmeta_size > target_size - AVB_FOOTER_SIZE) {
+        fprintf(stderr, "Target image is too small for VBMeta and footer\n");
+        free(vbmeta_data);
+        free(target_data);
         return -1;
     }
 
@@ -177,51 +194,47 @@ static int transplant_vbmeta(const char *vbmeta_path, const char *source_image,
 
     uint64_t vbmeta_offset = original_size;
     uint64_t footer_offset = target_size - AVB_FOOTER_SIZE;
-    uint64_t required = original_size + vbmeta_size + AVB_FOOTER_SIZE;
 
-    if (required > target_size) {
-        fprintf(stderr, "Insufficient space: need %llu, have %llu\n",
-                (unsigned long long)required, (unsigned long long)target_size);
+    if (original_size > footer_offset || vbmeta_size > footer_offset - original_size) {
+        fprintf(stderr, "Insufficient space for VBMeta and footer (image: %llu bytes)\n",
+                (unsigned long long)target_size);
         free(vbmeta_data);
         free(target_data);
         return -1;
     }
 
-    uint8_t *output = calloc(1, target_size);
-    if (!output) {
-        free(vbmeta_data);
-        free(target_data);
-        return -1;
-    }
-
-    memcpy(output, target_data, (size_t)original_size);
-    memcpy(output + vbmeta_offset, vbmeta_data, vbmeta_size);
-    create_avb_footer(output + footer_offset, original_size, vbmeta_offset, vbmeta_size);
-
-    free(target_data);
+    memset(target_data + original_size, 0, target_size - (size_t)original_size);
+    memcpy(target_data + vbmeta_offset, vbmeta_data, vbmeta_size);
+    create_avb_footer(target_data + footer_offset, original_size, vbmeta_offset, vbmeta_size);
     free(vbmeta_data);
 
-    if (write_file(output_path, output, target_size) != 0) {
+    if (write_file(output_path, target_data, target_size) != 0) {
         fprintf(stderr, "Failed to write transplanted image: %s\n", output_path);
-        free(output);
+        free(target_data);
         return -1;
     }
 
-    /* verify */
     uint64_t v_orig, v_off, v_sz;
-    if (read_avb_footer(output, target_size, &v_orig, &v_off, &v_sz)) {
-        if (v_off + v_sz <= target_size &&
-            memcmp(output + v_off, AVB_MAGIC, 4) == 0) {
-            printf("  VBMeta transplant verified OK\n");
-        } else {
-            fprintf(stderr, "  VBMeta transplant verification failed\n");
-            free(output);
-            return -1;
-        }
+    if (!read_avb_footer(target_data, target_size, &v_orig, &v_off, &v_sz) ||
+        v_off > target_size || v_sz > target_size - v_off ||
+        verify_avb_header(target_data + v_off, (size_t)v_sz) != 0) {
+        fprintf(stderr, "  VBMeta transplant verification failed\n");
+        free(target_data);
+        return -1;
     }
-
-    free(output);
+    printf("  VBMeta transplant verified OK\n");
+    free(target_data);
     return 0;
+}
+
+static int valid_partition_name(const char *partition) {
+    if (!partition || !*partition) return 0;
+    for (const unsigned char *p = (const unsigned char *)partition; *p; ++p) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || *p == '.'))
+            return 0;
+    }
+    return 1;
 }
 
 /* ---- partition name helpers ---- */
@@ -403,6 +416,11 @@ int main(int argc, char **argv) {
         image_arg = image_buf;
     }
 
+    if (!valid_partition_name(partition_arg)) {
+        fprintf(stderr, "Invalid partition name: %s\n", partition_arg);
+        wait_exit();
+        return 1;
+    }
     if (!file_exists(image_arg)) {
         fprintf(stderr, "Image file not found: %s\n", image_arg);
         wait_exit();

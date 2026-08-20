@@ -12,7 +12,7 @@ export BINDIR=$MODDIR/bin
 
 LANG=zh
 if [ -f "$MODDIR/lang.txt" ]; then
-  USER_LANG=$(cat "$MODDIR/lang.txt" | tr -d '[:space:]')
+  USER_LANG=$(tr -d '[:space:]' < "$MODDIR/lang.txt")
   if [ "$USER_LANG" = "en" ]; then
     LANG=en
   fi
@@ -134,24 +134,27 @@ TASK_FILE="$RUNTIME_DIR/task_id"
 PID_FILE="$RUNTIME_DIR/flash.pid"
 LOCK_DIR="$RUNTIME_DIR/flash.lock"
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin:$PATH
+RUNTIME_READY=0
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
-read_line() { [ -f "$1" ] && head -n1 "$1"; }
+read_line() { [ -f "$1" ] && IFS= read -r _line < "$1" && printf "%s\n" "$_line"; }
 emit() { printf "%s\n" "$1"; }
 
 ensure_runtime() {
+  [ "$RUNTIME_READY" = "1" ] && return
   mkdir -p "$RUNTIME_DIR"
   [ -f "$LOG_FILE" ] || : > "$LOG_FILE"
   [ -f "$STATE_FILE" ] || echo idle > "$STATE_FILE"
   [ -f "$MESSAGE_FILE" ] || echo "$TEXT_IDLE" > "$MESSAGE_FILE"
   [ -f "$UPDATED_FILE" ] || timestamp > "$UPDATED_FILE"
   [ -f "$TASK_FILE" ] || echo 0 > "$TASK_FILE"
+  RUNTIME_READY=1
 }
 
 clean_workdir() {
   for _f in "$RUNTIME_DIR"/*; do
     [ -e "$_f" ] || continue
-    case "$(basename "$_f")" in
+    case "${_f##*/}" in
       flash.pid|state|message|updated|task_id|flash.log|flash.lock) ;;
       *) rm -rf "$_f" ;;
     esac
@@ -194,7 +197,7 @@ partition_path() { echo "$BY_NAME_DIR/$1$2"; }
 
 current_pid() {
   [ -f "$PID_FILE" ] || return 1
-  pid=$(cat "$PID_FILE" | tr -d '[:space:]')
+  pid=$(tr -d '[:space:]' < "$PID_FILE")
   kill -0 "$pid" 2>/dev/null && echo "$pid" && return 0
   rm -f "$PID_FILE"
   return 1
@@ -206,14 +209,27 @@ place_efisp_tree_to() {
   cp -r "$MODDIR/efisp/." "$1/" >> "$LOG_FILE" 2>&1
 }
 
+build_patched_efi() {
+  abl="$1"
+  rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" "$RUNTIME_DIR/patch.log"
+  if ! "$MODDIR/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl" >> "$LOG_FILE" 2>&1; then
+    write_log "$TEXT_EXTRACT_FAILED"
+    return 1
+  fi
+  if ! "$MODDIR/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" > "$RUNTIME_DIR/patch.log" 2>&1; then
+    cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
+    write_log "$TEXT_PATCH_FAILED"
+    return 1
+  fi
+  cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
+  [ -s "$RUNTIME_DIR/patched.efi" ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
+}
+
 update_efisp() {
   abl=$1
   is_debug=$2
   clean_workdir
-  $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$abl" >> "$LOG_FILE" 2>&1
-  $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> "$RUNTIME_DIR/patch.log" 2>&1
-  cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"
-  [ -f $RUNTIME_DIR/patched.efi ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
+  build_patched_efi "$abl" || return 1
 
   if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
     gbl_vuln=0
@@ -235,7 +251,7 @@ update_efisp() {
   mkdir -p "$efisp_target" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
 
   if [ "$is_debug" != "yes" ] && [ -f "$efisp_target/boot.efi" ]; then
-    mv "$efisp_target/boot.efi" "$efisp_target/boot_backup.efi" >> "$LOG_FILE" 2>&1
+    mv "$efisp_target/boot.efi" "$efisp_target/boot_backup.efi" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
     write_log "$TEXT_BACKUP_BOOT"
   fi
 
@@ -243,7 +259,7 @@ update_efisp() {
     write_log "$TEXT_EFISP_WRITE_FAILED"
     return 1
   fi
-  place_efisp_tree_to "$efisp_target"
+  place_efisp_tree_to "$efisp_target" || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
   sync
   write_log "$TEXT_EFISP_FILES_OK"
 
@@ -271,10 +287,7 @@ update_efisp() {
 
 detect_gbl_vulnerability() {
   clean_workdir
-  $MODDIR/bin/extractfv -o $RUNTIME_DIR -v "$1" >> "$LOG_FILE" 2>&1
-  $MODDIR/bin/patch_abl $RUNTIME_DIR/LinuxLoader.efi $RUNTIME_DIR/patched.efi >> "$RUNTIME_DIR/patch.log" 2>&1
-  cat $RUNTIME_DIR/patch.log >> "$LOG_FILE"
-  [ -f $RUNTIME_DIR/patched.efi ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
+  build_patched_efi "$1" || return 1
   if ! grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
     write_log "$TEXT_GBL_VULN"
     return 0
@@ -323,7 +336,7 @@ update_bds_tools() {
   sync
   write_log "$TEXT_EFISP_FLASH_OK"
 
-  place_efisp_tree_to "$EFISP_DIR"
+  place_efisp_tree_to "$EFISP_DIR" || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
   sync
   write_log "$TEXT_EFISP_FILES_OK"
   return 0
@@ -358,9 +371,9 @@ exec_patch_by_args() {
   arg_super=0
   arg_vendor_boot=0
   arg_debug=0
-  echo "$arg_str" | grep -q "super=1" && arg_super=1
-  echo "$arg_str" | grep -q "vendor_boot=1" && arg_vendor_boot=1
-  echo "$arg_str" | grep -q "debug=1" && arg_debug=1
+  case ",$arg_str," in *,super=1,*) arg_super=1 ;; esac
+  case ",$arg_str," in *,vendor_boot=1,*) arg_vendor_boot=1 ;; esac
+  case ",$arg_str," in *,debug=1,*) arg_debug=1 ;; esac
 
   if [ "$arg_super" = "1" ] && [ "$arg_vendor_boot" = "1" ]; then
     write_log "$TEXT_PATCH_BOTH_ERR"
@@ -381,7 +394,7 @@ exec_patch_by_args() {
   slot_letter=$(slot_suffix_to_letter "$target_slot_suffix")
 
   _old_pwd="$PWD"
-  cd "$BINDIR"
+  cd "$BINDIR" || { write_log "$TEXT_BIN_NOT_FOUND: $BINDIR"; return 1; }
 
   if [ "$arg_vendor_boot" = "1" ]; then
     write_log "$TEXT_PATCH_VENDORBOOT_START"

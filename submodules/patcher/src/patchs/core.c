@@ -3,10 +3,10 @@
 #include <stdlib.h>
 
 int32_t patch_abl_gbl(char* buffer, int32_t size) {
-    char target[]      = { 'e',0, 'f',0, 'i',0, 's',0, 'p',0 };
-    char replacement[] = { 'n',0, 'u',0, 'l',0, 'l',0, 's',0 };
+    static const char target[]      = { 'e',0, 'f',0, 'i',0, 's',0, 'p',0 };
+    static const char replacement[] = { 'n',0, 'u',0, 'l',0, 'l',0, 's',0 };
     int32_t target_len = sizeof(target);
-    for (int32_t i = 0; i < size - target_len; ++i) {
+    for (int32_t i = 0; i <= size - target_len; ++i) {
         if (memcmp(buffer + i, target, target_len) == 0) {
             memcpy(buffer + i, replacement, target_len);
             return 0;
@@ -15,13 +15,13 @@ int32_t patch_abl_gbl(char* buffer, int32_t size) {
     return -1;
 }
 
-int16_t Original[] = {
+static const int16_t Original[] = {
     -1, 0x00, 0x00, 0x34, 0x28, 0x00, 0x80, 0x52,
     0x06, 0x00, 0x00, 0x14, 0xE8, -1, 0x40, 0xF9,
     0x08, 0x01, 0x40, 0x39, 0x1F, 0x01, 0x00, 0x71,
     0xE8, 0x07, 0x9F, 0x1A, 0x08, 0x79, 0x1F, 0x53
 };
-int16_t Patched[] = {
+static const int16_t Patched[] = {
     -1, -1, -1, -1, 0x08, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1,
