@@ -258,7 +258,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
         return 1;
     }
 
-    fprintf(stdout, "[+] 开始修补 vendor_boot%s%s\n", slot, super_mode ? " (super)" : "");
+    fprintf(stdout, "[+] 开始修补 %s%s\n", super_mode ? "super" : "vendor_boot", slot);
 
     char blk_path[128];
     ssprintf(blk_path, sizeof(blk_path), "/dev/block/by-name/vendor_boot%s", slot);
@@ -328,7 +328,7 @@ int patch_vendor_boot(int argc, char *argv[]) {
             return 1;
         }
 
-        fprintf(stdout, "[+] 修补完成: vendor_boot%s%s\n", slot, super_mode ? " (super)" : "");
+        fprintf(stdout, "[+] 修补完成: %s%s\n", super_mode ? "super" : "vendor_boot", slot);
 
         // 清理临时文件
         rm_rf("vendor_ramdisk");

@@ -610,7 +610,7 @@ run_patch() {
 start_patch() {
   ensure_runtime
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
-  nohup sh "$0" patch "$1" >/dev/null 2>&1 &
+  setsid sh "$0" patch "$1" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
     emit "STARTED=1"
@@ -623,7 +623,7 @@ start_patch() {
 start_flash() {
   ensure_runtime
   [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
-  nohup sh "$0" flash "$1" >/dev/null 2>&1 &
+  setsid sh "$0" flash "$1" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
     emit "STARTED=1"
