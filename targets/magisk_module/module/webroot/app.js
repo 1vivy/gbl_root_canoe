@@ -1,6 +1,7 @@
 import { exec as ksuExec, moduleInfo as ksuModuleInfo, toast } from "./kernelsu.js";
 
 const IMAGE_NAMES = ["abl"];
+const BOOT_MODES = new Set(["0", "1", "2"]);
 
 const state = {
   confirmStep: 0,
@@ -16,7 +17,7 @@ const state = {
   taskStarted: false,
   activeTaskId: "",
   completionNotifiedTaskId: "",
-  terminalTaskId: "",
+  activeTaskKind: "",
   lang: "zh"
 };
 
@@ -24,13 +25,21 @@ const i18n = {
   zh: {
     pageTitle: "假回锁 - BL Flasher",
     ksuWebUI: "KernelSU Module WebUI",
-    heroDesc: "自动识别当前活动槽位，若新版本存在GBL漏洞则跳过BL刷写；将BL镜像刷写到另一槽位，并将破解ABL放入persist的efisp目录、BDS刷入efisp分区",
+    heroDesc: "自动识别当前活动槽位，若新版本存在GBL漏洞则跳过BL刷写；将BL镜像刷写到另一槽位，在persist的efisp目录安装修补后的ABL与匹配profile，并将BDS刷入efisp分区",
     slotStatus: "槽位状态",
     refresh: "刷新",
     currentSlot: "当前槽位",
     targetSlot: "目标槽位",
     imageCount: "镜像数量",
     taskStatus: "任务状态",
+    preferredMode: "首选启动模式",
+    saveMode: "保存",
+    modeDefaulted: "未保存模式；当前使用默认 Mode 1",
+    modeSaved: "已保存",
+    modeUnavailable: "无法读取首选模式",
+    mode2ProfileMissing: "Mode 2 profile 缺失；请先安装有效的 boot.efi.gm2p",
+    mode2ProfileInvalid: "Mode 2 profile 无效；请重新安装匹配的 boot.efi.gm2p",
+    modeProfileToolMissing: "mode2_profile 工具缺失；请重新安装模块",
     flash: "刷写到另一槽位",
     bdsTools: "仅更新BDS和Tools",
     patchPart: "修补分区",
@@ -71,6 +80,8 @@ const i18n = {
     toastDebugDone: "调试任务运行成功",
     toastFlashDone: "刷写任务运行成功",
     toastPatchDone: "分区修补任务运行成功",
+    toastStartMode: "首选启动模式保存任务已启动",
+    toastModeDone: "首选启动模式已保存",
     toastBlDone: "BL 刷写完成，但 efisp 未更新",
     toastFailed: "任务执行失败",
     toastStartError: "任务启动失败",
@@ -98,13 +109,21 @@ const i18n = {
   en: {
     pageTitle: "Fake Lock - BL Flasher",
     ksuWebUI: "KernelSU Module WebUI",
-    heroDesc: "Auto-detect active slot. Skip BL flash if new build has GBL exploit. Flash BL images to inactive slot, place the cracked ABL in persist's efisp dir and flash the BDS to the efisp partition.",
+    heroDesc: "Auto-detect the active slot. Skip BL flashing when the new build has the GBL exploit, copy BL images to the inactive slot, install the patched ABL with its matching profile under persist/efisp, and flash BDS to efisp.",
     slotStatus: "Slot Status",
     refresh: "Refresh",
     currentSlot: "Current Slot",
     targetSlot: "Target Slot",
     imageCount: "Image Count",
     taskStatus: "Task Status",
+    preferredMode: "Preferred Boot Mode",
+    saveMode: "Save",
+    modeDefaulted: "No saved mode; currently using default Mode 1",
+    modeSaved: "Saved",
+    modeUnavailable: "Preferred mode unavailable",
+    mode2ProfileMissing: "Mode 2 profile is missing; install a valid boot.efi.gm2p first",
+    mode2ProfileInvalid: "Mode 2 profile is invalid; reinstall the matching boot.efi.gm2p",
+    modeProfileToolMissing: "mode2_profile is missing; reinstall the module",
     flash: "Flash To Other Slot",
     bdsTools: "Update BDS & Tools Only",
     patchPart: "Patch Partitions",
@@ -145,6 +164,8 @@ const i18n = {
     toastDebugDone: "Debug task succeeded",
     toastFlashDone: "Flash task succeeded",
     toastPatchDone: "Partition patch task succeeded",
+    toastStartMode: "Preferred boot mode save started",
+    toastModeDone: "Preferred boot mode saved",
     toastBlDone: "BL flashed, but efisp not updated",
     toastFailed: "Task finished (failed)",
     statusIdle: "Status: idle",
@@ -186,6 +207,10 @@ const elements = {
   patchPartButton: document.getElementById("patchPartButton"),
   clearLogButton: document.getElementById("clearLogButton"),
   refreshButton: document.getElementById("refreshButton"),
+  preferredModeSelect: document.getElementById("preferredModeSelect"),
+  saveModeButton: document.getElementById("saveModeButton"),
+  modeStatusText: document.getElementById("modeStatusText"),
+  modeControl: document.querySelector(".mode-control"),
   confirmModal: document.getElementById("confirmModal"),
   confirmText: document.getElementById("confirmText"),
   nextConfirmButton: document.getElementById("nextConfirmButton"),
@@ -210,6 +235,7 @@ function applyLanguage(lang) {
   document.querySelector("#lblTargetSlot").textContent = t.targetSlot;
   document.querySelector("#lblImageCount").textContent = t.imageCount;
   document.querySelector("#lblTaskStatus").textContent = t.taskStatus;
+  document.querySelector("#lblPreferredMode").textContent = t.preferredMode;
   document.querySelector("#lblUpdateEfisp").textContent = t.updateEfisp;
   document.querySelector("#lblDebugMode").textContent = t.debugMode;
   document.querySelector("#lblPatchVendorBoot").textContent = t.lblPatchVendorBoot;
@@ -221,7 +247,8 @@ function applyLanguage(lang) {
   document.querySelector("#tblSource").textContent = t.source;
   document.querySelector("#tblTarget").textContent = t.target;
   document.querySelector("#tblAction").textContent = t.action;
-  document.querySelector("#tblWaiting").textContent = t.waiting;
+  const waitingCell = document.querySelector("#tblWaiting");
+  if (waitingCell) waitingCell.textContent = t.waiting;
   document.querySelector("#lblLog").textContent = t.log;
   document.querySelector("#lblAutoPoll").textContent = t.autoPoll;
   document.querySelector("#modalRisk").textContent = t.risk;
@@ -258,7 +285,11 @@ async function runScript(action, arg) {
     setTimeout(() => reject(new Error("KernelSU exec timeout")), 8000);
   });
   const { errno, stdout, stderr } = await Promise.race([ksuExec(command), timeout]);
-  if (errno !== 0) throw new Error(stderr || `Command failed: ${errno}`);
+  if (errno !== 0) {
+    const error = new Error(stderr || `Command failed: ${errno}`);
+    error.commandOutput = stdout || "";
+    throw error;
+  }
   return stdout || "";
 }
 function parseKeyValueOutput(output) {
@@ -288,6 +319,55 @@ function renderTable(currentSlot, targetSlot) {
   }).join("");
 }
 
+function setControlsUnavailable(message) {
+  state.status = null;
+  closeConfirmModal();
+  elements.stateChip.textContent = i18n[state.lang].statusReadFail;
+  elements.stateChip.className = "chip chip-danger";
+  elements.taskMessage.textContent = message;
+  elements.flashButton.disabled = true;
+  elements.bdsToolsButton.disabled = true;
+  elements.patchPartButton.disabled = true;
+  elements.clearLogButton.disabled = true;
+  elements.preferredModeSelect.disabled = true;
+  elements.saveModeButton.disabled = true;
+  elements.updateEfispCheckbox.disabled = true;
+  elements.debugModeCheckbox.disabled = true;
+  elements.patchVendorBootCheckbox.disabled = true;
+  elements.patchSuperCheckbox.disabled = true;
+  elements.modeControl.setAttribute("aria-busy", "true");
+  elements.modeStatusText.textContent = i18n[state.lang].modeUnavailable;
+  elements.refreshButton.disabled = false;
+}
+function setTaskControlsBusy() {
+  elements.flashButton.disabled = true;
+  elements.bdsToolsButton.disabled = true;
+  elements.patchPartButton.disabled = true;
+  elements.clearLogButton.disabled = true;
+  elements.preferredModeSelect.disabled = true;
+  elements.saveModeButton.disabled = true;
+  elements.updateEfispCheckbox.disabled = true;
+  elements.debugModeCheckbox.disabled = true;
+  elements.patchVendorBootCheckbox.disabled = true;
+  elements.patchSuperCheckbox.disabled = true;
+  elements.modeControl.setAttribute("aria-busy", "true");
+}
+
+function renderModeStartError(error) {
+  const t = i18n[state.lang];
+  const out = parseKeyValueOutput(error.commandOutput || "");
+  const messages = {
+    MODE2_PROFILE_MISSING: t.mode2ProfileMissing,
+    MODE2_PROFILE_INVALID: t.mode2ProfileInvalid,
+    MODE_PROFILE_TOOL_MISSING: t.modeProfileToolMissing
+  };
+  const message = messages[out.ERROR_CODE] || out.ERROR || error.message;
+  elements.modeStatusText.textContent = message;
+  elements.taskMessage.textContent = message;
+  toast(message);
+}
+
+
 function renderStatus(status) {
   state.status = status;
   const t = i18n[state.lang];
@@ -315,59 +395,89 @@ function renderStatus(status) {
   else if (st === "error") elements.stateChip.classList.add("chip-danger");
   else if (st === "warning" || run) elements.stateChip.classList.add("chip-warn");
   elements.slotChip.textContent = (cur !== "-" && tar !== "-") ? `${state.lang === "zh" ? "当前" : "Current"} ${cur} → ${state.lang === "zh" ? "目标" : "Target"} ${tar}` : t.slotUnknown;
+  const preferredMode = status.PREFERRED_MODE || "";
+  const modeAvailable = BOOT_MODES.has(preferredMode);
+  if (modeAvailable) {
+    elements.preferredModeSelect.value = preferredMode;
+    const selectedLabel = elements.preferredModeSelect.selectedOptions[0].textContent;
+    elements.modeStatusText.textContent = status.MODE_DEFAULTED === "1" ? t.modeDefaulted : `${t.modeSaved}: ${selectedLabel}`;
+  } else {
+    elements.modeStatusText.textContent = t.modeUnavailable;
+  }
+  elements.modeControl.setAttribute("aria-busy", run ? "true" : "false");
   elements.flashButton.disabled = run || cur === "-" || tar === "-";
   elements.bdsToolsButton.disabled = run;
   elements.patchPartButton.disabled = run;
   elements.clearLogButton.disabled = run;
+  elements.preferredModeSelect.disabled = run || !modeAvailable;
+  elements.saveModeButton.disabled = run || !modeAvailable;
+  elements.updateEfispCheckbox.disabled = run;
+  elements.debugModeCheckbox.disabled = run;
+  elements.patchVendorBootCheckbox.disabled = run;
+  elements.patchSuperCheckbox.disabled = run;
   renderTable(cur, tar);
 }
-function notifyTaskFinished(stateStr) {
+function notifyTaskFinished(stateStr, taskKind = "") {
   const t = i18n[state.lang];
   const msg = state.status?.MESSAGE || "";
   const normalized = msg.toLowerCase();
   if (stateStr === "success") {
-    if (msg.includes("修补") || normalized.includes("patch")) toast(t.toastPatchDone);
+    if (taskKind === "mode") toast(t.toastModeDone);
+    else if (msg.includes("修补") || normalized.includes("patch")) toast(t.toastPatchDone);
     else if (msg.includes("调试") || normalized.includes("debug")) toast(t.toastDebugDone);
     else if (normalized.includes("bds")) toast(t.toastBdsToolsDone);
     else toast(t.toastFlashDone);
   } else if (stateStr === "warning") toast(t.toastBlDone);
   else if (stateStr === "error") toast(t.toastFailed);
 }
-function rememberPendingTask(taskId) {
+function rememberPendingTask(taskId, taskKind = "") {
   if (!taskId) return;
   state.taskStarted = true;
   state.activeTaskId = taskId;
-  try { localStorage.setItem("blFlasherPendingTaskId", taskId); } catch {}
+  state.activeTaskKind = taskKind;
+  try {
+    localStorage.setItem("blFlasherPendingTaskId", taskId);
+    localStorage.setItem("blFlasherPendingTaskKind", taskKind);
+  } catch {}
 }
 
 function clearPendingTask() {
   state.taskStarted = false;
   state.activeTaskId = "";
-  try { localStorage.removeItem("blFlasherPendingTaskId"); } catch {}
+  state.activeTaskKind = "";
+  try {
+    localStorage.removeItem("blFlasherPendingTaskId");
+    localStorage.removeItem("blFlasherPendingTaskKind");
+  } catch {}
 }
 
 function applyStatus(s, notify = true) {
   if (!s?.STATE) return s;
   const taskId = s.TASK_ID || "";
-  if (s.RUNNING === "1" && taskId && taskId === state.terminalTaskId) return state.status;
   renderStatus(s);
   const isRunning = s.RUNNING === "1";
   const terminalState = ["success", "warning", "error"].includes(s.STATE);
-  if (!isRunning && terminalState && state.activeTaskId && taskId === state.activeTaskId) {
+  const pendingMatches = state.activeTaskId && taskId === state.activeTaskId;
+  if (!isRunning && terminalState && pendingMatches) {
+    const finishedTaskKind = state.activeTaskKind;
     clearPendingTask();
     if (notify && taskId !== state.completionNotifiedTaskId) {
       state.completionNotifiedTaskId = taskId;
-      notifyTaskFinished(s.STATE);
+      notifyTaskFinished(s.STATE, finishedTaskKind);
     }
+    if (s.STATE === "error" && finishedTaskKind === "mode") refreshStatus(true);
+  } else if (state.activeTaskId &&
+             (taskId !== state.activeTaskId || !isRunning)) {
+    clearPendingTask();
   }
   return s;
 }
 
-async function refreshStatus() {
+async function refreshStatus(force = false) {
   try {
     const raw = await runScript("status");
-    if (!raw) return state.status;
-    if (raw === state.prevStatusRaw) return state.status;
+    if (!raw) throw new Error("empty status response");
+    if (!force && raw === state.prevStatusRaw) return state.status;
     state.prevStatusRaw = raw;
     const s = parseKeyValueOutput(raw);
     if (s.USER_LANG === "en") applyLanguage("en");
@@ -375,39 +485,12 @@ async function refreshStatus() {
     return applyStatus(s);
   } catch (e) {
     console.error("refreshStatus failed:", e);
-    return state.status;
-  }
-
-}
-
-function applyTerminalLog(log) {
-  const lines = log.split("\n").map(line => line.trim()).filter(Boolean);
-  const messages = lines.map(line => line.replace(/^\[[^\]]+\]\s*/, ""));
-  const last = lines[lines.length - 1] || "";
-  const message = messages[messages.length - 1] || "";
-  const dedicatedPatch = messages.some(item => /^(分区修补任务运行中|Partition patch task running)$/.test(item));
-  const taskCompleted = /^(分区修补任务已完成|Partition patch task completed|刷写任务已完成|Flash task completed|BDS 与 Tools 更新任务已完成|BDS and Tools update task completed|调试任务已完成|Debug task completed|已跳过BL刷写|Skipped BL flash)/.test(message);
-  const patchCompleted = dedicatedPatch && /^(vendor_boot 修补完成|super 修补完成|vendor_boot patched|super patched)$/.test(message);
-  if (!taskCompleted && !patchCompleted) return;
-  const taskId = state.activeTaskId || state.status?.TASK_ID || "";
-  const notificationKey = taskId || last;
-  const shouldNotify = state.completionNotifiedTaskId !== notificationKey;
-  if (taskId) state.terminalTaskId = taskId;
-  const timestamp = last.match(/^\[([^\]]+)\]/)?.[1] || state.status?.UPDATED_AT || "-";
-  applyStatus({
-    ...(state.status || {}),
-    RUNNING: "0",
-    PID: "",
-    STATE: "success",
-    MESSAGE: patchCompleted ? (state.lang === "zh" ? "分区修补任务已完成" : "Partition patch task completed") : message,
-    UPDATED_AT: timestamp,
-    TASK_ID: taskId
-  }, false);
-  if (shouldNotify) {
-    state.completionNotifiedTaskId = notificationKey;
-    notifyTaskFinished("success");
+    state.prevStatusRaw = "";
+    setControlsUnavailable(`${i18n[state.lang].statusReadFail}: ${e.message}`);
+    return null;
   }
 }
+
 
 async function refreshLog() {
   try {
@@ -417,7 +500,6 @@ async function refreshLog() {
     const log = raw.replace(/@NL@/g, String.fromCharCode(10));
     elements.logOutput.textContent = log || i18n[state.lang].logWaiting;
     elements.logOutput.scrollTop = elements.logOutput.scrollHeight;
-    applyTerminalLog(log);
   } catch (e) {
     elements.logOutput.textContent = `${state.lang === "zh" ? "日志读取失败" : "Log Read Failed"}: ${e.message}`;
   }
@@ -528,14 +610,14 @@ function showTaskStarting(message, taskId) {
   });
 }
 
-function handleStartResult(out, startedMessage) {
+function handleStartResult(out, startedMessage, taskKind = "") {
   const t = i18n[state.lang];
   if (out.ALREADY_RUNNING) {
     toast(t.toastRunning);
     return;
   }
   if (out.STARTED === "1" || out.FINISHED) {
-    rememberPendingTask(out.TASK_ID || "");
+    rememberPendingTask(out.TASK_ID || "", taskKind);
     if (out.STARTED === "1") {
       showTaskStarting(startedMessage, out.TASK_ID || "");
       toast(startedMessage);
@@ -553,6 +635,7 @@ async function startFlash() {
   const patchArgs = getPatchArgString();
   const fullMode = patchArgs ? `${baseMode},${patchArgs}` : baseMode;
 
+  setTaskControlsBusy();
   try {
     const out = parseKeyValueOutput(await runScript("start", fullMode));
     handleStartResult(out, dbg ? t.toastStartDebug : t.toastStartFlash);
@@ -562,6 +645,7 @@ async function startFlash() {
 
 async function startPatchPart() {
   const t = i18n[state.lang];
+  setTaskControlsBusy();
   try {
     const out = parseKeyValueOutput(await runScript("start-patch", getPatchArgString()));
     handleStartResult(out, t.toastStartPatch);
@@ -571,11 +655,31 @@ async function startPatchPart() {
 
 async function startBdsTools() {
   const t = i18n[state.lang];
+  setTaskControlsBusy();
   try {
     const out = parseKeyValueOutput(await runScript("start", "update-bds-tools"));
     handleStartResult(out, t.toastStartBdsTools);
   } catch (e) { toast(`${t.startFail}: ${e.message}`); }
   await manualRefresh();
+}
+
+async function savePreferredMode() {
+  const t = i18n[state.lang];
+  const mode = elements.preferredModeSelect.value;
+  if (!BOOT_MODES.has(mode)) {
+    toast(t.toastStartError);
+    return;
+  }
+  setTaskControlsBusy();
+  let startError = null;
+  try {
+    const out = parseKeyValueOutput(await runScript("start-mode", mode));
+    handleStartResult(out, t.toastStartMode, "mode");
+  } catch (error) {
+    startError = error;
+  }
+  await manualRefresh();
+  if (startError) renderModeStartError(startError);
 }
 
 async function clearLog() {
@@ -640,7 +744,10 @@ async function init() {
     state.moduleDir = info.moduleDir;
     state.scriptPath = `${state.moduleDir}/bin/bl_flasher.sh`;
     initPatchCheckboxMutual();
-    try { state.activeTaskId = localStorage.getItem("blFlasherPendingTaskId") || ""; } catch {}
+    try {
+      state.activeTaskId = localStorage.getItem("blFlasherPendingTaskId") || "";
+      state.activeTaskKind = localStorage.getItem("blFlasherPendingTaskKind") || "";
+    } catch {}
     state.taskStarted = Boolean(state.activeTaskId);
     await refreshStatus();
     await refreshLog();
@@ -652,12 +759,19 @@ async function init() {
     elements.bdsToolsButton.disabled = true;
     elements.patchPartButton.disabled = true;
     elements.clearLogButton.disabled = true;
+    elements.preferredModeSelect.disabled = true;
+    elements.updateEfispCheckbox.disabled = true;
+    elements.debugModeCheckbox.disabled = true;
+    elements.patchVendorBootCheckbox.disabled = true;
+    elements.patchSuperCheckbox.disabled = true;
+    elements.saveModeButton.disabled = true;
     return;
   }
 
   elements.refreshButton.addEventListener("click", manualRefresh);
   elements.flashButton.addEventListener("click", () => openConfirmModal("flash"));
   elements.bdsToolsButton.addEventListener("click", () => openConfirmModal("bds-tools"));
+  elements.saveModeButton.addEventListener("click", savePreferredMode);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) schedulePoll(null);
     else manualRefresh();

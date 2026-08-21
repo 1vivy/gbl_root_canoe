@@ -13,7 +13,7 @@
       <p class="eyebrow" id="lblKsuWebUI">KernelSU Module WebUI</p>
       <h1>BL Flasher</h1>
       <p class="hero-copy" id="heroDesc">
-        自动识别当前活动槽位，若新版本存在GBL漏洞则跳过BL刷写；将BL镜像刷写到另一槽位，并将破解ABL放入persist的efisp目录、BDS刷入efisp分区
+        自动识别当前活动槽位，若新版本存在GBL漏洞则跳过BL刷写；将BL镜像刷写到另一槽位，在persist的efisp目录安装修补后的ABL与匹配profile，并将BDS刷入efisp分区
       </p>
     </div>
     <div class="hero-meta">
@@ -54,6 +54,19 @@
         <button class="ghost-button" id="patchPartButton" type="button" data-i18n="patchPart">修补分区</button>
         <button class="ghost-button" id="clearLogButton" type="button" data-i18n="clearLog">清空日志</button>
       </div>
+
+      <fieldset class="mode-control">
+        <legend id="lblPreferredMode">首选启动模式</legend>
+        <div class="mode-actions">
+          <select id="preferredModeSelect" aria-labelledby="lblPreferredMode" aria-describedby="modeStatusText">
+            <option value="0">Mode 0 - Honest unlocked</option>
+            <option value="1">Mode 1 - ABL fake locked</option>
+            <option value="2">Mode 2 - KM/SPSS profile spoof</option>
+          </select>
+          <button class="ghost-button" id="saveModeButton" type="button" data-i18n="saveMode">保存</button>
+        </div>
+        <p class="caption mode-status" id="modeStatusText" aria-live="polite">等待读取首选模式</p>
+      </fieldset>
 
       <label class="option-check" for="updateEfispCheckbox">
         <input id="updateEfispCheckbox" type="checkbox" checked />

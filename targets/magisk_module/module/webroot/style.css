@@ -13,10 +13,20 @@
   --accent-soft: rgba(255, 122, 0, 0.18);
   --danger: #d9422b;
   --success: #25874b;
+  --control-bg: rgba(255, 255, 255, 0.62);
+  --control-border: rgba(80, 55, 34, 0.1);
+  --control-text: #2b1f17;
+  --focus-ring: rgba(255, 86, 0, 0.36);
   --shadow: 0 24px 80px rgba(31, 23, 18, 0.18);
   --radius-xl: 28px;
   --radius-lg: 22px;
   --radius-md: 16px;
+  --radius-control: 14px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --control-height: 46px;
 }
 
 * {
@@ -215,6 +225,49 @@ body::before {
   margin-top: 18px;
 }
 
+.mode-control {
+  min-inline-size: 0;
+  margin: var(--space-5) 0 0;
+  padding: var(--space-4) 0 0;
+  border: 0;
+  border-top: 1px solid var(--control-border);
+}
+
+.mode-control legend {
+  padding: 0 var(--space-2) 0 0;
+  font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+  font-weight: 700;
+}
+
+.mode-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+#preferredModeSelect {
+  width: 100%;
+  min-width: 0;
+  min-height: var(--control-height);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  background: var(--control-bg);
+  color: var(--control-text);
+  font: inherit;
+}
+
+#preferredModeSelect:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.mode-status {
+  margin: var(--space-2) 0 0;
+  line-height: 1.5;
+}
+
 .option-check {
   display: flex;
   align-items: center;
@@ -246,11 +299,17 @@ button:disabled {
   opacity: 0.52;
 }
 
+button:focus-visible,
+#preferredModeSelect:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .primary-button,
 .ghost-button {
-  min-height: 46px;
+  min-height: var(--control-height);
   padding: 0 18px;
-  border-radius: 14px;
+  border-radius: var(--radius-control);
   font-weight: 700;
 }
 
@@ -260,9 +319,9 @@ button:disabled {
 }
 
 .ghost-button {
-  color: #2b1f17;
-  background: rgba(255, 255, 255, 0.62);
-  border: 1px solid rgba(80, 55, 34, 0.1);
+  color: var(--control-text);
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
 }
 
 .warning-copy {
@@ -417,6 +476,10 @@ tbody tr:last-child td {
   }
 
   .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-actions {
     grid-template-columns: 1fr;
   }
 
