@@ -4,6 +4,7 @@
 
 #include "patchs/core.h"
 #include "patchs/libavb_force_success.h"
+#include "patchs/oplus/forceenablefastboot.h"
 
 #include <assert.h>
 #include <stdbool.h>
@@ -39,7 +40,7 @@ static const uint8_t Anchor[] =
 static const uint8_t Efisp[] = {'e', 0, 'f', 0, 'i', 0, 's', 0, 'p', 0};
 static const uint8_t Nulls[] = {'n', 0, 'u', 0, 'l', 0, 'l', 0, 's', 0};
 
-/* These are deliberately embedded in the same valid PE fixture as patch10.
+/* These are deliberately embedded in the same valid PE fixture as the libavb force.
  * They model every retired family from the old pipeline and act as mutation
  * sentinels: none is an allowed patch target anymore. */
 /* Retired ADRL unlock-to-lock: ADRP+ADD triples plus their strings. */
@@ -210,12 +211,12 @@ static void MakeManySectionsFixture(
 }
 
 static void TestExactPatchWords(void) {
-    // Given: one bounded executable xref to one patch10 anchor.
+    // Given: one bounded executable xref to one libavb anchor.
     uint8_t Image[IMAGE_SIZE];
     MakeFixture(Image, true);
 
-    // When: mandatory patch10 is applied.
-    assert(patch_libavb_force_success((char *)Image, IMAGE_SIZE) == PATCH10_SUCCESS);
+    // When: the mandatory libavb force is applied.
+    assert(patch_libavb_force_success((char *)Image, IMAGE_SIZE) == LIBAVB_FORCE_SUCCESS);
 
     // Then: only the two selected instructions carry the exact donor words.
     assert(ReadU32(Image + CODE_OFFSET + 4) == 0x32000065);
@@ -234,7 +235,7 @@ static void TestBackscanCrossesEarlierRet(void) {
     WriteU32(Image + CODE_OFFSET + 24, 0xd503201f);
 
     assert(patch_libavb_force_success((char *)Image, IMAGE_SIZE) ==
-           PATCH10_SUCCESS);
+           LIBAVB_FORCE_SUCCESS);
     assert(ReadU32(Image + CODE_OFFSET + 4) == 0x32000065);
     assert(ReadU32(Image + CODE_OFFSET + 8) == 0x52800000);
 }
@@ -256,7 +257,7 @@ static void TestWzrDestinationIsRejected(void) {
     WriteU32(Image + CODE_OFFSET + 24, 0xd65f03c0);
 
     assert(patch_libavb_force_success((char *)Image, IMAGE_SIZE) ==
-           PATCH10_SUCCESS);
+           LIBAVB_FORCE_SUCCESS);
 
     // Then: WZR is untouched and the real destination register was patched.
     assert(ReadU32(Image + CODE_OFFSET + 4) == 0x2a0303ff);
@@ -265,14 +266,14 @@ static void TestWzrDestinationIsRejected(void) {
 }
 
 static void AssertFailureLeavesImageUnchanged(uint8_t Image[IMAGE_SIZE],
-                                              PATCH10_RESULT Expected,
+                                              LIBAVB_FORCE_RESULT Expected,
                                               const char *Case) {
     uint8_t Before[IMAGE_SIZE];
-    PATCH10_RESULT Actual;
+    LIBAVB_FORCE_RESULT Actual;
     memcpy(Before, Image, IMAGE_SIZE);
     Actual = patch_libavb_force_success((char *)Image, IMAGE_SIZE);
     if (Actual != Expected) {
-        fprintf(stderr, "%s: expected patch10 result %d, got %d\n",
+        fprintf(stderr, "%s: expected libavb force result %d, got %d\n",
                 Case, Expected, Actual);
     }
     assert(Actual == Expected);
@@ -284,55 +285,55 @@ static void TestFailedPreflightsAreAtomic(void) {
 
     // Given/When/Then: a non-executable reference is rejected without writes.
     MakeFixture(Image, false);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "non-executable");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "non-executable");
 
     // A 32-bit ADD cannot form the required ADRP+ADD address reference.
     MakeFixture(Image, true);
     WriteU32(Image + CODE_OFFSET + 12, 0x11100000);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "32-bit ADD");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "32-bit ADD");
 
     // A shifted ADD resolves a different address and must not be misdecoded.
     MakeFixture(Image, true);
     WriteU32(Image + CODE_OFFSET + 12, 0x91500000);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "shifted ADD");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "shifted ADD");
 
     // The two mandatory writes may not target the same MOV W0,W3 instruction.
     MakeFixture(Image, true);
     WriteU32(Image + CODE_OFFSET + 4, 0x2a0303e0);
     WriteU32(Image + CODE_OFFSET + 16, 0xd503201f);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "overlapping MOV");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "overlapping MOV");
 
     // A unique anchor outside every mapped section is still a hard failure.
     MakeFixture(Image, true);
     WriteU32(Image + 0x188 + 16, 0x300);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "unmapped anchor");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "unmapped anchor");
 
     // Executable section bytes may not overlap the PE headers/section table.
     MakeFixture(Image, true);
     WriteU32(Image + 0x188 + 20, 0x180);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "header overlap");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "header overlap");
 
-    // A missing anchor is atomic at the patch10 boundary, not only in PatchBuffer.
+    // A missing anchor is atomic at the libavb force boundary, not only in PatchBuffer.
     MakeFixture(Image, true);
     memset(Image + ANCHOR_OFFSET, 0, sizeof(Anchor) - 1);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "missing anchor");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "missing anchor");
 
     // Given/When/Then: a duplicate executable reference is ambiguous and atomic.
     MakeFixture(Image, true);
     WriteU32(Image + CODE_OFFSET + 0x40, 0x90000001);
     WriteU32(Image + CODE_OFFSET + 0x44, 0x91100021);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_AMBIGUOUS, "duplicate xref");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_AMBIGUOUS, "duplicate xref");
 
     // Given/When/Then: duplicate anchors are ambiguous and atomic.
     MakeFixture(Image, true);
     memcpy(Image + ANCHOR_OFFSET + 0x80, Anchor, sizeof(Anchor) - 1);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_AMBIGUOUS, "duplicate anchor");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_AMBIGUOUS, "duplicate anchor");
 
     // The MOV-from-W3 must be in the same function before its first RET.
     MakeFixture(Image, true);
     WriteU32(Image + CODE_OFFSET + 4, 0xd503201f);
     WriteU32(Image + CODE_OFFSET + 24, 0x2a0303e5);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE,
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE,
                                      "MOV after function RET");
 
 
@@ -341,18 +342,18 @@ static void TestFailedPreflightsAreAtomic(void) {
     WriteU32(Image + CODE_OFFSET + 20, 0xd503201f);
     WriteU32(Image + CODE_OFFSET + 24, 0xd503233f);
     WriteU32(Image + CODE_OFFSET + 28, 0xd65f03c0);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE,
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE,
                                      "RET across next PACIASP");
 
     // A non-AArch64 PE must not be treated as an ARM64 instruction image.
     MakeFixture(Image, true);
     WriteU16(Image + 0x84, 0x8664);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "wrong PE machine");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "wrong PE machine");
 
-    // ARM64 PE32 is rejected; patch10 only accepts PE32+ images.
+    // ARM64 PE32 is rejected; the libavb force only accepts PE32+ images.
     MakeFixture(Image, true);
     WriteU16(Image + 0x98, 0x10b);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "PE32 image");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "PE32 image");
 
     // Section-count rejection happens before the quadratic overlap checks.
     {
@@ -362,19 +363,19 @@ static void TestFailedPreflightsAreAtomic(void) {
         memcpy(Before, ManySections, sizeof(Before));
         assert(patch_libavb_force_success(
                    (char *)ManySections, MANY_SECTIONS_IMAGE_SIZE) ==
-               PATCH10_FAILURE);
+               LIBAVB_FORCE_FAILURE);
         assert(memcmp(ManySections, Before, sizeof(ManySections)) == 0);
     }
 
     // A magic-only optional header is truncated even if a section table follows.
     MakeFixture(Image, true);
     WriteU16(Image + 0x94, 2);
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE,
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE,
                                      "truncated optional header");
 
     // Given/When/Then: malformed PE input is rejected without writes.
     memset(Image, 0xa5, sizeof(Image));
-    AssertFailureLeavesImageUnchanged(Image, PATCH10_FAILURE, "malformed PE");
+    AssertFailureLeavesImageUnchanged(Image, LIBAVB_FORCE_FAILURE, "malformed PE");
 }
 
 static void TestPipelineKeepsOnlySelectedPatches(void) {
@@ -391,19 +392,19 @@ static void TestPipelineKeepsOnlySelectedPatches(void) {
     // When: the package-facing PatchBuffer pipeline runs.
     assert(PatchBuffer((char *)Image, IMAGE_SIZE));
 
-    // Then: efisp is first-match only, patch10 is mandatory, and retired bytes stay exact.
+    // Then: efisp is first-match only, the libavb force is mandatory, and retired bytes stay exact.
     assert(memcmp(Image + 0x680, Nulls, sizeof(Nulls)) == 0);
     assert(memcmp(Image + 0x6a0, Efisp, sizeof(Efisp)) == 0);
     assert(ReadU32(Image + CODE_OFFSET + 4) == 0x32000065);
     assert(ReadU32(Image + CODE_OFFSET + 16) == 0x52800000);
     AssertRetiredSignaturesUnchanged(Before, Image);
 
-    // Given/When/Then: missing efisp stays nonfatal when mandatory patch10 succeeds.
+    // Given/When/Then: missing efisp stays nonfatal when the mandatory libavb force succeeds.
     MakeFixture(Image, true);
     assert(PatchBuffer((char *)Image, IMAGE_SIZE));
 
 
-    // Given/When/Then: missing patch10 is a hard, whole-pipeline atomic failure.
+    // Given/When/Then: a missing libavb force is a hard, whole-pipeline atomic failure.
     MakeFixture(Image, true);
     memcpy(Image + 0x680, Efisp, sizeof(Efisp));
     memset(Image + ANCHOR_OFFSET, 0, sizeof(Anchor) - 1);
@@ -496,6 +497,54 @@ static void TestAtomicWriterCandidates(void) {
     }
 }
 
+/*
+ * The Oplus force-enable-fastboot patch is restored, so it needs its own
+ * coverage: the retired-signature sentinels above deliberately do NOT form a
+ * valid target, and a patch that silently never matches is indistinguishable
+ * from one that is missing.
+ *
+ * Real shape, as observed on a stock ABL: a CBZ whose following ADRP+ADD pair
+ * resolves to "fastboot_unlock_verify error and reboot.". The patch turns the
+ * conditional branch into an unconditional one.
+ */
+#define OPLUS_BUFFER_SIZE 0x400
+#define OPLUS_BRANCH_OFFSET 0x100
+#define OPLUS_STRING_OFFSET 0x200
+
+static void MakeFastbootFixture(uint8_t Buffer[OPLUS_BUFFER_SIZE],
+                                bool WithString) {
+    memset(Buffer, 0, OPLUS_BUFFER_SIZE);
+    /* CBZ W8, #+4 */
+    WriteU32(Buffer + OPLUS_BRANCH_OFFSET, 0x34000028);
+    /* ADRP X0, page 0 ; ADD X0, X0, #OPLUS_STRING_OFFSET. The whole fixture
+     * lives in page 0, so the pair resolves straight to the string offset. */
+    WriteU32(Buffer + OPLUS_BRANCH_OFFSET + 4, 0x90000000);
+    WriteU32(Buffer + OPLUS_BRANCH_OFFSET + 8,
+             0x91000000u | ((uint32_t)OPLUS_STRING_OFFSET << 10));
+    if (WithString) {
+        memcpy(Buffer + OPLUS_STRING_OFFSET, RetiredFastbootString,
+               sizeof(RetiredFastbootString) - 1);
+    }
+}
+
+static void TestOplusFastbootPatch(void) {
+    uint8_t Buffer[OPLUS_BUFFER_SIZE];
+    uint8_t Before[OPLUS_BUFFER_SIZE];
+
+    // Given a real branch-plus-string shape, the conditional branch is rewritten.
+    MakeFastbootFixture(Buffer, true);
+    assert(patch_fastboot((char *)Buffer, OPLUS_BUFFER_SIZE, -1));
+    assert((ReadU32(Buffer + OPLUS_BRANCH_OFFSET) & 0xfc000000u) == 0x14000000u);
+    // The address pair it was matched by is left alone.
+    assert(ReadU32(Buffer + OPLUS_BRANCH_OFFSET + 4) == 0x90000000);
+
+    // Without the string there is no proof of the site, so nothing is touched.
+    MakeFastbootFixture(Buffer, false);
+    memcpy(Before, Buffer, sizeof(Before));
+    assert(!patch_fastboot((char *)Buffer, OPLUS_BUFFER_SIZE, -1));
+    assert(memcmp(Buffer, Before, sizeof(Before)) == 0);
+}
+
 int main(void) {
     TestExactPatchWords();
     TestBackscanCrossesEarlierRet();
@@ -503,6 +552,7 @@ int main(void) {
     TestFailedPreflightsAreAtomic();
     TestPipelineKeepsOnlySelectedPatches();
     TestAtomicWriterCandidates();
+    TestOplusFastbootPatch();
     puts("patcher host tests passed");
     return 0;
 }
