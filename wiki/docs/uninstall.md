@@ -6,9 +6,9 @@
 Before performing any uninstall operation, make sure to **fully back up all important data** to prevent data loss.
 
 
-## 2. True Re-lock Requirement
+## 2. Hardware Re-lock Requirement
 
-If the device is in **true re-lock mode**, the bootloader **must be unlocked first** before proceeding:
+If the bootloader has been **hardware re-locked** (a real `fastboot flashing lock` — not a BDS boot mode), it **must be unlocked first** before proceeding:
 
 | Device | Unlock Method |
 |--------|---------------|

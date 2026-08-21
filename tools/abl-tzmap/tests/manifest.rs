@@ -4,11 +4,12 @@ fn sample_bytes() -> [u8; TZMAP_SIZE] {
     let mut bytes = [0u8; TZMAP_SIZE];
     bytes[0..4].copy_from_slice(b"GTZM");
     bytes[4..6].copy_from_slice(&1u16.to_le_bytes());
-    bytes[6..8].copy_from_slice(&2u16.to_le_bytes());
+    bytes[6..8].copy_from_slice(&3u16.to_le_bytes());
     bytes[8..12].copy_from_slice(&TZMAP_FLAG_ALL.to_le_bytes());
     bytes[16..48].fill(0x11);
     write_command(&mut bytes, 0, 0x201, 44, Semantic::SetRot, 2);
     write_command(&mut bytes, 1, 0x208, 64, Semantic::SetBootstate, 1);
+    write_command(&mut bytes, 2, 0x219, 0, Semantic::GenerateFrsUds, 1);
     bytes
 }
 
@@ -26,6 +27,7 @@ fn sample_map() -> TzMap {
         commands: vec![
             CommandRecord { command: 0x201, request_bytes: 44, semantic: Semantic::SetRot, occurrences: 2 },
             CommandRecord { command: 0x208, request_bytes: 64, semantic: Semantic::SetBootstate, occurrences: 1 },
+            CommandRecord { command: 0x219, request_bytes: 0, semantic: Semantic::GenerateFrsUds, occurrences: 1 },
         ],
     }
 }
@@ -72,8 +74,8 @@ fn rejects_count_semantic_and_command_reserved_fields() {
     count[6..8].copy_from_slice(&17u16.to_le_bytes());
     assert!(matches!(TzMap::decode(&count), Err(ManifestError::CommandCount { actual: 17 })));
     let mut semantic = sample_bytes();
-    semantic[52] = 9;
-    assert!(matches!(TzMap::decode(&semantic), Err(ManifestError::UnknownSemantic { index: 0, actual: 9 })));
+    semantic[52] = 10;
+    assert!(matches!(TzMap::decode(&semantic), Err(ManifestError::UnknownSemantic { index: 0, actual: 10 })));
     let mut reserved = sample_bytes();
     reserved[54] = 1;
     assert!(matches!(TzMap::decode(&reserved), Err(ManifestError::CommandReserved { index: 0, .. })));
@@ -98,7 +100,9 @@ fn rejects_nonzero_reserved1_and_tail_slots() {
     let mut reserved = sample_bytes();
     reserved[176] = 1;
     assert!(matches!(TzMap::decode(&reserved), Err(ManifestError::Reserved1 { offset: 176, .. })));
+    // The golden vector now carries three commands, so slot 2 at offset 64 is a real
+    // record. The first genuinely unused tail slot is index 3 at offset 48 + 3 * 8.
     let mut tail = sample_bytes();
-    tail[64] = 1;
-    assert!(matches!(TzMap::decode(&tail), Err(ManifestError::NonZeroTail { index: 2, offset: 64, .. })));
+    tail[72] = 1;
+    assert!(matches!(TzMap::decode(&tail), Err(ManifestError::NonZeroTail { index: 3, offset: 72, .. })));
 }

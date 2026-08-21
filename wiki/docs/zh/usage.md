@@ -3,10 +3,11 @@
 
 ## 启动相关
 
-- 使用临时启动 EFI 文件（无需刷入）：
+- 将 BDS 临时启动到内存（不会写入闪存）：
 
   ```bash
-  fastboot boot xxx.efi
+  fastboot stage <BDS.efi>
+  fastboot oem boot-efi
   ```
 
 
@@ -66,4 +67,5 @@
 
 ## 注意事项
 
-- 开启 OEM 解锁且开机出现小白字时，**必须按音量减（Volume Down）键才能进入 Superfastboot 模式。**
+- ⚠️ **验证状态：** 主机端构建与测试夹具已通过验证。实机验证范围仅包括一加 Ace 6T（CPH2767，`macan`），运行 OxygenOS `CPH2767_16.0.9.401(EX01)`，通过仅驻留内存的 staged-BDS 路径完成；已确认 sidecar 加载、钩子武装、KeyMaster 重写和 SCM 丢弃。其他设备以及永久安装尚未验证。
+- 开启 OEM 解锁且开机出现小白字时，**必须按音量加（Volume Up）键才能进入 Superfastboot 模式。**

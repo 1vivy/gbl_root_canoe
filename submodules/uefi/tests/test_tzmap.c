@@ -180,8 +180,17 @@ TestRejections (void)
     WriteU16(Bytes + 6, 17);
     ExpectRejected(Bytes, SFB_TZMAP_BYTES);
 
+    /* Semantic 9 is the highest accepted value; the parser stores it verbatim.
+     * Firmware still resolves the acted-on semantic via SfbTzMapSemantic. */
     MakeValid(Bytes);
     Bytes[52] = 9;
+    {
+        SFB_TZ_MAP Map;
+        assert(SfbTzMapParse(Bytes, SFB_TZMAP_BYTES, &Map));
+        assert(Map.Commands[0].Semantic == SFB_TZ_SEMANTIC_GENERATE_FRS_UDS);
+    }
+    MakeValid(Bytes);
+    Bytes[52] = 10;
     ExpectRejected(Bytes, SFB_TZMAP_BYTES);
     MakeValid(Bytes);
     WriteU16(Bytes + 54, 1);
@@ -229,16 +238,18 @@ static void
 TestBuiltinDefault (void)
 {
     static const uint16_t Commands[] = {
-        0x200, 0x201, 0x202, 0x203, 0x207, 0x208, 0x211
+        0x200, 0x201, 0x202, 0x203, 0x204, 0x207, 0x208, 0x211, 0x219
     };
     static const uint8_t Semantics[] = {
         SFB_TZ_SEMANTIC_GET_VERSION,
         SFB_TZ_SEMANTIC_SET_ROT,
         SFB_TZ_SEMANTIC_READ_DEVICE_STATE,
         SFB_TZ_SEMANTIC_WRITE_DEVICE_STATE,
+        SFB_TZ_SEMANTIC_MILESTONE,
         SFB_TZ_SEMANTIC_SET_VERSION,
         SFB_TZ_SEMANTIC_SET_BOOTSTATE,
-        SFB_TZ_SEMANTIC_SET_VBH
+        SFB_TZ_SEMANTIC_SET_VBH,
+        SFB_TZ_SEMANTIC_GENERATE_FRS_UDS
     };
     SFB_TZ_MAP Map;
     SFB_TZ_MAP Again;
@@ -249,22 +260,32 @@ TestBuiltinDefault (void)
     assert(memcmp(Map.Magic, "GTZM", 4) == 0);
     assert(Map.Version == SFB_TZMAP_VERSION);
     assert(Map.Flags == SFB_TZMAP_FLAG_ALL);
-    assert(Map.CommandCount == 7);
-    for (Index = 0; Index < 7; ++Index) {
+    assert(Map.CommandCount == 9);
+    for (Index = 0; Index < 9; ++Index) {
         assert(Map.Commands[Index].Command == Commands[Index]);
         assert(Map.Commands[Index].Semantic == Semantics[Index]);
         assert(Map.Commands[Index].Occurrences == 0);
         assert(Map.Commands[Index].Reserved == 0);
+        if (Index != 0) {
+            assert(Map.Commands[Index - 1].Command < Map.Commands[Index].Command);
+        }
     }
     assert(Map.Commands[0].RequestBytes == 0);
     assert(Map.Commands[1].RequestBytes == 44);
     assert(Map.Commands[2].RequestBytes == 0);
     assert(Map.Commands[3].RequestBytes == 0);
-    assert(Map.Commands[4].RequestBytes == 12);
-    assert(Map.Commands[5].RequestBytes == 64);
-    assert(Map.Commands[6].RequestBytes == 36);
-    assert(SfbTzMapFind(&Map, 0x202u)->Semantic ==
-           SFB_TZ_SEMANTIC_READ_DEVICE_STATE);
+    assert(Map.Commands[4].RequestBytes == 0);
+    assert(Map.Commands[5].RequestBytes == 12);
+    assert(Map.Commands[6].RequestBytes == 64);
+    assert(Map.Commands[7].RequestBytes == 36);
+    assert(Map.Commands[8].RequestBytes == 0);
+    assert(SfbTzMapFind(&Map, 0x204u)->Semantic ==
+           SFB_TZ_SEMANTIC_MILESTONE);
+    assert(SfbTzMapFind(&Map, 0x219u)->Semantic ==
+           SFB_TZ_SEMANTIC_GENERATE_FRS_UDS);
+    assert(SfbTzMapSemantic(&Map, 0x204u) == SFB_TZ_SEMANTIC_MILESTONE);
+    assert(SfbTzMapSemantic(&Map, 0x219u) ==
+           SFB_TZ_SEMANTIC_GENERATE_FRS_UDS);
 
     SerializeMap(Bytes, &Map);
     assert(SfbTzMapParse(Bytes, SFB_TZMAP_BYTES, &Again));

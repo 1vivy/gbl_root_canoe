@@ -1,11 +1,17 @@
 # Xiaomi & OnePlus System Update Security Warning
 
+> ⚠️ **Validation status:** Host builds and test fixtures are validated. On-device validation is scoped to a OnePlus Ace 6T (CPH2767, `macan`) running OxygenOS `CPH2767_16.0.9.401(EX01)`, using the RAM-only staged-BDS path; sidecar loading, hook arming, KeyMaster rewrites, and SCM drops were confirmed. No other device and no permanent installation have been validated.
+
+## Universal SCM safeguards (all modes)
+
+All modes (0/1/2) best-effort suppress the TrustZone fuse and anti-rollback SCM requests during launch and OTA refresh. This prevents **further advancement only**: it cannot un-blow an already-blown fuse or lower an already-raised rollback floor. If the SCM protocol is absent, launch continues and the `hooks-armed ... scm=0` marker records that the safeguard was unavailable.
+
 ## Xiaomi
 
 Currently, Xiaomi fixed the GBL vulnerability in version **300**, but as of version **306**, XBL retains the ability to boot an old version of abl to indirectly load EFISP.
 
 **OTA method：**
-The OTA module (in release) flashes an old abl version once before reboot. As long as the abl's anti-rollback version remains unchanged, it can theoretically be used continuously.
+Nothing is flashed automatically. After an OTA package is installed — and before rebooting — open the module WebUI (or use the manual toolkit flow) to explicitly refresh the patched ABL/profile/map set and `BDS.efi`. Regenerate `boot.efi.gm2p` from the matching stock vbmeta and the optional `boot.efi.tzmap` from the unpatched ABL. Continued booting depends on the new build's abl anti-rollback version remaining unchanged.
 
 **⚠️ Critical risk：**
 If the abl avb version changes, this method will cause a **hard brick**.
@@ -63,4 +69,4 @@ for img in os.listdir(img_dir):
 
 ## About the module
 
-The module is only in Chinese. The author is too lazy to add multiple languages, sorry. International users can use screen translation features.
+The module installer and WebUI support both Chinese and English.

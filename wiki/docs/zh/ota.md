@@ -1,11 +1,17 @@
 # 小米与一加系统更新安全警告
 
+> ⚠️ **验证状态：** 主机端构建与测试夹具已通过验证。实机验证范围仅包括一加 Ace 6T（CPH2767，`macan`），运行 OxygenOS `CPH2767_16.0.9.401(EX01)`，通过仅驻留内存的 staged-BDS 路径完成；已确认 sidecar 加载、钩子武装、KeyMaster 重写和 SCM 丢弃。其他设备以及永久安装尚未验证。
+
+## 通用 SCM 保护（所有模式）
+
+Mode 0/1/2 在启动和 OTA 刷新期间都会尽力抑制 TrustZone 熔断和 anti-rollback SCM 请求，但这只能阻止**进一步推进**：无法让已经熔断的 fuse 复原，也无法降低已经升高的 rollback floor。如果 SCM 协议不存在，启动仍会继续，并通过 `hooks-armed ... scm=0` 标记记录保护不可用。
+
 ## 小米
 
 目前小米在 **300** 修复了 GBL 漏洞，但是截止 **306**，XBL 都有启动旧版 abl 来间接加载 EFISP 的能力。
 
 **OTA 方式：**
-OTA 模块（release 里）在重启前使用模块刷写一次旧版本 abl，只要 abl 的 anti-rollback 版本不变，理论上可以一直使用。
+模块不会自动刷写任何内容。OTA 包安装完成后、重启之前，需打开模块 WebUI（或使用手动工具包流程）显式刷新修补后的 ABL/profile/map 文件对与 `BDS.efi`。从匹配的原厂 vbmeta 重新生成 `boot.efi.gm2p`，并从未修补 ABL 重新生成可选的 `boot.efi.tzmap`。能否继续正常启动取决于新版本的 abl anti-rollback 版本是否保持不变。
 
 **⚠️ 严重风险：**
 一旦 abl avb 版本变化，该方法会**黑砖**。
@@ -63,4 +69,4 @@ for img in os.listdir(img_dir):
 
 ## 关于模块
 
-模块只有中文，作者懒得搞多语言了，见谅。国外用户可以使用屏幕翻译功能。
+模块安装脚本与 WebUI 均支持中文和英文。
