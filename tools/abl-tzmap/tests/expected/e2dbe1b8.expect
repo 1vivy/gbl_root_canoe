@@ -1,0 +1,10 @@
+sha256=e2dbe1b88f28751b762249986fe6b51cb3e3be53257f0dd2d62f12fdb9015497
+flags=0x0000003b
+command=0x200 size=4 semantic=get_version occurrences=1
+command=0x201 size=44 semantic=set_rot occurrences=1
+command=0x202 size=0 semantic=read_device_state occurrences=0
+command=0x203 size=0 semantic=write_device_state occurrences=0
+command=0x207 size=0 semantic=set_version occurrences=0
+command=0x208 size=64 semantic=set_bootstate occurrences=1
+command=0x211 size=36 semantic=set_vbh occurrences=1
+command=0x219 size=44 semantic=unknown occurrences=1

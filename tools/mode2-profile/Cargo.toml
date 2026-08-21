@@ -1,0 +1,23 @@
+[package]
+name = "mode2_profile"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "GM2P profile derivation and preferred boot-mode store utility"
+
+[lib]
+name = "mode2_profile"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mode2_profile"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"
