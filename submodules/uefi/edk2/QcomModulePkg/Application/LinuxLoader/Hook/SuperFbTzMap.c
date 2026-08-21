@@ -204,12 +204,14 @@ SfbTzMapBuiltinDefault (
   Map->Magic[3] = 'M';
   Map->Version = SFB_TZMAP_VERSION;
   Map->Flags = SFB_TZMAP_FLAG_ALL;
-  Map->CommandCount = 7;
+  Map->CommandCount = 9;
   SfbTzMapSetCommand (Map, 0, 0x200u, 0, SFB_TZ_SEMANTIC_GET_VERSION);
   SfbTzMapSetCommand (Map, 1, 0x201u, SFB_KM_SET_ROT_BYTES, SFB_TZ_SEMANTIC_SET_ROT);
   SfbTzMapSetCommand (Map, 2, 0x202u, 0, SFB_TZ_SEMANTIC_READ_DEVICE_STATE);
   SfbTzMapSetCommand (Map, 3, 0x203u, 0, SFB_TZ_SEMANTIC_WRITE_DEVICE_STATE);
-  SfbTzMapSetCommand (Map, 4, 0x207u, SFB_KM_SET_VERSION_BYTES, SFB_TZ_SEMANTIC_SET_VERSION);
-  SfbTzMapSetCommand (Map, 5, 0x208u, SFB_KM_SET_BOOTSTATE_BYTES, SFB_TZ_SEMANTIC_SET_BOOTSTATE);
-  SfbTzMapSetCommand (Map, 6, 0x211u, SFB_KM_SET_VBH_BYTES, SFB_TZ_SEMANTIC_SET_VBH);
+  SfbTzMapSetCommand (Map, 4, 0x204u, 0, SFB_TZ_SEMANTIC_MILESTONE);
+  SfbTzMapSetCommand (Map, 5, 0x207u, SFB_KM_SET_VERSION_BYTES, SFB_TZ_SEMANTIC_SET_VERSION);
+  SfbTzMapSetCommand (Map, 6, 0x208u, SFB_KM_SET_BOOTSTATE_BYTES, SFB_TZ_SEMANTIC_SET_BOOTSTATE);
+  SfbTzMapSetCommand (Map, 7, 0x211u, SFB_KM_SET_VBH_BYTES, SFB_TZ_SEMANTIC_SET_VBH);
+  SfbTzMapSetCommand (Map, 8, 0x219u, 0, SFB_TZ_SEMANTIC_GENERATE_FRS_UDS);
 }

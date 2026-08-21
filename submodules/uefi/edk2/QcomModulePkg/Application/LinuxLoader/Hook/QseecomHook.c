@@ -141,6 +141,10 @@ SfbKeymasterAction (
   case SFB_TZ_SEMANTIC_READ_DEVICE_STATE:
     return Mode == SfbBootModeAblFakeLocked ? SfbKeymasterProject
                                             : SfbKeymasterPass;
+  case SFB_TZ_SEMANTIC_GET_VERSION:
+  case SFB_TZ_SEMANTIC_MILESTONE:
+  case SFB_TZ_SEMANTIC_GENERATE_FRS_UDS:
+    return SfbKeymasterPass;
   default:
     return SfbKeymasterPass;
   }
@@ -442,8 +446,8 @@ HookedQseecomSendCmd (
   }
 
   /* Two distinct states, deliberately not conflated: a command the ABL scan
-   * never recorded is a gap worth a warning, while a recorded command with no
-   * assigned semantic is enumerated evidence that simply passes through. */
+   * never recorded is a gap worth a warning, while an enumerated pass-through
+   * command is evidence that simply passes through. */
   if (SfbIsKeymasterHandle (Handle) && Command >= 0x200u &&
       Command <= 0x2FFu && Command != 0x09u) {
     if (TzCommand == NULL) {
@@ -455,13 +459,15 @@ HookedQseecomSendCmd (
                 "(further warnings suppressed)\n",
                 Command));
       }
-    } else if (Semantic == SFB_TZ_SEMANTIC_UNKNOWN &&
+    } else if ((Semantic == SFB_TZ_SEMANTIC_UNKNOWN ||
+                Semantic == SFB_TZ_SEMANTIC_MILESTONE ||
+                Semantic == SFB_TZ_SEMANTIC_GENERATE_FRS_UDS) &&
                !gUnclassifiedCommandLogged) {
       gUnclassifiedCommandLogged = TRUE;
       DEBUG ((EFI_D_INFO,
-              "SFB: MARK keymaster-passthrough command=0x%03x enumerated=1 "
-              "semantic=unknown (further notices suppressed)\n",
-              Command));
+              "SFB: MARK keymaster-passthrough command=0x%03x "
+              "enumerated=1 semantic=%u (further notices suppressed)\n",
+              Command, (UINT32)Semantic));
     }
   }
 

@@ -23,6 +23,7 @@ pub enum Semantic {
     WriteDeviceState = 6,
     GetVersion = 7,
     Milestone = 8,
+    GenerateFrsUds = 9,
 }
 
 impl Semantic {
@@ -37,6 +38,7 @@ impl Semantic {
             6 => Some(Self::WriteDeviceState),
             7 => Some(Self::GetVersion),
             8 => Some(Self::Milestone),
+            9 => Some(Self::GenerateFrsUds),
             _ => None,
         }
     }
@@ -52,6 +54,7 @@ impl Semantic {
             Self::WriteDeviceState => 6,
             Self::GetVersion => 7,
             Self::Milestone => 8,
+            Self::GenerateFrsUds => 9,
         }
     }
     #[must_use]
@@ -66,6 +69,7 @@ impl Semantic {
             Self::WriteDeviceState => "write_device_state",
             Self::GetVersion => "get_version",
             Self::Milestone => "milestone",
+            Self::GenerateFrsUds => "generate_frs_uds",
         }
     }
     /// Inverse of [`Self::token`], so evidence tables and tool output share one
@@ -82,6 +86,7 @@ impl Semantic {
             "write_device_state" => Some(Self::WriteDeviceState),
             "get_version" => Some(Self::GetVersion),
             "milestone" => Some(Self::Milestone),
+            "generate_frs_uds" => Some(Self::GenerateFrsUds),
             _ => None,
         }
     }

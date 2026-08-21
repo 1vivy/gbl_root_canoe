@@ -1025,7 +1025,7 @@ TestManifestDrivenKeymasterPolicy(void)
   SfbDisarmManagedAblHooks();
   InstalledMap = SfbHooksTzMap();
   assert(InstalledMap->Flags == SFB_TZMAP_FLAG_ALL);
-  assert(InstalledMap->CommandCount == 7);
+  assert(InstalledMap->CommandCount == 9);
   assert(SfbTzMapFind(InstalledMap, 0x202u) != NULL);
 
   MakeValidStoredInfo(TRUE, TRUE);
@@ -1066,11 +1066,11 @@ TestManifestDrivenKeymasterPolicy(void)
   assert(mUnknownCommandWarningCount == 1);
   assert(mPassthroughMarkerCount == 0);
 
-  /* A command the scan DID record but left semantically unknown is enumerated
-   * evidence, so it passes through with an informational marker and must not be
-   * reported as absent from the scan. This is the real 0x219 case on macan. */
+  /* The newly classified factory-reset/UDS command is enumerated evidence,
+   * so it passes through with an informational marker and is not reported as
+   * absent from the scan. */
   SfbDisarmManagedAblHooks();
-  Map = MakeSingleTzMap(0x219u, 44, SFB_TZ_SEMANTIC_UNKNOWN);
+  Map = MakeSingleTzMap(0x219u, 44, SFB_TZ_SEMANTIC_GENERATE_FRS_UDS);
   assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map) ==
          EFI_SUCCESS);
   mNextHandle = 72;
@@ -1094,6 +1094,31 @@ TestManifestDrivenKeymasterPolicy(void)
                                  Response, sizeof(Response)) == mSendStatus);
   assert(mSendCount == Before + 1);
   assert(mPassthroughMarkerCount == 1);
+
+  /* The newly named milestone remains a pure pass-through in Mode 2.  Its
+   * enumerated record gets the informational marker, not an unknown warning,
+   * and cannot enter the rewrite size-mismatch path. */
+  SfbDisarmManagedAblHooks();
+  Map = MakeSingleTzMap(0x204u, 0, SFB_TZ_SEMANTIC_MILESTONE);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map) ==
+         EFI_SUCCESS);
+  mNextHandle = 73;
+  mUnknownCommandWarningCount = 0;
+  mPassthroughMarkerCount = 0;
+  PriorMarker = mTzMapSizeMismatchMarkerCount;
+  assert(mQseecom.QseecomStartApp(&mQseecom, "keymaster", &Handle) ==
+         EFI_SUCCESS);
+  memset(Buffer, 0xA5, sizeof(Buffer));
+  WriteCommand(Buffer, 0x204u);
+  memcpy(Original, Buffer, sizeof(Original));
+  Before = mSendCount;
+  assert(mQseecom.QseecomSendCmd(&mQseecom, Handle, Buffer, 4,
+                                 Response, sizeof(Response)) == mSendStatus);
+  assert(mSendCount == Before + 1);
+  assert(memcmp(Buffer, Original, sizeof(Original)) == 0);
+  assert(mPassthroughMarkerCount == 1);
+  assert(mUnknownCommandWarningCount == 0);
+  assert(mTzMapSizeMismatchMarkerCount == PriorMarker);
 
   for (Mode = SfbBootModeHonestUnlocked;
        Mode <= SfbBootModeKmProfile; ++Mode) {
@@ -1175,7 +1200,7 @@ TestManifestDrivenKeymasterPolicy(void)
   SfbDisarmManagedAblHooks();
   InstalledMap = SfbHooksTzMap();
   assert(InstalledMap->Flags == SFB_TZMAP_FLAG_ALL);
-  assert(InstalledMap->CommandCount == 7);
+  assert(InstalledMap->CommandCount == 9);
 }
 
 static void

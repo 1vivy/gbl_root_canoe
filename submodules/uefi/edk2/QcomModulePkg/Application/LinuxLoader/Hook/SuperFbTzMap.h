@@ -16,8 +16,12 @@
 #define SFB_TZ_SEMANTIC_READ_DEVICE_STATE  5u
 #define SFB_TZ_SEMANTIC_WRITE_DEVICE_STATE 6u
 #define SFB_TZ_SEMANTIC_GET_VERSION        7u
+/* 0x204 end-of-bootloader milestone sent to TZ; pass-through only. */
 #define SFB_TZ_SEMANTIC_MILESTONE          8u
-#define SFB_TZ_SEMANTIC_MAX                8u
+/* 0x219 generates the factory reset secret and DICE unique device secret;
+ * pass-through only. */
+#define SFB_TZ_SEMANTIC_GENERATE_FRS_UDS   9u
+#define SFB_TZ_SEMANTIC_MAX                9u
 
 #define SFB_TZMAP_FLAG_SPSS_CONSUMED   0x00000001u
 #define SFB_TZMAP_FLAG_APP_KEYMASTER   0x00000002u

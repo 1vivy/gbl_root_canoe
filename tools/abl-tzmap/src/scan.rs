@@ -129,6 +129,23 @@ fn scan_flags(data: &[u8]) -> u32 {
     flags
 }
 
+/// Return the protocol semantic for a command id, including commands that are
+/// only present when an ABL evidence table records an observed send.
+fn semantic_for_command(command: u16) -> Semantic {
+    match command {
+        0x200 => Semantic::GetVersion,
+        0x201 => Semantic::SetRot,
+        0x202 => Semantic::ReadDeviceState,
+        0x203 => Semantic::WriteDeviceState,
+        0x204 => Semantic::Milestone,
+        0x207 => Semantic::SetVersion,
+        0x208 => Semantic::SetBootstate,
+        0x211 => Semantic::SetVbh,
+        0x219 => Semantic::GenerateFrsUds,
+        _ => Semantic::Unknown,
+    }
+}
+
 /// Overlay verified per-artifact records onto the protocol table.
 fn merge_protocol(verified: Vec<CommandRecord>) -> Vec<CommandRecord> {
     let mut records: Vec<CommandRecord> = PROTOCOL_TABLE
@@ -141,6 +158,7 @@ fn merge_protocol(verified: Vec<CommandRecord>) -> Vec<CommandRecord> {
         })
         .collect();
     for record in verified {
+        let semantic = semantic_for_command(record.command);
         match records.iter_mut().find(|existing| existing.command == record.command) {
             // Evidence supplies the observed length and site count; the
             // semantic stays protocol-defined so a transcription slip cannot
@@ -149,7 +167,7 @@ fn merge_protocol(verified: Vec<CommandRecord>) -> Vec<CommandRecord> {
                 existing.request_bytes = record.request_bytes;
                 existing.occurrences = record.occurrences;
             }
-            None => records.push(record),
+            None => records.push(CommandRecord { semantic, ..record }),
         }
     }
     records.sort_by_key(|record| record.command);

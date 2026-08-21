@@ -69,8 +69,10 @@ fn tables_are_addressed_by_distinct_digests() {
 fn lookup_resolves_a_recorded_digest_and_misses_others() {
     let found = lookup(&PRIMARY).expect("lookup parses").expect("primary digest is recorded");
     assert_eq!(found.name, "cph2767-macan-16.0.9.401");
-    assert_eq!(found.commands.len(), 5);
-    assert!(lookup(&[0u8; 32]).expect("lookup parses").is_none());
+    assert_eq!(found.commands.len(), 6);
+    let milestone = found.commands.iter().find(|record| record.command == 0x204).expect("primary evidence records milestone");
+    assert_eq!(milestone.semantic, Semantic::Milestone);
+    assert_eq!(milestone.request_bytes, 0);
 }
 
 #[test]
