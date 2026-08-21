@@ -1,6 +1,9 @@
 #include "patchs/oplus/forceenablefastboot.h"
 #include "arm64_inst/utils.h"
 bool patch_fastbootcheck(char* buffer, int32_t size, int32_t global_var_offset) {
+    /* This check is located by its own string reference; the lock-state global
+     * is unused here, but the signature is shared with patch_warning. */
+    (void)global_var_offset;
     if (size < 12) return false;
     for (int32_t i = 0; i <= size - 12; i += 4) {
         DecodedInst d = decode_at(buffer, i);
