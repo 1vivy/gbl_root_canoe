@@ -40,8 +40,8 @@ if [ "$LANG" = "zh" ]; then
   TEXT_UPDATING_BDS_TOOLS="BDS 与 Tools 更新任务运行中"
   TEXT_BDS_TOOLS_OK="BDS 与 Tools 更新任务已完成"
   TEXT_BDS_TOOLS_FAIL="BDS 与 Tools 更新失败"
-  TEXT_BDS_OLD_VER="你的假回锁是旧版，请OTA最新完整包并在重启前选择刷写到下一槽"
-  TEXT_BDS_NOT_INSTALLED="你还没有安装假回锁，请重新安装模块选择全新安装"
+  TEXT_BDS_OLD_VER="当前 efisp 使用旧版布局，请先通过完整安装流程部署修补后的 ABL/profile pair"
+  TEXT_BDS_NOT_INSTALLED="尚未安装修补后的 ABL/profile pair，请重新安装模块并选择全新安装"
   TEXT_GBL_VULN="检测到GBL漏洞，跳过BL刷写"
   TEXT_GBL_VULN_SKIP="已跳过BL刷写"
   TEXT_GBL_DETECT_FAILED="漏洞检测失败，继续流程"
@@ -90,8 +90,8 @@ else
   TEXT_UPDATING_BDS_TOOLS="BDS and Tools update task running"
   TEXT_BDS_TOOLS_OK="BDS and Tools update task completed"
   TEXT_BDS_TOOLS_FAIL="BDS and Tools update failed"
-  TEXT_BDS_OLD_VER="Your fake-lock is an old version. Please OTA the latest full package and select 'Flash to other slot' before rebooting."
-  TEXT_BDS_NOT_INSTALLED="Fake-lock is not installed yet. Please reinstall the module and choose a fresh install."
+  TEXT_BDS_OLD_VER="The efisp partition uses the legacy layout. Run the full install flow for the patched ABL/profile pair first."
+  TEXT_BDS_NOT_INSTALLED="No patched ABL/profile pair is installed. Reinstall the module and choose a fresh install."
   TEXT_GBL_VULN="GBL vuln detected, skip BL flash"
   TEXT_GBL_VULN_SKIP="Skipped BL flash"
   TEXT_GBL_DETECT_FAILED="Vuln check failed"
@@ -133,6 +133,8 @@ UPDATED_FILE="$RUNTIME_DIR/updated"
 TASK_FILE="$RUNTIME_DIR/task_id"
 PID_FILE="$RUNTIME_DIR/flash.pid"
 LOCK_DIR="$RUNTIME_DIR/flash.lock"
+LOCK_OWNER_FILE="$LOCK_DIR/owner.pid"
+LOCK_TASK_FILE="$LOCK_DIR/task_id"
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin:$PATH
 RUNTIME_READY=0
 
@@ -195,20 +197,567 @@ slot_suffix_to_letter() {
 
 partition_path() { echo "$BY_NAME_DIR/$1$2"; }
 
-current_pid() {
-  [ -f "$PID_FILE" ] || return 1
-  pid=$(tr -d '[:space:]' < "$PID_FILE")
-  kill -0 "$pid" 2>/dev/null && echo "$pid" && return 0
-  rm -f "$PID_FILE"
+pid_from_file() {
+  pid_file="$1"
+  [ -f "$pid_file" ] || return 1
+  pid_value=$(tr -d '[:space:]' < "$pid_file")
+  case "$pid_value" in
+    ''|*[!0-9]*) rm -f "$pid_file"; return 1 ;;
+  esac
+  if kill -0 "$pid_value" 2>/dev/null; then
+    echo "$pid_value"
+    return 0
+  fi
+  rm -f "$pid_file"
   return 1
+}
+
+current_pid() { pid_from_file "$PID_FILE"; }
+lock_owner_pid() { pid_from_file "$LOCK_OWNER_FILE"; }
+
+task_busy() {
+  current_pid >/dev/null && return 0
+  [ -d "$LOCK_DIR" ] || return 1
+  if [ ! -f "$LOCK_OWNER_FILE" ]; then
+    # mkdir is the atomic lock operation, but owner publication follows it.
+    # Give a live creator one bounded grace period; an ownerless directory
+    # after that can only be an interrupted acquisition and is safe to reap.
+    sleep 1
+    [ -d "$LOCK_DIR" ] || return 1
+    if [ ! -f "$LOCK_OWNER_FILE" ]; then
+      rm -f "$LOCK_TASK_FILE" "$LOCK_OWNER_FILE".tmp.* \
+        "$LOCK_TASK_FILE".tmp.*
+      rmdir "$LOCK_DIR" 2>/dev/null || return 0
+      return 1
+    fi
+  fi
+  lock_owner_pid >/dev/null && return 0
+  rm -f "$LOCK_OWNER_FILE" "$LOCK_TASK_FILE" \
+    "$LOCK_OWNER_FILE".tmp.* "$LOCK_TASK_FILE".tmp.*
+  rmdir "$LOCK_DIR" 2>/dev/null || return 0
+  return 1
+}
+
+write_atomic_value() {
+  atomic_target="$1"
+  atomic_value="$2"
+  atomic_temp="${atomic_target}.tmp.$$"
+  if ! printf '%s\n' "$atomic_value" > "$atomic_temp" ||
+     ! mv "$atomic_temp" "$atomic_target"; then
+    rm -f "$atomic_temp"
+    return 1
+  fi
+  return 0
+}
+
+acquire_task_lock() {
+  lock_task_id="$1"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    task_busy && return 1
+    mkdir "$LOCK_DIR" 2>/dev/null || return 1
+  fi
+  if ! write_atomic_value "$LOCK_OWNER_FILE" "$$" ||
+     ! write_atomic_value "$LOCK_TASK_FILE" "$lock_task_id"; then
+    rm -f "$LOCK_OWNER_FILE" "$LOCK_TASK_FILE" \
+      "$LOCK_OWNER_FILE".tmp.* "$LOCK_TASK_FILE".tmp.*
+    rmdir "$LOCK_DIR" 2>/dev/null || :
+    return 1
+  fi
+  return 0
+}
+
+claim_worker_lock() {
+  worker_task_id="$1"
+  [ -d "$LOCK_DIR" ] || return 1
+  [ "$(read_line "$LOCK_TASK_FILE")" = "$worker_task_id" ] || return 1
+  write_atomic_value "$LOCK_OWNER_FILE" "$$" || return 1
+  if ! write_atomic_value "$PID_FILE" "$$"; then
+    cleanup_lock
+    return 1
+  fi
+  trap cleanup_lock EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  return 0
+}
+
+cleanup_lock() {
+  [ "$(read_line "$LOCK_OWNER_FILE")" = "$$" ] || return
+  rm -f "$PID_FILE" "$LOCK_OWNER_FILE" "$LOCK_TASK_FILE" \
+    "$LOCK_OWNER_FILE".tmp.* "$LOCK_TASK_FILE".tmp.* "$PID_FILE".tmp.*
+  rmdir "$LOCK_DIR" 2>/dev/null || :
 }
 
 persist_mounted() { grep -q " $PERSIST_MNT " /proc/mounts; }
 
 place_efisp_tree_to() {
-  cp -r "$MODDIR/efisp/." "$1/" >> "$LOG_FILE" 2>&1
+  target="$1"
+  if [ -f "$MODDIR/efisp/BOOTENTRIES" ]; then
+    cp "$MODDIR/efisp/BOOTENTRIES" "$target/" >> "$LOG_FILE" 2>&1 || return 1
+  fi
+  if [ -d "$MODDIR/efisp/tools" ]; then
+    mkdir -p "$target/tools" >> "$LOG_FILE" 2>&1 || return 1
+    cp -r "$MODDIR/efisp/tools/." "$target/tools/" >> "$LOG_FILE" 2>&1 || return 1
+  fi
 }
 
+mode2_profile_path() { echo "$BINDIR/mode2_profile"; }
+abl_tzmap_path() { echo "$BINDIR/abl_tzmap"; }
+
+build_abl_tzmap() {
+  abl="$1"
+  output="$2"
+  tool=$(abl_tzmap_path)
+  rm -f "$output"
+  [ -x "$tool" ] || return 1
+  [ -e "$abl" ] || return 1
+  # --allow-incomplete: an ABL with no recorded RE evidence still gets a sidecar
+  # carrying the soundly derived identifier flags.
+  "$tool" derive "$abl" -o "$output" --allow-incomplete >> "$LOG_FILE" 2>&1 || {
+    rm -f "$output"
+    return 1
+  }
+  [ -s "$output" ] || {
+    rm -f "$output"
+    return 1
+  }
+  "$tool" validate "$output" >> "$LOG_FILE" 2>&1 || {
+    rm -f "$output"
+    return 1
+  }
+  return 0
+}
+
+build_mode2_profile() {
+  vbmeta="$1"
+  output="$2"
+  tool=$(mode2_profile_path)
+  rm -f "$output"
+  [ -x "$tool" ] || return 1
+  [ -e "$vbmeta" ] || return 1
+  "$tool" derive --vbmeta "$vbmeta" --out "$output" >> "$LOG_FILE" 2>&1 || {
+    rm -f "$output"
+    return 1
+  }
+  [ -s "$output" ] || {
+    rm -f "$output"
+    return 1
+  }
+  "$tool" validate --input "$output" >> "$LOG_FILE" 2>&1 || {
+    rm -f "$output"
+    return 1
+  }
+  return 0
+}
+
+mode_partition_geometry() {
+  mode_device="$1"
+  MODE_PARTITION_BYTES=$(blockdev --getsize64 "$mode_device" 2>/dev/null) || return 1
+  MODE_BLOCK_SIZE=$(blockdev --getss "$mode_device" 2>/dev/null) || return 1
+  case "$MODE_PARTITION_BYTES" in ''|*[!0-9]*) return 1 ;; esac
+  case "$MODE_BLOCK_SIZE" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$MODE_PARTITION_BYTES" -ge 1048576 ] || return 1
+  [ "$MODE_BLOCK_SIZE" -gt 0 ] || return 1
+}
+
+read_mode_record() {
+  mode_device="${1:-$BY_NAME_DIR/efisp}"
+  tool=$(mode2_profile_path)
+  [ -x "$tool" ] || return 1
+  mode_partition_geometry "$mode_device" || return 1
+  mode_output=$("$tool" mode-read --device "$mode_device" \
+    --partition-bytes "$MODE_PARTITION_BYTES" --block-size "$MODE_BLOCK_SIZE" 2>/dev/null) || return 1
+  PREFERRED_MODE=$(printf '%s\n' "$mode_output" | sed -n 's/.*MODE=\([012]\).*/\1/p' | tail -n 1)
+  MODE_DEFAULTED=$(printf '%s\n' "$mode_output" | sed -n 's/.*MODE_DEFAULTED=\([01]\).*/\1/p' | tail -n 1)
+  case "$PREFERRED_MODE:$MODE_DEFAULTED" in
+    0:0|1:0|2:0|0:1|1:1|2:1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+write_mode_record() {
+  mode_device="${1:-$BY_NAME_DIR/efisp}"
+  mode_value="$2"
+  case "$mode_value" in 0|1|2) ;; *) return 1 ;; esac
+  tool=$(mode2_profile_path)
+  [ -x "$tool" ] || return 1
+  mode_partition_geometry "$mode_device" || return 1
+  "$tool" mode-write --device "$mode_device" \
+    --partition-bytes "$MODE_PARTITION_BYTES" --block-size "$MODE_BLOCK_SIZE" \
+    --mode "$mode_value" >> "$LOG_FILE" 2>&1
+}
+restore_preferred_mode() {
+  mode_device="${1:-$BY_NAME_DIR/efisp}"
+  mode_value="$2"
+  restore_mode_ok=1
+  if ! write_mode_record "$mode_device" "$mode_value"; then
+    restore_mode_ok=0
+  fi
+  if ! read_mode_record "$mode_device"; then
+    restore_mode_ok=0
+  elif [ "$PREFERRED_MODE" != "$mode_value" ] ||
+       [ "$MODE_DEFAULTED" != "0" ]; then
+    restore_mode_ok=0
+  fi
+  [ "$restore_mode_ok" = "1" ]
+}
+
+
+PAIR_TXN_MARKER_NAME=".canoe.pair.txn"
+PAIR_TXN_MARKER_MAGIC="CANOEP1"
+
+pair_has_transaction_files() {
+  target="$1"
+  for pair_file in \
+    "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" "$target/.canoe.new.tzmap" \
+    "$target/.canoe.old.live.efi" "$target/.canoe.old.live.gm2p" "$target/.canoe.old.live.tzmap" \
+    "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap" \
+    "$target/$PAIR_TXN_MARKER_NAME" "$target/$PAIR_TXN_MARKER_NAME.tmp.$$"; do
+    [ -e "$pair_file" ] && return 0
+  done
+  for pair_file in "$target/$PAIR_TXN_MARKER_NAME.tmp."*; do
+    [ -e "$pair_file" ] && return 0
+  done
+  return 1
+}
+
+pair_new_cleanup() {
+  target="$1"
+  pair_cleanup_failed=0
+  for pair_file in "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" \
+    "$target/.canoe.new.tzmap"; do
+    if [ -e "$pair_file" ] && ! rm -f "$pair_file"; then
+      pair_cleanup_failed=1
+    fi
+  done
+  [ "$pair_cleanup_failed" = "0" ]
+}
+
+pair_transaction_cleanup() {
+  target="$1"
+  pair_cleanup_failed=0
+  for pair_file in \
+    "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" "$target/.canoe.new.tzmap" \
+    "$target/.canoe.old.live.efi" "$target/.canoe.old.live.gm2p" "$target/.canoe.old.live.tzmap" \
+    "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap"; do
+    if [ -e "$pair_file" ] && ! rm -f "$pair_file"; then
+      pair_cleanup_failed=1
+    fi
+  done
+  for pair_file in "$target/$PAIR_TXN_MARKER_NAME.tmp."*; do
+    if [ -e "$pair_file" ] && ! rm -f "$pair_file"; then
+      pair_cleanup_failed=1
+    fi
+  done
+  [ "$pair_cleanup_failed" = "0" ]
+}
+
+pair_marker_read() {
+  target="$1"
+  pair_marker_file="$target/$PAIR_TXN_MARKER_NAME"
+  [ -f "$pair_marker_file" ] || return 1
+  pair_marker_line=$(cat "$pair_marker_file" 2>/dev/null) || return 1
+  case "$pair_marker_line" in
+    CANOEP1'|prepared|'[01]'|'[01]'|'[01]'|'[01]'|'[01]'|'[01])
+      pair_marker_state=prepared
+      pair_marker_bits=${pair_marker_line#CANOEP1|prepared|}
+      ;;
+    CANOEP1'|committed|'[01]'|'[01]'|'[01]'|'[01]'|'[01]'|'[01])
+      pair_marker_state=committed
+      pair_marker_bits=${pair_marker_line#CANOEP1|committed|}
+      ;;
+    *) return 1 ;;
+  esac
+  pair_live_efi_bit=${pair_marker_bits%%|*}
+  pair_marker_rest=${pair_marker_bits#*|}
+  pair_live_profile_bit=${pair_marker_rest%%|*}
+  pair_marker_rest=${pair_marker_rest#*|}
+  pair_live_tzmap_bit=${pair_marker_rest%%|*}
+  pair_marker_rest=${pair_marker_rest#*|}
+  pair_backup_efi_bit=${pair_marker_rest%%|*}
+  pair_marker_rest=${pair_marker_rest#*|}
+  pair_backup_profile_bit=${pair_marker_rest%%|*}
+  pair_backup_tzmap_bit=${pair_marker_rest#*|}
+  return 0
+}
+
+pair_marker_write() {
+  target="$1"
+  state="$2"
+  live_efi_bit="$3"
+  live_profile_bit="$4"
+  live_tzmap_bit="$5"
+  backup_efi_bit="$6"
+  backup_profile_bit="$7"
+  backup_tzmap_bit="$8"
+  pair_marker_file="$target/$PAIR_TXN_MARKER_NAME"
+  pair_marker_tmp="$pair_marker_file.tmp.$$"
+  if ! printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$PAIR_TXN_MARKER_MAGIC" \
+      "$state" "$live_efi_bit" "$live_profile_bit" "$live_tzmap_bit" \
+      "$backup_efi_bit" "$backup_profile_bit" "$backup_tzmap_bit" > "$pair_marker_tmp" ||
+     ! mv "$pair_marker_tmp" "$pair_marker_file"; then
+    rm -f "$pair_marker_tmp"
+    return 1
+  fi
+  # A committed marker publishes the new pair. If durability sync fails after
+  # that rename, preserve every old snapshot and leave the marker for startup
+  # recovery; callers must not attempt rollback over the published pair.
+  if ! sync; then
+    [ "$state" = "committed" ] && return 2
+    return 1
+  fi
+  return 0
+}
+
+pair_marker_clear() {
+  target="$1"
+  pair_marker_file="$target/$PAIR_TXN_MARKER_NAME"
+  sync || return 1
+  if [ -e "$pair_marker_file" ] && ! rm -f "$pair_marker_file"; then
+    return 1
+  fi
+  sync || return 1
+  return 0
+}
+
+pair_restore_one() {
+  target="$1"
+  canonical="$2"
+  old_temp="$3"
+  existed="$4"
+  if [ "$existed" = "1" ]; then
+    if [ -e "$old_temp" ]; then
+      [ ! -e "$canonical" ] || rm -f "$canonical" || return 1
+      mv "$old_temp" "$canonical" || return 1
+    elif [ ! -e "$canonical" ]; then
+      return 1
+    fi
+  else
+    [ ! -e "$old_temp" ] || return 1
+    [ ! -e "$canonical" ] || rm -f "$canonical" || return 1
+  fi
+  return 0
+}
+
+pair_recover() {
+  target="$1"
+  pair_marker_file="$target/$PAIR_TXN_MARKER_NAME"
+  if [ ! -e "$pair_marker_file" ]; then
+    pair_new_cleanup "$target" || return 1
+    pair_has_transaction_files "$target" && return 1
+    return 0
+  fi
+  pair_marker_read "$target" || return 1
+  if [ "$pair_marker_state" = "committed" ]; then
+    if [ -e "$target/.canoe.new.tzmap" ] &&
+       [ ! -e "$target/boot.efi.tzmap" ] &&
+       [ -e "$target/boot.efi" ] &&
+       [ -e "$target/boot.efi.gm2p" ]; then
+      mv "$target/.canoe.new.tzmap" "$target/boot.efi.tzmap" || return 1
+    fi
+    pair_transaction_cleanup "$target" || return 1
+    sync || return 1
+    pair_marker_clear "$target" || return 1
+    return 0
+  fi
+  pair_restore_one "$target" "$target/boot.efi" \
+    "$target/.canoe.old.live.efi" "$pair_live_efi_bit" || return 1
+  pair_restore_one "$target" "$target/boot.efi.gm2p" \
+    "$target/.canoe.old.live.gm2p" "$pair_live_profile_bit" || return 1
+  pair_restore_one "$target" "$target/boot.efi.tzmap" \
+    "$target/.canoe.old.live.tzmap" "$pair_live_tzmap_bit" || return 1
+  pair_restore_one "$target" "$target/boot_backup.efi" \
+    "$target/.canoe.old.backup.efi" "$pair_backup_efi_bit" || return 1
+  pair_restore_one "$target" "$target/boot_backup.efi.gm2p" \
+    "$target/.canoe.old.backup.gm2p" "$pair_backup_profile_bit" || return 1
+  pair_restore_one "$target" "$target/boot_backup.efi.tzmap" \
+    "$target/.canoe.old.backup.tzmap" "$pair_backup_tzmap_bit" || return 1
+  sync || return 1
+  pair_transaction_cleanup "$target" || return 1
+  sync || return 1
+  pair_marker_clear "$target" || return 1
+  return 0
+}
+
+pair_restore() {
+  pair_recover "$1"
+}
+
+pair_begin() {
+  target="$1"
+  pair_recover "$target" || return 1
+  pair_has_transaction_files "$target" && return 1
+  pair_new_cleanup "$target" || return 1
+  return 0
+}
+
+pair_prepare() {
+  target="$1"
+  pair_live_efi_bit=0
+  pair_live_profile_bit=0
+  pair_live_tzmap_bit=0
+  pair_backup_efi_bit=0
+  pair_backup_profile_bit=0
+  pair_backup_tzmap_bit=0
+  [ -e "$target/boot.efi" ] && pair_live_efi_bit=1
+  [ -e "$target/boot.efi.gm2p" ] && pair_live_profile_bit=1
+  [ -e "$target/boot.efi.tzmap" ] && pair_live_tzmap_bit=1
+  [ -e "$target/boot_backup.efi" ] && pair_backup_efi_bit=1
+  [ -e "$target/boot_backup.efi.gm2p" ] && pair_backup_profile_bit=1
+  [ -e "$target/boot_backup.efi.tzmap" ] && pair_backup_tzmap_bit=1
+  pair_marker_write "$target" prepared "$pair_live_efi_bit" \
+    "$pair_live_profile_bit" "$pair_live_tzmap_bit" "$pair_backup_efi_bit" \
+    "$pair_backup_profile_bit" "$pair_backup_tzmap_bit"
+}
+
+pair_install_failure() {
+  target="$1"
+  pair_restore "$target" || return 1
+  return 1
+}
+
+install_efisp_pair() {
+  target="$1"
+  source_efi="$2"
+  source_profile="$3"
+  source_tzmap="$4"
+  pair_begin "$target" || return 1
+  cp "$source_efi" "$target/.canoe.new.efi" >> "$LOG_FILE" 2>&1 || {
+    pair_new_cleanup "$target" || :
+    return 1
+  }
+  cp "$source_profile" "$target/.canoe.new.gm2p" >> "$LOG_FILE" 2>&1 || {
+    pair_new_cleanup "$target" || :
+    return 1
+  }
+  cp "$source_tzmap" "$target/.canoe.new.tzmap" >> "$LOG_FILE" 2>&1 || {
+    pair_new_cleanup "$target" || :
+    return 1
+  }
+  if [ ! -s "$target/.canoe.new.efi" ] ||
+     [ ! -s "$target/.canoe.new.gm2p" ] ||
+     ! "$(mode2_profile_path)" validate --input "$target/.canoe.new.gm2p" >> "$LOG_FILE" 2>&1 ||
+     [ ! -s "$target/.canoe.new.tzmap" ] ||
+     ! "$(abl_tzmap_path)" validate "$target/.canoe.new.tzmap" >> "$LOG_FILE" 2>&1; then
+    pair_new_cleanup "$target" || :
+    return 1
+  fi
+  pair_prepare "$target" || {
+    pair_new_cleanup "$target" || :
+    return 1
+  }
+  if [ "$pair_live_efi_bit" = "1" ]; then
+    mv "$target/boot.efi" "$target/.canoe.old.live.efi" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_live_profile_bit" = "1" ]; then
+    mv "$target/boot.efi.gm2p" "$target/.canoe.old.live.gm2p" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_live_tzmap_bit" = "1" ]; then
+    mv "$target/boot.efi.tzmap" "$target/.canoe.old.live.tzmap" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_backup_efi_bit" = "1" ]; then
+    mv "$target/boot_backup.efi" "$target/.canoe.old.backup.efi" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_backup_profile_bit" = "1" ]; then
+    mv "$target/boot_backup.efi.gm2p" "$target/.canoe.old.backup.gm2p" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_backup_tzmap_bit" = "1" ]; then
+    mv "$target/boot_backup.efi.tzmap" "$target/.canoe.old.backup.tzmap" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_live_efi_bit" = "1" ]; then
+    cp "$target/.canoe.old.live.efi" "$target/boot_backup.efi" >> "$LOG_FILE" 2>&1 || {
+      pair_install_failure "$target"
+      return 1
+    }
+  elif [ "$pair_backup_efi_bit" = "1" ]; then
+    mv "$target/.canoe.old.backup.efi" "$target/boot_backup.efi" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_live_efi_bit" = "1" ] && [ "$pair_live_profile_bit" = "1" ]; then
+    cp "$target/.canoe.old.live.gm2p" "$target/boot_backup.efi.gm2p" >> "$LOG_FILE" 2>&1 || {
+      pair_install_failure "$target"
+      return 1
+    }
+  elif [ -e "$target/boot_backup.efi.gm2p" ] &&
+       ! rm -f "$target/boot_backup.efi.gm2p"; then
+    pair_install_failure "$target"
+    return 1
+  fi
+  if [ "$pair_live_efi_bit" = "1" ] && [ "$pair_live_tzmap_bit" = "1" ]; then
+    cp "$target/.canoe.old.live.tzmap" "$target/boot_backup.efi.tzmap" >> "$LOG_FILE" 2>&1 || {
+      pair_install_failure "$target"
+      return 1
+    }
+  elif [ -e "$target/boot_backup.efi.tzmap" ] &&
+       ! rm -f "$target/boot_backup.efi.tzmap"; then
+    pair_install_failure "$target"
+    return 1
+  fi
+  mv "$target/.canoe.new.efi" "$target/boot.efi" || {
+    pair_install_failure "$target"
+    return 1
+  }
+  mv "$target/.canoe.new.gm2p" "$target/boot.efi.gm2p" || {
+    pair_install_failure "$target"
+    return 1
+  }
+  mv "$target/.canoe.new.tzmap" "$target/boot.efi.tzmap" || {
+    pair_install_failure "$target"
+    return 1
+  }
+  if ! place_efisp_tree_to "$target"; then
+    pair_install_failure "$target"
+    return 1
+  fi
+  if ! sync; then
+    pair_install_failure "$target"
+    return 1
+  fi
+  return 0
+}
+
+pair_commit() {
+  target="$1"
+  pair_marker_read "$target" || return 1
+  [ "$pair_marker_state" = "prepared" ] || return 1
+  sync || return 1
+  pair_marker_write "$target" committed "$pair_live_efi_bit" \
+    "$pair_live_profile_bit" "$pair_live_tzmap_bit" "$pair_backup_efi_bit" \
+    "$pair_backup_profile_bit" "$pair_backup_tzmap_bit"
+  pair_marker_status=$?
+  case "$pair_marker_status" in
+    0) ;;
+    2) return 2 ;;
+    *) return 1 ;;
+  esac
+  # Once the committed marker is durable, the new pair is irrevocable. Any
+  # cleanup failure leaves the committed marker for startup recovery.
+  pair_transaction_cleanup "$target" || return 0
+  sync || return 0
+  pair_marker_clear "$target" || return 0
+  return 0
+}
 build_patched_efi() {
   abl="$1"
   rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" "$RUNTIME_DIR/patch.log"
@@ -226,17 +775,39 @@ build_patched_efi() {
 }
 
 update_efisp() {
-  abl=$1
-  is_debug=$2
+  target_abl="$1"
+  target_vbmeta="$2"
+  is_debug="$3"
+  source_abl="$4"
+  source_vbmeta="$5"
   clean_workdir
-  build_patched_efi "$abl" || return 1
-
-  if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
+  build_patched_efi "$target_abl" || return 3
+  if grep -q "Warning: Failed to patch ABL GBL" "$RUNTIME_DIR/patch.log"; then
     gbl_vuln=0
   else
     gbl_vuln=1
   fi
 
+  # A non-vulnerable target is replaced by the current slot below, so derive
+  # every efisp artifact from that same current-slot pair. Debug calls omit a
+  # replacement source and retain the inspected target pair.
+  if [ "$gbl_vuln" = "1" ] || [ -z "$source_abl" ]; then
+    source_patched_efi="$RUNTIME_DIR/patched.efi"
+    source_vbmeta="$target_vbmeta"
+  else
+    [ -n "$source_vbmeta" ] || source_vbmeta="$target_vbmeta"
+    build_patched_efi "$source_abl" || return 3
+    source_patched_efi="$RUNTIME_DIR/patched.efi"
+  fi
+  if ! build_mode2_profile "$source_vbmeta" "$RUNTIME_DIR/patched.efi.gm2p"; then
+    write_log "Mode 2 profile build failed"
+    return 3
+  fi
+
+  if ! build_abl_tzmap "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi.tzmap"; then
+    write_log "ABL TrustZone map build failed"
+    return 3
+  fi
   if [ "$is_debug" = "yes" ]; then
     write_log "$TEXT_DEBUG_MODE"
     efisp_target=$RUNTIME_DIR/efisp
@@ -246,37 +817,105 @@ update_efisp() {
       write_log "$TEXT_PERSIST_NOT_MOUNTED"
       return 1
     fi
+    if ! read_mode_record "$BY_NAME_DIR/efisp"; then
+      write_log "preferred mode read failed"
+      return 3
+    fi
+    preserved_mode="$PREFERRED_MODE"
+    if ! pair_recover "$efisp_target"; then
+      write_log "pair recovery failed"
+      return 3
+    fi
   fi
 
   mkdir -p "$efisp_target" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
-
-  if [ "$is_debug" != "yes" ] && [ -f "$efisp_target/boot.efi" ]; then
-    mv "$efisp_target/boot.efi" "$efisp_target/boot_backup.efi" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
-    write_log "$TEXT_BACKUP_BOOT"
-  fi
-
-  if ! cp $RUNTIME_DIR/patched.efi "$efisp_target/boot.efi" >> "$LOG_FILE" 2>&1; then
-    write_log "$TEXT_EFISP_WRITE_FAILED"
-    return 1
-  fi
-  place_efisp_tree_to "$efisp_target" || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
-  sync
-  write_log "$TEXT_EFISP_FILES_OK"
-
   if [ "$is_debug" = "yes" ]; then
+    cp "$source_patched_efi" "$efisp_target/boot.efi" >> "$LOG_FILE" 2>&1 || {
+      write_log "$TEXT_EFISP_WRITE_FAILED"
+      return 1
+    }
+    cp "$RUNTIME_DIR/patched.efi.gm2p" "$efisp_target/boot.efi.gm2p" >> "$LOG_FILE" 2>&1 || {
+      write_log "$TEXT_EFISP_WRITE_FAILED"
+      return 1
+    }
+    cp "$RUNTIME_DIR/patched.efi.tzmap" "$efisp_target/boot.efi.tzmap" >> "$LOG_FILE" 2>&1 || {
+      write_log "$TEXT_EFISP_WRITE_FAILED"
+      return 1
+    }
+    place_efisp_tree_to "$efisp_target" || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
+    if ! sync; then
+      write_log "$TEXT_EFISP_WRITE_FAILED"
+      return 1
+    fi
+    write_log "$TEXT_EFISP_FILES_OK"
     return 0
   fi
 
+  if ! install_efisp_pair "$efisp_target" "$source_patched_efi" \
+       "$RUNTIME_DIR/patched.efi.gm2p" "$RUNTIME_DIR/patched.efi.tzmap"; then
+    if ! pair_restore "$efisp_target"; then
+      write_log "pair recovery failed; transaction retained"
+      return 3
+    fi
+    write_log "$TEXT_EFISP_WRITE_FAILED"
+    return 1
+  fi
+  write_log "$TEXT_EFISP_FILES_OK"
+
   if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$LOG_FILE" 2>&1; then
+    if ! pair_restore "$efisp_target"; then
+      write_log "pair recovery failed; transaction retained"
+      return 3
+    fi
     write_log "$TEXT_EFISP_SET_RW_FAILED"
     return 1
   fi
   if ! dd if="$BDS_EFI" of="$BY_NAME_DIR/efisp" bs=4M conv=fsync >> "$LOG_FILE" 2>&1; then
+    if ! pair_restore "$efisp_target"; then
+      write_log "pair recovery failed; transaction retained"
+      return 3
+    fi
     write_log "$TEXT_EFISP_FLASH_FAILED"
     return 1
   fi
-  sync
-  write_log "$TEXT_EFISP_FLASH_OK"
+  mode_write_ok=1
+  if ! write_mode_record "$BY_NAME_DIR/efisp" "$preserved_mode"; then
+    mode_write_ok=0
+  fi
+  mode_read_ok=1
+  if ! read_mode_record "$BY_NAME_DIR/efisp"; then
+    mode_read_ok=0
+  fi
+  if [ "$mode_write_ok" != "1" ] ||
+     [ "$mode_read_ok" != "1" ] ||
+     [ "$PREFERRED_MODE" != "$preserved_mode" ] ||
+     [ "$MODE_DEFAULTED" != "0" ]; then
+    mode_restore_ok=1
+    restore_preferred_mode "$BY_NAME_DIR/efisp" "$preserved_mode" || mode_restore_ok=0
+    if ! pair_restore "$efisp_target"; then
+      write_log "pair recovery failed; transaction retained"
+    fi
+    [ "$mode_restore_ok" = "1" ] || write_log "preferred mode restoration failed"
+    write_log "preferred mode write or verification failed"
+    return 3
+  fi
+  pair_commit "$efisp_target"
+  pair_commit_status=$?
+  case "$pair_commit_status" in
+    0) ;;
+    2)
+      write_log "efisp pair committed; cleanup pending"
+      return 3
+      ;;
+    *)
+      if ! pair_restore "$efisp_target"; then
+        write_log "pair recovery failed; transaction retained"
+        return 3
+      fi
+      write_log "efisp pair commit failed"
+      return 1
+      ;;
+  esac
 
   if [ "$gbl_vuln" = "1" ]; then
     write_log "$TEXT_GBL_VULN"
@@ -313,8 +952,21 @@ update_bds_tools() {
     write_log "$TEXT_PERSIST_NOT_MOUNTED"
     return 1
   fi
+  if [ -f "$EFISP_DIR/$PAIR_TXN_MARKER_NAME" ] &&
+     ! pair_recover "$EFISP_DIR"; then
+    write_log "pair transaction recovery failed before BDS update"
+    return 1
+  fi
+  if pair_has_transaction_files "$EFISP_DIR"; then
+    write_log "pair transaction present; refusing pair-free BDS update"
+    return 1
+  fi
 
-  if [ ! -f "$EFISP_DIR/boot.efi" ]; then
+
+  bds_pair_ready=1
+  [ -s "$EFISP_DIR/boot.efi" ] || bds_pair_ready=0
+  mode2_profile_installed || bds_pair_ready=0
+  if [ "$bds_pair_ready" != "1" ]; then
     if efisp_has_mz && gbl_exploit_present; then
       write_state error "$TEXT_BDS_OLD_VER"
     else
@@ -322,9 +974,23 @@ update_bds_tools() {
     fi
     return 2
   fi
+  if [ -e "$EFISP_DIR/boot.efi.tzmap" ] &&
+     ! abl_tzmap_installed; then
+    write_state error "$TEXT_BDS_OLD_VER"
+    return 2
+  fi
+
+
+
+  # The raw mode record is part of the ESP tail. Read it before touching BDS
+  # and write the same value back afterwards, materializing the default.
+  read_mode_record "$BY_NAME_DIR/efisp" || {
+    write_log "preferred mode read failed"
+    return 1
+  }
+  preserved_mode="$PREFERRED_MODE"
 
   mkdir -p "$EFISP_DIR" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
-
   if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$LOG_FILE" 2>&1; then
     write_log "$TEXT_EFISP_SET_RW_FAILED"
     return 1
@@ -333,33 +999,68 @@ update_bds_tools() {
     write_log "$TEXT_EFISP_FLASH_FAILED"
     return 1
   fi
-  sync
+  if ! sync; then
+    write_log "$TEXT_EFISP_FLASH_FAILED"
+    return 1
+  fi
+  mode_write_ok=1
+  if ! write_mode_record "$BY_NAME_DIR/efisp" "$preserved_mode"; then
+    mode_write_ok=0
+  fi
+  mode_read_ok=1
+  if ! read_mode_record "$BY_NAME_DIR/efisp"; then
+    mode_read_ok=0
+  fi
+  if [ "$mode_write_ok" != "1" ] ||
+     [ "$mode_read_ok" != "1" ] ||
+     [ "$PREFERRED_MODE" != "$preserved_mode" ] ||
+     [ "$MODE_DEFAULTED" != "0" ]; then
+    mode_restore_ok=1
+    restore_preferred_mode "$BY_NAME_DIR/efisp" "$preserved_mode" || mode_restore_ok=0
+    [ "$mode_restore_ok" = "1" ] || write_log "preferred mode restoration failed"
+    write_log "preferred mode write or verification failed"
+    return 1
+  fi
   write_log "$TEXT_EFISP_FLASH_OK"
+  if pair_has_transaction_files "$EFISP_DIR"; then
+    write_log "pair transaction appeared before static tree"
+    return 1
+  fi
 
-  place_efisp_tree_to "$EFISP_DIR" || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
-  sync
+  if ! place_efisp_tree_to "$EFISP_DIR"; then
+    write_log "$TEXT_EFISP_WRITE_FAILED"
+    return 1
+  fi
+  if ! sync; then
+    write_log "$TEXT_EFISP_WRITE_FAILED"
+    return 1
+  fi
   write_log "$TEXT_EFISP_FILES_OK"
   return 0
 }
-
-cleanup_lock() { rm -rf "$LOCK_DIR" "$PID_FILE"; }
-
 print_status() {
   ensure_runtime
   current_slot=$(detect_current_slot)
   target_slot=$(other_slot "$current_slot")
   _state=$(read_line "$STATE_FILE")
   running=0
-  pid=""
-  case "$_state" in
-    success|warning|error) ;;
-    *) pid=$(current_pid); [ -n "$pid" ] && running=1 ;;
-  esac
+  pid=$(current_pid)
+  [ -n "$pid" ] || pid=$(lock_owner_pid)
+  [ -n "$pid" ] && running=1
   _msg=$(read_line "$MESSAGE_FILE")
   _upd=$(read_line "$UPDATED_FILE")
   _task=$(read_line "$TASK_FILE")
+  mode_read_error=0
+  if read_mode_record "$BY_NAME_DIR/efisp"; then
+    status_mode="$PREFERRED_MODE"
+    status_defaulted="$MODE_DEFAULTED"
+  else
+    status_mode=
+    status_defaulted=
+    mode_read_error=1
+  fi
 
-  out="CURRENT_SLOT=$current_slot|TARGET_SLOT=$target_slot|RUNNING=$running|PID=$pid|STATE=$_state|MESSAGE=$_msg|UPDATED_AT=$_upd|TASK_ID=$_task|USER_LANG=$LANG"
+  out="CURRENT_SLOT=$current_slot|TARGET_SLOT=$target_slot|RUNNING=$running|PID=$pid|STATE=$_state|MESSAGE=$_msg|UPDATED_AT=$_upd|TASK_ID=$_task|PREFERRED_MODE=$status_mode|MODE_DEFAULTED=$status_defaulted|MODE_READ_ERROR=$mode_read_error|USER_LANG=$LANG"
   emit "$out"
 }
 
@@ -446,6 +1147,7 @@ exec_patch_by_args() {
 
 run_flash() {
   mode_full="$1"
+  worker_task_id="$2"
   debug=no
 
   # ========== 修复1：改用 shell 参数扩展解析，兼容所有 Android 环境 ==========
@@ -466,10 +1168,18 @@ run_flash() {
   fi
 
   ensure_runtime
-  mkdir "$LOCK_DIR" 2>/dev/null || { write_log "$TEXT_BUSY"; exit 1; }
-  echo $$ > "$PID_FILE"
-  trap cleanup_lock EXIT INT TERM HUP
-  : > "$LOG_FILE"
+  if [ -z "$worker_task_id" ]; then
+    worker_task_id="direct-$(date +%s)-$$"
+    acquire_task_lock "$worker_task_id" || exit 1
+    echo "$worker_task_id" > "$TASK_FILE"
+    : > "$LOG_FILE"
+  fi
+  claim_worker_lock "$worker_task_id" || exit 1
+
+  case "$base_mode" in
+    update-efisp|update-bds-tools|skip-efisp) ;;
+    *) write_state error "invalid flash action"; exit 1 ;;
+  esac
 
   if [ "$base_mode" = "update-bds-tools" ]; then
     write_state running "$TEXT_UPDATING_BDS_TOOLS"
@@ -517,14 +1227,17 @@ run_flash() {
   # update-efisp 模式：刷 ABL + 更新 efisp + 可选修补
   write_state running "$TEXT_FLASHING $target_slot"
   abl=$(partition_path abl "$target_slot")
+  vbmeta=$(partition_path vbmeta "$target_slot")
+  current_abl=$(partition_path abl "$current_slot")
+  current_vbmeta=$(partition_path vbmeta "$current_slot")
 
   if [ "$debug" = "yes" ]; then
-    update_efisp "$abl" yes
+    update_efisp "$abl" "$vbmeta" yes
     efisp_res=$?
-    
+
     patch_res=0
     if [ -n "$patch_args" ]; then
-      exec_patch_by_args "$patch_args" "$target_slot"
+      exec_patch_by_args "debug=1,$patch_args" "$target_slot"
       patch_res=$?
     fi
 
@@ -538,16 +1251,34 @@ run_flash() {
 
   efisp_fail=0
   skip_abl_flash=0
-  update_efisp "$abl" no
+  update_efisp "$abl" "$vbmeta" no "$current_abl" "$current_vbmeta"
   res=$?
-  if [ $res -eq 1 ]; then
+  if [ $res -eq 3 ]; then
+    write_log "ABL/vbmeta/mode transaction failed"
+    write_state error "ABL/vbmeta/mode transaction failed"
+    exit 3
+  elif [ $res -eq 1 ]; then
     efisp_fail=1
     write_state running "$TEXT_EFISP_WARN"
+    if [ "$gbl_vuln" = "1" ]; then
+      # The target is the retained image when its GBL is exploitable. Do not
+      # flash the current slot after an efisp failure and create a mixed pair.
+      skip_abl_flash=1
+      write_log "$TEXT_GBL_VULN_SKIP"
+    fi
   elif [ $res -eq 2 ]; then
     # ========== 修复2：有漏洞仅跳过ABL刷写，继续执行修补 ==========
     skip_abl_flash=1
     write_log "$TEXT_GBL_VULN_SKIP"
   fi
+  # A committed marker may have survived the pair install cleanup. Recover it
+  # before any subsequent target-partition or optional-patch mutation.
+  if ! pair_recover "$EFISP_DIR"; then
+    write_log "pair transaction recovery failed before target ABL"
+    write_state error "ABL/vbmeta/mode transaction failed"
+    exit 3
+  fi
+
 
   # 刷写 ABL 到目标槽位（无漏洞时执行）
   if [ "$skip_abl_flash" != "1" ]; then
@@ -556,10 +1287,21 @@ run_flash() {
       src=$(partition_path "$part" "$current_slot")
       blockdev --setrw "$dst" >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_SET_RW_FAILED"; exit 1; }
       dd if="$src" of="$dst" bs=4M conv=fsync >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_FLASH_PART failed"; exit 1; }
-      sync
+      if ! sync; then
+        write_log "$TEXT_FLASH_PART $part sync failed"
+        write_state error "$TEXT_FLASH_PART $part sync failed"
+        exit 1
+      fi
       write_log "$TEXT_FLASH_PART $part -> $dst $TEXT_FLASH_OK"
     done
+
   fi
+  if ! pair_recover "$EFISP_DIR"; then
+    write_log "pair transaction recovery failed before optional patch"
+    write_state error "ABL/vbmeta/mode transaction failed"
+    exit 3
+  fi
+
 
   # 执行目标槽位修补
   patch_fail=0
@@ -583,19 +1325,135 @@ run_flash() {
     write_log "$TEXT_GBL_VULN_SKIP"
     write_state success "$TEXT_GBL_VULN_SKIP"
   else
+
     write_log "$TEXT_ALL_OK"
     write_state success "$TEXT_ALL_OK"
+  fi
+}
+mode2_profile_installed() {
+  [ -s "$EFISP_DIR/boot.efi.gm2p" ] || return 1
+  "$BINDIR/mode2_profile" validate --input "$EFISP_DIR/boot.efi.gm2p" >> "$LOG_FILE" 2>&1
+}
+abl_tzmap_installed() {
+  [ -s "$EFISP_DIR/boot.efi.tzmap" ] || return 1
+  "$BINDIR/abl_tzmap" validate "$EFISP_DIR/boot.efi.tzmap" >> "$LOG_FILE" 2>&1
+}
+
+mode_request_preflight() {
+  mode_value="$1"
+  MODE_PREFLIGHT_ERROR=PREFERRED_MODE_PREFLIGHT
+  case "$mode_value" in 0|1|2) ;; *) return 1 ;; esac
+  [ -x "$BINDIR/mode2_profile" ] || {
+    MODE_PREFLIGHT_ERROR=MODE_PROFILE_TOOL_MISSING
+    return 1
+  }
+  [ -e "$BY_NAME_DIR/efisp" ] || return 1
+  [ -r "$BY_NAME_DIR/efisp" ] || return 1
+  mode_partition_geometry "$BY_NAME_DIR/efisp" || return 1
+  if [ "$mode_value" = "2" ]; then
+    [ -s "$EFISP_DIR/boot.efi.gm2p" ] || {
+      MODE_PREFLIGHT_ERROR=MODE2_PROFILE_MISSING
+      return 1
+    }
+    "$BINDIR/mode2_profile" validate --input "$EFISP_DIR/boot.efi.gm2p" >> "$LOG_FILE" 2>&1 || {
+      MODE_PREFLIGHT_ERROR=MODE2_PROFILE_INVALID
+      return 1
+    }
+    [ -x "$BINDIR/abl_tzmap" ] || {
+      MODE_PREFLIGHT_ERROR=TZMAP_TOOL_MISSING
+      return 1
+    }
+    abl_tzmap_installed || {
+      MODE_PREFLIGHT_ERROR=TZMAP_INVALID
+      return 1
+    }
+  fi
+  if [ -b "$BY_NAME_DIR/efisp" ]; then
+    mode_readonly=$(blockdev --getro "$BY_NAME_DIR/efisp" 2>/dev/null) || return 1
+    [ "$mode_readonly" = "0" ] || return 1
+  else
+    [ -w "$BY_NAME_DIR/efisp" ] || return 1
+  fi
+  read_mode_record "$BY_NAME_DIR/efisp" || return 1
+  return 0
+}
+
+run_mode_write_worker() {
+  mode_value="$1"
+  worker_task_id="$2"
+  claim_worker_lock "$worker_task_id" || exit 1
+  if ! mode_request_preflight "$mode_value"; then
+    write_state error "preferred mode preflight failed"
+    read_mode_record "$BY_NAME_DIR/efisp" >/dev/null 2>&1 || :
+    exit 1
+  fi
+  if ! write_mode_record "$BY_NAME_DIR/efisp" "$mode_value"; then
+    write_state error "preferred mode write failed"
+    if read_mode_record "$BY_NAME_DIR/efisp"; then
+      write_log "actual preferred mode: $PREFERRED_MODE|MODE_DEFAULTED=$MODE_DEFAULTED"
+    fi
+    exit 1
+  fi
+  if ! read_mode_record "$BY_NAME_DIR/efisp" || [ "$PREFERRED_MODE" != "$mode_value" ] || [ "$MODE_DEFAULTED" != "0" ]; then
+    write_state error "preferred mode verification failed"
+    if read_mode_record "$BY_NAME_DIR/efisp"; then
+      write_log "actual preferred mode: $PREFERRED_MODE|MODE_DEFAULTED=$MODE_DEFAULTED"
+    fi
+    exit 1
+  fi
+  write_state success "preferred mode saved"
+  exit 0
+}
+
+start_mode() {
+  mode_value="$1"
+  ensure_runtime
+  case "$mode_value" in
+    0|1|2) ;;
+    *) emit "STARTED=0|ERROR=invalid mode"; return 1 ;;
+  esac
+  task_id="$(date +%s)-$$"
+  if ! acquire_task_lock "$task_id"; then
+    emit "ALREADY_RUNNING=1"
+    return 0
+  fi
+  if ! mode_request_preflight "$mode_value"; then
+    echo "$task_id" > "$TASK_FILE"
+    write_state error "preferred mode preflight failed: $MODE_PREFLIGHT_ERROR"
+    cleanup_lock
+    emit "STARTED=0|TASK_ID=$task_id|ERROR_CODE=$MODE_PREFLIGHT_ERROR|ERROR=preferred mode preflight failed"
+    return 1
+  fi
+  : > "$LOG_FILE"
+  echo "$task_id" > "$TASK_FILE"
+  write_state running "saving preferred mode"
+  setsid sh "$0" mode-write-worker "$mode_value" "$task_id" >/dev/null 2>&1 </dev/null &
+  sleep 1
+  if [ -n "$(current_pid)" ]; then
+    emit "STARTED=1|TASK_ID=$task_id"
+  else
+    st=$(read_line "$STATE_FILE")
+    if [ "$st" = "running" ]; then
+      write_state error "preferred mode worker failed to start"
+      st=error
+    fi
+    cleanup_lock
+    emit "FINISHED=$st|TASK_ID=$task_id"
   fi
 }
 
 run_patch() {
   arg_str="$1"
+  worker_task_id="$2"
 
   ensure_runtime
-  mkdir "$LOCK_DIR" 2>/dev/null || { write_log "$TEXT_BUSY"; exit 1; }
-  echo $$ > "$PID_FILE"
-  trap cleanup_lock EXIT INT TERM HUP
-  : > "$LOG_FILE"
+  if [ -z "$worker_task_id" ]; then
+    worker_task_id="direct-$(date +%s)-$$"
+    acquire_task_lock "$worker_task_id" || exit 1
+    echo "$worker_task_id" > "$TASK_FILE"
+    : > "$LOG_FILE"
+  fi
+  claim_worker_lock "$worker_task_id" || exit 1
 
   write_state running "$TEXT_PATCH_START"
   write_log "$TEXT_PATCH_START"
@@ -621,24 +1479,42 @@ run_patch() {
 
 start_patch() {
   ensure_runtime
-  [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
   task_id="$(date +%s)-$$"
+  if ! acquire_task_lock "$task_id"; then
+    emit "ALREADY_RUNNING=1"
+    return 0
+  fi
+  : > "$LOG_FILE"
   echo "$task_id" > "$TASK_FILE"
   write_state running "$TEXT_PATCH_START"
-  setsid sh "$0" patch "$1" >/dev/null 2>&1 </dev/null &
+  setsid sh "$0" patch "$1" "$task_id" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
     emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
-    [ -n "$st" ] && emit "FINISHED=$st|TASK_ID=$task_id" || emit "STARTED=0"
+    if [ "$st" = "running" ]; then
+      write_state error "patch worker failed to start"
+      st=error
+    fi
+    cleanup_lock
+    emit "FINISHED=$st|TASK_ID=$task_id"
   fi
 }
 
 start_flash() {
+  case "$1" in
+    update-efisp|update-efisp,*|update-bds-tools|skip-efisp|skip-efisp,*|debug|debug,*) ;;
+    *) emit "STARTED=0|ERROR=invalid action"; return 1 ;;
+  esac
+
   ensure_runtime
-  [ -n "$(current_pid)" ] && { emit "ALREADY_RUNNING=1"; return; }
   task_id="$(date +%s)-$$"
+  if ! acquire_task_lock "$task_id"; then
+    emit "ALREADY_RUNNING=1"
+    return 0
+  fi
+  : > "$LOG_FILE"
   echo "$task_id" > "$TASK_FILE"
   case "$1" in
     update-bds-tools*) _start_msg="$TEXT_UPDATING_BDS_TOOLS" ;;
@@ -647,13 +1523,18 @@ start_flash() {
     *) _start_msg="$TEXT_FLASHING" ;;
   esac
   write_state running "$_start_msg"
-  setsid sh "$0" flash "$1" >/dev/null 2>&1 </dev/null &
+  setsid sh "$0" flash "$1" "$task_id" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
     emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
-    [ -n "$st" ] && emit "FINISHED=$st|TASK_ID=$task_id" || emit "STARTED=0"
+    if [ "$st" = "running" ]; then
+      write_state error "flash worker failed to start"
+      st=error
+    fi
+    cleanup_lock
+    emit "FINISHED=$st|TASK_ID=$task_id"
   fi
 }
 
@@ -662,7 +1543,7 @@ tail_log() { tail -n200 "$LOG_FILE" | awk '{printf "%s@NL@", $0}'; }
 
 clear_log() {
   ensure_runtime
-  [ -n "$(current_pid)" ] && { emit "BUSY=1"; return; }
+  task_busy && { emit "BUSY=1"; return; }
   : > "$LOG_FILE"
   write_state idle "$TEXT_LOG_CLEARED"
   emit "CLEARED=1"
@@ -670,10 +1551,12 @@ clear_log() {
 
 case "$1" in
   status) print_status ;;
-  flash) run_flash "$2" ;;
+  flash) run_flash "$2" "$3" ;;
   start) start_flash "$2" ;;
-  patch) run_patch "$2" ;;
+  patch) run_patch "$2" "$3" ;;
   start-patch) start_patch "$2" ;;
+  start-mode) start_mode "$2" ;;
+  mode-write-worker) run_mode_write_worker "$2" "$3" ;;
   log) print_log ;;
   tail) tail_log ;;
   clear-log) clear_log ;;

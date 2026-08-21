@@ -63,7 +63,7 @@ if [ "$LANG" = "zh" ]; then
   T_VOL_UP="音量上为是（全新安装，需要格式化）"
   T_VOL_DOWN="音量下为否（如果之前安装过一次假回锁或者刚刚首次安装并格式化，建议选否）"
   T_TIP_YES="如果选择是，将会布置 efisp 启动项到 persist 并刷入 BDS 到 efisp，然后重启recovery 进行格式化，格式化后请安装一次这个模块来完成安装，这时选否"
-  T_TIP_NO="如果选择否，将会安装OTA更新补丁，每次OTA更新后都需要打开这个模块来安装补丁，来保留BL版本，安装完成后重启系统即可"
+  T_TIP_NO="如果选择否，将跳过本次启动链写入，仅安装模块与 WebUI；每次 OTA 后请在 WebUI 中重新刷写以保留 BL 版本"
   T_SEL_YES="选择了是，正在安装包含补丁的efisp"
   T_NO_SLOT="无法识别当前槽位，已中止安装"
   T_PATCH_FAIL="补丁应用失败，已中止安装"
@@ -89,8 +89,8 @@ if [ "$LANG" = "zh" ]; then
   T_PLACE_BOOT="正在布置 efisp 启动项到 persist"
   T_FLASH_BDS="正在刷入 BDS 到 efisp"
   T_DONE_YES="安装完成，请重启到recovery进行格式化，格式化后请安装一次这个模块来完成安装，这时选否"
-  T_SEL_NO="选择了否，正在安装OTA更新模块"
-  T_DONE_NO="安装完成，请重启系统即可"
+  T_SEL_NO="选择了否，跳过启动链写入并保留模块 WebUI"
+  T_DONE_NO="模块安装完成，请重启系统；OTA 后请使用 WebUI 刷写"
 else
   T_OPT_MENU="====================================="
   T_OPT_ASK="Enable extra patch functions?"
@@ -117,7 +117,7 @@ else
   T_VOL_UP="Vol+ = YES (Fresh install, requires format)"
   T_VOL_DOWN="Vol‑ = NO (If installed before or just formatted)"
   T_TIP_YES="If YES: efisp boot entries placed on persist and BDS flashed to efisp, reboot to recovery and format data, then reinstall this module and select NO"
-  T_TIP_NO="If NO: OTA patch will be installed, after each OTA, flash this module again to keep BL version"
+  T_TIP_NO="If NO: skip boot-chain writes and install only the module/WebUI; after each OTA, use the WebUI to retain the BL version"
   T_SEL_YES="Selected YES, installing patched efisp"
   T_NO_SLOT="Failed to detect current slot, abort"
   T_PATCH_FAIL="Failed to apply patch, abort"
@@ -143,8 +143,8 @@ else
   T_PLACE_BOOT="Placing efisp boot entries on persist"
   T_FLASH_BDS="Flashing BDS to efisp"
   T_DONE_YES="Install complete. Reboot to recovery and format data, then reinstall module and choose NO"
-  T_SEL_NO="Selected NO, installing OTA update patch"
-  T_DONE_NO="Install complete, please reboot"
+  T_SEL_NO="Selected NO, skipping boot-chain writes and keeping the module WebUI"
+  T_DONE_NO="Module install complete; reboot, then use the WebUI after each OTA"
 fi
 
 ui_print "$T_VERIFY"
@@ -208,37 +208,8 @@ if [ -z "$current_slot_suffix" ]; then
 fi
 slot_letter=${current_slot_suffix#_}  # 去掉下划线前缀，得到纯字母 a 或 b
 
-# 调用bin目录下二进制，传入当前槽位参数
-if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
-  ui_print "$T_OPT_RUN_VB"
-  ui_print "- 当前槽位: $slot_letter"
-  if [ ! -x "$MODPATH/bin/patch_tools" ]; then
-    ui_print "$T_BIN_FAIL: patch_tools binary not found!"
-    abort "patch_tools missing"
-  fi
-  "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter"
-  ret=$?
-  if [ "$ret" -ne 0 ]; then
-    ui_print "$T_BIN_FAIL (vendor_boot ret:$ret)"
-    abort "vendor_boot patch failed"
-  fi
-  ui_print "$T_OPT_FINISH_VB"
-elif [ "$EXTRA_PATCH_MODE" = "super" ]; then
-  ui_print "$T_OPT_RUN_SUPER"
-  ui_print "- 当前槽位: $slot_letter"
-  if [ ! -x "$MODPATH/bin/patch_tools" ]; then
-    ui_print "$T_BIN_FAIL: patch_tools binary not found!"
-    abort "patch_tools missing"
-  fi
-  "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter" super
-  ret=$?
-  if [ "$ret" -ne 0 ]; then
-    ui_print "$T_BIN_FAIL (super ret:$ret)"
-    abort "super patch failed"
-  fi
-  ui_print "$T_OPT_FINISH_SUPER"
-  ui_print "$T_OPT_SUPER_NOTE"
-fi
+# Defer optional partition mutation until ABL/vbmeta/profile preflight and any
+# required GBL-vulnerable ABL downgrade have completed successfully.
 
 BY_NAME_DIR=/dev/block/by-name
 RUNTIME_DIR=$MODPATH/tmp
@@ -291,6 +262,472 @@ fetch_abl_from_repo() {
   fi
   return 1
 }
+MODE2_PROFILE="$MODPATH/bin/mode2_profile"
+ABL_TZMAP="$MODPATH/bin/abl_tzmap"
+abl_part="$BY_NAME_DIR/abl$current_slot_suffix"
+vbmeta_part="$BY_NAME_DIR/vbmeta$current_slot_suffix"
+
+preflight_current_pair() {
+  rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" \
+    "$RUNTIME_DIR/patch.log" "$RUNTIME_DIR/boot.efi.gm2p" \
+    "$RUNTIME_DIR/boot.efi.tzmap"
+  if ! "$MODPATH/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl_part" > "$RUNTIME_DIR/extract.log" 2>&1 ||
+     ! "$MODPATH/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" > "$RUNTIME_DIR/patch.log" 2>&1 ||
+     [ ! -s "$RUNTIME_DIR/patched.efi" ]; then
+    ui_print "$T_PATCH_FAIL"
+    return 1
+  fi
+  if [ ! -x "$MODE2_PROFILE" ] ||
+     ! "$MODE2_PROFILE" derive --vbmeta "$vbmeta_part" --out "$RUNTIME_DIR/boot.efi.gm2p" > "$RUNTIME_DIR/profile.log" 2>&1 ||
+     [ ! -s "$RUNTIME_DIR/boot.efi.gm2p" ] ||
+     ! "$MODE2_PROFILE" validate --input "$RUNTIME_DIR/boot.efi.gm2p" >> "$RUNTIME_DIR/profile.log" 2>&1; then
+    ui_print "$T_PATCH_FAIL"
+    rm -f "$RUNTIME_DIR/boot.efi.gm2p"
+    return 1
+  fi
+  # --allow-incomplete: an ABL with no recorded RE evidence still gets a sidecar
+  # carrying the soundly derived identifier flags.
+  if [ ! -x "$ABL_TZMAP" ] ||
+     ! "$ABL_TZMAP" derive "$RUNTIME_DIR/LinuxLoader.efi" \
+       -o "$RUNTIME_DIR/boot.efi.tzmap" --allow-incomplete \
+       > "$RUNTIME_DIR/tzmap.log" 2>&1 ||
+     [ ! -s "$RUNTIME_DIR/boot.efi.tzmap" ] ||
+     ! "$ABL_TZMAP" validate "$RUNTIME_DIR/boot.efi.tzmap" >> "$RUNTIME_DIR/tzmap.log" 2>&1; then
+    ui_print "$T_PATCH_FAIL"
+    rm -f "$RUNTIME_DIR/boot.efi.tzmap"
+    return 1
+  fi
+  return 0
+}
+
+read_preferred_mode() {
+  [ -x "$MODE2_PROFILE" ] || return 1
+  mode_partition_bytes=$(blockdev --getsize64 "$BY_NAME_DIR/efisp" 2>/dev/null) || return 1
+  mode_block_size=$(blockdev --getss "$BY_NAME_DIR/efisp" 2>/dev/null) || return 1
+  mode_result=$("$MODE2_PROFILE" mode-read --device "$BY_NAME_DIR/efisp" \
+    --partition-bytes "$mode_partition_bytes" --block-size "$mode_block_size" 2>/dev/null) || return 1
+  preferred_mode=$(printf '%s\n' "$mode_result" | sed -n 's/.*MODE=\([012]\).*/\1/p' | tail -n 1)
+  preferred_defaulted=$(printf '%s\n' "$mode_result" | sed -n 's/.*MODE_DEFAULTED=\([01]\).*/\1/p' | tail -n 1)
+  case "$preferred_mode:$preferred_defaulted" in
+    0:0|1:0|2:0|0:1|1:1|2:1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+write_preferred_mode() {
+  mode_value="$1"
+  "$MODE2_PROFILE" mode-write --device "$BY_NAME_DIR/efisp" \
+    --partition-bytes "$mode_partition_bytes" --block-size "$mode_block_size" \
+    --mode "$mode_value" >> "$RUNTIME_DIR/flash.log" 2>&1
+}
+
+restore_preferred_mode() {
+  mode_value="$1"
+  restore_mode_ok=1
+  write_preferred_mode "$mode_value" || restore_mode_ok=0
+  if ! read_preferred_mode; then
+    restore_mode_ok=0
+  elif [ "$preferred_mode" != "$mode_value" ] ||
+       [ "$preferred_defaulted" != "0" ]; then
+    restore_mode_ok=0
+  fi
+  [ "$restore_mode_ok" = "1" ]
+}
+
+
+PAIR_TXN_MARKER_NAME=".canoe.pair.txn"
+PAIR_TXN_MARKER_MAGIC="CANOEP1"
+
+pair_has_transaction_files() {
+  target="$1"
+  for pair_file in \
+    "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" "$target/.canoe.new.tzmap" \
+    "$target/.canoe.old.live.efi" "$target/.canoe.old.live.gm2p" "$target/.canoe.old.live.tzmap" \
+    "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap" \
+    "$target/$PAIR_TXN_MARKER_NAME" "$target/$PAIR_TXN_MARKER_NAME.tmp.$$"; do
+    [ -e "$pair_file" ] && return 0
+  done
+  for pair_file in "$target/$PAIR_TXN_MARKER_NAME.tmp."*; do
+    [ -e "$pair_file" ] && return 0
+  done
+  return 1
+}
+
+pair_new_cleanup() {
+  target="$1"
+  pair_cleanup_failed=0
+  for pair_file in "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" \
+    "$target/.canoe.new.tzmap"; do
+    if [ -e "$pair_file" ] && ! rm -f "$pair_file"; then
+      pair_cleanup_failed=1
+    fi
+  done
+  [ "$pair_cleanup_failed" = "0" ]
+}
+
+pair_transaction_cleanup() {
+  target="$1"
+  pair_cleanup_failed=0
+  for pair_file in \
+    "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" "$target/.canoe.new.tzmap" \
+    "$target/.canoe.old.live.efi" "$target/.canoe.old.live.gm2p" "$target/.canoe.old.live.tzmap" \
+    "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap"; do
+    if [ -e "$pair_file" ] && ! rm -f "$pair_file"; then
+      pair_cleanup_failed=1
+    fi
+  done
+  for pair_file in "$target/$PAIR_TXN_MARKER_NAME.tmp."*; do
+    if [ -e "$pair_file" ] && ! rm -f "$pair_file"; then
+      pair_cleanup_failed=1
+    fi
+  done
+  [ "$pair_cleanup_failed" = "0" ]
+}
+
+pair_marker_read() {
+  target="$1"
+  pair_marker_file="$target/$PAIR_TXN_MARKER_NAME"
+  [ -f "$pair_marker_file" ] || return 1
+  pair_marker_line=$(cat "$pair_marker_file" 2>/dev/null) || return 1
+  case "$pair_marker_line" in
+    CANOEP1'|prepared|'[01]'|'[01]'|'[01]'|'[01]'|'[01]'|'[01])
+      pair_marker_state=prepared
+      pair_marker_bits=${pair_marker_line#CANOEP1|prepared|}
+      ;;
+    CANOEP1'|committed|'[01]'|'[01]'|'[01]'|'[01]'|'[01]'|'[01])
+      pair_marker_state=committed
+      pair_marker_bits=${pair_marker_line#CANOEP1|committed|}
+      ;;
+    *) return 1 ;;
+  esac
+  pair_live_efi_bit=${pair_marker_bits%%|*}
+  pair_marker_rest=${pair_marker_bits#*|}
+  pair_live_profile_bit=${pair_marker_rest%%|*}
+  pair_marker_rest=${pair_marker_rest#*|}
+  pair_live_tzmap_bit=${pair_marker_rest%%|*}
+  pair_marker_rest=${pair_marker_rest#*|}
+  pair_backup_efi_bit=${pair_marker_rest%%|*}
+  pair_marker_rest=${pair_marker_rest#*|}
+  pair_backup_profile_bit=${pair_marker_rest%%|*}
+  pair_backup_tzmap_bit=${pair_marker_rest#*|}
+  return 0
+}
+
+pair_marker_write() {
+  target="$1"
+  state="$2"
+  live_efi_bit="$3"
+  live_profile_bit="$4"
+  live_tzmap_bit="$5"
+  backup_efi_bit="$6"
+  backup_profile_bit="$7"
+  backup_tzmap_bit="$8"
+  pair_marker_file="$target/$PAIR_TXN_MARKER_NAME"
+  pair_marker_tmp="$pair_marker_file.tmp.$$"
+  if ! printf '%s|%s|%s|%s|%s|%s|%s|%s\n' "$PAIR_TXN_MARKER_MAGIC" \
+      "$state" "$live_efi_bit" "$live_profile_bit" "$live_tzmap_bit" \
+      "$backup_efi_bit" "$backup_profile_bit" "$backup_tzmap_bit" > "$pair_marker_tmp" ||
+     ! mv "$pair_marker_tmp" "$pair_marker_file"; then
+    rm -f "$pair_marker_tmp"
+    return 1
+  fi
+  # A committed marker publishes the new pair. If durability sync fails after
+  # that rename, preserve every old snapshot and leave the marker for startup
+  # recovery; callers must not attempt rollback over the published pair.
+  if ! sync; then
+    [ "$state" = "committed" ] && return 2
+    return 1
+  fi
+  return 0
+}
+
+pair_marker_clear() {
+  target="$1"
+  pair_marker_file="$target/$PAIR_TXN_MARKER_NAME"
+  sync || return 1
+  if [ -e "$pair_marker_file" ] && ! rm -f "$pair_marker_file"; then
+    return 1
+  fi
+  sync || return 1
+  return 0
+}
+
+pair_restore_one() {
+  target="$1"
+  canonical="$2"
+  old_temp="$3"
+  existed="$4"
+  if [ "$existed" = "1" ]; then
+    if [ -e "$old_temp" ]; then
+      [ ! -e "$canonical" ] || rm -f "$canonical" || return 1
+      mv "$old_temp" "$canonical" || return 1
+    elif [ ! -e "$canonical" ]; then
+      return 1
+    fi
+  else
+    [ ! -e "$old_temp" ] || return 1
+    [ ! -e "$canonical" ] || rm -f "$canonical" || return 1
+  fi
+  return 0
+}
+
+pair_recover() {
+  target="$1"
+  pair_marker_file="$target/$PAIR_TXN_MARKER_NAME"
+  if [ ! -e "$pair_marker_file" ]; then
+    pair_new_cleanup "$target" || return 1
+    pair_has_transaction_files "$target" && return 1
+    return 0
+  fi
+  pair_marker_read "$target" || return 1
+  if [ "$pair_marker_state" = "committed" ]; then
+    if [ -e "$target/.canoe.new.tzmap" ] &&
+       [ ! -e "$target/boot.efi.tzmap" ] &&
+       [ -e "$target/boot.efi" ] &&
+       [ -e "$target/boot.efi.gm2p" ]; then
+      mv "$target/.canoe.new.tzmap" "$target/boot.efi.tzmap" || return 1
+    fi
+    pair_transaction_cleanup "$target" || return 1
+    sync || return 1
+    pair_marker_clear "$target" || return 1
+    return 0
+  fi
+  pair_restore_one "$target" "$target/boot.efi" \
+    "$target/.canoe.old.live.efi" "$pair_live_efi_bit" || return 1
+  pair_restore_one "$target" "$target/boot.efi.gm2p" \
+    "$target/.canoe.old.live.gm2p" "$pair_live_profile_bit" || return 1
+  pair_restore_one "$target" "$target/boot.efi.tzmap" \
+    "$target/.canoe.old.live.tzmap" "$pair_live_tzmap_bit" || return 1
+  pair_restore_one "$target" "$target/boot_backup.efi" \
+    "$target/.canoe.old.backup.efi" "$pair_backup_efi_bit" || return 1
+  pair_restore_one "$target" "$target/boot_backup.efi.gm2p" \
+    "$target/.canoe.old.backup.gm2p" "$pair_backup_profile_bit" || return 1
+  pair_restore_one "$target" "$target/boot_backup.efi.tzmap" \
+    "$target/.canoe.old.backup.tzmap" "$pair_backup_tzmap_bit" || return 1
+  sync || return 1
+  pair_transaction_cleanup "$target" || return 1
+  sync || return 1
+  pair_marker_clear "$target" || return 1
+  return 0
+}
+
+pair_restore() {
+  pair_recover "$1"
+}
+
+pair_begin() {
+  target="$1"
+  pair_recover "$target" || return 1
+  pair_has_transaction_files "$target" && return 1
+  pair_new_cleanup "$target" || return 1
+  return 0
+}
+
+pair_prepare() {
+  target="$1"
+  pair_live_efi_bit=0
+  pair_live_profile_bit=0
+  pair_live_tzmap_bit=0
+  pair_backup_efi_bit=0
+  pair_backup_profile_bit=0
+  pair_backup_tzmap_bit=0
+  [ -e "$target/boot.efi" ] && pair_live_efi_bit=1
+  [ -e "$target/boot.efi.gm2p" ] && pair_live_profile_bit=1
+  [ -e "$target/boot.efi.tzmap" ] && pair_live_tzmap_bit=1
+  [ -e "$target/boot_backup.efi" ] && pair_backup_efi_bit=1
+  [ -e "$target/boot_backup.efi.gm2p" ] && pair_backup_profile_bit=1
+  [ -e "$target/boot_backup.efi.tzmap" ] && pair_backup_tzmap_bit=1
+  pair_marker_write "$target" prepared "$pair_live_efi_bit" \
+    "$pair_live_profile_bit" "$pair_live_tzmap_bit" "$pair_backup_efi_bit" \
+    "$pair_backup_profile_bit" "$pair_backup_tzmap_bit"
+}
+
+pair_install_failure() {
+  target="$1"
+  pair_restore "$target" || return 1
+  return 1
+}
+
+install_pair() {
+  target="$1"
+  pair_begin "$target" || return 1
+  cp "$RUNTIME_DIR/patched.efi" "$target/.canoe.new.efi" || {
+    pair_new_cleanup "$target" || :
+    return 1
+  }
+  cp "$RUNTIME_DIR/boot.efi.gm2p" "$target/.canoe.new.gm2p" || {
+    pair_new_cleanup "$target" || :
+    return 1
+  }
+  cp "$RUNTIME_DIR/boot.efi.tzmap" "$target/.canoe.new.tzmap" || {
+    pair_new_cleanup "$target" || :
+    return 1
+  }
+  if [ ! -s "$target/.canoe.new.efi" ] ||
+     [ ! -s "$target/.canoe.new.gm2p" ] ||
+     ! "$MODE2_PROFILE" validate --input "$target/.canoe.new.gm2p" >> "$RUNTIME_DIR/profile.log" 2>&1 ||
+     [ ! -s "$target/.canoe.new.tzmap" ] ||
+     ! "$ABL_TZMAP" validate "$target/.canoe.new.tzmap" >> "$RUNTIME_DIR/tzmap.log" 2>&1; then
+    pair_new_cleanup "$target" || :
+    return 1
+  fi
+  pair_prepare "$target" || {
+    pair_new_cleanup "$target" || :
+    return 1
+  }
+  if [ "$pair_live_efi_bit" = "1" ]; then
+    mv "$target/boot.efi" "$target/.canoe.old.live.efi" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_live_profile_bit" = "1" ]; then
+    mv "$target/boot.efi.gm2p" "$target/.canoe.old.live.gm2p" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_live_tzmap_bit" = "1" ]; then
+    mv "$target/boot.efi.tzmap" "$target/.canoe.old.live.tzmap" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_backup_efi_bit" = "1" ]; then
+    mv "$target/boot_backup.efi" "$target/.canoe.old.backup.efi" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_backup_profile_bit" = "1" ]; then
+    mv "$target/boot_backup.efi.gm2p" "$target/.canoe.old.backup.gm2p" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_backup_tzmap_bit" = "1" ]; then
+    mv "$target/boot_backup.efi.tzmap" "$target/.canoe.old.backup.tzmap" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_live_efi_bit" = "1" ]; then
+    cp "$target/.canoe.old.live.efi" "$target/boot_backup.efi" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  elif [ "$pair_backup_efi_bit" = "1" ]; then
+    mv "$target/.canoe.old.backup.efi" "$target/boot_backup.efi" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ "$pair_live_efi_bit" = "1" ] && [ "$pair_live_profile_bit" = "1" ]; then
+    cp "$target/.canoe.old.live.gm2p" "$target/boot_backup.efi.gm2p" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  elif [ -e "$target/boot_backup.efi.gm2p" ] &&
+       ! rm -f "$target/boot_backup.efi.gm2p"; then
+    pair_install_failure "$target"
+    return 1
+  fi
+  if [ "$pair_live_efi_bit" = "1" ] && [ "$pair_live_tzmap_bit" = "1" ]; then
+    cp "$target/.canoe.old.live.tzmap" "$target/boot_backup.efi.tzmap" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  elif [ -e "$target/boot_backup.efi.tzmap" ] &&
+       ! rm -f "$target/boot_backup.efi.tzmap"; then
+    pair_install_failure "$target"
+    return 1
+  fi
+  mv "$target/.canoe.new.efi" "$target/boot.efi" || {
+    pair_install_failure "$target"
+    return 1
+  }
+  mv "$target/.canoe.new.gm2p" "$target/boot.efi.gm2p" || {
+    pair_install_failure "$target"
+    return 1
+  }
+  mv "$target/.canoe.new.tzmap" "$target/boot.efi.tzmap" || {
+    pair_install_failure "$target"
+    return 1
+  }
+  if [ -f "$MODPATH/efisp/BOOTENTRIES" ]; then
+    cp "$MODPATH/efisp/BOOTENTRIES" "$target/" || {
+      pair_install_failure "$target"
+      return 1
+    }
+  fi
+  if [ -d "$MODPATH/efisp/tools" ]; then
+    if ! mkdir -p "$target/tools" ||
+       ! cp -r "$MODPATH/efisp/tools/." "$target/tools/"; then
+      pair_install_failure "$target"
+      return 1
+    fi
+  fi
+  if ! sync; then
+    pair_install_failure "$target"
+    return 1
+  fi
+  return 0
+}
+
+pair_commit() {
+  target="$1"
+  pair_marker_read "$target" || return 1
+  [ "$pair_marker_state" = "prepared" ] || return 1
+  sync || return 1
+  pair_marker_write "$target" committed "$pair_live_efi_bit" \
+    "$pair_live_profile_bit" "$pair_live_tzmap_bit" "$pair_backup_efi_bit" \
+    "$pair_backup_profile_bit" "$pair_backup_tzmap_bit"
+  pair_marker_status=$?
+  case "$pair_marker_status" in
+    0) ;;
+    2) return 2 ;;
+    *) return 1 ;;
+  esac
+  # Once the committed marker is durable, the new pair is irrevocable. Any
+  # cleanup failure leaves the committed marker for startup recovery.
+  pair_transaction_cleanup "$target" || return 0
+  sync || return 0
+  pair_marker_clear "$target" || return 0
+  return 0
+}
+
+
+run_optional_patch() {
+  if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
+    ui_print "$T_OPT_RUN_VB"
+    ui_print "- 当前槽位: $slot_letter"
+    if [ ! -x "$MODPATH/bin/patch_tools" ]; then
+      ui_print "$T_BIN_FAIL: patch_tools binary not found!"
+      abort "patch_tools missing"
+    fi
+    "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter"
+    ret=$?
+    if [ "$ret" -ne 0 ]; then
+      ui_print "$T_BIN_FAIL (vendor_boot ret:$ret)"
+      abort "vendor_boot patch failed"
+    fi
+    ui_print "$T_OPT_FINISH_VB"
+  elif [ "$EXTRA_PATCH_MODE" = "super" ]; then
+    ui_print "$T_OPT_RUN_SUPER"
+    ui_print "- 当前槽位: $slot_letter"
+    if [ ! -x "$MODPATH/bin/patch_tools" ]; then
+      ui_print "$T_BIN_FAIL: patch_tools binary not found!"
+      abort "patch_tools missing"
+    fi
+    "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter" super
+    ret=$?
+    if [ "$ret" -ne 0 ]; then
+      ui_print "$T_BIN_FAIL (super ret:$ret)"
+      abort "super patch failed"
+    fi
+    ui_print "$T_OPT_FINISH_SUPER"
+    ui_print "$T_OPT_SUPER_NOTE"
+  fi
+}
 
 ui_print "$T_EFISP_TITLE"
 ui_print "$T_SOC"
@@ -311,15 +748,16 @@ while true; do
       ui_print "$T_NO_SLOT"
       abort "slot detection failed"
     fi
-    abl_part="$BY_NAME_DIR/abl$current_slot"
-    rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi"
-    if ! "$MODPATH/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl_part" >> "$RUNTIME_DIR/extract.log" 2>&1 ||
-       ! "$MODPATH/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" >> "$RUNTIME_DIR/patch.log" 2>&1 ||
-       [ ! -s "$RUNTIME_DIR/patched.efi" ]; then
-      ui_print "$T_PATCH_FAIL"
-      abort "patch failed"
+    if ! preflight_current_pair; then
+      abort "ABL/vbmeta/profile preflight failed"
     fi
-    if grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
+    if ! read_preferred_mode; then
+      abort "preferred mode read failed"
+    fi
+    if ! pair_recover "$EFISP_DIR"; then
+      abort "pair transaction recovery failed before optional patch"
+    fi
+    if grep -q "Warning: Failed to patch ABL GBL" "$RUNTIME_DIR/patch.log"; then
       ui_print "$T_NO_GBL"
       ui_print "$T_ABLREPO_CONFIRM"
       ui_print "$T_ABLREPO_CONFIRM_YES"
@@ -341,55 +779,111 @@ while true; do
         ui_print "$T_ABLREPO_FAIL"
         abort "abl repo lookup failed"
       fi
-      # Downgrade ONLY the abl partition so it has the vuln to load BDS. Do NOT
-      # rebuild boot.efi from this image: some systems need the high‑version
-      # LinuxLoader from the current partition to boot, so boot.efi (already
-      # built above from the running ABL) stays untouched. The repo ABL is
-      # trusted to carry the vuln.
       ui_print "$T_ABLREPO_DOWNGRADE"
-      if ! blockdev --setrw "$abl_part" >> $RUNTIME_DIR/flash.log 2>&1; then
+      if ! pair_recover "$EFISP_DIR"; then
+        abort "pair transaction recovery failed before ABL downgrade"
+      fi
+
+      if ! blockdev --setrw "$abl_part" >> "$RUNTIME_DIR/flash.log" 2>&1; then
         ui_print "$T_ABL_SETRW_FAIL"
         abort "setrw abl failed"
       fi
-      if ! dd if=$RUNTIME_DIR/repo_abl.img of="$abl_part" bs=4M conv=fsync >> $RUNTIME_DIR/flash.log 2>&1; then
+      if ! dd if="$RUNTIME_DIR/repo_abl.img" of="$abl_part" bs=4M conv=fsync >> "$RUNTIME_DIR/flash.log" 2>&1; then
         ui_print "$T_ABL_FLASH_FAIL"
         abort "downgrade abl failed"
       fi
-      sync
+      if ! sync; then
+        ui_print "$T_ABL_FLASH_FAIL"
+        abort "sync downgraded abl failed"
+      fi
       ui_print "$T_ABLREPO_OK"
     fi
 
     ui_print "$T_PLACE_BOOT"
+    if ! pair_recover "$EFISP_DIR"; then
+      abort "pair transaction recovery failed before paired install"
+    fi
+
     if ! grep -q " $PERSIST_MNT " /proc/mounts; then
       ui_print "$T_PERSIST_NOT_MOUNTED"
       abort "persist not mounted"
     fi
     mkdir -p "$EFISP_DIR" || { ui_print "$T_EFISP_DIR_FAIL"; abort "efisp mkdir failed"; }
-    [ -f "$EFISP_DIR/boot.efi" ] && mv "$EFISP_DIR/boot.efi" "$EFISP_DIR/boot_backup.efi"
-    if ! cp $RUNTIME_DIR/patched.efi "$EFISP_DIR/boot.efi"; then
+    # All abort-prone boot-chain prerequisites passed; only now mutate optional
+    # partitions, immediately before committing the paired efisp install.
+    run_optional_patch
+    if ! install_pair "$EFISP_DIR"; then
+      if ! pair_restore "$EFISP_DIR"; then
+        ui_print "$T_EFISP_WRITE_FAIL"
+      fi
       ui_print "$T_EFISP_WRITE_FAIL"
-      abort "efisp write failed"
+      abort "efisp pair write failed"
     fi
-    cp -r "$MODPATH/efisp/." "$EFISP_DIR/" || { ui_print "$T_EFISP_WRITE_FAIL"; abort "efisp write failed"; }
-    sync
 
     ui_print "$T_FLASH_BDS"
-    if ! blockdev --setrw $BY_NAME_DIR/efisp >> $RUNTIME_DIR/flash.log 2>&1; then
+    if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$RUNTIME_DIR/flash.log" 2>&1; then
+      if ! pair_restore "$EFISP_DIR"; then
+        ui_print "$T_EFISP_WRITE_FAIL"
+      fi
       ui_print "$T_SETRW_FAIL"
       abort "setrw failed"
     fi
-    if ! dd if=$MODPATH/BDS.efi of=$BY_NAME_DIR/efisp bs=4M conv=fsync >> $RUNTIME_DIR/flash.log 2>&1; then
+    if ! dd if="$MODPATH/BDS.efi" of="$BY_NAME_DIR/efisp" bs=4M conv=fsync >> "$RUNTIME_DIR/flash.log" 2>&1; then
+      if ! pair_restore "$EFISP_DIR"; then
+        ui_print "$T_EFISP_WRITE_FAIL"
+      fi
       ui_print "$T_FLASH_FAIL"
       abort "flash failed"
     fi
-    sync
+    if ! sync; then
+      if ! pair_restore "$EFISP_DIR"; then
+        ui_print "$T_EFISP_WRITE_FAIL"
+      fi
+      ui_print "$T_FLASH_FAIL"
+      abort "sync BDS failed"
+    fi
+    wanted_mode="$preferred_mode"
+    mode_write_ok=1
+    if ! write_preferred_mode "$wanted_mode"; then
+      mode_write_ok=0
+    fi
+    mode_read_ok=1
+    if ! read_preferred_mode; then
+      mode_read_ok=0
+    fi
+    if [ "$mode_write_ok" != "1" ] ||
+       [ "$mode_read_ok" != "1" ] ||
+       [ "$preferred_mode" != "$wanted_mode" ] ||
+       [ "$preferred_defaulted" != "0" ]; then
+      mode_restore_ok=1
+      restore_preferred_mode "$wanted_mode" || mode_restore_ok=0
+      if ! pair_restore "$EFISP_DIR"; then
+        ui_print "$T_EFISP_WRITE_FAIL"
+      fi
+      [ "$mode_restore_ok" = "1" ] || ui_print "$T_EFISP_WRITE_FAIL"
+      abort "preferred mode write failed"
+    fi
+    pair_commit "$EFISP_DIR"
+    pair_commit_status=$?
+    case "$pair_commit_status" in
+      0) ;;
+      2)
+        abort "efisp pair committed; cleanup pending"
+        ;;
+      *)
+        if ! pair_restore "$EFISP_DIR"; then
+          ui_print "$T_EFISP_WRITE_FAIL"
+        fi
+        abort "efisp pair commit failed"
+        ;;
+    esac
     ui_print "$T_DONE_YES"
-    rm -rf $RUNTIME_DIR
+    rm -rf "$RUNTIME_DIR"
     break
   elif [ "$keyevent" = "down" ]; then
     ui_print "$T_SEL_NO"
     ui_print "$T_DONE_NO"
-    rm -rf $RUNTIME_DIR
+    rm -rf "$RUNTIME_DIR"
     break
   fi
 done

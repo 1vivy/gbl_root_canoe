@@ -1,9 +1,16 @@
+.PHONY: clean build tools tools-clean test
+
 clean:
 	rm -rf edk2/Build || true
 	rm -rf edk2/Conf || true
 	rm -rf ./build || true
 build:
 	cp -r ./Conf ./edk2/
+	# Remove the previous output first. The EDK2 invocation below is tolerated
+	# with `|| true`, so an existence check alone would accept a FAILED rebuild
+	# whenever a stale artifact was still lying around, and the packages would
+	# then ship it silently.
+	rm -f edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi
 	bash -c 'cd edk2 && . ./edksetup.sh && make BOARD_BOOTLOADER_PRODUCT_NAME=canoe TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
   		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- VERIFIED_BOOT_ENABLED=1 \
   		VERIFIED_BOOT_LE=0 AB_RETRYCOUNT_DISABLE=0 TARGET_BOARD_TYPE_AUTO=0 \
@@ -26,6 +33,8 @@ build:
 # CLANG35 toolchain and BaseTools resolve identically.
 tools:
 	cp -r ./Conf ./edk2/ 2>/dev/null || true
+	@TOOLS_DIR=edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64; \
+	rm -f $$TOOLS_DIR/RebootTools.efi $$TOOLS_DIR/ArbTools.efi $$TOOLS_DIR/BLTools.efi
 	bash -c 'cd edk2 && . ./edksetup.sh && make tools BOARD_BOOTLOADER_PRODUCT_NAME=canoe TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
   		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- VERIFIED_BOOT_ENABLED=1 \
   		VERIFIED_BOOT_LE=0 AB_RETRYCOUNT_DISABLE=0 TARGET_BOARD_TYPE_AUTO=0 \
@@ -48,4 +57,7 @@ tools-clean:
   		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- \
   		PREBUILT_HOST_TOOLS="BUILD_CC=clang BUILD_CXX=clang++ LDPATH=-fuse-ld=lld BUILD_AR=llvm-ar"' || true
 	rm -f ./build/RebootTools.efi ./build/ArbTools.efi ./build/BLTools.efi || true
+
+test:
+	$(MAKE) -C tests test
 
