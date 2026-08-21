@@ -1,0 +1,30 @@
+# OnePlus Ace 6T (CPH2767, macan) — OxygenOS CPH2767_16.0.9.401(EX01)
+# Artifact: LinuxLoader.efi extracted from the stock abl.img, 770048 bytes.
+#
+# Source of truth: Ghidra decompiler evidence, project
+# ~/Ghidra/projects/canoe-abl-tz-20260821, records under
+# ~/Ghidra/records/canoe-abl-tz-20260821/. Command ids are NOT recoverable by
+# immediate scanning on this image: each request is assembled from a 16-byte
+# constant loaded out of .data, the request length is passed in w3, and the
+# send is an indirect blr through the Qseecom protocol vtable.
+#
+# Observed send sites (request/response byte counts, file offsets):
+#   keymaster client FUN_0002389c: 0x201 44/4 @0x256e0, 0x208 64/4 @0x25768,
+#                                 0x211 36/4 @0x25ee0, 0x219 44/112 @0x26264
+#   startup path    FUN_0002ff44: 0x200  4/20 @0x30040
+#
+# Excluded on purpose: 0x207. Its only occurrence is the literal at 0x25e3c
+# inside a DebugPrint failure path, and the helper at 0x55368 is a bare ret, so
+# this ABL never issues SET_VERSION. It still reaches the manifest from the
+# protocol table with size 0 (no constraint) so classification is unchanged.
+#
+# Not observed statically: 0x202 and 0x203. The runtime log proves 0x202 is
+# issued, so it is reached by a path this static evidence does not cover; its
+# request layout is deliberately left unstated (size 0).
+sha256=e2dbe1b88f28751b762249986fe6b51cb3e3be53257f0dd2d62f12fdb9015497
+
+command=0x200 size=4 semantic=get_version occurrences=1
+command=0x201 size=44 semantic=set_rot occurrences=1
+command=0x208 size=64 semantic=set_bootstate occurrences=1
+command=0x211 size=36 semantic=set_vbh occurrences=1
+command=0x219 size=44 semantic=unknown occurrences=1

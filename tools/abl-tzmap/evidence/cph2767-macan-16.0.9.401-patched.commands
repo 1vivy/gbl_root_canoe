@@ -1,0 +1,19 @@
+# OnePlus Ace 6T (CPH2767, macan) — stock ABL after `patch_abl`, 770048 bytes.
+# This is the image BDS actually launches as boot.efi / boot_backup.efi.
+#
+# Source of truth: Ghidra project ~/Ghidra/projects/canoe-abl-tz-20260821,
+# records under ~/Ghidra/records/canoe-abl-tz-20260821/. Recorded to prove the
+# patcher does not relocate or alter any TrustZone identifier: every send site,
+# command id, request length and response length matches the stock build, and
+# the SPSS consumer is unchanged. This is what lets the toolkit derive the
+# sidecar from the unpatched LinuxLoader.efi.
+#
+# Excluded on purpose: 0x207 (failure-log argument only). Not observed
+# statically: 0x202, 0x203.
+sha256=1addf1d5769d1b7a44680da9e6536578d30ae8124da4cf93dd013a71ee4adb53
+
+command=0x200 size=4 semantic=get_version occurrences=1
+command=0x201 size=44 semantic=set_rot occurrences=1
+command=0x208 size=64 semantic=set_bootstate occurrences=1
+command=0x211 size=36 semantic=set_vbh occurrences=1
+command=0x219 size=44 semantic=unknown occurrences=1
