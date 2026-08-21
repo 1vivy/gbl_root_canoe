@@ -2,12 +2,11 @@
  * Persistent settings for the super-fastboot boot menu.
  *
  * The firmware refuses EFI variables it does not already know about, so the
- * menu keeps its two settings in the EFI System Partition instead. Only the
- * last megabyte of that partition is safe to write, so the store sits at the
- * very end of it: two 1 KiB NUL-padded ASCII records, back to back, ending on
- * the partition's last byte.
+ * menu keeps its settings in the EFI System Partition instead. Only the last
+ * megabyte of that partition is safe to write, so the store uses permanent
+ * 1 KiB NUL-padded ASCII records measured from the partition end:
  *
- *   [ ... file system ... | 1 MiB scratch ... | rec 0 | rec 1 ] end of ESP
+ *   [ ... file system ... | 1 MiB scratch ... | mode | default | custom ] end
  *
  * Nothing here goes through the file system: the records must survive the ESP
  * being written by an operating system that knows nothing about them, and a
@@ -32,7 +31,9 @@
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbStoreModuleTag = "SuperFbStore";
 
-#define SFB_STORE_BYTES  (SFB_STORE_SLOT_BYTES * SFB_STORE_SLOTS)
+
+STATIC_ASSERT (SFB_STORE_MODE_TAIL_DISTANCE <= SFB_STORE_SCRATCH_BYTES,
+               "SuperFb mode record must remain within scratch area");
 
 /* Refuse anything too small to have the megabyte of slack we were promised. */
 #define SFB_STORE_MIN_PARTITION_BYTES  SIZE_1MB
@@ -41,11 +42,36 @@ CONST CHAR8 *gSfbStoreModuleTag = "SuperFbStore";
 #define SFB_GPT_MAX_ENTRIES     512
 #define SFB_GPT_MIN_ENTRY_SIZE  128
 #define SFB_GPT_MAX_ENTRY_SIZE  4096
+#define SFB_STORE_MAX_BLOCK_BYTES SIZE_1MB
+
+STATIC
+BOOLEAN
+SfbMulU64 (IN UINT64 Left, IN UINT64 Right, OUT UINT64 *Result)
+{
+  if (Result == NULL || (Left != 0 && Right > MAX_UINT64 / Left)) {
+    return FALSE;
+  }
+  *Result = Left * Right;
+  return TRUE;
+}
+
+STATIC
+BOOLEAN
+SfbValidBlockMedia (IN CONST EFI_BLOCK_IO_MEDIA *Media)
+{
+  if (Media == NULL || Media->BlockSize == 0 ||
+      Media->BlockSize > SFB_STORE_MAX_BLOCK_BYTES) {
+    return FALSE;
+  }
+  return (BOOLEAN)(Media->IoAlign <= 1 ||
+                   (Media->IoAlign & (Media->IoAlign - 1)) == 0);
+}
+
 
 typedef struct {
   EFI_BLOCK_IO_PROTOCOL  *BlockIo;
-  /* Absolute byte offset of the first store record on BlockIo's media. */
-  UINT64                 Offset;
+  /* Exclusive byte offset immediately after the ESP on BlockIo's media. */
+  UINT64                 PartitionEnd;
   BOOLEAN                Resolved;
   BOOLEAN                Failed;
 } SFB_STORE_LOCATION;
@@ -69,6 +95,14 @@ SfbReadBlocks (IN EFI_BLOCK_IO_PROTOCOL  *BlockIo,
   EFI_STATUS  Status;
   UINTN       Bytes;
   UINTN       Alignment;
+
+  if (BlockIo == NULL || !SfbValidBlockMedia (BlockIo->Media) ||
+      Buffer == NULL || Pages == NULL || Blocks == 0 ||
+      Lba > BlockIo->Media->LastBlock ||
+      Blocks - 1 > BlockIo->Media->LastBlock - Lba ||
+      Blocks > MAX_UINTN / BlockIo->Media->BlockSize) {
+    return EFI_INVALID_PARAMETER;
+  }
 
   *Buffer = NULL;
   *Pages = 0;
@@ -104,6 +138,12 @@ SfbReadBlocks (IN EFI_BLOCK_IO_PROTOCOL  *BlockIo,
  * How well an entry answers to "the ESP". PartitionName is a fixed-width field
  * and is not required to be NUL terminated, so it is copied out before being
  * compared as a string.
+ *
+ * The NAME is checked before the type GUID on purpose. On this platform the BDS
+ * and the mode-record tail live on a vendor `efisp` partition that is NOT typed
+ * as an EFI System Partition, so requiring the ESP GUID first would leave the
+ * mode store unresolvable on exactly the devices this loader targets. A
+ * correctly typed ESP remains the fallback when no such name exists.
  */
 STATIC
 UINTN
@@ -118,8 +158,6 @@ SfbRankEspEntry (IN CONST EFI_PARTITION_ENTRY *Entry)
     return SFB_ESP_BY_NAME;
   }
 
-  /* Fallback for a table that names it something else: the type GUID is what
-   * makes a partition an ESP in the first place. */
   if (CompareGuid (&Entry->PartitionTypeGUID, &gEfiPartTypeSystemPartGuid)) {
     return SFB_ESP_BY_TYPE;
   }
@@ -143,11 +181,20 @@ SfbFindEspInGpt (IN EFI_BLOCK_IO_PROTOCOL *Disk, OUT UINT64 *PartitionEnd)
   UINT8                        *Entries = NULL;
   UINTN                        HeaderPages = 0;
   UINTN                        EntryPages = 0;
-  UINTN                        BlockSize = Disk->Media->BlockSize;
+  UINTN                        BlockSize;
   UINTN                        EntryBytes;
   UINTN                        EntryBlocks;
   UINTN                        Index;
   UINTN                        Best;
+
+  if (Disk == NULL || PartitionEnd == NULL ||
+      !SfbValidBlockMedia (Disk->Media)) {
+    return EFI_VOLUME_CORRUPTED;
+  }
+  BlockSize = Disk->Media->BlockSize;
+  if (BlockSize < sizeof (EFI_PARTITION_TABLE_HEADER)) {
+    return EFI_VOLUME_CORRUPTED;
+  }
 
   *PartitionEnd = 0;
 
@@ -170,6 +217,9 @@ SfbFindEspInGpt (IN EFI_BLOCK_IO_PROTOCOL *Disk, OUT UINT64 *PartitionEnd)
 
   EntryBytes = (UINTN)Header->NumberOfPartitionEntries *
                Header->SizeOfPartitionEntry;
+  if (EntryBytes > MAX_UINTN - (BlockSize - 1)) {
+    goto Done;
+  }
   EntryBlocks = (EntryBytes + BlockSize - 1) / BlockSize;
 
   Status = SfbReadBlocks (Disk, Header->PartitionEntryLBA, EntryBlocks,
@@ -191,18 +241,30 @@ SfbFindEspInGpt (IN EFI_BLOCK_IO_PROTOCOL *Disk, OUT UINT64 *PartitionEnd)
       continue;
     }
 
-    if (Entry->EndingLBA < Entry->StartingLBA ||
-        Entry->EndingLBA > Disk->Media->LastBlock) {
-      continue;
-    }
+    {
+      UINT64 PartitionBlocks;
+      UINT64 PartitionBytes;
+      UINT64 EndLbaExclusive;
 
-    if ((Entry->EndingLBA - Entry->StartingLBA + 1) * BlockSize <
-        SFB_STORE_MIN_PARTITION_BYTES) {
-      DEBUG ((EFI_D_ERROR, "SFB: ESP candidate too small for the store\n"));
-      continue;
-    }
+      if (Entry->EndingLBA < Entry->StartingLBA ||
+          Entry->EndingLBA > Disk->Media->LastBlock ||
+          Entry->EndingLBA - Entry->StartingLBA == MAX_UINT64) {
+        continue;
+      }
+      PartitionBlocks = Entry->EndingLBA - Entry->StartingLBA + 1;
+      if (!SfbMulU64 (PartitionBlocks, BlockSize, &PartitionBytes) ||
+          PartitionBytes < SFB_STORE_MIN_PARTITION_BYTES) {
+        DEBUG ((EFI_D_ERROR, "SFB: ESP candidate too small or invalid\n"));
+        continue;
+      }
+      if (Entry->EndingLBA == MAX_UINT64 ||
+          !SfbMulU64 (Entry->EndingLBA + 1, BlockSize,
+                      &EndLbaExclusive)) {
+        continue;
+      }
 
-    *PartitionEnd = (Entry->EndingLBA + 1) * BlockSize;
+      *PartitionEnd = EndLbaExclusive;
+    }
     Status = EFI_SUCCESS;
     Best = Rank;
 
@@ -263,12 +325,12 @@ SfbFindEspByPartitionInfo (OUT EFI_BLOCK_IO_PROTOCOL **BlockIo,
     if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
                                         &gEfiBlockIoProtocolGuid,
                                         (VOID **)&Candidate)) ||
-        Candidate->Media == NULL || !Candidate->Media->MediaPresent) {
-      continue;
-    }
-
-    Bytes = (Candidate->Media->LastBlock + 1) * Candidate->Media->BlockSize;
-    if (Bytes < SFB_STORE_MIN_PARTITION_BYTES) {
+        Candidate->Media == NULL || !Candidate->Media->MediaPresent ||
+        !SfbValidBlockMedia (Candidate->Media) ||
+        Candidate->Media->LastBlock == MAX_UINT64 ||
+        !SfbMulU64 (Candidate->Media->LastBlock + 1,
+                    Candidate->Media->BlockSize, &Bytes) ||
+        Bytes < SFB_STORE_MIN_PARTITION_BYTES) {
       continue;
     }
 
@@ -342,11 +404,12 @@ SfbResolveStore (VOID)
     /* Still usable for reads, so this is not a resolution failure. */
   }
 
-  mSfbStore.Offset = PartitionEnd - SFB_STORE_BYTES;
+  mSfbStore.PartitionEnd = PartitionEnd;
   mSfbStore.Resolved = TRUE;
 
-  DEBUG ((EFI_D_INFO, "SFB: store at offset 0x%lx (block size %u)\n",
-          mSfbStore.Offset, (UINT32)mSfbStore.BlockIo->Media->BlockSize));
+  DEBUG ((EFI_D_INFO, "SFB: store partition end 0x%lx (block size %u)\n",
+          mSfbStore.PartitionEnd,
+          (UINT32)mSfbStore.BlockIo->Media->BlockSize));
 
   return EFI_SUCCESS;
 }
@@ -354,62 +417,96 @@ SfbResolveStore (VOID)
 /* ---- record access ------------------------------------------------------ */
 
 /*
- * The store is not block aligned in general - a 4 KiB sector device puts both
- * records inside one block - so every access works on the whole run of blocks
- * that covers it, and a write is a read-modify-write of that run.
+ * The store is not block aligned in general - a 4 KiB sector device can put a
+ * record inside one block - so every access works on the whole run of blocks
+ * that covers one named slot, and a write is a read-modify-write of that run.
  *
- * On success *Buffer holds the blocks, *Skip is where the store starts inside
- * them, and *Lba / *Blocks describe where they came from.
+ * TailDistance is the permanent distance from PartitionEnd to the start of
+ * the named record. This deliberately avoids a moving base when new records
+ * are added in the reserved scratch area.
  */
 STATIC
 EFI_STATUS
-SfbMapStoreBlocks (OUT VOID      **Buffer,
-                   OUT UINTN     *Pages,
+SfbMapStoreBlocks (IN UINT64      TailDistance,
+                   OUT VOID      **Buffer,
+                   OUT UINTN      *Pages,
                    OUT EFI_LBA   *Lba,
                    OUT UINTN     *Blocks,
                    OUT UINTN     *Skip)
 {
   EFI_STATUS  Status;
   UINTN       BlockSize;
+  UINT64      RecordOffset;
+
+  if (Buffer == NULL || Pages == NULL || Lba == NULL ||
+      Blocks == NULL || Skip == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
 
   Status = SfbResolveStore ();
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
+  if (TailDistance < SFB_STORE_SLOT_BYTES ||
+      TailDistance > mSfbStore.PartitionEnd) {
+    return EFI_VOLUME_CORRUPTED;
+  }
+
+  RecordOffset = mSfbStore.PartitionEnd - TailDistance;
+  if (!SfbValidBlockMedia (mSfbStore.BlockIo->Media)) {
+    return EFI_VOLUME_CORRUPTED;
+  }
   BlockSize = mSfbStore.BlockIo->Media->BlockSize;
 
-  *Lba = mSfbStore.Offset / BlockSize;
-  *Skip = (UINTN)(mSfbStore.Offset % BlockSize);
-  *Blocks = (*Skip + SFB_STORE_BYTES + BlockSize - 1) / BlockSize;
+  *Lba = RecordOffset / BlockSize;
+  *Skip = (UINTN)(RecordOffset % BlockSize);
+  if (*Skip > MAX_UINTN - SFB_STORE_SLOT_BYTES ||
+      *Skip + SFB_STORE_SLOT_BYTES > MAX_UINTN - (BlockSize - 1)) {
+    return EFI_VOLUME_CORRUPTED;
+  }
+  *Blocks = (*Skip + SFB_STORE_SLOT_BYTES + BlockSize - 1) / BlockSize;
 
   return SfbReadBlocks (mSfbStore.BlockIo, *Lba, *Blocks, Buffer, Pages);
 }
-
-EFI_STATUS
-SfbStoreRead (IN UINTN Slot, OUT CHAR8 *Out, IN UINTN OutBytes)
+STATIC
+UINT64
+SfbLegacyTailDistance (IN UINTN Slot)
 {
-  EFI_STATUS  Status;
-  VOID        *Buffer = NULL;
-  UINTN       Pages = 0;
-  EFI_LBA     Lba = 0;
-  UINTN       Blocks = 0;
-  UINTN       Skip = 0;
-  CONST CHAR8 *Record;
-  UINTN       Index;
+  return (Slot == SFB_STORE_DEFAULT)
+           ? SFB_STORE_DEFAULT_TAIL_DISTANCE
+           : SFB_STORE_CUSTOM_TAIL_DISTANCE;
+}
 
-  if (Slot >= SFB_STORE_SLOTS || OutBytes == 0) {
+
+STATIC
+EFI_STATUS
+SfbStoreReadTail (IN UINT64   TailDistance,
+                  OUT CHAR8  *Out,
+                  IN UINTN    OutBytes)
+{
+  EFI_STATUS     Status;
+  VOID           *Buffer = NULL;
+  UINTN          Pages = 0;
+  EFI_LBA        Lba = 0;
+  UINTN          Blocks = 0;
+  UINTN          Skip = 0;
+  CONST CHAR8    *Record;
+  UINTN          Index;
+
+  if (Out == NULL || OutBytes == 0) {
     return EFI_INVALID_PARAMETER;
   }
 
   Out[0] = '\0';
 
-  Status = SfbMapStoreBlocks (&Buffer, &Pages, &Lba, &Blocks, &Skip);
+  Status = SfbMapStoreBlocks (TailDistance, &Buffer, &Pages, &Lba, &Blocks,
+                              &Skip);
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
-  Record = (CONST CHAR8 *)Buffer + Skip + Slot * SFB_STORE_SLOT_BYTES;
+  Record = (CONST CHAR8 *)Buffer + Skip;
 
   /* Never-written media is whatever the flash was left as, so nothing beyond
    * the record's own bounds is trusted and the copy is terminated by us. */
@@ -438,7 +535,19 @@ SfbStoreRead (IN UINTN Slot, OUT CHAR8 *Out, IN UINTN OutBytes)
 }
 
 EFI_STATUS
-SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text)
+SfbStoreRead (IN UINTN Slot, OUT CHAR8 *Out, IN UINTN OutBytes)
+{
+  if (Slot >= SFB_STORE_SLOTS || Out == NULL || OutBytes == 0) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  return SfbStoreReadTail (SfbLegacyTailDistance (Slot), Out, OutBytes);
+}
+
+STATIC
+EFI_STATUS
+SfbStoreWriteTail (IN UINT64      TailDistance,
+                   IN CONST CHAR8 *Text)
 {
   EFI_STATUS  Status;
   VOID        *Buffer = NULL;
@@ -449,7 +558,7 @@ SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text)
   CHAR8       *Record;
   UINTN       Length;
 
-  if (Slot >= SFB_STORE_SLOTS) {
+  if (Text == NULL) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -458,7 +567,8 @@ SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text)
     return EFI_BAD_BUFFER_SIZE;
   }
 
-  Status = SfbMapStoreBlocks (&Buffer, &Pages, &Lba, &Blocks, &Skip);
+  Status = SfbMapStoreBlocks (TailDistance, &Buffer, &Pages, &Lba, &Blocks,
+                              &Skip);
   if (EFI_ERROR (Status)) {
     return Status;
   }
@@ -468,9 +578,9 @@ SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text)
     return EFI_WRITE_PROTECTED;
   }
 
-  /* Only this slot changes; the other one and the rest of the blocks are put
-   * back exactly as they were read. */
-  Record = (CHAR8 *)Buffer + Skip + Slot * SFB_STORE_SLOT_BYTES;
+  /* Only this named slot changes; all other bytes in the covering blocks are
+   * put back exactly as they were read. */
+  Record = (CHAR8 *)Buffer + Skip;
   ZeroMem (Record, SFB_STORE_SLOT_BYTES);
   CopyMem (Record, Text, Length);
 
@@ -494,5 +604,139 @@ SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text)
   FreeAlignedPages (Buffer, Pages);
 
   return Status;
+}
+
+EFI_STATUS
+SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text)
+{
+  if (Slot >= SFB_STORE_SLOTS || Text == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  return SfbStoreWriteTail (SfbLegacyTailDistance (Slot), Text);
+}
+
+STATIC
+EFI_STATUS
+SfbStoreReadRawTail (IN UINT64 TailDistance,
+                     OUT CHAR8 *Record)
+{
+  EFI_STATUS  Status;
+  VOID        *Buffer = NULL;
+  UINTN       Pages = 0;
+  EFI_LBA     Lba = 0;
+  UINTN       Blocks = 0;
+  UINTN       Skip = 0;
+
+  if (Record == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Status = SfbMapStoreBlocks (TailDistance, &Buffer, &Pages, &Lba, &Blocks,
+                              &Skip);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  CopyMem (Record, (CONST UINT8 *)Buffer + Skip, SFB_STORE_SLOT_BYTES);
+  FreeAlignedPages (Buffer, Pages);
+  return EFI_SUCCESS;
+}
+
+STATIC
+BOOLEAN
+SfbModeRecordMatches (IN CONST CHAR8 *Record, IN CONST CHAR8 *Expected)
+{
+  UINTN  Index;
+
+  if (CompareMem (Record, Expected, 7) != 0) {
+    return FALSE;
+  }
+
+  /* Mode records are exact tokens followed by a fully NUL-padded slot. */
+  for (Index = 7; Index < SFB_STORE_SLOT_BYTES; Index++) {
+    if (Record[Index] != '\0') {
+      return FALSE;
+    }
+  }
+
+  return TRUE;
+}
+
+EFI_STATUS
+SfbStoreReadMode (OUT SFB_BOOT_MODE *Mode, OUT BOOLEAN *Defaulted)
+{
+  EFI_STATUS  Status;
+  CHAR8       Record[SFB_STORE_SLOT_BYTES];
+
+  if (Mode == NULL || Defaulted == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  *Mode = SfbBootModeAblFakeLocked;
+  *Defaulted = TRUE;
+
+  Status = SfbStoreReadRawTail (SFB_STORE_MODE_TAIL_DISTANCE, Record);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  if (SfbModeRecordMatches (Record, "SFBM1|0")) {
+    *Mode = SfbBootModeHonestUnlocked;
+    *Defaulted = FALSE;
+  } else if (SfbModeRecordMatches (Record, "SFBM1|1")) {
+    *Mode = SfbBootModeAblFakeLocked;
+    *Defaulted = FALSE;
+  } else if (SfbModeRecordMatches (Record, "SFBM1|2")) {
+    *Mode = SfbBootModeKmProfile;
+    *Defaulted = FALSE;
+  }
+
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS
+SfbStoreWriteMode (IN SFB_BOOT_MODE Mode)
+{
+  CONST CHAR8  *Record;
+
+  switch (Mode) {
+  case SfbBootModeHonestUnlocked:
+    Record = "SFBM1|0";
+    break;
+  case SfbBootModeAblFakeLocked:
+    Record = "SFBM1|1";
+    break;
+  case SfbBootModeKmProfile:
+    Record = "SFBM1|2";
+    break;
+  default:
+    return EFI_INVALID_PARAMETER;
+  }
+
+  return SfbStoreWriteTail (SFB_STORE_MODE_TAIL_DISTANCE, Record);
+}
+
+EFI_STATUS
+SfbCommitModeSelection (
+  IN OUT SFB_BOOT_MODE *CurrentMode,
+  IN SFB_BOOT_MODE      SelectedMode
+  )
+{
+  EFI_STATUS Status;
+
+  if (CurrentMode == NULL || SelectedMode > SfbBootModeKmProfile) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Status = SfbStoreWriteMode (SelectedMode);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  *CurrentMode = SelectedMode;
+  DEBUG ((EFI_D_INFO, "SFB: MARK mode-selected mode=%u\n",
+          (UINT32)SelectedMode));
+  return EFI_SUCCESS;
 }
 

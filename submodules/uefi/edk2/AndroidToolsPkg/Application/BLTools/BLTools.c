@@ -33,6 +33,7 @@
 #include <Library/UefiLib.h>
 
 #include "AtDevInfo.h"
+#include "AtVerifiedBoot.h"
 #include "AndroidToolsUi.h"
 
 #ifndef ARRAY_SIZE

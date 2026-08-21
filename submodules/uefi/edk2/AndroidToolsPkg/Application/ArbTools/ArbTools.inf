@@ -19,6 +19,7 @@
 [Packages]
   MdePkg/MdePkg.dec
   AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
 
 [LibraryClasses]
   AndroidToolsUi
