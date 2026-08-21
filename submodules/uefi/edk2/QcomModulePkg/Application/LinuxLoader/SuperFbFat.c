@@ -10,7 +10,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "SuperFbMenu.h"
+#include "SuperFbFatClassify.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -192,16 +192,10 @@ SfbStartFatStack (VOID)
 }
 
 /*
- * Byte offsets into the FAT boot sector. Named here rather than pulled from
- * EnhancedFatDxe's FatFileSystem.h, which is module-private to its package.
+ * Little-endian helpers used by the PE driver-file probe below. Volume
+ * classification itself lives in SuperFbFatClassify.h so the same pure
+ * decision is used by firmware and host regressions.
  */
-#define SFB_BPB_BYTES_PER_SEC   11
-#define SFB_BPB_ROOT_ENT_CNT    17
-#define SFB_BPB_TOT_SEC_16      19
-#define SFB_BPB_FAT_SZ_16       22
-#define SFB_BPB_FAT_SZ_32       36
-#define SFB_BPB_FS_TYPE_32      82
-#define SFB_BPB_SIGNATURE       510
 
 STATIC
 UINT16
@@ -223,8 +217,7 @@ SfbLe32 (IN CONST UINT8 *Sector, IN UINTN Offset)
 /*
  * Decide from the boot sector alone. The FAT type is defined by the geometry
  * rather than by the "FAT32" text at offset 82, which is documented as
- * informational only, so the geometry is what is checked; the text is accepted
- * as a second opinion for images that fill it in but lay out the BPB oddly.
+ * informational only.
  */
 BOOLEAN
 SfbIsFat32Volume (IN EFI_HANDLE Volume)
@@ -233,7 +226,6 @@ SfbIsFat32Volume (IN EFI_HANDLE Volume)
   EFI_BLOCK_IO_PROTOCOL  *BlockIo = NULL;
   UINT8                  *Sector;
   UINTN                  SectorSize;
-  UINT16                 BytesPerSec;
   BOOLEAN                IsFat32 = FALSE;
 
   Status = gBS->HandleProtocol (Volume, &gEfiBlockIoProtocolGuid,
@@ -263,46 +255,20 @@ SfbIsFat32Volume (IN EFI_HANDLE Volume)
                                 SectorSize, Sector);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_VERBOSE, "SFB: boot sector read failed: %r\n", Status));
-    goto Done;
+  } else {
+    IsFat32 = (BOOLEAN)(SfbClassifyVolumeBytes (Sector, SectorSize) ==
+                        SfbVolumeKindFat32);
   }
 
-  if (Sector[SFB_BPB_SIGNATURE] != 0x55 ||
-      Sector[SFB_BPB_SIGNATURE + 1] != 0xAA) {
-    goto Done;
-  }
-
-  BytesPerSec = SfbLe16 (Sector, SFB_BPB_BYTES_PER_SEC);
-  if (BytesPerSec != 512 && BytesPerSec != 1024 &&
-      BytesPerSec != 2048 && BytesPerSec != 4096) {
-    goto Done;
-  }
-
-  /* FAT32 has no fixed-size root directory, no 16-bit FAT size and, past the
-   * 32MB mark, no 16-bit total sector count either. */
-  if (SfbLe16 (Sector, SFB_BPB_ROOT_ENT_CNT) == 0 &&
-      SfbLe16 (Sector, SFB_BPB_FAT_SZ_16) == 0 &&
-      SfbLe16 (Sector, SFB_BPB_TOT_SEC_16) == 0 &&
-      SfbLe32 (Sector, SFB_BPB_FAT_SZ_32) != 0) {
-    IsFat32 = TRUE;
-    goto Done;
-  }
-
-  if (CompareMem (Sector + SFB_BPB_FS_TYPE_32, "FAT32   ", 8) == 0) {
-    IsFat32 = TRUE;
-  }
-
-Done:
   FreeAlignedPages (Sector, EFI_SIZE_TO_PAGES (SectorSize));
-
   return IsFat32;
 }
 
 /*
  * The ext4 superblock sits 1024 bytes into the partition and carries the
- * 0xEF53 signature at offset 56 within it (byte 1080). FAT32 volumes answer
- * FALSE here: their first few KiB are a boot sector and FATs, never an ext4
- * superblock, so this and SfbIsFat32Volume () partition the volume set
- * cleanly and a handle is never both.
+ * 0xEF53 signature at offset 56 within it (byte 1080). The shared classifier
+ * checks FAT32 geometry first and validates the ext4 layout before accepting
+ * the magic, so a coincidental match cannot redirect a FAT32 root.
  */
 BOOLEAN
 SfbIsExt4Volume (IN EFI_HANDLE Volume)
@@ -314,7 +280,6 @@ SfbIsExt4Volume (IN EFI_HANDLE Volume)
   UINTN                  Bytes;
   UINTN                  Blocks;
   BOOLEAN                IsExt4 = FALSE;
-
   Status = gBS->HandleProtocol (Volume, &gEfiBlockIoProtocolGuid,
                                 (VOID **)&BlockIo);
   if (EFI_ERROR (Status) || BlockIo == NULL || BlockIo->Media == NULL) {
@@ -330,7 +295,8 @@ SfbIsExt4Volume (IN EFI_HANDLE Volume)
     return FALSE;
   }
 
-  /* The magic is at byte 1080; read at least that far from the start. */
+  /* Read enough to cover the ext4 superblock; the classifier validates all
+   * fields before accepting the magic. */
   Bytes = 4096;
   Blocks = (Bytes + SectorSize - 1) / SectorSize;
   Bytes = Blocks * SectorSize;
@@ -346,19 +312,101 @@ SfbIsExt4Volume (IN EFI_HANDLE Volume)
                                 Bytes, Sector);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_VERBOSE, "SFB: ext4 superblock read failed: %r\n", Status));
-    goto Done;
+  } else {
+    IsExt4 = (BOOLEAN)(SfbClassifyVolumeBytes (Sector, Bytes) ==
+                       SfbVolumeKindExt4);
   }
 
-  if (SfbLe16 (Sector, 1080) == 0xEF53) {
-    IsExt4 = TRUE;
-  }
-
-Done:
   FreeAlignedPages (Sector, EFI_SIZE_TO_PAGES (Bytes));
-
   return IsExt4;
 }
 
+
+typedef struct {
+  EFI_HANDLE       Volume;
+  SFB_VOLUME_KIND  Kind;
+} SFB_VOLUME_CLASS;
+
+#define SFB_VOLUME_CLASS_CACHE_MAX  256
+
+STATIC SFB_VOLUME_CLASS  mSfbVolumeClassCache[SFB_VOLUME_CLASS_CACHE_MAX];
+STATIC UINTN             mSfbVolumeClassCount;
+
+STATIC
+VOID
+SfbResetVolumeClassCache (VOID)
+{
+  ZeroMem (mSfbVolumeClassCache, sizeof (mSfbVolumeClassCache));
+  mSfbVolumeClassCount = 0;
+}
+
+STATIC
+SFB_VOLUME_KIND
+SfbProbeVolumeKind (IN EFI_HANDLE Volume)
+{
+  EFI_STATUS             Status;
+  EFI_BLOCK_IO_PROTOCOL  *BlockIo = NULL;
+  UINT8                  *Sector;
+  UINTN                  SectorSize;
+  UINTN                  Bytes;
+  UINTN                  Blocks;
+  SFB_VOLUME_KIND        Kind = SfbVolumeKindOther;
+
+  Status = gBS->HandleProtocol (Volume, &gEfiBlockIoProtocolGuid,
+                                (VOID **)&BlockIo);
+  if (EFI_ERROR (Status) || BlockIo == NULL || BlockIo->Media == NULL ||
+      !BlockIo->Media->MediaPresent) {
+    return Kind;
+  }
+
+  SectorSize = BlockIo->Media->BlockSize;
+  if (SectorSize < 512) {
+    return Kind;
+  }
+
+  Bytes = 4096;
+  Blocks = (Bytes + SectorSize - 1) / SectorSize;
+  Bytes = Blocks * SectorSize;
+  Sector = AllocateAlignedPages (EFI_SIZE_TO_PAGES (Bytes),
+                                 BlockIo->Media->IoAlign > 1 ?
+                                   BlockIo->Media->IoAlign : 8);
+  if (Sector == NULL) {
+    return Kind;
+  }
+
+  Status = BlockIo->ReadBlocks (BlockIo, BlockIo->Media->MediaId, 0,
+                                Bytes, Sector);
+  if (!EFI_ERROR (Status)) {
+    Kind = SfbClassifyVolumeBytes (Sector, Bytes);
+  }
+  FreeAlignedPages (Sector, EFI_SIZE_TO_PAGES (Bytes));
+  return Kind;
+}
+
+STATIC
+SFB_VOLUME_KIND
+SfbClassifyVolume (IN EFI_HANDLE Volume)
+{
+  UINTN           Index;
+  SFB_VOLUME_KIND Kind;
+
+  for (Index = 0; Index < mSfbVolumeClassCount; Index++) {
+    if (mSfbVolumeClassCache[Index].Volume == Volume) {
+      return mSfbVolumeClassCache[Index].Kind;
+    }
+  }
+
+  Kind = SfbProbeVolumeKind (Volume);
+  if (mSfbVolumeClassCount < SFB_VOLUME_CLASS_CACHE_MAX) {
+    mSfbVolumeClassCache[mSfbVolumeClassCount].Volume = Volume;
+    mSfbVolumeClassCache[mSfbVolumeClassCount].Kind = Kind;
+    mSfbVolumeClassCount++;
+  } else {
+    DEBUG ((EFI_D_WARN, "SFB: volume classification cache full\n"));
+    Kind = SfbVolumeKindOther;
+  }
+  return Kind;
+}
 /*
  * The subdirectory that plays the role of a FAT32 volume root on a given
  * volume: empty for genuine FAT32 (its root already is the scan root) and
@@ -369,7 +417,13 @@ Done:
 CONST CHAR16 *
 SfbVolumeRootPrefix (IN EFI_HANDLE Volume)
 {
-  return SfbIsExt4Volume (Volume) ? L"\\efisp" : L"";
+  return SfbClassifyVolume (Volume) == SfbVolumeKindExt4 ?
+           L"\\efisp" : L"";
+}
+BOOLEAN
+SfbVolumeIsExt4 (IN EFI_HANDLE Volume)
+{
+  return (BOOLEAN)(SfbClassifyVolume (Volume) == SfbVolumeKindExt4);
 }
 
 /*
@@ -421,14 +475,16 @@ SfbVolumeHasDir (IN EFI_HANDLE Volume, IN CONST CHAR16 *Path)
 EFI_STATUS
 SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
 {
-  EFI_STATUS  Status;
-  EFI_HANDLE  *All = NULL;
-  UINTN       AllCount = 0;
-  UINTN       Kept = 0;
-  UINTN       Index;
+  EFI_STATUS        Status;
+  EFI_HANDLE        *All = NULL;
+  UINTN              AllCount = 0;
+  UINTN              Kept = 0;
+  UINTN              Index;
+  SFB_VOLUME_KIND    Kind;
 
   *Handles = NULL;
   *Count = 0;
+  SfbResetVolumeClassCache ();
 
   Status = gBS->LocateHandleBuffer (ByProtocol,
                                     &gEfiSimpleFileSystemProtocolGuid,
@@ -446,8 +502,9 @@ SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
    * it has no boot root to scan and nothing to browse, so it would only clutter
    * the menu. Anything else is dropped too. */
   for (Index = 0; Index < AllCount; Index++) {
-    if (SfbIsFat32Volume (All[Index]) ||
-        (SfbIsExt4Volume (All[Index]) &&
+    Kind = SfbClassifyVolume (All[Index]);
+    if (Kind == SfbVolumeKindFat32 ||
+        (Kind == SfbVolumeKindExt4 &&
          SfbVolumeHasDir (All[Index], L"\\efisp"))) {
       All[Kept++] = All[Index];
     }

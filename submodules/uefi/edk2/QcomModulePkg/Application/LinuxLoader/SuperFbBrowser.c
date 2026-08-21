@@ -34,7 +34,8 @@ typedef struct {
 
 /* ---- path helpers ------------------------------------------------------- */
 
-STATIC
+/* Shared with SuperFbEntries.c via SuperFbMenu.h: both join paths and must
+ * agree on whether a separator is already present. */
 BOOLEAN
 SfbIsRootPath (IN CONST CHAR16 *Path)
 {
@@ -42,15 +43,42 @@ SfbIsRootPath (IN CONST CHAR16 *Path)
 }
 
 STATIC
-VOID
-SfbJoinPath (IN OUT CHAR16   *Path,
-             IN UINTN        PathChars,
-             IN CONST CHAR16 *Name)
+EFI_STATUS
+SfbJoinPath (IN OUT CHAR16    *Path,
+             IN UINTN          PathChars,
+             IN CONST CHAR16  *Name)
 {
-  if (!SfbIsRootPath (Path)) {
-    StrnCatS (Path, PathChars, L"\\", PathChars - StrLen (Path) - 1);
+  RETURN_STATUS  Status;
+  UINTN          PathLength;
+  UINTN          NameLength;
+
+  if (Path == NULL || Name == NULL || PathChars == 0) {
+    return EFI_INVALID_PARAMETER;
   }
-  StrnCatS (Path, PathChars, Name, PathChars - StrLen (Path) - 1);
+
+  PathLength = StrLen (Path);
+  NameLength = StrLen (Name);
+  if (PathLength >= PathChars) {
+    return EFI_BUFFER_TOO_SMALL;
+  }
+
+  if (SfbIsRootPath (Path)) {
+    if (NameLength >= PathChars - PathLength) {
+      return EFI_BUFFER_TOO_SMALL;
+    }
+  } else if (PathLength + 1 >= PathChars ||
+             NameLength >= PathChars - PathLength - 1) {
+    return EFI_BUFFER_TOO_SMALL;
+  }
+
+  if (!SfbIsRootPath (Path)) {
+    Status = StrCatS (Path, PathChars, L"\\");
+    if (RETURN_ERROR (Status)) {
+      return (EFI_STATUS)Status;
+    }
+  }
+  Status = StrCatS (Path, PathChars, Name);
+  return RETURN_ERROR (Status) ? (EFI_STATUS)Status : EFI_SUCCESS;
 }
 
 STATIC
@@ -115,11 +143,24 @@ SfbCompareDirEntries (IN CONST SFB_DIR_ENTRY *A, IN CONST SFB_DIR_ENTRY *B)
 }
 
 STATIC
+BOOLEAN
+SfbCopyDirectoryName (OUT CHAR16       *Destination,
+                      IN CONST CHAR16  *Source)
+{
+  if (Destination == NULL || Source == NULL ||
+      StrLen (Source) >= SFB_NAME_CHARS) {
+    return FALSE;
+  }
+  return (BOOLEAN)!RETURN_ERROR (StrCpyS (Destination, SFB_NAME_CHARS, Source));
+}
+
+STATIC
 VOID
 SfbSortDirEntries (IN OUT SFB_DIR_ENTRY *List, IN UINTN Count)
 {
   UINTN          Index;
   UINTN          Probe;
+
   SFB_DIR_ENTRY  Pending;
 
   for (Index = 1; Index < Count; Index++) {
@@ -213,6 +254,12 @@ SfbReadDirectory (IN EFI_FILE_PROTOCOL  *Dir,
       continue;
     }
 
+    if (StrLen (Info->FileName) >= SFB_NAME_CHARS) {
+      DEBUG ((EFI_D_WARN,
+              "SFB: directory entry name too long; skipped\n"));
+      continue;
+    }
+
     if (*Count >= Max) {
       *Truncated = TRUE;
       Status = EFI_SUCCESS;
@@ -220,8 +267,9 @@ SfbReadDirectory (IN EFI_FILE_PROTOCOL  *Dir,
     }
 
     ZeroMem (&List[*Count], sizeof (List[0]));
-    StrnCpyS (List[*Count].Name, SFB_NAME_CHARS, Info->FileName,
-              SFB_NAME_CHARS - 1);
+    if (!SfbCopyDirectoryName (List[*Count].Name, Info->FileName)) {
+      continue;
+    }
     List[*Count].IsDir =
       (BOOLEAN)((Info->Attribute & EFI_FILE_DIRECTORY) != 0);
     (*Count)++;
@@ -326,9 +374,10 @@ SfbDriverActionMenu (IN EFI_HANDLE   Volume,
  */
 STATIC
 BOOLEAN
-SfbEfiActionMenu (IN EFI_HANDLE   Volume,
-                  IN CONST CHAR16 *FullPath,
-                  IN CONST CHAR16 *Name)
+SfbEfiActionMenu (IN EFI_HANDLE    Volume,
+                  IN CONST CHAR16  *FullPath,
+                  IN CONST CHAR16  *Name,
+                  IN SFB_BOOT_MODE Mode)
 {
   STATIC CONST CHAR16  *Actions[] = {
     L"Boot (temporary)",
@@ -378,7 +427,7 @@ SfbEfiActionMenu (IN EFI_HANDLE   Volume,
     if (Cursor == 0) {
       /* Temporary: deliberately does not touch the default-entry variable.
        * Menu-driven launch, so clear the screen for the "Booting" banner. */
-      Status = SfbLaunchEntry (&Entry, TRUE, TRUE);
+      Status = SfbLaunchEntry (&Entry, TRUE, TRUE, Mode);
       if (EFI_ERROR (Status)) {
         SfbReportStatus (L"Boot failed", Status);
       }
@@ -406,9 +455,10 @@ SfbEfiActionMenu (IN EFI_HANDLE   Volume,
 /* Returns TRUE when the browser should unwind back to the boot menu. */
 STATIC
 BOOLEAN
-SfbBrowseVolume (IN EFI_HANDLE   Volume,
-                 IN CONST CHAR16 *VolumeLabel,
-                 IN CONST CHAR16 *BrowseRoot)
+SfbBrowseVolume (IN EFI_HANDLE    Volume,
+                 IN CONST CHAR16  *VolumeLabel,
+                 IN CONST CHAR16  *BrowseRoot,
+                 IN SFB_BOOT_MODE Mode)
 {
   CHAR16         Path[SFB_PATH_CHARS];
   SFB_DIR_ENTRY  *List;
@@ -435,6 +485,7 @@ SfbBrowseVolume (IN EFI_HANDLE   Volume,
     SFB_KEY              Key;
     CONST SFB_DIR_ENTRY  *Selected;
     CHAR16               FullPath[SFB_PATH_CHARS];
+    EFI_STATUS            JoinStatus;
 
     if (Reload) {
       EFI_FILE_PROTOCOL  *Root = NULL;
@@ -486,7 +537,6 @@ SfbBrowseVolume (IN EFI_HANDLE   Volume,
 
       SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, List[Index].Name);
     }
-
     if (Last < Count) {
       Print (L"    ... %u more\r\n", (UINT32)(Count - Last));
     }
@@ -520,7 +570,11 @@ SfbBrowseVolume (IN EFI_HANDLE   Volume,
     }
 
     if (Selected->IsDir) {
-      SfbJoinPath (Path, SFB_PATH_CHARS, Selected->Name);
+      JoinStatus = SfbJoinPath (Path, SFB_PATH_CHARS, Selected->Name);
+      if (EFI_ERROR (JoinStatus)) {
+        SfbReportStatus (L"Path too long", JoinStatus);
+        continue;
+      }
       Reload = TRUE;
       continue;
     }
@@ -531,9 +585,13 @@ SfbBrowseVolume (IN EFI_HANDLE   Volume,
     }
 
     StrCpyS (FullPath, SFB_PATH_CHARS, Path);
-    SfbJoinPath (FullPath, SFB_PATH_CHARS, Selected->Name);
+    JoinStatus = SfbJoinPath (FullPath, SFB_PATH_CHARS, Selected->Name);
+    if (EFI_ERROR (JoinStatus)) {
+      SfbReportStatus (L"Path too long", JoinStatus);
+      continue;
+    }
 
-    if (SfbEfiActionMenu (Volume, FullPath, Selected->Name)) {
+    if (SfbEfiActionMenu (Volume, FullPath, Selected->Name, Mode)) {
       FreePool (List);
       return TRUE;
     }
@@ -554,7 +612,7 @@ typedef struct {
 } SFB_VOLUME_ROW;
 
 VOID
-SfbRunFileBrowser (VOID)
+SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
 {
   EFI_STATUS      Status;
   EFI_HANDLE      *Volumes = NULL;
@@ -596,10 +654,12 @@ SfbRunFileBrowser (VOID)
     }
 
     /* Tag the ext4 persist volume so it is told apart from FAT32 media. */
-    if (SfbIsExt4Volume (Volumes[Index])) {
+    if (SfbVolumeIsExt4 (Volumes[Index])) {
       if (Label[0] != L'\0') {
-        StrnCatS (Label, SFB_DESC_CHARS, L" (ext4)",
-                  SFB_DESC_CHARS - StrLen (Label) - 1);
+        if (RETURN_ERROR (StrCatS (Label, SFB_DESC_CHARS, L" (ext4)"))) {
+          /* Empty labels avoid presenting a truncated volume name as valid. */
+          Label[0] = L'\0';
+        }
       } else {
         StrCpyS (Label, SFB_DESC_CHARS, L"ext4");
       }
@@ -661,7 +721,8 @@ SfbRunFileBrowser (VOID)
       CONST CHAR16  *Prefix = SfbVolumeRootPrefix (Volumes[Cursor]);
       CONST CHAR16  *BrowseRoot = (Prefix[0] == L'\0') ? L"\\" : Prefix;
 
-      if (SfbBrowseVolume (Volumes[Cursor], Rows[Cursor].Label, BrowseRoot)) {
+      if (SfbBrowseVolume (Volumes[Cursor], Rows[Cursor].Label, BrowseRoot,
+                           Mode)) {
         break;
       }
     }

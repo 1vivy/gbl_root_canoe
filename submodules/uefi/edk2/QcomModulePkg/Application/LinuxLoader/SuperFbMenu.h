@@ -54,7 +54,7 @@
 
 #define SFB_DESC_CHARS       48
 #define SFB_PATH_CHARS       256
-#define SFB_MAX_ENTRIES      24
+#define SFB_MAX_ENTRIES      25
 #define SFB_MAX_DIR_ENTRIES  128
 
 /* Deepest submenu nesting allowed. Bounds the recursion when a chain of
@@ -73,6 +73,8 @@ typedef enum {
   /* Built-in entries; no backing file, handled in code. */
   SfbEntryFastboot,
   SfbEntrySelector,
+  /* Preferred boot policy selector. */
+  SfbEntryMode,
   /* "Back" row at the foot of a submenu: returns to the parent menu. */
   SfbEntryBack,
   /* Power management actions offered at the end of the menu and on the
@@ -80,6 +82,16 @@ typedef enum {
   SfbEntryPowerOff,
   SfbEntryRestart
 } SFB_ENTRY_KIND;
+
+typedef enum {
+  /* Let the backing DeviceInfo and ABL report the real unlocked state. */
+  SfbBootModeHonestUnlocked = 0,
+  /* Project a locked state to ABL while keeping the backing state unlocked. */
+  SfbBootModeAblFakeLocked = 1,
+  /* Keep ABL unlocked and project a locked/green KeyMint profile. */
+  SfbBootModeKmProfile = 2
+} SFB_BOOT_MODE;
+
 
 typedef struct {
   SFB_ENTRY_KIND            Kind;
@@ -107,9 +119,13 @@ typedef struct {
    * point for the cursor and the "*" marker. */
   UINTN           DefaultIndex;
   /* TRUE only when DefaultIndex came from a stored default record, not from
-   * the first-entry fallback. A power-on with no key pressed boots the default
-   * straight away only when this is TRUE; otherwise the menu is shown. */
+   * the first-entry fallback. A power-on with no key pressed boots the
+   * default straight away only when this is TRUE; otherwise the menu is
+   * shown. */
   BOOLEAN         DefaultIsPersisted;
+  /* Snapshot used while this menu is being drawn. The run-loop's local mode
+   * remains authoritative across menu rebuilds. */
+  SFB_BOOT_MODE   Mode;
 } SFB_MENU_STATE;
 
 typedef enum {
@@ -144,6 +160,12 @@ SfbStartFatStack (VOID);
 EFI_STATUS
 SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count);
 
+typedef enum {
+  SfbVolumeKindOther = 0,
+  SfbVolumeKindFat32,
+  SfbVolumeKindExt4
+} SFB_VOLUME_KIND;
+
 /* TRUE when the volume handle's block device holds a FAT32 file system. */
 BOOLEAN
 SfbIsFat32Volume (IN EFI_HANDLE Volume);
@@ -151,6 +173,9 @@ SfbIsFat32Volume (IN EFI_HANDLE Volume);
 /* TRUE when the volume handle's block device holds an ext4 file system. */
 BOOLEAN
 SfbIsExt4Volume (IN EFI_HANDLE Volume);
+/* TRUE when the cached volume classification identifies ext4. */
+BOOLEAN
+SfbVolumeIsExt4 (IN EFI_HANDLE Volume);
 
 /*
  * The volume-relative directory that acts as the boot root: "" for FAT32 (its
@@ -214,35 +239,57 @@ SfbGetVolumeLabel (IN EFI_FILE_PROTOCOL *Root,
 /* ---- SuperFbStore.c: settings kept in the tail of the ESP ---------------- */
 
 /*
- * The firmware on this platform rejects variables it does not know, so the two
- * things the menu has to remember outlive a reboot in the EFI System Partition
- * instead: two 1 KiB NUL-padded ASCII records written to the very end of the
- * partition, which is the only part of it that is safe to touch.
+ * The firmware on this platform rejects variables it does not know, so the
+ * settings the menu has to remember outlive a reboot in the EFI System
+ * Partition. Each named record occupies a permanent 1 KiB slot measured from
+ * the partition end; deployed default/custom records therefore never move.
  */
-#define SFB_STORE_SLOT_BYTES  1024
-#define SFB_STORE_SLOTS       2
+#define SFB_STORE_SLOT_BYTES             1024
+#define SFB_STORE_SLOTS                  2
+#define SFB_STORE_CUSTOM_TAIL_DISTANCE  SFB_STORE_SLOT_BYTES
+#define SFB_STORE_DEFAULT_TAIL_DISTANCE (SFB_STORE_SLOT_BYTES * 2)
+#define SFB_STORE_MODE_TAIL_DISTANCE    (SFB_STORE_SLOT_BYTES * 3)
+#define SFB_STORE_SCRATCH_BYTES         SIZE_1MB
+
+#if SFB_STORE_MODE_TAIL_DISTANCE > SFB_STORE_SCRATCH_BYTES
+#error "SuperFb store record exceeds the reserved 1 MiB scratch area"
+#endif
 
 #define SFB_STORE_DEFAULT  0   /* the entry the menu timeout launches */
 #define SFB_STORE_CUSTOM   1   /* the single user-added menu entry */
 
 /*
- * Replace one record. Text is NUL-terminated ASCII of at most
+ * Replace one legacy record. Text is NUL-terminated ASCII of at most
  * SFB_STORE_SLOT_BYTES - 1 bytes; passing an empty string clears the slot.
  */
 EFI_STATUS
 SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text);
 
 /*
- * Read one record. Out is always NUL-terminated, and empty when the slot has
- * never been written. Fails only when the store itself is unreachable.
+ * Read one legacy record. Out is always NUL-terminated, and empty when the
+ * slot has never been written. Fails only when the store itself is unreachable.
  */
 EFI_STATUS
 SfbStoreRead (IN UINTN Slot, OUT CHAR8 *Out, IN UINTN OutBytes);
 
+/* Read/write the preferred boot mode record at the permanent third slot. */
+EFI_STATUS
+SfbStoreReadMode (OUT SFB_BOOT_MODE *Mode, OUT BOOLEAN *Defaulted);
+
+EFI_STATUS
+SfbStoreWriteMode (IN SFB_BOOT_MODE Mode);
+
+/* Persist one menu selection before changing the caller's session mode. */
+EFI_STATUS
+SfbCommitModeSelection (
+  IN OUT SFB_BOOT_MODE *CurrentMode,
+  IN SFB_BOOT_MODE      SelectedMode
+  );
+
 /* ---- SuperFbEntries.c: entry list, persistence and launching ------------ */
 
 VOID
-SfbBuildMenu (OUT SFB_MENU_STATE *Menu);
+SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode);
 
 /*
  * Build a submenu from an ENTRIES file at EntriesPath (an absolute volume path
@@ -255,7 +302,8 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu);
 EFI_STATUS
 SfbBuildSubMenu (OUT SFB_MENU_STATE *Menu,
                  IN EFI_HANDLE      Volume,
-                 IN CONST CHAR16    *EntriesPath);
+                 IN CONST CHAR16    *EntriesPath,
+                 IN SFB_BOOT_MODE    Mode);
 
 VOID
 SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu);
@@ -269,6 +317,10 @@ SfbSaveDefaultEntry (IN CONST SFB_BOOT_ENTRY *Entry);
 EFI_STATUS
 SfbSaveCustomEntry (IN CONST SFB_BOOT_ENTRY *Entry);
 
+/* True only for the four canonical managed ABL paths. */
+BOOLEAN
+SfbIsManagedAblEntry (IN CONST SFB_BOOT_ENTRY *Entry);
+
 /*
  * Load and start the image the entry points at. Records the entry as the new
  * default first unless Temporary is TRUE. Only returns if the launch failed or
@@ -281,7 +333,8 @@ SfbSaveCustomEntry (IN CONST SFB_BOOT_ENTRY *Entry);
 EFI_STATUS
 SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
                 IN BOOLEAN              Temporary,
-                IN BOOLEAN              ClearScreen);
+                IN BOOLEAN              ClearScreen,
+                IN SFB_BOOT_MODE        Mode);
 
 /*
  * Load and start a single UEFI driver image named by a volume-relative path.
@@ -299,7 +352,7 @@ SfbLoadDriver (IN EFI_HANDLE Volume, IN CONST CHAR16 *Path);
  * so the caller shows the menu instead.
  */
 BOOLEAN
-SfbLaunchDefaultEntry (VOID);
+SfbLaunchDefaultEntry (IN SFB_BOOT_MODE Mode);
 
 /* Fill in an entry describing PathOnVolume on Volume. */
 EFI_STATUS
@@ -321,11 +374,19 @@ SfbFreeEntry (IN OUT SFB_BOOT_ENTRY *Entry);
  * the caller is expected to honour; FALSE means the menu has nothing left to do.
  */
 BOOLEAN
-SfbRunBootMenu (VOID);
+SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode);
 
 /* Simple FAT32 browser: pick a volume, walk directories, act on a .efi. */
 VOID
-SfbRunFileBrowser (VOID);
+SfbRunFileBrowser (IN SFB_BOOT_MODE Mode);
+
+/*
+ * TRUE when Path is exactly the volume root "\". Defined in SuperFbBrowser.c
+ * and shared with SuperFbEntries.c: both join paths and must agree on whether a
+ * separator is already present, so a second private copy could drift.
+ */
+BOOLEAN
+SfbIsRootPath (IN CONST CHAR16 *Path);
 
 /*
  * Clear the console and announce fastboot. Called on the way out of the menu so

@@ -244,7 +244,8 @@ Ext4GetExtent (
   Ext    = NULL;
   Buffer = NULL;
 
-  DEBUG ((EFI_D_INFO, "[ext4] Looking up extent for block %lu\n", LogicalBlock));
+  DEBUG ((EFI_D_VERBOSE, "[ext4] Looking up extent for block %lu\n",
+          LogicalBlock));
 
   if (!(Inode->i_flags & EXT4_EXTENTS_FL)) {
     return EFI_UNSUPPORTED;

@@ -76,6 +76,20 @@
 	SuperFbEntries.c
 	SuperFbMenu.c
 	SuperFbBrowser.c
+	SuperFbLaunchPolicy.h
+	SuperFbLaunchPolicy.c
+	Hook/SuperFbManagedPath.h
+	Hook/SuperFbManagedPath.c
+	Hook/SuperFbProfile.h
+	Hook/SuperFbProfile.c
+	Hook/SuperFbTzMap.c
+	Hook/SuperFbProfileRewrite.c
+	Hook/HookCommon.h
+	Hook/InstallAll.c
+	Hook/VerifiedBootHook.c
+	Hook/QseecomHook.c
+	Hook/SpssHook.c
+	Hook/ScmHook.c
 
 [Packages]
 	ArmPkg/ArmPkg.dec
@@ -92,6 +106,8 @@
 	UefiApplicationEntryPoint
 	ArmLib
 	BaseLib
+	BaseMemoryLib
+	UefiBootServicesTableLib
 	DebugLib
 	DevicePathLib
 	DebugPrintErrorLevelLib
@@ -159,6 +175,10 @@
 	gEfiUsb2HcProtocolGuid
 	gEfiPciIoProtocolGuid
 	gEfiPlatformInfoProtocolGuid
+	gEfiQcomVerifiedBootProtocolGuid
+	gQcomQseecomProtocolGuid
+	gEfiSPSSProtocolGuid
+	gQcomScmProtocolGuid
 	gEfiChipInfoProtocolGuid
 	gQcomPmicVersionProtocolGuid
 	gEfiMemCardInfoProtocolGuid
