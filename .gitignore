@@ -17,11 +17,15 @@ __pycache__/
 *$py.class
 .venv/
 venv/
+# Rust — every in-tree tool, not just the first one
+tools/*/target/
+
 ENV/
 
 # ABL/GBL Binary & Build Assets
 *.bin
 *.img
+!tools/mode2-profile/tests/fixtures/*.img
 *.efi
 extracted/
 

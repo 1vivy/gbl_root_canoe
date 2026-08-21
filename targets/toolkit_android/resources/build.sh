@@ -3,6 +3,13 @@ set -e
 
 SCRIPTDIR=$(dirname "$0")
 cd "$SCRIPTDIR"
+rm -f ./efisp/boot.efi ./efisp/boot.efi.gm2p ./efisp/boot.efi.tzmap ./LinuxLoader.efi \
+  ./ABL_original.efi ./patch_log.txt
+
+if [ ! -f ./images/vbmeta.img ]; then
+  echo "ERROR: matching images/vbmeta.img is required"
+  exit 1
+fi
 
 ./bin/extractfv -o ./ ./images/abl.img || { echo "ERROR: extractfv failed"; exit 1; }
 if [ ! -f ./LinuxLoader.efi ]; then
@@ -17,10 +24,46 @@ if ! ./bin/patch_abl ./ABL_original.efi ./efisp/boot.efi > ./patch_log.txt 2>&1;
   exit 1
 fi
 cat ./patch_log.txt
-if [ ! -f ./efisp/boot.efi ]; then
-  echo "ERROR: patch_abl produced no efisp/boot.efi"
+if [ ! -s ./efisp/boot.efi ]; then
+  echo "ERROR: patch_abl produced no nonempty efisp/boot.efi"
   exit 1
 fi
+if ! ./bin/mode2_profile derive --vbmeta ./images/vbmeta.img --out ./efisp/boot.efi.gm2p; then
+  rm -f ./efisp/boot.efi ./efisp/boot.efi.gm2p ./efisp/boot.efi.tzmap
+  echo "ERROR: mode2_profile derive failed"
+  exit 1
+fi
+if ! ./bin/mode2_profile validate --input ./efisp/boot.efi.gm2p; then
+  rm -f ./efisp/boot.efi ./efisp/boot.efi.gm2p ./efisp/boot.efi.tzmap
+  echo "ERROR: mode2_profile validate failed"
+  exit 1
+fi
+profile_size=$(wc -c < ./efisp/boot.efi.gm2p)
+if [ "$profile_size" -ne 120 ]; then
+  rm -f ./efisp/boot.efi ./efisp/boot.efi.gm2p ./efisp/boot.efi.tzmap
+  echo "ERROR: mode2_profile output is not exactly 120 bytes"
+  exit 1
+fi
+# --allow-incomplete: an ABL with no recorded RE evidence still gets a sidecar
+# carrying the soundly derived identifier flags.
+if ! ./bin/abl_tzmap derive ./ABL_original.efi -o ./efisp/boot.efi.tzmap --allow-incomplete; then
+  rm -f ./efisp/boot.efi ./efisp/boot.efi.gm2p ./efisp/boot.efi.tzmap
+  echo "ERROR: abl_tzmap derive failed"
+  exit 1
+fi
+if ! ./bin/abl_tzmap validate ./efisp/boot.efi.tzmap; then
+  rm -f ./efisp/boot.efi ./efisp/boot.efi.gm2p ./efisp/boot.efi.tzmap
+  echo "ERROR: abl_tzmap validate failed"
+  exit 1
+fi
+tzmap_size=$(wc -c < ./efisp/boot.efi.tzmap)
+if [ "$tzmap_size" -ne 256 ]; then
+  rm -f ./efisp/boot.efi ./efisp/boot.efi.gm2p ./efisp/boot.efi.tzmap
+  echo "ERROR: abl_tzmap output is not exactly 256 bytes"
+  exit 1
+fi
+
+
 
 if grep -q "Warning: Failed to patch ABL GBL" ./patch_log.txt; then
   gbl_ok=no
@@ -37,7 +80,9 @@ fi
 echo ""
 echo "========================================"
 echo "Patched. Outputs:"
-echo "  efisp/boot.efi     - cracked ABL loader (fake re-lock), the ANDROID boot entry"
+echo "  efisp/boot.efi     - patched ABL loader (use with the matching GM2P profile)"
+echo "  efisp/boot.efi.gm2p - locked/green KeyMint profile for images/vbmeta.img"
+echo "  efisp/boot.efi.tzmap - ABL-derived TrustZone interface map"
 echo "  efisp/BOOTENTRIES  - boot entry list (includes the tools submenu)"
 echo "  efisp/tools/       - tools submenu (Reboot / BL / ARB tools)"
 echo "  BDS.efi            - superfastboot BDS (flash raw to the efisp partition)"
