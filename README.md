@@ -4,9 +4,12 @@
 
 > ⚠️ **This project has been archived.** This is the final version — the patching engine is stable across multiple vendors and ABL versions, the core logic no longer changes, and active maintenance has ended. The code still works; forks are welcome. See [ARCHIVE.md](ARCHIVE.md) for details.
 
+> ⚠️ **Validation status:** Host builds and test fixtures are validated. On-device validation is scoped to a OnePlus Ace 6T (CPH2767, `macan`) running OxygenOS `CPH2767_16.0.9.401(EX01)`, using the RAM-only staged-BDS path; sidecar loading, hook arming, KeyMaster rewrites, and SCM drops were confirmed. No other device and no permanent installation have been validated.
+
 `gbl_root_canoe` is an EDK2-based workspace for patching the EFI applications within Qualcomm ABL (Android Bootloader) images. It leverages a GBL (Generic Bootloader Loader) vulnerability so the real ABL loads an embedded **superfastboot BDS** off the raw `efisp` partition. The BDS then scans a compatible partition (ext4/fat32) for boot entries and chains to the selected one - primarily to achieve a **Fake Locked Bootloader** state on Snapdragon 8 Gen 5 / 8 Elite (Gen 5) devices to bypass bootloader unlock detection.
 
-`BDS.efi` is written raw to the `efisp` partition; the cracked ABL (`boot.efi`) and the boot entry list (`BOOTENTRIES`) live on the `persist` partition under its `efisp/` directory.
+`BDS.efi` is written raw to the `efisp` partition; the patched ABL/profile/map set (`boot.efi`, `boot.efi.gm2p`, and `boot.efi.tzmap`) and the boot entry list (`BOOTENTRIES`) live on the `persist` partition under its `efisp/` directory.
+`boot.efi.gm2p` is the 120-byte KeyMint profile derived from the matching stock vbmeta; `boot.efi.tzmap` is the 256-byte `GTZM` ABL-derived TrustZone interface map derived from the **unpatched ABL**. The `.tzmap` is generated locally by the build scripts or installer, not shipped inside the archive, and is stored beside the launched image at `/mnt/vendor/persist/efisp/boot.efi.tzmap`.
 
 ---
 
@@ -17,6 +20,7 @@ This section is for developers who want to compile the toolkits from source.
 ### Prerequisites
 You must be on a **Linux** host to build the project:
 - `gcc` / `clang`, `lld`, `make`, `zip`, `python3`
+- Rust toolchain (`cargo`/`rustup`) for the native and cross-compilation targets
 - `liblzma-dev` (for compiling `extractfv`)
 - **Android NDK** (Required for `make target_magisk_module` to cross-compile tools for Android)
 - **MinGW-w64**
@@ -26,16 +30,16 @@ You must be on a **Linux** host to build the project:
 **Note:** You **do not** need to provide an `abl.img` to build the distributable toolkits or module.
 
 - **`make target_toolkit_linux`**
-  Builds the superfastboot BDS (`BDS.efi`) from the `uefi` submodule and compiles the patching utilities (`extractfv`, `patch_abl`) for Linux.
+  Builds the superfastboot BDS (`BDS.efi`) from the `uefi` submodule and compiles the toolkit utilities (`extractfv`, `patch_abl`, `mode2_profile`, `abl_tzmap`) for Linux. `abl_tzmap` derives and validates the local 256-byte `boot.efi.tzmap` from the unpatched ABL.
 
 - **`make target_toolkit_windows`**
-  Same as above, but cross-compiles the utilities into Windows `.exe` programs using MinGW-w64.
+  Same as above, but cross-compiles the utilities (`extractfv.exe`, `patch_abl.exe`, `mode2_profile.exe`, `abl_tzmap.exe`) into Windows `.exe` programs using MinGW-w64.
 
 - **`make target_magisk_module`**
-  Cross-compiles the patcher tools for Android using your NDK, builds the BDS, and packages everything as a KernelSU/Magisk module.
+  Cross-compiles the toolkit utilities (`extractfv`, `patch_abl`, `mode2_profile`, `abl_tzmap`) for Android using your NDK, builds the BDS, and packages everything as a KernelSU/Magisk module.
 
 - **`make target_toolkit_android`**
-  Produces a standalone Android arm64 toolkit (`toolkit_android.zip`) with Android-native binaries for on-device use outside of the module.
+  Produces a standalone Android arm64 toolkit (`toolkit_android.zip`) with Android-native binaries (`extractfv`, `patch_abl`, `mode2_profile`, `abl_tzmap`) for on-device use outside of the module.
 
 ---
 
@@ -51,30 +55,34 @@ The module is designed to run directly on your rooted Android device.
 - Device must be Snapdragon 8 Gen 5 / 8 Elite (Gen 5).
 - Bootloader must be unlocked.
 - Kernel must NOT have Baseband Guard.
-- The ABL on the `abl` partition must contain the GBL vulnerability. If it does not, flash an older ABL with the vulnerability first (the cracked `boot.efi` does not need to match the ABL on the `abl` partition).
+- The ABL on the `abl` partition must contain the GBL vulnerability. If it does not, flash an older ABL with the vulnerability first; `boot.efi` and its matching `boot.efi.gm2p` profile still describe the current stock ABL/vbmeta pair, while the optional `boot.efi.tzmap` describes the unpatched ABL used to produce `boot.efi`; neither needs to match the downgraded `abl` partition.
 
 **Installation & Usage:**
 When flashing the module via a root manager (KernelSU, Magisk, or APatch), the script interacts with you using the volume keys:
-- **Volume Up (First-time installation):** The script extracts the current-slot `.abl`, cracks it into `boot.efi`, places `boot.efi` / `LinuxLoader.efi` / `BOOTENTRIES` into `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`. After this, reboot into Recovery and **format Data**. Once booted, install this module again (Volume Down the second time) to complete the installation.
-- **Volume Down (OTA retention or post-format):** Installs the OTA-update patch. After each OTA, open the module WebUI and flash again to retain the BL version.
+- **Volume Up (First-time installation):** The script extracts and patches the current-slot ABL, derives `boot.efi.gm2p` from the matching current-slot vbmeta, generates the local `boot.efi.tzmap` from the unpatched ABL, installs the validated pair plus map, `BOOTENTRIES` and tools under `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`. The `.tzmap` is generated locally and is not shipped inside the module archive. After this, reboot into Recovery and **format Data**. Once booted, install this module again (Volume Down the second time) to complete the installation.
+- **Volume Down (post-format or module-only install):** Skips boot-chain writes and completes module/WebUI installation. After each OTA, open the WebUI and flash again to retain the BL version.
 
 ### 2. Using the PC Toolkits (Linux / Windows)
 
 If you downloaded the `target_toolkit_linux` or `target_toolkit_windows` zip files:
 1. Extract the toolkit zip on your PC.
-2. Place your device's stock `abl.img` inside the `images/` (or `images\`) directory of the toolkit.
+2. Place the matching stock `abl.img` and `vbmeta.img` inside the toolkit's `images/` directory.
 3. **Linux:** Run `bash build.sh`. **Windows:** Run `build.bat`.
-4. The script extracts and cracks the ABL, outputting `ABL.efi` (fake re-lock) and `ABL_original.efi` (original). `BDS.efi` is bundled. Check `patch_log.txt` - if it says "Warning: Failed to patch ABL GBL", the ABL lacks the vulnerability and the `abl` partition must be downgraded to an older ABL with it.
+4. The script extracts and patches the ABL, outputting `efisp/boot.efi`, its matching 120-byte `efisp/boot.efi.gm2p` profile derived from the matching stock vbmeta, and the local 256-byte `efisp/boot.efi.tzmap` map derived from the **unpatched ABL**, plus `ABL_original.efi` (original). The `.tzmap` is not shipped inside the toolkit archive. `BDS.efi` is bundled. Check `patch_log.txt` - if it says "Warning: Failed to patch ABL GBL", the ABL lacks the vulnerability and the `abl` partition must be downgraded to an older ABL with it.
 
-Then complete the install manually (see the [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki) for full steps): copy `ABL.efi` into `/mnt/vendor/persist/efisp/`, create `BOOTENTRIES`, `sync`, and flash `BDS.efi` to `efisp` (`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`).
+Then complete the install manually (see the [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki) for full steps): copy the `efisp/` tree, including `boot.efi`, `boot.efi.gm2p`, `boot.efi.tzmap`, and `BOOTENTRIES`, into `/mnt/vendor/persist/efisp/`, `sync`, and flash `BDS.efi` to `efisp` (`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`).
 
 ### 3. OTA Upgrade
 Before rebooting for an OTA update, use the module WebUI to flash and retain the old ABL version. "Update efisp" is enabled by default; for a major version upgrade keep it on, otherwise the device may get stuck on the first boot screen.
 
 ### 4. Superfastboot Usage Instructions
-When OEM Unlocking is enabled and the white warning text appears on boot, press **Volume Down** to enter Superfastboot mode (the BDS).
+When OEM Unlocking is enabled and the white warning text appears on boot, press **Volume Up** to enter Superfastboot mode (the BDS).
 Common commands include:
-- **Temp-boot an EFI file (without flashing)**: `fastboot boot xxx.efi`
+- **Temp-boot BDS in RAM (nothing is written to flash):**
+  ```bash
+  fastboot stage <BDS.efi>
+  fastboot oem boot-efi
+  ```
 - **Lock and Unlock (BL related)**:
   - Lock BL, triggers a data wipe: `fastboot flashing lock`
   - Unlock BL, no data wipe: `fastboot flashing unlock` or `fastboot flashing unlock_critical`
@@ -89,6 +97,6 @@ Common commands include:
 
 ### 5. File Reference
 1. `BDS.efi`: The superfastboot BDS, flashed raw to the `efisp` partition.
-2. `boot.efi` / `ABL.efi`: The cracked ABL with fake re-lock (the module names it `boot.efi`; the toolkit names it `ABL.efi`), placed on `persist` under `efisp/`.
+2. `boot.efi` / `boot.efi.gm2p` / `boot.efi.tzmap`: The patched ABL, its matching 120-byte locked/green KeyMint profile from stock vbmeta, and the 256-byte TrustZone map from the unpatched ABL, placed on `persist` under `efisp/`; the map is generated locally and is not shipped in the archive.
 3. `LinuxLoader.efi` / `ABL_original.efi`: The original unpatched ABL. For analysis; do not flash to `efisp`.
 4. `BOOTENTRIES`: Boot entry list, format `<name>:<path relative to efisp/>`.

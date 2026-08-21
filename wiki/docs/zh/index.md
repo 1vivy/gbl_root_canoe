@@ -8,7 +8,7 @@ next: false
 
 hero:
   name: GBL Root Canoe
-  text: 利用 GBL 漏洞注入自定义 EFI，在 8 Gen 5 / 8 Elite 设备上实现假回锁
+  text: 利用 GBL 漏洞注入自定义 EFI，在 8 Gen 5 / 8 Elite 设备上提供 BDS 模式 0/1/2；硬件真回锁仍是独立操作
   tagline: ""
   actions:
     - theme: brand
@@ -20,7 +20,7 @@ hero:
 
 features:
   - title: 安装
-    details: Release 下载与刷机指南 — 真假回锁模式选择与操作流程
+    details: Release 下载与刷机指南 — BDS 模式 0/1/2（真实解锁 / ABL 假锁定 / KM-SPSS profile 伪装）；硬件真回锁是独立的非 BDS 操作
     link: /zh/install
   - title: 使用说明
     details: Superfastboot 命令参考 — BL 锁/解锁、刷写、重启

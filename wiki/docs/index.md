@@ -8,7 +8,7 @@ next: false
 
 hero:
   name: GBL Root Canoe
-  text: Inject custom EFI via GBL exploit to achieve fake relock on 8 Gen 5 / 8 Elite
+  text: Inject custom EFI via the GBL exploit with BDS Modes 0/1/2 on 8 Gen 5 / 8 Elite; hardware re-lock remains separate
   tagline: ""
   actions:
     - theme: brand
@@ -20,7 +20,7 @@ hero:
 
 features:
   - title: Install
-    details: Release download & flashing guide — true/fake relock modes and procedures
+    details: Release download & flashing guide — BDS Modes 0/1/2 (honest unlocked / ABL fake locked / KM-SPSS profile spoof); hardware re-lock is a separate, non-BDS operation
     link: /install
   - title: Usage
     details: Superfastboot command reference — lock/unlock BL, flash, reboot
