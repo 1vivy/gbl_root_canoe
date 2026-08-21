@@ -227,7 +227,9 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
   }
 
   {
-    UINT8  MenuRequested;
+    UINT8         MenuRequested;
+    SFB_BOOT_MODE  Mode = SfbBootModeAblFakeLocked;
+    BOOLEAN        ModeDefaulted = TRUE;
 
     /*
      * Scan for Volume Up held at power-on FIRST, before any other init disturbs
@@ -250,11 +252,23 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       DEBUG ((EFI_D_ERROR, "Unable to start the FAT stack: %r\n", Status));
     }
 
+    Status = SfbStoreReadMode (&Mode, &ModeDefaulted);
+    if (EFI_ERROR (Status)) {
+      Mode = SfbBootModeAblFakeLocked;
+      ModeDefaulted = TRUE;
+      DEBUG ((EFI_D_ERROR, "SFB: preferred mode unavailable: %r\n", Status));
+    } else if (ModeDefaulted) {
+      DEBUG ((EFI_D_INFO, "SFB: preferred mode defaulted to Mode 1\n"));
+    }
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK mode-current mode=%u defaulted=%u\n",
+            (UINT32)Mode, (UINT32)ModeDefaulted));
+
     if (!MenuRequested) {
       /* No menu key: boot the saved default. This does not return on success;
        * it only comes back if there is no saved default or the launch failed,
        * in which case the menu is shown so the user is never stranded. */
-      SfbLaunchDefaultEntry ();
+      SfbLaunchDefaultEntry (Mode);
     }
 
     /*
@@ -264,7 +278,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
      * the user picked fastboot.
      */
     SfbShowEnteringMenu ();
-    if (!SfbRunBootMenu ()) {
+    if (!SfbRunBootMenu (Mode)) {
       Status = EFI_SUCCESS;
       goto stack_guard_update_default;
     }

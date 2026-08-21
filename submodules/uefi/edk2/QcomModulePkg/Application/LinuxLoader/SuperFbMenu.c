@@ -158,6 +158,22 @@ SfbDrawRow (IN BOOLEAN Selected, IN CONST CHAR16 *Marker, IN CONST CHAR16 *Text)
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
   Print (L"\r\n");
 }
+STATIC
+CONST CHAR16 *
+SfbBootModeLabel (IN SFB_BOOT_MODE Mode)
+{
+  switch (Mode) {
+  case SfbBootModeHonestUnlocked:
+    return L"Mode 0 - Honest unlocked";
+  case SfbBootModeAblFakeLocked:
+    return L"Mode 1 - ABL fake locked";
+  case SfbBootModeKmProfile:
+    return L"Mode 2 - KM/SPSS profile spoof";
+  default:
+    return L"Mode 1 - ABL fake locked";
+  }
+}
+
 
 /*
  * First row of the visible window, keeping the cursor inside it. Lists longer
@@ -326,9 +342,15 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
     CONST SFB_BOOT_ENTRY  *Entry = &Menu->Entry[Index];
     CONST CHAR16          *Marker = (Index == Menu->DefaultIndex) ? L"*" : L" ";
 
-    /* Submenu rows get a trailing '>' so it is obvious they open another list
-     * rather than launch an image. */
-    if (Entry->Kind == SfbEntrySubmenu) {
+    /* Mode is the first root row; render from the authoritative snapshot so
+     * a rebuild can never display a stale persisted label. */
+    if (Entry->Kind == SfbEntryMode) {
+      CHAR16  Text[SFB_DESC_CHARS + 40];
+
+      UnicodeSPrint (Text, sizeof (Text), L"Boot Mode: %s",
+                     SfbBootModeLabel (Menu->Mode));
+      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
+    } else if (Entry->Kind == SfbEntrySubmenu) {
       CHAR16  Text[SFB_DESC_CHARS + 4];
 
       UnicodeSPrint (Text, sizeof (Text), L"%s >", Entry->Desc);
@@ -344,6 +366,60 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
 
   SfbEndScreen (L"Vol Up/Down: move   Power: select");
 }
+/*
+ * Select and persist the preferred mode. The caller owns the authoritative
+ * CurrentMode value; it changes only after the raw tail record was written.
+ */
+STATIC
+VOID
+SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode)
+{
+  STATIC CONST CHAR16 *Rows[] = {
+    L"Mode 0 - Honest unlocked",
+    L"Mode 1 - ABL fake locked",
+    L"Mode 2 - KM/SPSS profile spoof",
+    L"Back"
+  };
+  UINTN  Cursor = 0;
+  UINTN  Index;
+
+  if (CurrentMode == NULL) {
+    return;
+  }
+
+  while (TRUE) {
+    SFB_KEY  Key;
+
+    SfbBeginScreen (L"Boot Mode", L"Choose the preferred ABL policy.");
+    for (Index = 0; Index < ARRAY_SIZE (Rows); Index++) {
+      SfbDrawRow ((BOOLEAN)(Index == Cursor), L" ", Rows[Index]);
+    }
+    SfbEndScreen (L"Vol Up/Down: move   Power: select");
+
+    Key = SfbWaitForKey (0);
+    if (Key == SfbKeyUp || Key == SfbKeyDown) {
+      SfbMoveCursor (&Cursor, ARRAY_SIZE (Rows), Key);
+      continue;
+    }
+
+    if (Cursor == ARRAY_SIZE (Rows) - 1) {
+      return;
+    }
+
+    {
+      EFI_STATUS Status;
+
+      Status = SfbCommitModeSelection (CurrentMode,
+                                       (SFB_BOOT_MODE)Cursor);
+      if (EFI_ERROR (Status)) {
+        SfbReportStatus (L"Could not save boot mode", Status);
+        continue;
+      }
+    }
+    return;
+  }
+}
+
 
 /*
  * Run a submenu defined by the ENTRIES file at EntriesPath on Volume. The file
@@ -357,10 +433,11 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
  */
 STATIC
 VOID
-SfbRunSubMenu (IN EFI_HANDLE   Volume,
-               IN CONST CHAR16 *EntriesPath,
-               IN CONST CHAR16 *Title,
-               IN UINTN        Depth)
+SfbRunSubMenu (IN EFI_HANDLE    Volume,
+               IN CONST CHAR16  *EntriesPath,
+               IN CONST CHAR16  *Title,
+               IN UINTN         Depth,
+               IN SFB_BOOT_MODE Mode)
 {
   SFB_MENU_STATE  *Menu = NULL;
   UINTN           Cursor = 0;
@@ -379,7 +456,7 @@ SfbRunSubMenu (IN EFI_HANDLE   Volume,
 
     if (Rebuild) {
       SfbFreeMenu (Menu);
-      Status = SfbBuildSubMenu (Menu, Volume, EntriesPath);
+      Status = SfbBuildSubMenu (Menu, Volume, EntriesPath, Mode);
       if (EFI_ERROR (Status)) {
         SfbReportStatus (Title, Status);
         break;
@@ -414,7 +491,8 @@ SfbRunSubMenu (IN EFI_HANDLE   Volume,
         SfbRunSubMenu (Menu->Entry[Chosen].Volume,
                        Menu->Entry[Chosen].Path,
                        Menu->Entry[Chosen].Desc,
-                       Depth + 1);
+                       Depth + 1,
+                       Mode);
       }
       /* Media may have changed while the child menu was open. */
       Rebuild = TRUE;
@@ -422,7 +500,7 @@ SfbRunSubMenu (IN EFI_HANDLE   Volume,
 
     case SfbEntryEfiFile:
     default:
-      Status = SfbLaunchEntry (&Menu->Entry[Chosen], TRUE, TRUE);//Entries in submenu never defaults
+      Status = SfbLaunchEntry (&Menu->Entry[Chosen], TRUE, TRUE, Mode);
       if (EFI_ERROR (Status)) {
         SfbReportStatus (L"Boot failed", Status);
       }
@@ -437,13 +515,18 @@ done:
 }
 
 BOOLEAN
-SfbRunBootMenu (VOID)
+SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
 {
   SFB_MENU_STATE  Menu;
+  SFB_BOOT_MODE   CurrentMode = InitialMode;
   UINTN           Cursor = 0;
   BOOLEAN         Rebuild = TRUE;
   SFB_KEY         Key;
   EFI_STATUS      Status;
+
+  if (CurrentMode > SfbBootModeKmProfile) {
+    CurrentMode = SfbBootModeAblFakeLocked;
+  }
 
   ZeroMem (&Menu, sizeof (Menu));
   Menu.DefaultIndex = SFB_NO_INDEX;
@@ -453,8 +536,9 @@ SfbRunBootMenu (VOID)
 
     if (Rebuild) {
       SfbFreeMenu (&Menu);
-      SfbBuildMenu (&Menu);
-      Cursor = (Menu.DefaultIndex == SFB_NO_INDEX) ? 0 : Menu.DefaultIndex;
+      SfbBuildMenu (&Menu, CurrentMode);
+      Cursor = (Menu.DefaultIndex != SFB_NO_INDEX &&
+                Menu.DefaultIndex < Menu.Count) ? Menu.DefaultIndex : 0;
       Rebuild = FALSE;
     }
 
@@ -480,8 +564,13 @@ SfbRunBootMenu (VOID)
       SfbFreeMenu (&Menu);
       return TRUE;
 
+    case SfbEntryMode:
+      SfbRunModeMenu (&CurrentMode);
+      Rebuild = TRUE;
+      break;
+
     case SfbEntrySelector:
-      SfbRunFileBrowser ();
+      SfbRunFileBrowser (CurrentMode);
       /* The browser may have added a custom entry. */
       Rebuild = TRUE;
       break;
@@ -490,7 +579,8 @@ SfbRunBootMenu (VOID)
       SfbRunSubMenu (Menu.Entry[Chosen].Volume,
                      Menu.Entry[Chosen].Path,
                      Menu.Entry[Chosen].Desc,
-                     1);
+                     1,
+                     CurrentMode);
       /* Media may have changed while the submenu was open. */
       Rebuild = TRUE;
       break;
@@ -512,7 +602,7 @@ SfbRunBootMenu (VOID)
 
     case SfbEntryEfiFile:
     default:
-      Status = SfbLaunchEntry (&Menu.Entry[Chosen], FALSE, TRUE);
+      Status = SfbLaunchEntry (&Menu.Entry[Chosen], FALSE, TRUE, CurrentMode);
       if (EFI_ERROR (Status)) {
         SfbReportStatus (L"Boot failed", Status);
       }
