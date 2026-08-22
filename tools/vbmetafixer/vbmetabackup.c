@@ -5,10 +5,14 @@
 
 #ifdef _WIN32
 #include <direct.h>
+#include <windows.h>
 #define mkdir_p(d) _mkdir(d)
+#define NULL_DEVICE "nul"
 #else
 #include <sys/stat.h>
+#include <unistd.h>
 #define mkdir_p(d) mkdir(d, 0755)
+#define NULL_DEVICE "/dev/null"
 #endif
 
 #define AVB_MAGIC "AVB0"
@@ -211,16 +215,57 @@ static int write_file(const char *path, const uint8_t *data, size_t size) {
     return 0;
 }
 
-static void wait_for_device(void) {
+#ifndef __ANDROID__
+#define WAIT_FOR_DEVICE_SECONDS 60
+
+/* Transport states that give us a working `adb shell`. `recovery` is what a
+ * TWRP-derived custom recovery reports, and that is where this tool is used. */
+static int transport_ready(const char *state) {
+    return strcmp(state, "device") == 0 || strcmp(state, "recovery") == 0 ||
+           strcmp(state, "rescue") == 0 || strcmp(state, "sideload") == 0;
+}
+
+static void sleep_one_second(void) {
+#ifdef _WIN32
+    Sleep(1000);
+#else
+    sleep(1);
+#endif
+}
+#endif
+
+/* NOT `adb wait-for-device`: that waits for state=device specifically, so it
+ * blocks forever against a custom recovery, which reports `recovery`. Poll
+ * get-state instead and accept any transport that yields a shell. */
+static int wait_for_device(void) {
 #ifdef __ANDROID__
     /* Running on-device: block devices are directly accessible, nothing to wait for. */
     (void)adb_path;
+    return 0;
 #else
     char cmd[MAX_CMD_LEN];
+    char state[64];
+
+    snprintf(cmd, sizeof(cmd), "%s get-state 2>%s", adb_path, NULL_DEVICE);
     printf("Waiting for device...\n");
-    snprintf(cmd, sizeof(cmd), "%s wait-for-device", adb_path);
-    run_cmd(cmd);
-    printf("Device connected\n");
+    for (int waited = 0; waited <= WAIT_FOR_DEVICE_SECONDS; waited++) {
+        state[0] = '\0';
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            if (!fgets(state, sizeof(state), fp)) state[0] = '\0';
+            pclose(fp);
+        }
+        state[strcspn(state, "\r\n")] = '\0';
+        if (transport_ready(state)) {
+            printf("Device connected (%s)\n", state);
+            return 0;
+        }
+        if (waited < WAIT_FOR_DEVICE_SECONDS) sleep_one_second();
+    }
+    fprintf(stderr,
+            "error: no usable adb transport after %d seconds (state: %s)\n",
+            WAIT_FOR_DEVICE_SECONDS, state[0] ? state : "none");
+    return -1;
 #endif
 }
 
@@ -441,7 +486,7 @@ int main(int argc, char **argv) {
         return rc == 0 ? 0 : 1;
     }
 
-    wait_for_device();
+    if (wait_for_device() != 0) return 1;
 
     char slot[32];
     if (slot_arg) {
