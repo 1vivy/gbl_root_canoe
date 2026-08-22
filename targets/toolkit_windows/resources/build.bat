@@ -104,8 +104,17 @@ echo   efisp/tools/       - tools submenu (Reboot / BL / ARB tools)
 echo   BDS.efi            - superfastboot BDS (flash raw to the efisp partition)
 echo   ABL_original.efi   - original unpatched loader (for analysis; do NOT flash)
 echo.
-echo Note: the toolkit is manual-install only; superfb does not provide automated
-echo installation for toolkit users.
+echo ---- Install over ADB from a custom recovery (recommended) ----
+echo Standalone, no firmware package:
+echo      canoe_prep_device.bat    ^&^& rem derive from the device's own abl/vbmeta
+echo      canoe_stage.bat          ^&^& rem install the persist tree, then the BDS
+echo Alongside a Super Flasher / RegionalHybrid package:
+echo      canoe_prep.bat --pkg ^<dir^> --recovery ^<custom^>.img --abl ^<vulnerable^>.img --in-place
+echo      rem run the package's own flasher, then:
+echo      canoe_stage.bat
+echo See README.canoe.md for the full contract and guarantees.
+echo.
+echo Or place the files by hand:
 echo.
 echo ---- Manual install flow (English) ----
 echo 1. Copy the efisp/ folder to the persist boot root:

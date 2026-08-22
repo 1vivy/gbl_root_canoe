@@ -1,5 +1,6 @@
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
-	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor build
+	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
+	submodule_vbmetafixer canoe_device_script build
 
 clean:
 	rm -rf build || true
@@ -38,6 +39,23 @@ submodule_abl_tzmap: copy_resources
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_windows
 	cp ../../submodules/ablfvextractor/build/extractfv.exe ./build/toolkit/bin/extractfv.exe
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor
+submodule_vbmetafixer: copy_resources
+	# vbmetaport grafts an official vbmeta onto a third-party image; vbmetabackup
+	# -f lifts that vbmeta out of a local firmware image. canoe_prep.bat needs both.
+	# Guarded like submodule_uefi: the vbmetafixer `build_windows` target is not
+	# phony, so a stale build/ directory would otherwise make a plain make build a no-op.
+	cd ../../tools/vbmetafixer && \
+		if [ ! -f build/toolkit_win/bin/vbmetaport.exe ] || \
+		   [ ! -f build/toolkit_win/bin/vbmetabackup.exe ]; then $(MAKE) build_windows; fi
+	cp ../../tools/vbmetafixer/build/toolkit_win/bin/vbmetaport.exe ./build/toolkit/bin/vbmetaport.exe
+	cp ../../tools/vbmetafixer/build/toolkit_win/bin/vbmetabackup.exe ./build/toolkit/bin/vbmetabackup.exe
+canoe_device_script: copy_resources
+	# The device-side install transaction is shared by the Linux and Windows
+	# drivers, so it lives in tools/canoe-device and is copied into each toolkit
+	# rather than duplicated per target.
+	cp ../../tools/canoe-device/canoe_device_install.sh ./build/toolkit/canoe_device_install.sh
+	chmod +x ./build/toolkit/canoe_device_install.sh
+	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script
 	# zip
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./

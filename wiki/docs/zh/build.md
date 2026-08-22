@@ -19,6 +19,8 @@ Android 工具包和模块构建要求 `NDK_PATH` 指向 Android NDK。工具包
 
 Linux 和 Android 工具包包含 `extractfv`、`patch_abl`、`mode2_profile` 和 `abl_tzmap`。Windows 工具包包含 `extractfv.exe`、`patch_abl.exe`、`mode2_profile.exe` 和 `abl_tzmap.exe`。`abl_tzmap` 从**未修补 ABL**在本地生成并验证 256 字节 `GTZM` `boot.efi.tzmap` TrustZone 接口映射。
 
+Linux 工具包还额外附带来自 `tools/vbmetafixer` 的 `vbmetaport` 与 `vbmetabackup`，Windows 工具包附带其 `.exe` 版本；电脑端安装脚本用它们把官方 vbmeta 移植到第三方 Recovery 镜像上。`vbmetabackup -f <image>` 直接从本地固件镜像完成该提取，无需设备、无需 adb；不带 `-f` 时仍保持原有行为，即通过 adb 拉取设备上的实际链。
+
 ## 生成 ABL/profile/map 配对
 
 解压对应平台的工具包，并放入同一套匹配的原厂镜像：
@@ -40,9 +42,34 @@ sidecar；`.tzmap` 在运行时是可选的，因为 BDS 内置了回退映射�
 逆向分析证据，仍会得到带有标识符标志和协议命令表的有效 256 字节 sidecar。
 安装不会因缺少该证据而失败。
 
-## 开发者注意事项
+## 电脑端安装脚本
 
-编辑 UEFI 源码后，请使用 `UEFI_REBUILD=1 make target_<name>` 重建 BDS，
-或者先运行 `make clean`。
+Linux 与 Windows 工具包都在 `build.sh` / `build.bat` 之外附带安装脚本 ——
+Linux 为 `.sh`，Windows 为 `.bat`，参数完全一致。详见各压缩包内的
+`README.canoe.md` 与《安装指南》：
 
-本项目不再提供单独的通用构建。
+| 脚本 | 作用 |
+|------|------|
+| `canoe_lib.sh` | Linux 脚本共用的 adb、槽位与分区辅助函数（用于 source，不直接运行） |
+| `canoe_prep_device` | 独立准备：从设备拉取 `abl` + `vbmeta` 并派生三件套 |
+| `canoe_prep` | 固件包准备：移植第三方 Recovery 的 vbmeta，并将准备好的镜像替换进固件包 |
+| `canoe_stage` | 电脑端驱动：校验、暂存到启动根目录、调用设备端事务 |
+| `canoe_device_install.sh` | 事务本体，在设备上执行 |
+
+`canoe_device_install.sh` 位于 `tools/canoe-device/`，由两个工具包各自的
+`canoe_device_script` make 目标复制进去，因此快照/提交/回滚逻辑只有一份实现，
+而不是每个宿主平台一份。所有设备端绝对路径都通过参数传入，这也正是它能直接在
+电脑上被测试的原因。
+
+所有脚本都不触碰 `abl` 分区：让该分区带上 GBL 漏洞是独立的
+`fastboot flash abl` 步骤。
+
+固定测试：
+
+- `targets/toolkit_linux/tests/test_canoe_device_install.sh` 直接在普通目录与
+  一个代替块设备的普通文件上驱动事务，并通过遮蔽 `mv`、`dd`、`cmp` 注入提交、
+  写入与校验失败。
+- `targets/toolkit_linux/tests/test_canoe_scripts.sh` 借助 `tests/stub_adb.py`
+  驱动两条准备路径与 staging 驱动。
+
+两者都已注册进 `make test`。
