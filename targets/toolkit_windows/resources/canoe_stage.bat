@@ -89,11 +89,27 @@ if not exist "%WORKDIR%" mkdir "%WORKDIR%"
 
 echo.
 echo [*] Connecting
-"%ADB%" %ADBARGS% wait-for-device
-if errorlevel 1 (
-  echo canoe_stage: error: adb wait-for-device failed 1>&2
-  exit /b 1
-)
+rem NOT `adb wait-for-device`: it waits for state=device specifically, which a
+rem TWRP-derived custom recovery never reports (it reports `recovery`), so it
+rem blocks forever in exactly the environment this script is documented for.
+set /a ADB_WAITED=0
+:canoe_wait_transport
+set "ADB_STATE="
+for /f "usebackq delims=" %%S in (`"%ADB%" %ADBARGS% get-state 2^>nul`) do set "ADB_STATE=%%S"
+if /i "%ADB_STATE%"=="device"   goto canoe_transport_ready
+if /i "%ADB_STATE%"=="recovery" goto canoe_transport_ready
+if /i "%ADB_STATE%"=="rescue"   goto canoe_transport_ready
+if /i "%ADB_STATE%"=="sideload" goto canoe_transport_ready
+if %ADB_WAITED% GEQ 60 goto canoe_transport_timeout
+>nul ping -n 2 127.0.0.1
+set /a ADB_WAITED+=1
+goto canoe_wait_transport
+:canoe_transport_timeout
+if not defined ADB_STATE set "ADB_STATE=none"
+echo canoe_stage: error: no usable adb transport after 60s ^(state: %ADB_STATE%^) 1>&2
+exit /b 1
+:canoe_transport_ready
+echo     adb transport: %ADB_STATE%
 "%ADB%" %ADBARGS% shell true >nul 2>&1
 if errorlevel 1 (
   echo canoe_stage: error: no adb shell ^(enable ADB in recovery^) 1>&2
