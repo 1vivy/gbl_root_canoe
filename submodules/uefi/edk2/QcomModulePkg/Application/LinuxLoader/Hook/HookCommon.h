@@ -69,4 +69,10 @@ EFI_STATUS SfbPreflightScm (OUT QCOM_SCM_PROTOCOL **Protocol);
 EFI_STATUS SfbInstallScm (IN QCOM_SCM_PROTOCOL *Protocol);
 VOID SfbRestoreScm (VOID);
 
+/* Universal vendor-reserve write suppression: the relock path zeroes the
+ * fastboot unlock token in a vendor reserve partition, and that loss is
+ * one-way. Fail-soft -- a platform with no such partition arms nothing. */
+EFI_STATUS SfbInstallReserveBlockIo (VOID);
+VOID SfbRestoreReserveBlockIo (VOID);
+
 #endif

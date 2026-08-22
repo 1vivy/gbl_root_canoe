@@ -73,3 +73,19 @@ Linux 为 `.sh`，Windows 为 `.bat`，参数完全一致。详见各压缩包�
   驱动两条准备路径与 staging 驱动。
 
 两者都已注册进 `make test`。
+
+## `patch_abl` 修改了什么
+
+`libavb_force_success` 是强制项——缺少它则整个修补失败。其余都是尽力而为、仅告警，因为失败只损失功能而不影响可启动性：
+
+- **锁定状态 fastboot 门控。** ABL 收到的是锁定视图，因此其 fastboot 命令分发会拒绝 `flash`、`erase`、槽位切换和快照取消。每条拒绝消息都锚定到守护它的门控，该门控会被改为无条件跳转或直接移除。全有或全无：若镜像中存在的任一门控无法解析，则不写入任何内容——一个接受 `flash` 却仍拒绝 `erase` 的 ABL 比两者都拒绝更糟。`patch_log.txt` 会列出每个被改写的偏移。
+- **Oplus 橙色状态警告**与**强制启用 fastboot**——外观与易用性，Oplus 专有。
+
+出现 `Warning: Failed to patch ABL GBL` 表示该 ABL 不含该漏洞，必须将 `abl` 分区降级。
+
+## 开发者注意事项
+
+编辑 UEFI 源码后，请使用 `UEFI_REBUILD=1 make target_<name>` 重建 BDS，
+或者先运行 `make clean`。
+
+本项目不再提供单独的通用构建。

@@ -90,6 +90,7 @@
 	Hook/QseecomHook.c
 	Hook/SpssHook.c
 	Hook/ScmHook.c
+	Hook/BlockIoHook.c
 
 [Packages]
 	ArmPkg/ArmPkg.dec

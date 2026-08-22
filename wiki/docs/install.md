@@ -145,6 +145,18 @@ Because the flasher writes the package's own `recovery.img` to both slots, keepi
 
 All modes (0/1/2) best-effort suppress the TrustZone fuse request (`0x02000801`) and anti-rollback SCM requests (`0x0200011E` and `0x32000110`). This prevents **further advancement only**: it cannot un-blow an already-blown fuse or lower an already-raised rollback floor. If the SCM protocol is absent, launch continues and the `hooks-armed ... scm=0` marker records that the safeguard was unavailable.
 
+### Universal reserve-token safeguard (all modes)
+
+All modes (0/1/2) swallow writes to a vendor reserve partition that carries the fastboot unlock token (`oplusreserve1`, or its legacy `opporeserve1` name) for as long as the chainloaded ABL is running. The vendor relock path zeroes that token block, and the loss is one-way: once zeroed, the device can no longer be unlocked from fastboot. The write is reported as successful to the ABL so its state machine still completes.
+
+This is not device-specific. A platform carrying no such partition arms nothing, launch continues, and the `hooks-armed ... reserve=0` marker records that the safeguard did not apply. Superfastboot's own `fastboot flash oplusreserve1` is unaffected, because the slot is only wrapped across a managed ABL launch.
+
+The reserve partition has many routine writers (Phoenix boot accounting, charge/UFS state), all of which are swallowed silently and logged. The one destructive write — zeroing the token block at `LastBlock - 0x3A5` — is additionally announced on screen, once per launch:
+
+`SFB: blocked unlock-token erase on oplusreserve1 LBA 1114; token preserved`
+
+Every swallow is recorded in `UefiLog<N>.txt` on the `logfs` partition with a `reason=` field (`token-zero-write`, `token-block-write`, `unlock-record-write`, `reserve-write`). `DEBUG` output never reaches the framebuffer, so that log is the only place the routine swallows appear.
+
 Choose the preferred mode in the BDS menu or module WebUI. The choice is stored in the fixed tail record on `efisp`; a missing or malformed record defaults to Mode 1. Mode 2 requires the matching 120-byte `.gm2p` profile; if that profile is missing or invalid, launch falls back to Mode 0. The 256-byte `.tzmap` is optional; if it is missing or invalid, BDS uses its built-in fallback.
 
 Hardware bootloader re-locking is a separate operation. Use only a device-supported flow and account for vendor-specific data-wipe requirements.

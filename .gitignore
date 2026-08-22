@@ -35,6 +35,9 @@ extracted/
 # VS Code
 .vscode/
 
+# Session scratch: device dumps, pulled UefiLogs, one-off host tools
+.work/
+
 submodules/uefi/edk2/build_modulepkg.log
 
 submodules/unsigned_abl.elf

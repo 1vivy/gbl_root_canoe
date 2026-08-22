@@ -13,6 +13,8 @@
 #include <Library/DebugLib.h>
 #include <Library/DeviceInfo.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Guid/Gpt.h>
+#include <Protocol/BlockIo.h>
 
 #include <assert.h>
 #include <string.h>
@@ -23,6 +25,11 @@ EFI_GUID gEfiSPSSProtocolGuid = EFI_SPSS_PROTOCOL_GUID;
 EFI_GUID gQcomScmProtocolGuid = {
   0x77ed108d, 0x8524, 0x4b8b,
   { 0x9d, 0x2e, 0x34, 0x98, 0x7a, 0xec, 0xb9, 0xc1 }
+};
+EFI_GUID gEfiBlockIoProtocolGuid = EFI_BLOCK_IO_PROTOCOL_GUID;
+EFI_GUID gEfiPartitionRecordGuid = {
+  0xfe2555be, 0xd716, 0x4686,
+  { 0xb9, 0xd0, 0x79, 0xdb, 0x59, 0x21, 0xb7, 0x0d }
 };
 
 static QCOM_VERIFIEDBOOT_PROTOCOL mVerifiedBoot;
@@ -52,6 +59,11 @@ static UINTN mTzMapSizeMismatchMarkerCount;
 static UINTN mDeviceStateProjectedMarkerCount;
 static UINTN mDeviceStateOpaqueMarkerCount;
 static UINTN mSpssRewriteMarkerCount;
+static UINTN mTokenNoticeCount;
+static UINTN mStallCount;
+static UINTN mStallTotalUs;
+static UINTN mReserveSwallowMarkerCount;
+static UINTN mReserveAbsentMarkerCount;
 static void
 ResetMarkerCounters(void)
 {
@@ -69,6 +81,11 @@ ResetMarkerCounters(void)
   mDeviceStateProjectedMarkerCount = 0;
   mDeviceStateOpaqueMarkerCount = 0;
   mSpssRewriteMarkerCount = 0;
+  mTokenNoticeCount = 0;
+  mReserveSwallowMarkerCount = 0;
+  mReserveAbsentMarkerCount = 0;
+  mStallCount = 0;
+  mStallTotalUs = 0;
 }
 static DeviceInfo mStoredInfo;
 static DeviceInfo mLastWrittenInfo;
@@ -224,6 +241,18 @@ AsciiStrCmp(IN CONST CHAR8 *FirstString, IN CONST CHAR8 *SecondString)
   return strcmp(FirstString, SecondString);
 }
 
+/* The hook announces the destructive write on the framebuffer via Print, which
+ * DEBUG never reaches. Counted separately so the test can prove the notice
+ * fires for exactly the token erase and nothing else. */
+UINTN EFIAPI
+Print(IN CONST CHAR16 *Format, ...)
+{
+  if (Format != NULL && Format[0] != L'\0') {
+    ++mTokenNoticeCount;
+  }
+  return 0;
+}
+
 VOID EFIAPI
 DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
 {
@@ -283,6 +312,12 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
   if (strstr(Format, "SFB: MARK spss-rewrite") != NULL) {
     ++mSpssRewriteMarkerCount;
   }
+  if (strstr(Format, "SFB: MARK reserve-write-swallow") != NULL) {
+    ++mReserveSwallowMarkerCount;
+  }
+  if (strstr(Format, "component=reserve universal=1 present=0") != NULL) {
+    ++mReserveAbsentMarkerCount;
+  }
 }
 
 static EFI_STATUS EFIAPI
@@ -311,6 +346,126 @@ FakeLocateProtocol(IN EFI_GUID *Protocol, IN VOID *Registration,
     return EFI_SUCCESS;
   }
   return EFI_NOT_FOUND;
+}
+
+/* A minimal two-entry GPT: one vendor reserve partition and one ordinary
+ * partition that must stay untouched. mReserveName is what the first entry is
+ * called, so a non-Oplus device is modelled by renaming it. */
+#define FAKE_PART_COUNT  2u
+
+static EFI_PARTITION_ENTRY mPartEntries[FAKE_PART_COUNT];
+static EFI_BLOCK_IO_PROTOCOL mPartBlockIo[FAKE_PART_COUNT];
+static EFI_BLOCK_IO_MEDIA mPartMedia[FAKE_PART_COUNT];
+static EFI_HANDLE mPartHandles[FAKE_PART_COUNT];
+static UINTN mPartWriteCount[FAKE_PART_COUNT];
+static CONST CHAR16 *mReserveName = L"oplusreserve1";
+
+static EFI_STATUS EFIAPI
+FakePartWriteBlocks(IN EFI_BLOCK_IO_PROTOCOL *This, IN UINT32 MediaId,
+                    IN EFI_LBA Lba, IN UINTN BufferSize, IN VOID *Buffer)
+{
+  UINTN Index;
+
+  (void)MediaId; (void)Lba; (void)BufferSize; (void)Buffer;
+  for (Index = 0; Index < FAKE_PART_COUNT; ++Index) {
+    if (&mPartBlockIo[Index] == This) {
+      ++mPartWriteCount[Index];
+      return EFI_SUCCESS;
+    }
+  }
+  return EFI_INVALID_PARAMETER;
+}
+
+static void
+SetPartitionName(UINTN Index, CONST CHAR16 *Name)
+{
+  UINTN Char;
+
+  memset(mPartEntries[Index].PartitionName, 0,
+         sizeof(mPartEntries[Index].PartitionName));
+  for (Char = 0; Char < 36 && Name[Char] != L'\0'; ++Char) {
+    mPartEntries[Index].PartitionName[Char] = Name[Char];
+  }
+}
+
+static void
+InitializePartitions(void)
+{
+  UINTN Index;
+
+  for (Index = 0; Index < FAKE_PART_COUNT; ++Index) {
+    memset(&mPartMedia[Index], 0, sizeof(mPartMedia[Index]));
+    mPartMedia[Index].BlockSize = 4096;
+    mPartMedia[Index].LastBlock = 0x2000;
+    memset(&mPartBlockIo[Index], 0, sizeof(mPartBlockIo[Index]));
+    mPartBlockIo[Index].Media = &mPartMedia[Index];
+    mPartBlockIo[Index].WriteBlocks = FakePartWriteBlocks;
+    mPartHandles[Index] = (EFI_HANDLE)&mPartBlockIo[Index];
+    mPartWriteCount[Index] = 0;
+  }
+  SetPartitionName(0, mReserveName);
+  SetPartitionName(1, L"userdata");
+}
+
+static EFI_STATUS EFIAPI
+FakeLocateHandleBuffer(IN EFI_LOCATE_SEARCH_TYPE SearchType,
+                       IN EFI_GUID *Protocol, IN VOID *SearchKey,
+                       IN OUT UINTN *NoHandles, OUT EFI_HANDLE **Buffer)
+{
+  (void)SearchType; (void)SearchKey;
+  if (NoHandles == NULL || Buffer == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  if (Protocol != &gEfiBlockIoProtocolGuid) {
+    return EFI_NOT_FOUND;
+  }
+  *NoHandles = FAKE_PART_COUNT;
+  *Buffer = mPartHandles;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeHandleProtocol(IN EFI_HANDLE Handle, IN EFI_GUID *Protocol,
+                   OUT VOID **Interface)
+{
+  UINTN Index;
+
+  if (Interface == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *Interface = NULL;
+  for (Index = 0; Index < FAKE_PART_COUNT; ++Index) {
+    if (mPartHandles[Index] != Handle) {
+      continue;
+    }
+    if (Protocol == &gEfiPartitionRecordGuid) {
+      *Interface = &mPartEntries[Index];
+      return EFI_SUCCESS;
+    }
+    if (Protocol == &gEfiBlockIoProtocolGuid) {
+      *Interface = &mPartBlockIo[Index];
+      return EFI_SUCCESS;
+    }
+  }
+  return EFI_UNSUPPORTED;
+}
+
+/* Records the on-screen hold instead of actually sleeping, so the test can
+ * assert it happens exactly once per launch and for the intended duration. */
+static EFI_STATUS EFIAPI
+FakeStall(IN UINTN Microseconds)
+{
+  ++mStallCount;
+  mStallTotalUs += Microseconds;
+  return EFI_SUCCESS;
+}
+
+/* The handle buffer is static storage, so releasing it is a no-op. */
+static EFI_STATUS EFIAPI
+FakeFreePool(IN VOID *Buffer)
+{
+  (void)Buffer;
+  return EFI_SUCCESS;
 }
 
 static EFI_STATUS EFIAPI
@@ -564,7 +719,12 @@ InitializeProtocols(void)
 {
   memset(&mBootServices, 0, sizeof(mBootServices));
   mBootServices.LocateProtocol = FakeLocateProtocol;
+  mBootServices.LocateHandleBuffer = FakeLocateHandleBuffer;
+  mBootServices.HandleProtocol = FakeHandleProtocol;
+  mBootServices.FreePool = FakeFreePool;
+  mBootServices.Stall = FakeStall;
   gBS = &mBootServices;
+  InitializePartitions();
 
   memset(&mScm, 0, sizeof(mScm));
   mScm.ScmSipSysCall = FakeScmSipSysCall;
@@ -1436,6 +1596,170 @@ TestUniversalScmDrops(void)
   mExposeScm = TRUE;
 }
 
+/* Universal vendor-reserve write suppression: writes to a token-carrying
+ * reserve partition never reach flash while a managed ABL runs, every other
+ * partition is untouched, and a platform without such a partition still
+ * launches. */
+static void
+TestUniversalReserveWriteSwallow(void)
+{
+  const EFI_LBA TokenLba = 0x2000 - 0x3A5;
+  const EFI_LBA RoutineLba = 1080;   /* a Phoenix accounting block */
+  UINT8 Block[4096];
+  EFI_BLOCK_WRITE Wrapped;
+
+  memset(Block, 0, sizeof(Block));
+
+  SfbDisarmManagedAblHooks();
+  InitializePartitions();
+  MakeValidStoredInfo(TRUE, TRUE);
+  ResetMarkerCounters();
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
+         EFI_SUCCESS);
+
+  /* Only the reserve slot is wrapped. */
+  assert(mPartBlockIo[0].WriteBlocks != FakePartWriteBlocks);
+  assert(mPartBlockIo[1].WriteBlocks == FakePartWriteBlocks);
+  Wrapped = mPartBlockIo[0].WriteBlocks;
+
+  /* The token zeroing write is reported as successful and never forwarded. */
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, TokenLba,
+                                     sizeof(Block), Block) == EFI_SUCCESS);
+  assert(mPartWriteCount[0] == 0);
+  assert(mReserveSwallowMarkerCount == 1);
+
+  /* Every swallow is reported, not just the first. */
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, TokenLba,
+                                     sizeof(Block), Block) == EFI_SUCCESS);
+  assert(mReserveSwallowMarkerCount == 2);
+
+  /* Routine reserve traffic is NOT ours to block: it reaches flash even on the
+   * protected partition, and is not counted as a swallow. */
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, RoutineLba,
+                                     sizeof(Block), Block) == EFI_SUCCESS);
+  assert(mPartWriteCount[0] == 1);
+  assert(mReserveSwallowMarkerCount == 2);
+
+  /* An unprotected partition still reaches flash. */
+  assert(mPartBlockIo[1].WriteBlocks(&mPartBlockIo[1], 0, 0, sizeof(Block),
+                                     Block) == EFI_SUCCESS);
+  assert(mPartWriteCount[1] == 1);
+
+  /* Disarming restores the slot, so superfastboot's own reserve flash lands --
+   * including a write to the token block, which is refused only while a managed
+   * ABL is running. */
+  SfbDisarmManagedAblHooks();
+  assert(mPartBlockIo[0].WriteBlocks == FakePartWriteBlocks);
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, TokenLba,
+                                     sizeof(Block), Block) == EFI_SUCCESS);
+  assert(mPartWriteCount[0] == 2);
+
+  /* A retained wrapper reached after disarm refuses rather than swallowing
+   * silently against a released record. */
+  assert(Wrapped(&mPartBlockIo[0], 0, 0, sizeof(Block), Block) ==
+         EFI_INVALID_PARAMETER);
+
+  /* Re-arming over our own slot keeps the retained original. */
+  MakeValidStoredInfo(TRUE, TRUE);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
+         EFI_SUCCESS);
+  SfbDisarmManagedAblHooks();
+  assert(mPartBlockIo[0].WriteBlocks == FakePartWriteBlocks);
+
+  /* Fail-soft: a non-Oplus GPT arms nothing, reports the absence, and still
+   * launches. The legacy Oppo name is covered by the same table. */
+  mReserveName = L"modem";
+  InitializePartitions();
+  MakeValidStoredInfo(TRUE, TRUE);
+  ResetMarkerCounters();
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
+         EFI_SUCCESS);
+  assert(SfbHooksActive());
+  assert(mReserveAbsentMarkerCount == 1);
+  assert(mPartBlockIo[0].WriteBlocks == FakePartWriteBlocks);
+  SfbDisarmManagedAblHooks();
+
+  mReserveName = L"opporeserve1";
+  InitializePartitions();
+  MakeValidStoredInfo(TRUE, TRUE);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
+         EFI_SUCCESS);
+  assert(mPartBlockIo[0].WriteBlocks != FakePartWriteBlocks);
+  SfbDisarmManagedAblHooks();
+
+  mReserveName = L"oplusreserve1";
+  InitializePartitions();
+}
+
+/* The token erase is the one swallow the user must see, so it is announced on
+ * the framebuffer via Print. Geometry is LastBlock-0x3A5, RE-derived and
+ * confirmed against a PLR110 dump (8 MiB / 4 KiB blocks -> LastBlock 2047,
+ * token LBA 1114). The routine reserve writers must stay silent on screen. */
+static void
+TestReserveTokenNotice(void)
+{
+  const EFI_LBA TokenLba = 0x2000 - 0x3A5;  /* 7259 with the fixture geometry */
+  const EFI_LBA UnlockLba = 0x2000 - 0x35C; /* 7332 */
+  UINT8 Zero[4096];
+  UINT8 Data[4096];
+
+  memset(Zero, 0, sizeof(Zero));
+  memset(Data, 0xA5, sizeof(Data));
+
+  SfbDisarmManagedAblHooks();
+  InitializePartitions();
+  MakeValidStoredInfo(TRUE, TRUE);
+  ResetMarkerCounters();
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
+         EFI_SUCCESS);
+
+  /* Zeroing the token block is the destructive event: swallowed, announced, and
+   * the notice is held on screen. */
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, TokenLba,
+                                     sizeof(Zero), Zero) == EFI_SUCCESS);
+  assert(mPartWriteCount[0] == 0);
+  assert(mTokenNoticeCount == 1);
+  assert(mStallCount == 1);
+  assert(mStallTotalUs == 3000000);
+
+  /* The relock path retries; the screen notice and its hold stay at one per
+   * launch while every swallow is still logged. Repeating the hold would stack
+   * multi-second stalls into the boot. */
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, TokenLba,
+                                     sizeof(Zero), Zero) == EFI_SUCCESS);
+  assert(mTokenNoticeCount == 1);
+  assert(mStallCount == 1);
+  assert(mReserveSwallowMarkerCount == 2);
+
+  /* Also protected, but silently: a non-zero write over the token block, and
+   * the UnlockRecord. Neither is the erase the user needs told about. */
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, TokenLba,
+                                     sizeof(Data), Data) == EFI_SUCCESS);
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, UnlockLba,
+                                     sizeof(Zero), Zero) == EFI_SUCCESS);
+  assert(mPartWriteCount[0] == 0);
+  assert(mReserveSwallowMarkerCount == 4);
+
+  /* Routine accounting elsewhere in the partition is forwarded, not blocked,
+   * and never reaches the screen. */
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, 1080,
+                                     sizeof(Zero), Zero) == EFI_SUCCESS);
+  assert(mPartWriteCount[0] == 1);
+  assert(mReserveSwallowMarkerCount == 4);
+  assert(mTokenNoticeCount == 1);
+  assert(mStallCount == 1);
+
+  /* A fresh launch may announce again. */
+  SfbDisarmManagedAblHooks();
+  MakeValidStoredInfo(TRUE, TRUE);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
+         EFI_SUCCESS);
+  assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, TokenLba,
+                                     sizeof(Zero), Zero) == EFI_SUCCESS);
+  assert(mTokenNoticeCount == 2);
+  SfbDisarmManagedAblHooks();
+}
+
 int
 main(void)
 {
@@ -1446,5 +1770,7 @@ main(void)
   TestRewriteLayouts();
   TestInvalidRepair();
   TestUniversalScmDrops();
+  TestUniversalReserveWriteSwallow();
+  TestReserveTokenNotice();
   return 0;
 }

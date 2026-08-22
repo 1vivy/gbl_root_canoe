@@ -1,5 +1,6 @@
 #include "patchs/core.h"
 #include "patchs/libavb_force_success.h"
+#include "patchs/fastboot_lock_gates.h"
 #include "patchs/oplus/forceenablefastboot.h"
 #include "patchs/oplus/warning.h"
 
@@ -124,6 +125,27 @@ bool PatchBuffer(char *Data, int32_t Size) {
     printf("libavb_force_success patch applied\n");
     if (patch_abl_gbl(Data, Size) != 0) {
         printf("Warning: Failed to patch ABL GBL\n");
+    }
+
+    /*
+     * Lock-state fastboot gates. The loader hands the ABL a locked view, so
+     * without this the ABL refuses flash / erase / slot change / snapshot
+     * cancel. Best effort rather than mandatory: losing it costs fastboot
+     * write access, which is a usability regression, not an unbootable device,
+     * and an ABL that ships none of these gates is a legitimate outcome.
+     */
+    switch (patch_fastboot_lock_gates(Data, Size)) {
+        case LOCK_GATES_SUCCESS:
+            printf("fastboot lock-state gates patched\n");
+            break;
+        case LOCK_GATES_ABSENT:
+            printf("Warning: no fastboot lock-state gates found; fastboot may "
+                   "refuse flash while the device reports locked\n");
+            break;
+        default:
+            printf("Warning: fastboot lock-state gate patch failed; fastboot "
+                   "will refuse flash while the device reports locked\n");
+            break;
     }
 
     /*
