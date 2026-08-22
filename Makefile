@@ -55,3 +55,5 @@ test:
 	sh targets/magisk_module/tests/test_flows.sh
 	sh targets/magisk_module/tests/test_webui.sh
 	sh targets/toolkit_linux/tests/test_build_scripts.sh
+	sh targets/toolkit_linux/tests/test_canoe_device_install.sh
+	sh targets/toolkit_linux/tests/test_canoe_scripts.sh
