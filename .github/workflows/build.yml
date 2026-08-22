@@ -202,45 +202,71 @@ jobs:
           esac
         done
 
+    - name: Package release archives
+      run: |
+        # Zip here, in the job that produced the tree. Artifact upload/download
+        # does not preserve the executable bit, so zipping after that round-trip
+        # publishes mode-644 scripts and binaries: `./build.sh` and
+        # `./canoe_stage.sh` fail with Permission denied and bin/* cannot be
+        # exec'd even via `bash build.sh`. A zip stores the modes itself, and
+        # uploading the zip round-trips its bytes intact.
+        mkdir -p release
+        for package in toolkit_linux toolkit_windows toolkit_android magisk_module \
+                       vbmetafixer_linux vbmetafixer_windows vbmetafixer_android; do
+          ( cd "artifacts/$package" && zip -qr "../../release/$package.zip" . )
+        done
 
+        # The archive is the deliverable, so assert the modes inside the archive
+        # rather than in the build tree they came from.
+        rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
+        for exe in build.sh canoe_prep.sh canoe_prep_device.sh canoe_stage.sh \
+                   canoe_device_install.sh bin/patch_abl bin/mode2_profile \
+                   bin/abl_tzmap bin/extractfv bin/vbmetaport bin/vbmetabackup; do
+          test -x "modecheck/$exe" || { echo "not executable in archive: $exe"; exit 1; }
+        done
+        rm -rf modecheck
+
+
+    # Each artifact carries the packaged .zip, not the loose tree: the zip is
+    # what preserves the executable bit across the artifact round-trip.
     - name: Upload Linux Toolkit
       uses: actions/upload-artifact@v4
       with:
         name: toolkit_linux
-        path: artifacts/toolkit_linux/*
+        path: release/toolkit_linux.zip
 
     - name: Upload Windows Toolkit
       uses: actions/upload-artifact@v4
       with:
         name: toolkit_windows
-        path: artifacts/toolkit_windows/*
+        path: release/toolkit_windows.zip
 
     - name: Upload Android Toolkit
       uses: actions/upload-artifact@v4
       with:
         name: toolkit_android
-        path: artifacts/toolkit_android/*
+        path: release/toolkit_android.zip
 
     - name: Upload Magisk Module
       uses: actions/upload-artifact@v4
       with:
         name: magisk_module
-        path: artifacts/magisk_module/*
+        path: release/magisk_module.zip
 
     - name: Upload VBMeta Fixer Linux
       uses: actions/upload-artifact@v4
       with:
         name: vbmetafixer_linux
-        path: artifacts/vbmetafixer_linux/*
+        path: release/vbmetafixer_linux.zip
 
     - name: Upload VBMeta Fixer Windows
       uses: actions/upload-artifact@v4
       with:
         name: vbmetafixer_windows
-        path: artifacts/vbmetafixer_windows/*
+        path: release/vbmetafixer_windows.zip
 
     - name: Upload VBMeta Fixer Android
       uses: actions/upload-artifact@v4
       with:
         name: vbmetafixer_android
-        path: artifacts/vbmetafixer_android/*
+        path: release/vbmetafixer_android.zip

@@ -20,15 +20,18 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@v4
 
-    - name: Package release assets
+    # The build job already packaged each archive, because zipping only after
+    # the artifact round-trip loses every executable bit. Re-zipping here would
+    # reintroduce exactly that, so the downloaded archives are attached as-is.
+    - name: Verify the executable bit survived
       run: |
-        cd toolkit_linux && zip -r ../toolkit_linux.zip . && cd ..
-        cd toolkit_windows && zip -r ../toolkit_windows.zip . && cd ..
-        cd toolkit_android && zip -r ../toolkit_android.zip . && cd ..
-        cd magisk_module && zip -r ../magisk_module.zip . && cd ..
-        cd vbmetafixer_linux && zip -r ../vbmetafixer_linux.zip . && cd ..
-        cd vbmetafixer_windows && zip -r ../vbmetafixer_windows.zip . && cd ..
-        cd vbmetafixer_android && zip -r ../vbmetafixer_android.zip . && cd ..
+        unzip -q -o toolkit_linux/toolkit_linux.zip -d modecheck
+        for exe in build.sh canoe_prep.sh canoe_prep_device.sh canoe_stage.sh \
+                   canoe_device_install.sh bin/patch_abl bin/mode2_profile \
+                   bin/abl_tzmap bin/extractfv bin/vbmetaport bin/vbmetabackup; do
+          test -x "modecheck/$exe" || { echo "not executable in release asset: $exe"; exit 1; }
+        done
+        rm -rf modecheck
 
     - name: Create Release
       uses: softprops/action-gh-release@v2
@@ -36,10 +39,10 @@ jobs:
         name: ${{ github.ref_name }}
         generate_release_notes: false
         files: |
-          toolkit_linux.zip
-          toolkit_windows.zip
-          toolkit_android.zip
-          magisk_module.zip
-          vbmetafixer_linux.zip
-          vbmetafixer_windows.zip
-          vbmetafixer_android.zip
+          toolkit_linux/toolkit_linux.zip
+          toolkit_windows/toolkit_windows.zip
+          toolkit_android/toolkit_android.zip
+          magisk_module/magisk_module.zip
+          vbmetafixer_linux/vbmetafixer_linux.zip
+          vbmetafixer_windows/vbmetafixer_windows.zip
+          vbmetafixer_android/vbmetafixer_android.zip
