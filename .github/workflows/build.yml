@@ -192,8 +192,12 @@ jobs:
 
         for efi in BDS.efi efisp/tools/RebootTools.efi efisp/tools/BLTools.efi efisp/tools/ArbTools.efi; do
           efi_type="$(file -b "artifacts/toolkit_linux/$efi")"
+          # file(1) renamed the PE machine string for this architecture from
+          # "ARM64" to "Aarch64"; a runner-image bump must not fail a correct
+          # binary, so accept either spelling.
           case "$efi_type" in
             *"PE32+ executable"*"EFI"*"ARM64"*) ;;
+            *"PE32+ executable"*"EFI"*"Aarch64"*) ;;
             *) echo "unexpected ARM64 EFI binary $efi: $efi_type"; exit 1 ;;
           esac
         done
