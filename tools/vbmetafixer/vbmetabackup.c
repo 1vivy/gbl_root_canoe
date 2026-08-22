@@ -363,16 +363,36 @@ static int backup_vbmeta(const uint8_t *part_data, size_t part_size,
     return 0;
 }
 
+/* Derive a partition name from an image path: strip directories and a
+ * trailing ".img" so "OOS_FILES_HERE/recovery.img" yields "recovery". */
+static void name_from_path(const char *path, char *out, size_t out_size) {
+    const char *base = path;
+    for (const char *p = path; *p; p++) {
+        if (*p == '/' || *p == '\\')
+            base = p + 1;
+    }
+    snprintf(out, out_size, "%s", base);
+    size_t len = strlen(out);
+    if (len > 4 && strcmp(out + len - 4, ".img") == 0)
+        out[len - 4] = '\0';
+}
+
 static void usage(const char *prog) {
     fprintf(stderr, "Usage: %s [-o output_dir] [-s slot] [-a adb_path]\n", prog);
+    fprintf(stderr, "       %s -f image [-n name] [-o output_dir]\n", prog);
     fprintf(stderr, "  -o  vbmeta backup directory (default: ./vbmetas)\n");
     fprintf(stderr, "  -s  slot suffix, e.g. _a or _b (default: auto-detect)\n");
     fprintf(stderr, "  -a  path to adb executable (default: adb)\n");
+    fprintf(stderr, "  -f  extract from a LOCAL image file instead of the device;\n");
+    fprintf(stderr, "      no adb, no slot detection, no chain recursion\n");
+    fprintf(stderr, "  -n  partition name for -f (default: image basename minus .img)\n");
 }
 
 int main(int argc, char **argv) {
     const char *output_dir = "./vbmetas";
     const char *slot_arg = NULL;
+    const char *image_path = NULL;
+    const char *image_name = NULL;
 
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "-o") == 0) && i + 1 < argc) {
@@ -381,6 +401,10 @@ int main(int argc, char **argv) {
             slot_arg = argv[++i];
         } else if ((strcmp(argv[i], "-a") == 0) && i + 1 < argc) {
             adb_path = argv[++i];
+        } else if ((strcmp(argv[i], "-f") == 0) && i + 1 < argc) {
+            image_path = argv[++i];
+        } else if ((strcmp(argv[i], "-n") == 0) && i + 1 < argc) {
+            image_name = argv[++i];
         } else {
             usage(argv[0]);
             return 1;
@@ -388,6 +412,34 @@ int main(int argc, char **argv) {
     }
 
     mkdir_p(output_dir);
+
+    /* File mode: one local image in, one <name>.vbmeta out. This is the
+     * host-side path used when no device is attached (e.g. lifting the
+     * official recovery vbmeta out of a firmware package before flashing). */
+    if (image_path) {
+        char derived[MAX_PARTITION_NAME];
+        if (!image_name) {
+            name_from_path(image_path, derived, sizeof(derived));
+            image_name = derived;
+        }
+        if (image_name[0] == '\0') {
+            fprintf(stderr, "Cannot derive a partition name from: %s\n", image_path);
+            return 1;
+        }
+
+        size_t image_size;
+        uint8_t *image_data = read_file(image_path, &image_size);
+        if (!image_data) {
+            fprintf(stderr, "Failed to read image: %s\n", image_path);
+            return 1;
+        }
+
+        printf("Reading local image: %s (%zu bytes)\n", image_path, image_size);
+        int rc = backup_vbmeta(image_data, image_size, image_name, output_dir,
+                               NULL, NULL);
+        free(image_data);
+        return rc == 0 ? 0 : 1;
+    }
 
     wait_for_device();
 
