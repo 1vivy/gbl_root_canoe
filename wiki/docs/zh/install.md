@@ -145,6 +145,18 @@ bash Super_Flasher.sh
 
 Mode 0/1/2 都会尽力抑制 TrustZone 熔断请求（`0x02000801`）和 anti-rollback SCM 请求（`0x0200011E`、`0x32000110`），但这只能阻止**进一步推进**：无法让已经熔断的 fuse 复原，也无法降低已经升高的 rollback floor。如果 SCM 协议不存在，启动仍会继续，并通过 `hooks-armed ... scm=0` 标记记录保护不可用。
 
+### 通用保留分区 token 保护（所有模式）
+
+Mode 0/1/2 在被链式加载的 ABL 运行期间，都会吞掉对携带 fastboot 解锁 token 的厂商保留分区（`oplusreserve1`，或其旧名 `opporeserve1`）的写入。厂商回锁流程会把该 token 块清零，且该损失不可逆：一旦清零，设备就再也无法通过 fastboot 解锁。写入会向 ABL 报告成功，使其状态机仍能正常走完。
+
+该保护与具体机型无关。没有此类分区的平台不会挂载任何 hook，启动照常继续，并通过 `hooks-armed ... reserve=0` 标记记录保护未生效。Superfastboot 自身的 `fastboot flash oplusreserve1` 不受影响，因为该槽位只在受管 ABL 启动期间被包装。
+
+保留分区有很多常规写入者（Phoenix 启动计数、充电/UFS 状态），它们都会被静默吞掉并记入日志。唯一具有破坏性的写入——把 `LastBlock - 0x3A5` 处的 token 块清零——会额外在屏幕上提示，每次启动只提示一次：
+
+`SFB: blocked unlock-token erase on oplusreserve1 LBA 1114; token preserved`
+
+每一次吞写都会带 `reason=` 字段记录到 `logfs` 分区的 `UefiLog<N>.txt`（`token-zero-write`、`token-block-write`、`unlock-record-write`、`reserve-write`）。`DEBUG` 输出永远不会到达 framebuffer，因此常规吞写只能在该日志中看到。
+
 可在 BDS 菜单或模块 WebUI 中选择首选模式。选择保存在 `efisp` 固定尾部记录；记录缺失或损坏时默认使用 Mode 1。Mode 2 要求匹配的 120 字节 `.gm2p` profile；若该 profile 缺失或无效，启动会回退到 Mode 0。256 字节 `.tzmap` 是可选的；若缺失或无效，BDS 使用内置回退映射。
 
 硬件 Bootloader 真回锁是另一项独立操作。仅使用设备支持的流程，并提前确认厂商的数据清除要求。

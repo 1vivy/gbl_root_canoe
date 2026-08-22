@@ -78,3 +78,20 @@ Fixture coverage:
   pathways and the staging driver against `tests/stub_adb.py`.
 
 Both are registered in `make test`.
+
+## What `patch_abl` rewrites
+
+`libavb_force_success` is mandatory — patching fails outright without it. The rest are best effort and only warn, because losing them costs functionality rather than bootability:
+
+- **Lock-state fastboot gates.** The ABL is handed a locked view, so its in-fastboot dispatcher would otherwise refuse `flash`, `erase`, slot change and snapshot cancel. Each refusal message is anchored to the gate guarding it, and the gate is either made unconditional or removed. All-or-nothing: if any gate present in the image cannot be resolved, nothing is written, because an ABL that accepts `flash` but still refuses `erase` is worse than one that refuses both. `patch_log.txt` names each rewritten offset.
+- **Oplus orange-state warning** and **force-enable-fastboot** — cosmetic and usability, Oplus-specific.
+
+A `Warning: Failed to patch ABL GBL` line means the ABL lacks the vulnerability and the `abl` partition must be downgraded.
+
+## Developer note
+
+After editing UEFI sources, rebuild the BDS with `UEFI_REBUILD=1 make
+target_<name>`, or run `make clean` first.
+
+There is no separate generic build.
+
