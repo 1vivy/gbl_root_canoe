@@ -70,7 +70,14 @@
 3. **Linux 平台：** 开启终端执行 `bash build.sh`。**Windows 平台：** 双击运行 `build.bat`。
 4. 脚本会提取并修补 ABL，输出 `efisp/boot.efi`、从匹配原厂 vbmeta 派生的 120 字节 `efisp/boot.efi.gm2p` profile，以及从**未修补 ABL**派生的本地 256 字节 `efisp/boot.efi.tzmap` 映射，并保留原版 `ABL_original.efi`。`.tzmap` 不包含在工具包发布压缩包内。`BDS.efi` 已附带。请查看 `patch_log.txt`，若显示 "Warning: Failed to patch ABL GBL"，则该 ABL 没有漏洞，需将 `abl` 分区降级为带有 GBL 漏洞的旧版本 ABL。
 
-随后手动完成安装（完整步骤见 [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki)）：将包含 `boot.efi`、`boot.efi.gm2p`、`boot.efi.tzmap` 和 `BOOTENTRIES` 的整个 `efisp/` 目录复制到 `/mnt/vendor/persist/efisp/`，`sync`，再将 `BDS.efi` 刷入 `efisp`（`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`）。
+两个工具包随后都从第三方 Recovery 通过 ADB 安装：该环境下 `persist` 可写，且不需要运行系统具备 Root。Linux 提供 `.sh`，Windows 提供 `.bat`，参数与行为完全一致。两条彼此独立的路径，详见压缩包内的 `README.canoe.md` 以及 [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki)：
+
+- **独立安装** —— 只需一个开启了 ADB 的第三方 Recovery。`canoe_prep_device` 从设备拉取 `abl`/`vbmeta` 配对并派生三件套，`canoe_stage` 安装 persist 目录树并写入 BDS。全程不涉及固件包，也不涉及 vbmeta graft。若 `abl` 分区尚未是带 GBL 漏洞的版本，请自行用 `fastboot flash abl <vulnerable>.img` 刷入。
+- **配合固件包**（Super Flasher / RegionalHybrid，二者同时提供 `.sh` 与 `.bat`）—— `canoe_prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place` 会把固件包自带的官方 recovery vbmeta 移植到你的第三方 Recovery 上，并将准备好的镜像替换进固件包（保留 `.canoe-orig` 备份）。随后原样运行固件包自带的刷机脚本，最后执行 `canoe_stage` 完成安装。
+
+`canoe_stage` 只是一个薄驱动：它负责校验与暂存，随后把事务交给在设备上运行的 `canoe_device_install.sh`，因此两个平台共用同一份回滚实现。提交将覆盖的一切都会先快照——在用三件套、上一代备份、`BOOTENTRIES` 与 `tools/`——上一代被降级为 `boot_backup.efi`（可从 BDS 菜单选择）；persist 目录树在写入 BDS 之前完成 sync；写入 BDS 前先备份、写入后逐字节校验；任何失败都会将整套内容回滚。它始终不触碰 `abl` 分区与首选模式记录。
+
+**手动流程**（两个平台通用，完整步骤见 [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki)）：将包含 `boot.efi`、`boot.efi.gm2p`、`boot.efi.tzmap` 和 `BOOTENTRIES` 的整个 `efisp/` 目录复制到 persist 启动根目录（已启动系统为 `/mnt/vendor/persist/efisp/`，第三方 Recovery 为 `/persist/efisp/`），`sync`，再将 `BDS.efi` 刷入 `efisp`（`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`）。
 
 ### 3. OTA 升级
 重启进行 OTA 更新前，使用模块 WebUI 刷写以保留旧版本 ABL。“更新 efisp”默认开启；跨版本升级时请保持开启，否则可能卡一屏。
