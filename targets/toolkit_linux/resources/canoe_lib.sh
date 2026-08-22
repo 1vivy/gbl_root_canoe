@@ -10,9 +10,25 @@ warn() { printf '    WARNING: %s\n' "$1" >&2; }
 ADB=adb
 ADB_ARGS=()
 
-# dev_init [serial] - resolve adb, wait for the device, prove a shell works.
+# Seconds to wait for a usable transport. Overridable for slow enumeration.
+ADB_WAIT_SECONDS=${CANOE_ADB_WAIT:-60}
+
+# adb_state_ready <state> - true for transports that give us a working shell.
+adb_state_ready() {
+  case "$1" in
+    device|recovery|rescue|sideload) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# dev_init [serial] - resolve adb, wait for a usable transport, prove a shell works.
+#
+# Deliberately NOT `adb wait-for-device`: that waits for state=device
+# specifically, which a TWRP-derived custom recovery never reports (it reports
+# `recovery`), so it blocks forever in exactly the environment these scripts are
+# documented to run in. Poll get-state and accept any transport with a shell.
 dev_init() {
-  local serial=${1:-}
+  local serial=${1:-} waited=0 state=""
   if [ -x ./Platform-Tools/adb ]; then
     ADB=./Platform-Tools/adb
   elif ! command -v adb >/dev/null 2>&1; then
@@ -20,7 +36,18 @@ dev_init() {
   fi
   ADB_ARGS=()
   [ -n "$serial" ] && ADB_ARGS=(-s "$serial")
-  "$ADB" "${ADB_ARGS[@]}" wait-for-device
+
+  while :; do
+    state=$("$ADB" "${ADB_ARGS[@]}" get-state 2>/dev/null | tr -d '\r\n ')
+    adb_state_ready "$state" && break
+    [ "$waited" -ge "$ADB_WAIT_SECONDS" ] && break
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  adb_state_ready "$state" || \
+    die "no usable adb transport after ${ADB_WAIT_SECONDS}s (state: ${state:-none}); enable ADB in recovery"
+  printf '    adb transport: %s\n' "$state"
   sh_dev true >/dev/null 2>&1 || die "no adb shell (enable ADB in recovery)"
 }
 

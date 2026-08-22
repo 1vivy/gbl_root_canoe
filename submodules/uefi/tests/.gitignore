@@ -1,0 +1,10 @@
+# Host test binaries are build outputs, never artifacts. Committing them made
+# `make test` run a stale binary instead of rebuilding from the .c beside it,
+# and one built on a newer x86-64 baseline than the CI runner aborted with
+# "CPU ISA level is lower than required" before executing a single assertion.
+test_fat
+test_hooks
+test_launch
+test_profile
+test_store_mode
+test_tzmap
