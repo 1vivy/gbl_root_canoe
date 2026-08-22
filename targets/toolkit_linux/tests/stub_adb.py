@@ -60,8 +60,19 @@ if not argv:
 
 op = argv[0]
 
-if op == "wait-for-device":
+# The fake device reports `recovery`, which is what a TWRP-derived custom
+# recovery reports and the environment these scripts are documented to run in.
+if op == "get-state":
+    sys.stdout.write(os.environ.get("STUB_STATE", "recovery") + "\n")
     sys.exit(0)
+
+# Regression guard. `adb wait-for-device` waits for state=device specifically
+# and therefore hangs forever against a recovery, so no canoe script may use it.
+# Failing here turns a reintroduction into a test failure instead of a hang.
+if op == "wait-for-device":
+    log("FAULT", "wait-for-device is unusable in recovery; poll get-state")
+    sys.stderr.write("stub_adb: wait-for-device is forbidden in canoe scripts\n")
+    sys.exit(1)
 
 if op == "shell":
     cmd = " ".join(argv[1:])
