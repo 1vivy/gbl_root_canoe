@@ -33,6 +33,7 @@ test_hooks: test_hooks.c \
 	$(HOOK_DIR)/QseecomHook.c \
 	$(HOOK_DIR)/SpssHook.c \
 	$(HOOK_DIR)/ScmHook.c \
+	$(HOOK_DIR)/BlockIoHook.c \
 	$(HOOK_DIR)/SuperFbProfile.c \
 	$(HOOK_DIR)/SuperFbTzMap.c \
 	$(HOOK_DIR)/SuperFbProfileRewrite.c

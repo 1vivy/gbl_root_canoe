@@ -56,6 +56,8 @@ SfbPrepareManagedAblHooks (
   EFI_STATUS ScmStatus;
   BOOLEAN ScmInstalled = FALSE;
   BOOLEAN SpssInstalled = FALSE;
+  BOOLEAN ReserveInstalled = FALSE;
+  EFI_STATUS ReserveStatus;
 
   /* A failed reconfiguration must leave installed wrappers strict pass-through
    * rather than retaining a prior launch's active policy. */
@@ -193,6 +195,25 @@ SfbPrepareManagedAblHooks (
     }
   }
 
+  /* Universal and mode independent, same reasoning as SCM: zeroing the vendor
+   * fastboot unlock token is irreversible, so it is suppressed in every managed
+   * mode. Fail-soft on absence rather than refusing to launch -- most platforms
+   * running this have no vendor reserve partition at all, and a launch refusal
+   * there would be a pure regression. */
+  ReserveStatus = SfbInstallReserveBlockIo ();
+  if (EFI_ERROR (ReserveStatus)) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK hook-stage stage=install component=reserve "
+            "universal=1 present=0 status=%r\n",
+            ReserveStatus));
+  } else {
+    ReserveInstalled = TRUE;
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK hook-stage stage=install component=reserve "
+            "universal=1 present=1 status=%r\n",
+            ReserveStatus));
+  }
+
   if ((UINT32)EffectiveMode == 2u) {
     BOOLEAN SpssRequired;
 
@@ -254,13 +275,14 @@ SfbPrepareManagedAblHooks (
   gManagedPolicyActive = TRUE;
   DEBUG ((EFI_D_INFO,
           "SFB: MARK hooks-armed mode=%u profile=%u spss=%u scm=%u "
-          "tzmap-commands=%u\n",
+          "reserve=%u tzmap-commands=%u\n",
           (UINT32)gManagedMode, (UINT32)gManagedProfileValid,
           (UINT32)SpssInstalled, (UINT32)ScmInstalled,
-          (UINT32)gManagedTzMap.CommandCount));
+          (UINT32)ReserveInstalled, (UINT32)gManagedTzMap.CommandCount));
   return EFI_SUCCESS;
 
 Rollback:
+  SfbRestoreReserveBlockIo ();
   SfbRestoreScm ();
   SfbRestoreSpss ();
   SfbRestoreQseecom ();
@@ -279,6 +301,7 @@ SfbDisarmManagedAblHooks (VOID)
   ZeroMem (&gManagedProfile, sizeof (gManagedProfile));
   SfbTzMapBuiltinDefault (&gManagedTzMap);
   gManagedTzMapInitialized = TRUE;
+  SfbRestoreReserveBlockIo ();
   SfbRestoreScm ();
   SfbRestoreSpss ();
   SfbRestoreQseecom ();
