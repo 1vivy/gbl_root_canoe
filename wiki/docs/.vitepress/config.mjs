@@ -12,7 +12,7 @@ export default defineConfig({
       description: 'GBL Root Canoe — Fake Lock Bootloader',
       themeConfig: {
         socialLinks: [
-          { icon: 'github', link: 'https://github.com/superturtlee/gbl_root_canoe' },
+          { icon: 'github', link: 'https://github.com/1vivy/gbl_root_canoe' },
         ],
         sidebar: {
           '/': [
@@ -39,7 +39,7 @@ export default defineConfig({
       description: 'GBL Root Canoe — 假回锁 Bootloader 方案',
       themeConfig: {
         socialLinks: [
-          { icon: 'github', link: 'https://github.com/superturtlee/gbl_root_canoe' },
+          { icon: 'github', link: 'https://github.com/1vivy/gbl_root_canoe' },
         ],
         sidebar: {
           '/zh/': [

@@ -16,7 +16,7 @@ hero:
       link: /zh/intro
     - theme: alt
       text: 查看 GitHub
-      link: https://github.com/superturtlee/gbl_root_canoe
+      link: https://github.com/1vivy/gbl_root_canoe
 
 features:
   - title: 安装
