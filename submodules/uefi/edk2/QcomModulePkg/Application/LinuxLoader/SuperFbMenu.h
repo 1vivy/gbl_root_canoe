@@ -145,6 +145,13 @@ typedef enum {
  */
 EFI_STATUS
 SfbStartFatStack (VOID);
+/*
+ * Mount the logfs partition so the Qualcomm BDS earlier in the boot chain can
+ * flush its buffered log to it. No-op unless the FAT stack is already up, and
+ * harmless on platforms without a logfs partition.
+ */
+VOID
+SfbMountLogfs (VOID);
 
 /*
  * Snapshot of the boot volumes currently in the system: FAT32 volumes plus the
