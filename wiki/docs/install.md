@@ -137,7 +137,7 @@ Because the flasher writes the package's own `recovery.img` to both slots, keepi
 - The persist tree is complete and synced **before** the BDS is written, so an interrupted run never leaves a live BDS pointing at half-installed sidecars.
 - A failed first install leaves no partial `boot.efi` behind.
 - The BDS write is preceded by a full backup of `efisp` and followed by a byte-for-byte comparison of the written region; either failing restores the partition. The backup is pulled to the host either way.
-- The preferred-mode record is never touched, and the `abl` partition is never touched.
+- The preferred-mode record is left untouched unless `--mode N` is passed (which sets the preferred boot mode after a successful install, verified by reread); the `abl` partition is never touched.
 
 ## 5. Preferred Boot Mode
 
@@ -163,7 +163,7 @@ The reserve partition has many routine writers (Phoenix boot accounting, charge/
 
 Every swallow is recorded in `UefiLog<N>.txt` on the `logfs` partition with a `reason=` field (`token-zero-write`, `token-block-write`, `unlock-record-write`, `reserve-write`). `DEBUG` output never reaches the framebuffer, so that log is the only place the routine swallows appear.
 
-Choose the preferred mode in the BDS menu or module WebUI. The choice is stored in the fixed tail record on `efisp`; a missing or malformed record defaults to Mode 1. Mode 2 requires the matching 120-byte `.gm2p` profile; if that profile is missing or invalid, launch falls back to Mode 0. The 256-byte `.tzmap` is optional; if it is missing or invalid, BDS uses its built-in fallback.
+Choose the preferred mode in the BDS menu, the module WebUI, or at install time via `canoe_stage --mode N`. The choice is stored in the fixed tail record on `efisp`; a missing or malformed record defaults to Mode 1. Mode 2 requires the matching 120-byte `.gm2p` profile; if that profile is missing or invalid, launch falls back to Mode 0. The 256-byte `.tzmap` is optional; if it is missing or invalid, BDS uses its built-in fallback.
 
 Hardware bootloader re-locking is a separate operation. Use only a device-supported flow and account for vendor-specific data-wipe requirements.
 

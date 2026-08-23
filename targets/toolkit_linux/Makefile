@@ -1,6 +1,10 @@
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
-	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
+	submodule_mode2_profile submodule_mode2_profile_android \
+	submodule_abl_tzmap submodule_ablfvextractor \
 	submodule_vbmetafixer canoe_device_script build
+
+NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
+export NDK_PATH
 
 clean:
 	rm -rf build || true
@@ -34,6 +38,17 @@ submodule_mode2_profile: copy_resources
 	cargo build --locked --release --manifest-path ../../tools/mode2-profile/Cargo.toml
 	test -x ../../tools/mode2-profile/target/release/mode2_profile
 	cp ../../tools/mode2-profile/target/release/mode2_profile ./build/toolkit/bin/mode2_profile
+submodule_mode2_profile_android: copy_resources
+	# The arm64 build is pushed on-device by `canoe_stage --mode` for the
+	# preferred-mode write. Skipped with a loud warning when the NDK is absent
+	# so a host-only local build still packages; CI always has it.
+	if [ -n "$(NDK_PATH)" ]; then \
+		CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/mode2-profile/Cargo.toml && \
+		test -f ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile && \
+		cp ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile ./build/toolkit/bin/mode2_profile-arm64; \
+	else \
+		echo "WARNING: NDK_PATH unset; shipping without bin/mode2_profile-arm64 (canoe_stage --mode will be unavailable)"; \
+	fi
 submodule_abl_tzmap: copy_resources
 	cargo build --locked --release --manifest-path ../../tools/abl-tzmap/Cargo.toml
 	test -x ../../tools/abl-tzmap/target/release/abl_tzmap
@@ -58,6 +73,6 @@ canoe_device_script: copy_resources
 	cp ../../tools/canoe-device/canoe_device_install.sh ./build/toolkit/canoe_device_install.sh
 	chmod +x ./build/toolkit/canoe_device_install.sh
 	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script
 	# zip
 	cd build/toolkit && zip -r ../toolkit_linux.zip ./

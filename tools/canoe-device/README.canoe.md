@@ -114,9 +114,13 @@ Guarantees:
 - The BDS write is preceded by a full backup of `efisp` and followed by a
   byte-for-byte comparison of the written region; either failing restores the
   partition. The backup is pulled to the host either way.
-- The preferred-mode record is never touched. It sits 3072 bytes before the end
+- The preferred-mode record is left untouched unless `--mode N` is passed, in
+  which case it is written after a successful install by an on-device
+  `mode2_profile mode-write` (aligned read-modify-write, verified by reread)
+  from the shipped `bin/mode2_profile-arm64`. It sits 3072 bytes before the end
   of `efisp`, outside the written region, and an absent or malformed record
-  already means Mode 1. Change modes from the BDS menu or the module WebUI.
+  already means Mode 1. Modes can also be changed from the BDS menu or the
+  module WebUI.
 - The `abl` partition is never touched by any of these scripts.
 
 ## Files
@@ -127,5 +131,6 @@ Guarantees:
 | `canoe_lib.sh` | shared adb/slot/partition helpers for the Linux scripts (sourced) |
 | `canoe_prep_device.sh` / `.bat` | pathway A preparation: derive from the device |
 | `canoe_prep.sh` / `.bat` | pathway B preparation: graft + substitute into a package |
-| `canoe_stage.sh` / `.bat` | host driver: validate, stage, invoke the device script |
+| `canoe_stage.sh` / `.bat` | host driver: validate, stage, invoke the device script; `--mode N` also sets the preferred boot mode |
 | `canoe_device_install.sh` | the install transaction, executed on the device |
+| `bin/mode2_profile-arm64` | Android-arm64 `mode2_profile`, pushed on-device by `canoe_stage --mode` |

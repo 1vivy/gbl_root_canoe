@@ -13,12 +13,19 @@ rem so no root on the running system is needed.
 rem
 rem This script never touches the abl partition. Making that partition carry the
 rem GBL vulnerability is the operator's own `fastboot flash abl` step.
+rem
+rem --mode N additionally sets the BDS preferred-mode record on efisp after a
+rem successful install: the toolkit's Android-arm64 mode2_profile is pushed and
+rem its mode-write (aligned read-modify-write of the record block, verified by
+rem reread) runs on the device. This folds the old standalone set_mode1 helper
+rem into the one-shot install.
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 set "SERIAL="
 set "PERSIST="
 set "SKIP_BDS=no"
+set "MODE="
 set "WORKDIR=%~dp0work"
 
 :parse
@@ -28,6 +35,7 @@ if /i "%~1"=="--serial"    ( set "SERIAL=%~2" & shift & shift & goto parse )
 if /i "%~1"=="--persist"   ( set "PERSIST=%~2" & shift & shift & goto parse )
 if /i "%~1"=="--work"      ( set "WORKDIR=%~2" & shift & shift & goto parse )
 if /i "%~1"=="--skip-bds"  ( set "SKIP_BDS=yes" & shift & goto parse )
+if /i "%~1"=="--mode"      ( set "MODE=%~2" & shift & shift & goto parse )
 if /i "%~1"=="-h"          goto usage
 if /i "%~1"=="--help"      goto usage
 echo canoe_stage: error: unknown argument: %~1 1>&2
@@ -40,6 +48,8 @@ echo   -s, --serial SERIAL   adb device serial
 echo       --persist PATH    persist mount point ^(default: autodetect /persist,
 echo                         then /mnt/vendor/persist^)
 echo       --skip-bds        install the persist tree only; do not write efisp
+echo       --mode 0^|1^|2      after a successful install, set the preferred boot mode
+echo                         on efisp; needs bin\mode2_profile-arm64
 echo       --work DIR        local backup directory ^(default: .\work^)
 echo   -h, --help            this text
 echo.
@@ -51,6 +61,14 @@ exit /b 0
 exit /b 1
 
 :parsed
+
+if "%MODE%"=="" goto mode_ok
+if "%MODE%"=="0" goto mode_ok
+if "%MODE%"=="1" goto mode_ok
+if "%MODE%"=="2" goto mode_ok
+echo canoe_stage: error: --mode must be 0, 1 or 2 ^(got '%MODE%'^) 1>&2
+exit /b 1
+:mode_ok
 
 rem ------------------------------------------------------------- adb -------
 set "ADB=adb"
@@ -201,7 +219,37 @@ if /i "%SKIP_BDS%"=="no" (
 echo     staged set validated on device
 
 rem ----------------------------------------------------- transaction -------
+rem efisp geometry is fixed, so read it before the transaction: an early
+rem failure beats a late one, and the --mode step below reuses the values.
 set "DEVBACKUP=%STAGE%/efisp-backup.img"
+if /i "%SKIP_BDS%"=="no" goto read_geometry
+if not "%MODE%"=="" goto read_geometry
+goto geometry_done
+:read_geometry
+"%ADB%" %ADBARGS% shell "[ -e /dev/block/by-name/efisp ]" >nul 2>&1
+if errorlevel 1 (
+  echo canoe_stage: error: efisp partition not found 1>&2
+  goto stage_fail
+)
+set "PART_BYTES="
+for /f "delims=" %%S in ('"%ADB%" %ADBARGS% shell "blockdev --getsize64 /dev/block/by-name/efisp"') do set "PART_BYTES=%%S"
+set "PART_BYTES=%PART_BYTES: =%"
+echo %PART_BYTES%|findstr /r "^[0-9][0-9]*$" >nul || (
+  echo canoe_stage: error: could not read the size of efisp 1>&2
+  goto stage_fail
+)
+set /a PART_BLOCKS_4096=%PART_BYTES% %% 4096 >nul
+set "BLOCK=4096"
+if not "%PART_BLOCKS_4096%"=="0" (
+  set "BLOCK=512"
+  set /a PART_BLOCKS_512=%PART_BYTES% %% 512 >nul
+  if not "!PART_BLOCKS_512!"=="0" (
+    echo canoe_stage: error: efisp size %PART_BYTES% is not a multiple of 4096 or 512 1>&2
+    goto stage_fail
+  )
+)
+echo     efisp device: /dev/block/by-name/efisp ^(%PART_BYTES% bytes, block size !BLOCK!^)
+:geometry_done
 if /i "%SKIP_BDS%"=="yes" (
   echo.
   echo [*] Running the device-side install ^(tree only^)
@@ -209,12 +257,6 @@ if /i "%SKIP_BDS%"=="yes" (
 ) else (
   echo.
   echo [*] Running the device-side install
-  "%ADB%" %ADBARGS% shell "[ -e /dev/block/by-name/efisp ]"
-  if errorlevel 1 (
-    echo canoe_stage: error: efisp partition not found 1>&2
-    goto stage_fail
-  )
-  echo     efisp device: /dev/block/by-name/efisp
   set "INSTALLARGS=%STAGE% %D% /dev/block/by-name/efisp %DEVBACKUP%"
 )
 
@@ -243,6 +285,43 @@ if not "%INSTALLRC%"=="0" (
   exit /b 1
 )
 
+rem ------------------------------- preferred mode ---------------------------
+rem Runs after the transaction, not inside it: mode-write is an aligned
+rem read-modify-write of the record block with its own reread verification, so
+rem a failure here never endangers the just-installed boot chain.
+if not "%MODE%"=="" (
+  echo.
+  echo [*] Setting the preferred boot mode to %MODE%
+  if not exist "bin\mode2_profile-arm64" (
+    echo canoe_stage: error: --mode needs bin\mode2_profile-arm64 in the toolkit 1>&2
+    exit /b 1
+  )
+  "%ADB%" %ADBARGS% push "bin\mode2_profile-arm64" /tmp/canoe-mode2_profile >nul
+  if errorlevel 1 (
+    echo canoe_stage: error: adb push failed: bin\mode2_profile-arm64 1>&2
+    exit /b 1
+  )
+  "%ADB%" %ADBARGS% shell "chmod 755 /tmp/canoe-mode2_profile"
+  if errorlevel 1 (
+    echo canoe_stage: error: could not chmod the pushed mode2_profile 1>&2
+    exit /b 1
+  )
+  "%ADB%" %ADBARGS% shell "/tmp/canoe-mode2_profile mode-write --device /dev/block/by-name/efisp --partition-bytes %PART_BYTES% --block-size !BLOCK! --mode %MODE%"
+  if errorlevel 1 (
+    "%ADB%" %ADBARGS% shell "rm -f /tmp/canoe-mode2_profile" >nul 2>&1
+    echo canoe_stage: error: mode-write failed 1>&2
+    exit /b 1
+  )
+  set "MODE_AFTER="
+  for /f "delims=" %%S in ('"%ADB%" %ADBARGS% shell "/tmp/canoe-mode2_profile mode-read --device /dev/block/by-name/efisp --partition-bytes %PART_BYTES% --block-size !BLOCK!"') do set "MODE_AFTER=%%S"
+  "%ADB%" %ADBARGS% shell "rm -f /tmp/canoe-mode2_profile" >nul 2>&1
+  echo !MODE_AFTER!|findstr /C:"MODE=%MODE%|" |findstr /C:"MODE_DEFAULTED=0" >nul || (
+    echo canoe_stage: error: mode record reread does not show mode %MODE% non-defaulted: !MODE_AFTER! 1>&2
+    exit /b 1
+  )
+  echo     record reread: !MODE_AFTER!
+)
+
 echo.
 echo ========================================
 echo canoe_stage: done.
@@ -251,7 +330,11 @@ echo Installed under %D%:
 echo   boot.efi, boot.efi.gm2p, boot.efi.tzmap, BOOTENTRIES, tools/
 echo   boot_backup.efi ^(previous generation, selectable from the BDS menu^)
 echo.
-echo The preferred-mode record was left untouched.
+if "%MODE%"=="" (
+  echo The preferred-mode record was left untouched.
+) else (
+  echo Preferred boot mode set to %MODE%.
+)
 echo Reboot to use the new boot chain.
 echo ========================================
 exit /b 0

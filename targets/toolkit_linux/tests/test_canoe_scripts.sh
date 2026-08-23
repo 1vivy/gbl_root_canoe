@@ -16,6 +16,7 @@
 #   E  --abl without --vbmeta is rejected
 #   F  the package pathway grafts, substitutes in place and is idempotent
 #   G  --slot inactive derives from the non-active slot; bad values rejected
+#   H  --mode writes the preferred-mode record via the on-device tool
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -89,6 +90,48 @@ cp "$target" "$out"
 printf 'GRAFTED' | dd of="$out" bs=1 seek=0 conv=notrunc 2>/dev/null
 EOS
   chmod +x "$TK/bin/vbmetabackup" "$TK/bin/vbmetaport"
+
+  # Stub of the Android-arm64 mode2_profile that canoe_stage --mode pushes to
+  # the device. Runs on the host through stub_adb, so it operates on the
+  # remapped fixture path it is handed via --device. Implements exactly the
+  # surface the stage script uses: mode-write then mode-read.
+  cat > "$TK/bin/mode2_profile-arm64" <<'EOS'
+#!/bin/sh
+set -eu
+op=${1:-}; shift || :
+dev=""; pb=""; bs=""; mode=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --device) dev=$2; shift 2 ;;
+    --partition-bytes) pb=$2; shift 2 ;;
+    --block-size) bs=$2; shift 2 ;;
+    --mode) mode=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ -n "$dev" ] && [ -n "$pb" ] && [ -n "$bs" ] || exit 1
+[ "$pb" -ge 1048576 ] || exit 1
+[ $((pb % bs)) -eq 0 ] || exit 1
+off=$((pb - 3072))
+case "$op" in
+  mode-read)
+    head7=$(dd if="$dev" bs=1 skip="$off" count=7 2>/dev/null)
+    case "$head7" in
+      SFBM1\|0) echo 'MODE=0|MODE_DEFAULTED=0' ;;
+      SFBM1\|1) echo 'MODE=1|MODE_DEFAULTED=0' ;;
+      SFBM1\|2) echo 'MODE=2|MODE_DEFAULTED=0' ;;
+      *) echo 'MODE=1|MODE_DEFAULTED=1' ;;
+    esac
+    ;;
+  mode-write)
+    case "$mode" in 0|1|2) ;; *) exit 1 ;; esac
+    { printf 'SFBM1|%s' "$mode"; dd if=/dev/zero bs=1 count=1017 2>/dev/null; } \
+      | dd of="$dev" bs=1 seek="$off" count=1024 conv=notrunc 2>/dev/null
+    ;;
+  *) exit 1 ;;
+esac
+EOS
+  chmod +x "$TK/bin/mode2_profile-arm64"
   cp "$ROOT/targets/toolkit_linux/tests/stub_adb.py" "$TK/Platform-Tools/adb"
   chmod +x "$TK/Platform-Tools/adb"
 }
@@ -194,6 +237,22 @@ if ( cd "$TK" && STUB_DEV="$DEV" ./canoe_prep_device.sh --slot nonsense >"$TMP/o
 fi
 grep -q 'must be _a, _b, active or inactive' "$TMP/err" || fail 'G: wrong rejection message'
 pass '--slot inactive derives from the non-active slot; bad values rejected'
+
+# H: --mode writes the preferred-mode record through the pushed on-device tool
+make_device yes
+# The shared fixture efisp is deliberately odd-sized; the mode store requires a
+# geometry the host tool accepts, so give it an aligned 4 MiB image.
+truncate -s 4194304 "$DEV/efisp.bin"
+stage '' '--mode 2' || fail "H: canoe_stage.sh --mode failed: $(cat "$TMP/err")"
+rec=$(dd if="$DEV/efisp.bin" bs=1 skip=$((4194304 - 3072)) count=7 2>/dev/null)
+[ "$rec" = 'SFBM1|2' ] || fail "H: record not written at the tail (got '$rec')"
+grep -q 'MODE=2|MODE_DEFAULTED=0' "$TMP/out" || fail 'H: reread did not confirm mode 2'
+grep -q 'Preferred boot mode set to 2' "$TMP/out" || fail 'H: summary did not report the mode'
+if ( cd "$TK" && STUB_DEV="$DEV" ./canoe_stage.sh --mode 9 >"$TMP/out" 2>"$TMP/err" ); then
+  fail 'H: --mode 9 was accepted'
+fi
+grep -q 'must be 0, 1 or 2' "$TMP/err" || fail 'H: wrong --mode rejection message'
+pass '--mode writes the preferred-mode record via the on-device tool'
 
 # F: package pathway grafts, substitutes and is idempotent
 PKG="$TMP/pkg"
