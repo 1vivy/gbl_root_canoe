@@ -215,7 +215,7 @@ BY_NAME_DIR=/dev/block/by-name
 RUNTIME_DIR=$MODPATH/tmp
 PERSIST_MNT=/mnt/vendor/persist
 EFISP_DIR=$PERSIST_MNT/efisp
-ABLREPO_URL="https://raw.githubusercontent.com/superturtlee/gbl_root_canoe/main/ablrepo"
+ABLREPO_URL="https://raw.githubusercontent.com/1vivy/gbl_root_canoe/main/ablrepo"
 mkdir -p $RUNTIME_DIR
 
 # Verify $1 against the sha256 in $2 (first whitespace‑delimited token).
