@@ -18,12 +18,20 @@ set "SLOT_FORCED=no"
 if "%~1"=="" goto args_done
 if /I "%~1"=="--slot" (
   if "%~2"=="" (
-    echo canoe_prep_device: error: --slot needs a suffix 1>&2
+    echo canoe_prep_device: error: --slot needs a value 1>&2
     exit /b 1
   )
-  call :normalize_slot "%~2"
-  if errorlevel 1 exit /b 1
-  set "SLOT_FORCED=yes"
+  if /I "%~2"=="active" (
+    set "SLOT="
+    set "SLOT_FORCED=no"
+  ) else if /I "%~2"=="inactive" (
+    set "SLOT=inactive"
+    set "SLOT_FORCED=yes"
+  ) else (
+    call :normalize_slot "%~2"
+    if errorlevel 1 exit /b 1
+    set "SLOT_FORCED=yes"
+  )
   shift
   shift
   goto parse_args
@@ -170,54 +178,29 @@ if errorlevel 1 (
 
 echo.
 echo [*] Resolving the source slot
+if /I "%SLOT%"=="inactive" goto resolve_inactive_slot
 if defined SLOT goto slot_resolved
-set "SLOT_FILE=%TEMP%\canoe-slot-%RANDOM%-%RANDOM%.txt"
-"%ADB%" %ADB_SERIAL_ARGS% shell getprop ro.boot.slot_suffix >"%SLOT_FILE%" 2>nul
-if errorlevel 1 (
-  echo canoe_prep_device: error: could not read ro.boot.slot_suffix 1>&2
-  exit /b 1
-)
-set "SLOT_PROP="
-for /f "usebackq tokens=* delims=" %%A in ("%SLOT_FILE%") do if not defined SLOT_PROP set "SLOT_PROP=%%A"
-del /q "%SLOT_FILE%" >nul 2>&1
-if errorlevel 1 (
-  echo canoe_prep_device: error: could not remove the temporary slot file 1>&2
-  exit /b 1
-)
-if not defined SLOT_PROP goto read_cmdline_slot
-set "SLOT=%SLOT_PROP%"
-call :normalize_slot "%SLOT%"
+call :detect_active_slot
 if errorlevel 1 exit /b 1
 goto slot_resolved
 
-:read_cmdline_slot
-set "CMDLINE_FILE=%TEMP%\canoe-cmdline-%RANDOM%-%RANDOM%.txt"
-"%ADB%" %ADB_SERIAL_ARGS% shell cat /proc/cmdline >"%CMDLINE_FILE%" 2>nul
-if errorlevel 1 (
-  echo canoe_prep_device: error: could not read /proc/cmdline 1>&2
-  exit /b 1
-)
-set "CMDLINE="
-for /f "usebackq tokens=* delims=" %%A in ("%CMDLINE_FILE%") do if not defined CMDLINE set "CMDLINE=%%A"
-del /q "%CMDLINE_FILE%" >nul 2>&1
-if errorlevel 1 (
-  echo canoe_prep_device: error: could not remove the temporary cmdline file 1>&2
-  exit /b 1
-)
-if defined CMDLINE for %%A in (%CMDLINE%) do call :parse_slot_token "%%A"
+:resolve_inactive_slot
+set "SLOT="
+call :detect_active_slot
 if errorlevel 1 exit /b 1
 if not defined SLOT (
-  echo     no slot suffix reported; using non-A/B partition names
-  goto slot_resolved
+  echo canoe_prep_device: error: --slot inactive needs a detectable active slot; pass --slot _a or _b explicitly 1>&2
+  exit /b 1
 )
-call :normalize_slot "%SLOT%"
-if errorlevel 1 exit /b 1
-
-goto slot_resolved
+set "ACTIVE_SLOT=%SLOT%"
+if /I "%SLOT%"=="_a" (set "SLOT=_b") else (set "SLOT=_a")
+echo     active slot: %ACTIVE_SLOT%; sourcing from the inactive slot %SLOT%
+echo     ^(the slot an adb sideload has just written^)
+goto slot_message_done
 
 :slot_resolved
-if "%SLOT_FORCED%"=="yes" goto slot_forced
 if not defined SLOT goto no_slot_message
+if "%SLOT_FORCED%"=="yes" goto slot_forced
 echo     active slot: %SLOT%
 goto slot_message_done
 
@@ -391,6 +374,46 @@ exit /b 0
 set "SLOT_TOKEN=%~1"
 for /f "tokens=1,* delims==" %%A in ("%SLOT_TOKEN%") do if /I "%%A"=="androidboot.slot_suffix" set "SLOT=%%B"
 exit /b 0
+:detect_active_slot
+set "SLOT_FILE=%TEMP%\canoe-slot-%RANDOM%-%RANDOM%.txt"
+"%ADB%" %ADB_SERIAL_ARGS% shell getprop ro.boot.slot_suffix >"%SLOT_FILE%" 2>nul
+if errorlevel 1 (
+  echo canoe_prep_device: error: could not read ro.boot.slot_suffix 1>&2
+  exit /b 1
+)
+set "SLOT_PROP="
+for /f "usebackq tokens=* delims=" %%A in ("%SLOT_FILE%") do if not defined SLOT_PROP set "SLOT_PROP=%%A"
+del /q "%SLOT_FILE%" >nul 2>&1
+if errorlevel 1 (
+  echo canoe_prep_device: error: could not remove the temporary slot file 1>&2
+  exit /b 1
+)
+if not defined SLOT_PROP goto detect_cmdline_slot
+set "SLOT=%SLOT_PROP%"
+call :normalize_slot "%SLOT%"
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:detect_cmdline_slot
+set "CMDLINE_FILE=%TEMP%\canoe-cmdline-%RANDOM%-%RANDOM%.txt"
+"%ADB%" %ADB_SERIAL_ARGS% shell cat /proc/cmdline >"%CMDLINE_FILE%" 2>nul
+if errorlevel 1 (
+  echo canoe_prep_device: error: could not read /proc/cmdline 1>&2
+  exit /b 1
+)
+set "CMDLINE="
+for /f "usebackq tokens=* delims=" %%A in ("%CMDLINE_FILE%") do if not defined CMDLINE set "CMDLINE=%%A"
+del /q "%CMDLINE_FILE%" >nul 2>&1
+if errorlevel 1 (
+  echo canoe_prep_device: error: could not remove the temporary cmdline file 1>&2
+  exit /b 1
+)
+if defined CMDLINE for %%A in (%CMDLINE%) do call :parse_slot_token "%%A"
+if errorlevel 1 exit /b 1
+if not defined SLOT exit /b 0
+call :normalize_slot "%SLOT%"
+if errorlevel 1 exit /b 1
+exit /b 0
 
 :normalize_slot
 set "SLOT=%~1"
@@ -398,13 +421,15 @@ if /I "%~1"=="a" set "SLOT=_a"
 if /I "%~1"=="b" set "SLOT=_b"
 if /I "%SLOT%"=="_a" exit /b 0
 if /I "%SLOT%"=="_b" exit /b 0
-echo canoe_prep_device: error: --slot must be _a or _b ^(got '%SLOT%'^) 1>&2
+echo canoe_prep_device: error: --slot must be _a, _b, active or inactive ^(got '%SLOT%'^) 1>&2
 exit /b 1
 
 :usage
 echo Usage: canoe_prep_device.bat [options]
 echo.
-echo   --slot _a^|_b        source slot suffix ^(default: the device's active slot^)
+echo   --slot SLOT         source slot: _a, _b, active ^(default^) or inactive.
+echo                       "inactive" is the slot that is not booted right now,
+echo                       e.g. the one an adb sideload has just written.
 echo   --abl IMG           use this ABL image instead of pulling the partition
 echo   --vbmeta IMG        use this vbmeta image instead of pulling the partition
 echo   -s, --serial SERIAL adb device serial

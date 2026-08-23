@@ -69,6 +69,14 @@ detect_slot() {
   fi
   printf '%s' "$s"
 }
+# other_slot <_a|_b> - echo the opposite suffix.
+other_slot() {
+  case "$1" in
+    _a) printf '%s' _b ;;
+    _b) printf '%s' _a ;;
+    *)  return 1 ;;
+  esac
+}
 
 # resolve_part <base> <slot> - echo the by-name path for <base>.
 #

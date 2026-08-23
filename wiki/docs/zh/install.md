@@ -68,6 +68,12 @@
 ./canoe_stage.sh           # 安装 persist 目录树，再写入 BDS
 ```
 
+默认从**当前活动槽位**拉取。若在 `adb sideload` 之后立即安装（常见的第三方 ROM 刷机流程），sideload 写入的是*另一个*槽位且尚未启动它，此时应加 `--slot inactive` 从该槽位派生：
+
+```bash
+./canoe_prep_device.sh --slot inactive
+```
+
 随后，仅当 `abl` 分区尚未是带 GBL 漏洞的版本时：
 
 ```bash
@@ -131,7 +137,7 @@ bash Super_Flasher.sh
 - persist 目录树在写入 BDS **之前**即已完整并 sync，因此中断的运行绝不会留下指向半安装 sidecar 的在用 BDS。
 - 首次安装失败不会残留不完整的 `boot.efi`。
 - 写入 BDS 前会先完整备份 `efisp`，写入后再对写入区域做逐字节比对；任一环节失败都会恢复该分区。无论成功与否，备份都会被拉回电脑端。
-- 首选模式记录始终不被触碰，`abl` 分区也始终不被触碰。
+- 除非传入 `--mode N`（安装成功后会写入首选启动模式，并通过重读校验），否则首选模式记录始终不被触碰；`abl` 分区也始终不被触碰。
 
 ## 5. 首选启动模式
 
@@ -157,7 +163,7 @@ Mode 0/1/2 在被链式加载的 ABL 运行期间，都会吞掉对携带 fastbo
 
 每一次吞写都会带 `reason=` 字段记录到 `logfs` 分区的 `UefiLog<N>.txt`（`token-zero-write`、`token-block-write`、`unlock-record-write`、`reserve-write`）。`DEBUG` 输出永远不会到达 framebuffer，因此常规吞写只能在该日志中看到。
 
-可在 BDS 菜单或模块 WebUI 中选择首选模式。选择保存在 `efisp` 固定尾部记录；记录缺失或损坏时默认使用 Mode 1。Mode 2 要求匹配的 120 字节 `.gm2p` profile；若该 profile 缺失或无效，启动会回退到 Mode 0。256 字节 `.tzmap` 是可选的；若缺失或无效，BDS 使用内置回退映射。
+可在 BDS 菜单、模块 WebUI 中选择首选模式，或在安装时通过 `canoe_stage --mode N` 指定。选择保存在 `efisp` 固定尾部记录；记录缺失或损坏时默认使用 Mode 1。Mode 2 要求匹配的 120 字节 `.gm2p` profile；若该 profile 缺失或无效，启动会回退到 Mode 0。256 字节 `.tzmap` 是可选的；若缺失或无效，BDS 使用内置回退映射。
 
 硬件 Bootloader 真回锁是另一项独立操作。仅使用设备支持的流程，并提前确认厂商的数据清除要求。
 

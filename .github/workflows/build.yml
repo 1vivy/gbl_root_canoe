@@ -65,6 +65,8 @@ jobs:
       run: |
         test -x artifacts/toolkit_linux/bin/patch_abl
         test -x artifacts/toolkit_linux/bin/mode2_profile
+        test -x artifacts/toolkit_linux/bin/mode2_profile-arm64
+        test -x artifacts/toolkit_windows/bin/mode2_profile-arm64
         test -x artifacts/toolkit_linux/bin/abl_tzmap
         test -f artifacts/toolkit_windows/bin/patch_abl.exe
         test -f artifacts/toolkit_windows/bin/mode2_profile.exe
@@ -128,6 +130,16 @@ jobs:
         case "$linux_profile_type" in
           *"ELF 64-bit"*"x86-64"*) ;;
           *) echo "unexpected Linux mode2_profile: $linux_profile_type"; exit 1 ;;
+        esac
+        linux_mode2_arm64_type="$(file -b artifacts/toolkit_linux/bin/mode2_profile-arm64)"
+        case "$linux_mode2_arm64_type" in
+          *"ELF 64-bit"*"ARM aarch64"*) ;;
+          *) echo "unexpected Linux mode2_profile-arm64: $linux_mode2_arm64_type"; exit 1 ;;
+        esac
+        windows_mode2_arm64_type="$(file -b artifacts/toolkit_windows/bin/mode2_profile-arm64)"
+        case "$windows_mode2_arm64_type" in
+          *"ELF 64-bit"*"ARM aarch64"*) ;;
+          *) echo "unexpected Windows mode2_profile-arm64: $windows_mode2_arm64_type"; exit 1 ;;
         esac
         linux_tzmap_type="$(file -b artifacts/toolkit_linux/bin/abl_tzmap)"
         case "$linux_tzmap_type" in
@@ -221,7 +233,8 @@ jobs:
         rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
         for exe in build.sh canoe_prep.sh canoe_prep_device.sh canoe_stage.sh \
                    canoe_device_install.sh bin/patch_abl bin/mode2_profile \
-                   bin/abl_tzmap bin/extractfv bin/vbmetaport bin/vbmetabackup; do
+                   bin/mode2_profile-arm64 bin/abl_tzmap bin/extractfv \
+                   bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in archive: $exe"; exit 1; }
         done
         rm -rf modecheck
