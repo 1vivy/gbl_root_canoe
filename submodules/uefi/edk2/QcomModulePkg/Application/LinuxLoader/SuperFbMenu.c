@@ -24,6 +24,8 @@
 CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
 
 #define SFB_ATTR_NORMAL    EFI_TEXT_ATTR (EFI_LIGHTGRAY, EFI_BLACK)
+/* Project credit line shown under the boot-menu title. */
+#define SFB_MENU_CREDIT  L"gbl_root_canoe 6.3.3 by 1vivy"
 #define SFB_ATTR_SELECTED  EFI_TEXT_ATTR (EFI_BLACK, EFI_LIGHTGRAY)
 #define SFB_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
 
@@ -326,7 +328,7 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
   UINTN  Index;
   UINTN  Last;
 
-  SfbBeginScreen (Title, NULL);
+  SfbBeginScreen (Title, SFB_MENU_CREDIT);
 
   if (Menu->Count == 0) {
     Print (L"  No boot entries found.\r\n");
