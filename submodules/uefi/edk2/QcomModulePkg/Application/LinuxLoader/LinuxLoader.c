@@ -252,6 +252,13 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       DEBUG ((EFI_D_ERROR, "Unable to start the FAT stack: %r\n", Status));
     }
 
+    /*
+     * With the filesystem drivers up, mount logfs so the earlier boot-chain
+     * BDS log flush has somewhere to land; the chainloaded ABL inherits the
+     * mounted volume.
+     */
+    SfbMountLogfs ();
+
     Status = SfbStoreReadMode (&Mode, &ModeDefaulted);
     if (EFI_ERROR (Status)) {
       Mode = SfbBootModeAblFakeLocked;

@@ -19,6 +19,7 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include <Library/DevicePathLib.h>
+#include <Guid/Gpt.h>
 #include <Guid/FileInfo.h>
 #include <Guid/FileSystemVolumeLabelInfo.h>
 #include <IndustryStandard/PeImage.h>
@@ -189,6 +190,97 @@ SfbStartFatStack (VOID)
   SfbConnectAll ();
 
   return EFI_SUCCESS;
+}
+
+/* ---- logfs -------------------------------------------------------------- */
+
+extern EFI_GUID gEfiPartitionRecordGuid;
+
+/* GPT name fields are CHAR16[36], not required to be NUL-terminated and
+ * space-padded by some writers. Case-insensitive, like the reserve table's
+ * matcher in Hook/BlockIoHook.c. */
+STATIC BOOLEAN
+SfbGptNameIsLogfs (IN CONST CHAR16 *Stored)
+{
+  STATIC CONST CHAR16  Want[] = L"logfs";
+  UINTN                Index;
+
+  if (Stored == NULL) return FALSE;
+  for (Index = 0; Index < 36 && Want[Index] != L'\0'; Index++) {
+    CHAR16 A = Stored[Index];
+    CHAR16 B = Want[Index];
+
+    if (A >= L'A' && A <= L'Z') A = (CHAR16)(A | 0x20);
+    if (A != B) return FALSE;
+  }
+  return Stored[Index] == L'\0' || Stored[Index] == L' ';
+}
+
+STATIC UINTN
+SfbFileSystemCount (VOID)
+{
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       Count  = 0;
+
+  if (!EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol,
+                                           &gEfiSimpleFileSystemProtocolGuid,
+                                           NULL, &Count, &Handles)) &&
+      Handles != NULL) {
+    FreePool (Handles);
+  }
+  return Count;
+}
+
+/*
+ * Mount the logfs partition, nothing more.
+ *
+ * The Qualcomm BDS earlier in the boot chain defers its log flush until logfs
+ * is mounted, and the stock fastboot path never mounts it, so the buffered log
+ * is silently dropped. Binding the filesystem drivers to that one partition is
+ * all it takes; the flush itself is Qualcomm's business. Fail-soft by
+ * construction: a platform with no logfs partition mounts nothing, and the
+ * marker records that as an expected outcome rather than a failure.
+ */
+VOID
+SfbMountLogfs (VOID)
+{
+  EFI_STATUS  Status;
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       Count    = 0;
+  UINTN       Index;
+  UINTN       Found    = 0;
+  UINTN       Mounted  = 0;
+
+  if (!mSfbFatStackStarted) {
+    return;
+  }
+
+  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid,
+                                    NULL, &Count, &Handles);
+  if (EFI_ERROR (Status) || Handles == NULL) {
+    return;
+  }
+
+  for (Index = 0; Index < Count; Index++) {
+    EFI_PARTITION_ENTRY  *PartEntry = NULL;
+    UINTN                Before;
+    UINTN                After;
+
+    Status = gBS->HandleProtocol (Handles[Index], &gEfiPartitionRecordGuid,
+                                  (VOID **)&PartEntry);
+    if (EFI_ERROR (Status) || PartEntry == NULL) continue;
+    if (!SfbGptNameIsLogfs (PartEntry->PartitionName)) continue;
+
+    Found++;
+    Before = SfbFileSystemCount ();
+    gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
+    After = SfbFileSystemCount ();
+    if (After > Before) Mounted++;
+  }
+
+  FreePool (Handles);
+  DEBUG ((EFI_D_INFO, "SFB: MARK logfs-mount found=%u mounted=%u\n",
+          (UINT32)Found, (UINT32)Mounted));
 }
 
 /*
