@@ -27,6 +27,10 @@ from recovery.
 fastboot flash abl <vulnerable>.img
 ```
 
+The pull defaults to the active slot. Right after an `adb sideload` — the usual
+custom-ROM flow — the sideload wrote the *other* slot and has not booted it
+yet; pass `--slot inactive` to derive from that slot instead.
+
 Order matters. `canoe_prep_device.sh` derives `boot.efi` from `abl` and
 `boot.efi.gm2p` from `vbmeta`, and those two must describe the **same** firmware.
 Pulling both from the device gives a matching pair only while the `abl` partition

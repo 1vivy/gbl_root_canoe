@@ -15,6 +15,7 @@
 #   D  --skip-bds installs the tree and leaves efisp untouched
 #   E  --abl without --vbmeta is rejected
 #   F  the package pathway grafts, substitutes in place and is idempotent
+#   G  --slot inactive derives from the non-active slot; bad values rejected
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -177,6 +178,22 @@ if ( cd "$TK" && STUB_DEV="$DEV" ./canoe_prep_device.sh --abl "$DEV/abl_a.bin" \
 fi
 grep -q 'must be given together' "$TMP/err" || fail 'E: wrong rejection message'
 pass '--abl without --vbmeta is rejected'
+
+# G: --slot inactive derives from the slot a sideload just wrote
+make_device yes
+printf 'OTHER-ABL-IMAGE' > "$DEV/abl_b.bin"
+printf 'OTHER-VBMETA-IMAGE' > "$DEV/vbmeta_b.bin"
+( cd "$TK" && STUB_DEV="$DEV" ./canoe_prep_device.sh --slot inactive >"$TMP/out" 2>"$TMP/err" ) ||
+  fail "G: canoe_prep_device.sh --slot inactive failed: $(cat "$TMP/err")"
+want="PATCHED-ABL-FROM-$(printf 'OTHER-ABL-IMAGE' | sha256sum | cut -c1-8)"
+grep -q "$want" "$TK/efisp/boot.efi" || fail 'G: did not derive from the inactive slot abl'
+grep -q 'sourcing from the inactive slot _b' "$TMP/out" ||
+  fail 'G: did not report the inactive slot'
+if ( cd "$TK" && STUB_DEV="$DEV" ./canoe_prep_device.sh --slot nonsense >"$TMP/out" 2>"$TMP/err" ); then
+  fail 'G: --slot nonsense was accepted'
+fi
+grep -q 'must be _a, _b, active or inactive' "$TMP/err" || fail 'G: wrong rejection message'
+pass '--slot inactive derives from the non-active slot; bad values rejected'
 
 # F: package pathway grafts, substitutes and is idempotent
 PKG="$TMP/pkg"

@@ -9,6 +9,10 @@
 # It pulls the abl and vbmeta partitions from the target slot and runs build.sh
 # on them, producing efisp/boot.efi plus its matching .gm2p and .tzmap sidecars.
 #
+# The target slot is the active one by default; --slot inactive selects the
+# slot that is not booted right now, which is the slot an adb sideload has
+# just written - the custom-ROM install case.
+#
 # TWO THINGS THIS DOES NOT DO
 #
 # 1. It does not touch the abl partition. Making that partition carry the GBL
@@ -42,7 +46,9 @@ usage() {
   cat <<'EOF'
 Usage: canoe_prep_device.sh [options]
 
-  --slot _a|_b        source slot suffix (default: the device's active slot)
+  --slot SLOT         source slot: _a, _b, active (default) or inactive.
+                      "inactive" is the slot that is not booted right now,
+                      e.g. the one an adb sideload has just written.
   --abl IMG           use this ABL image instead of pulling the partition
   --vbmeta IMG        use this vbmeta image instead of pulling the partition
   -s, --serial SERIAL adb device serial
@@ -98,21 +104,27 @@ else
   dev_init "$SERIAL"
 
   step "Resolving the source slot"
-  if [ -z "$SLOT" ]; then
-    SLOT=$(detect_slot)
-    if [ -n "$SLOT" ]; then
-      printf '    active slot: %s\n' "$SLOT"
-    else
-      printf '    no slot suffix reported; assuming a non-A/B layout\n'
-    fi
-  else
-    case "$SLOT" in
-      _a|_b) ;;
-      a|b) SLOT="_$SLOT" ;;
-      *) die "--slot must be _a or _b (got '$SLOT')" ;;
-    esac
-    printf '    slot forced to %s\n' "$SLOT"
-  fi
+  case "$SLOT" in
+    ""|active)
+      SLOT=$(detect_slot)
+      if [ -n "$SLOT" ]; then
+        printf '    active slot: %s\n' "$SLOT"
+      else
+        printf '    no slot suffix reported; assuming a non-A/B layout\n'
+      fi
+      ;;
+    inactive)
+      ACTIVE_SLOT=$(detect_slot)
+      [ -n "$ACTIVE_SLOT" ] || die "--slot inactive needs a detectable active slot; pass --slot _a or _b explicitly"
+      SLOT=$(other_slot "$ACTIVE_SLOT") \
+        || die "could not resolve the inactive slot from '$ACTIVE_SLOT'"
+      printf '    active slot: %s; sourcing from the inactive slot %s\n' "$ACTIVE_SLOT" "$SLOT"
+      printf '    (the slot an adb sideload has just written)\n'
+      ;;
+    _a|_b) printf '    slot forced to %s\n' "$SLOT" ;;
+    a|b) SLOT="_$SLOT"; printf '    slot forced to %s\n' "$SLOT" ;;
+    *) die "--slot must be _a, _b, active or inactive (got '$SLOT')" ;;
+  esac
 
   ABL_DEV=$(resolve_part abl "$SLOT") \
     || die "abl$SLOT not found; pass --slot explicitly or supply --abl/--vbmeta"

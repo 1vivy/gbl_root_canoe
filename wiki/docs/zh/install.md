@@ -68,6 +68,12 @@
 ./canoe_stage.sh           # 安装 persist 目录树，再写入 BDS
 ```
 
+默认从**当前活动槽位**拉取。若在 `adb sideload` 之后立即安装（常见的第三方 ROM 刷机流程），sideload 写入的是*另一个*槽位且尚未启动它，此时应加 `--slot inactive` 从该槽位派生：
+
+```bash
+./canoe_prep_device.sh --slot inactive
+```
+
 随后，仅当 `abl` 分区尚未是带 GBL 漏洞的版本时：
 
 ```bash

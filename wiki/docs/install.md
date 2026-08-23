@@ -68,6 +68,12 @@ The only prerequisite is a custom recovery with ADB enabled. Persist is writable
 ./canoe_stage.sh           # install the persist tree, then write the BDS
 ```
 
+The pair is pulled from the **active** slot by default. When installing right after an `adb sideload` — the usual custom-ROM flow — the sideload has written the *other* slot and not booted it yet, so pass `--slot inactive` to derive from that slot instead:
+
+```bash
+./canoe_prep_device.sh --slot inactive
+```
+
 Then, only if the `abl` partition is not already a GBL-vulnerable version:
 
 ```bash
