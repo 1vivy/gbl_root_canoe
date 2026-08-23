@@ -4,8 +4,6 @@
 
 ![Stone Badge](https://stone.professorlee.work/api/stone/superturtlee/gbl_root_canoe)
 
-> ⚠️ **Validation status:** Host builds and test fixtures are validated. On-device validation is scoped to a OnePlus Ace 6T (CPH2767, `macan`) running OxygenOS `CPH2767_16.0.9.401(EX01)`, using the RAM-only staged-BDS path; sidecar loading, hook arming, KeyMaster rewrites, and SCM drops were confirmed. No other device and no permanent installation have been validated.
-
 `gbl_root_canoe` is an EDK2-based workspace for patching the EFI applications within Qualcomm ABL (Android Bootloader) images. It leverages a GBL (Generic Bootloader Loader) vulnerability so the real ABL loads an embedded **superfastboot BDS** off the raw `efisp` partition. The BDS then scans a compatible partition (ext4/fat32) for boot entries and chains to the selected one - primarily to achieve a **Fake Locked Bootloader** state on Snapdragon 8 Gen 5 / 8 Elite (Gen 5) devices to bypass bootloader unlock detection.
 
 `BDS.efi` is written raw to the `efisp` partition; the patched ABL/profile/map set (`boot.efi`, `boot.efi.gm2p`, and `boot.efi.tzmap`) and the boot entry list (`BOOTENTRIES`) live on the `persist` partition under its `efisp/` directory.
@@ -45,7 +43,7 @@ You must be on a **Linux** host to build the project:
 
 ## User Guide
 
-For more detailed instructions, please refer to the [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki).
+For more detailed instructions, please refer to the [Wiki](https://github.com/1vivy/gbl_root_canoe/wiki).
 
 ### 1. Using the Module (On-Device)
 
@@ -54,13 +52,13 @@ The module is designed to run directly on your rooted Android device.
 **Requirements:**
 - Device must be Snapdragon 8 Gen 5 / 8 Elite (Gen 5).
 - Bootloader must be unlocked.
-- Kernel must NOT have Baseband Guard.
+- Kernel must permit writes to `abl` and `efisp`. Baseband Guard blocks them; a kernel that allows them (WildKernel reportedly does now) works. If writes are refused, switch to LKM or stock boot images.
 - The ABL on the `abl` partition must contain the GBL vulnerability. If it does not, flash an older ABL with the vulnerability first; `boot.efi` and its matching `boot.efi.gm2p` profile still describe the current stock ABL/vbmeta pair, while the optional `boot.efi.tzmap` describes the unpatched ABL used to produce `boot.efi`; neither needs to match the downgraded `abl` partition.
 
 **Installation & Usage:**
 When flashing the module via a root manager (KernelSU, Magisk, or APatch), the script interacts with you using the volume keys:
 - **Volume Up (First-time installation):** The script extracts and patches the current-slot ABL, derives `boot.efi.gm2p` from the matching current-slot vbmeta, generates the local `boot.efi.tzmap` from the unpatched ABL, installs the validated pair plus map, `BOOTENTRIES` and tools under `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`. The `.tzmap` is generated locally and is not shipped inside the module archive. After this, reboot into Recovery and **format Data**. Once booted, install this module again (Volume Down the second time) to complete the installation.
-- **Volume Down (post-format or module-only install):** Skips boot-chain writes and completes module/WebUI installation. After each OTA, open the WebUI and flash again to retain the BL version.
+- **Volume Down (post-format or module-only install):** Skips boot-chain writes and completes module/WebUI installation. After each OTA, open the WebUI and flash again to retain the BL version; the WebUI writes the retained BL to the **inactive** slot and is also where the preferred mode (0/1/2) is selected. The host toolkits set the same record at install time with `canoe_stage --mode`.
 
 ### 2. Using the PC Toolkits (Linux / Windows)
 
@@ -70,14 +68,14 @@ If you downloaded the `target_toolkit_linux` or `target_toolkit_windows` zip fil
 3. **Linux:** Run `bash build.sh`. **Windows:** Run `build.bat`.
 4. The script extracts and patches the ABL, outputting `efisp/boot.efi`, its matching 120-byte `efisp/boot.efi.gm2p` profile derived from the matching stock vbmeta, and the local 256-byte `efisp/boot.efi.tzmap` map derived from the **unpatched ABL**, plus `ABL_original.efi` (original). The `.tzmap` is not shipped inside the toolkit archive. `BDS.efi` is bundled. Check `patch_log.txt` - if it says "Warning: Failed to patch ABL GBL", the ABL lacks the vulnerability and the `abl` partition must be downgraded to an older ABL with it.
 
-Both toolkits then install over ADB from a custom recovery, where `persist` is writable and no root on the running system is needed. Linux ships `.sh`, Windows ships `.bat`; options and behaviour are identical. Two independent pathways, documented in `README.canoe.md` inside the archive and in the [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki):
+Both toolkits then install over ADB from a custom recovery, where `persist` is writable and no root on the running system is needed. Linux ships `.sh`, Windows ships `.bat`; options and behaviour are identical. Two independent pathways, documented in `README.canoe.md` inside the archive and in the [Wiki](https://github.com/1vivy/gbl_root_canoe/wiki):
 
 - **Standalone** - needs only a custom recovery with ADB. `canoe_prep_device` pulls the `abl`/`vbmeta` pair off the device and derives the triplet; `canoe_stage` installs the persist tree and writes the BDS. No firmware package and no vbmeta graft are involved. If the `abl` partition is not already a GBL-vulnerable version, flash one yourself with `fastboot flash abl <vulnerable>.img`. The pair is pulled from the active slot by default; pass `--slot inactive` to source from the slot that is not currently booted, e.g. the one an `adb sideload` has just written during a custom-ROM install.
 - **With a firmware package** (Super Flasher / RegionalHybrid, which ship both `.sh` and `.bat`) - `canoe_prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place` grafts the package's official recovery vbmeta onto your custom recovery and substitutes the prepared images into the package, keeping `.canoe-orig` backups. The package's own flasher then runs unmodified, after which `canoe_stage` completes the install.
 
 `canoe_stage` is a thin driver: it validates and stages, then hands the transaction to `canoe_device_install.sh` running on the device, so both platforms share one implementation of the rollback. Everything the commit overwrites is snapshotted first - the live triplet, the previous backup, `BOOTENTRIES` and `tools/` - the previous generation is demoted to `boot_backup.efi` (selectable from the BDS menu), the persist tree is synced before the BDS is written, the BDS write is backed up and verified byte-for-byte, and any failure rolls the whole set back. It never touches the `abl` partition, and writes the preferred-mode record only when `--mode 0|1|2` is passed (an on-device, reread-verified `mode2_profile mode-write` via the shipped `bin/mode2_profile-arm64`).
 
-**Manual flow** (either platform, see the [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki) for full steps): copy the `efisp/` tree, including `boot.efi`, `boot.efi.gm2p`, `boot.efi.tzmap`, and `BOOTENTRIES`, into the persist boot root (`/mnt/vendor/persist/efisp/` from a booted system, `/persist/efisp/` from recovery), `sync`, and flash `BDS.efi` to `efisp` (`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`).
+**Manual flow** (either platform, see the [Wiki](https://github.com/1vivy/gbl_root_canoe/wiki) for full steps): copy the `efisp/` tree, including `boot.efi`, `boot.efi.gm2p`, `boot.efi.tzmap`, and `BOOTENTRIES`, into the persist boot root (`/mnt/vendor/persist/efisp/` from a booted system, `/persist/efisp/` from recovery), `sync`, and flash `BDS.efi` to `efisp` (`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`).
 
 ### 3. OTA Upgrade
 Before rebooting for an OTA update, use the module WebUI to flash and retain the old ABL version. "Update efisp" is enabled by default; for a major version upgrade keep it on, otherwise the device may get stuck on the first boot screen.

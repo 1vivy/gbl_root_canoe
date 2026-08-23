@@ -161,7 +161,7 @@ The reserve partition has many routine writers (Phoenix boot accounting, charge/
 
 `SFB: blocked unlock-token erase on oplusreserve1 LBA 1114; token preserved`
 
-Every swallow is recorded in `UefiLog<N>.txt` on the `logfs` partition with a `reason=` field (`token-zero-write`, `token-block-write`, `unlock-record-write`, `reserve-write`). `DEBUG` output never reaches the framebuffer, so that log is the only place the routine swallows appear.
+Every swallow is recorded with a `reason=` field (`token-zero-write`, `token-block-write`, `unlock-record-write`, `reserve-write`). `DEBUG` output never reaches the framebuffer, so the log is the only place the routine swallows appear. There is one log, not a rotation: BDS mounts `logfs` before ExitBootServices, which is what lets the platform's own flush land a `UefiLog` text file there. On Oplus devices the same buffer is readable from a booted system at `/proc/bootloader_log`.
 
 Choose the preferred mode in the BDS menu, the module WebUI, or at install time via `canoe_stage --mode N`. The choice is stored in the fixed tail record on `efisp`; a missing or malformed record defaults to Mode 1. Mode 2 requires the matching 120-byte `.gm2p` profile; if that profile is missing or invalid, launch falls back to Mode 0. The 256-byte `.tzmap` is optional; if it is missing or invalid, BDS uses its built-in fallback.
 

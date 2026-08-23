@@ -16,7 +16,7 @@ hero:
       link: /intro
     - theme: alt
       text: View on GitHub
-      link: https://github.com/superturtlee/gbl_root_canoe
+      link: https://github.com/1vivy/gbl_root_canoe
 
 features:
   - title: Install

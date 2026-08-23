@@ -1,7 +1,5 @@
 # Xiaomi & OnePlus System Update Security Warning
 
-> ⚠️ **Validation status:** Host builds and test fixtures are validated. On-device validation is scoped to a OnePlus Ace 6T (CPH2767, `macan`) running OxygenOS `CPH2767_16.0.9.401(EX01)`, using the RAM-only staged-BDS path; sidecar loading, hook arming, KeyMaster rewrites, and SCM drops were confirmed. No other device and no permanent installation have been validated.
-
 ## Universal SCM safeguards (all modes)
 
 All modes (0/1/2) best-effort suppress the TrustZone fuse and anti-rollback SCM requests during launch and OTA refresh. This prevents **further advancement only**: it cannot un-blow an already-blown fuse or lower an already-raised rollback floor. If the SCM protocol is absent, launch continues and the `hooks-armed ... scm=0` marker records that the safeguard was unavailable.
@@ -31,7 +29,7 @@ If the abl avb version changes, this method will cause a **hard brick**.
 
 ## OnePlus
 
-The vulnerability is not yet fixed, but given the previous "fuse" incident, it is still recommended to use Hail to freeze system updates.
+Newer builds fix the loader path, so an older vulnerable ABL stays on the `abl` partition; given the previous "fuse" incident, it is still recommended to use Hail to freeze system updates.
 
 **⚠️ Warnings：**
 - **Do NOT update unless necessary / on a primary device**
@@ -42,7 +40,7 @@ The vulnerability is not yet fixed, but given the previous "fuse" incident, it i
 - You can also use the module for OTA
 
 **Version info：**
-- version **761** is fixed
+- Vulnerable through `16.0.5.7xx` and below; newer builds are fixed, so keep a vulnerable ABL for the `abl` partition and let the patched loader track your firmware.
 
 
 ## Regarding future fuse of abl anti-rollback versions
