@@ -109,11 +109,16 @@ python_embed: copy_resources $(PYTHON_EMBED_ARCHIVE)
 	unzip -q "$(PYTHON_EMBED_ARCHIVE)" -d build/toolkit/python; \
 	test -f build/toolkit/python/python.exe
 $(PYTHON_EMBED_ARCHIVE):
+	# GNU wget only. `--fail` and `--location` are curl options and GNU wget
+	# rejects them outright; it already exits non-zero on an HTTP error and
+	# follows redirects by default, so neither is needed. Download to a temp
+	# name and rename, so an interrupted fetch cannot leave a short archive
+	# that the checksum step would then have to catch.
 	@set -eu; \
 	mkdir -p "$(dir $@)"; \
 	tmp="$@.tmp"; \
 	rm -f "$$tmp"; \
-	wget --no-verbose --fail --location --output-document="$$tmp" "$(PYTHON_EMBED_URL)"; \
+	wget --no-verbose --tries=3 --output-document="$$tmp" "$(PYTHON_EMBED_URL)"; \
 	mv "$$tmp" "$@"
 build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host python_embed
 	# zip
