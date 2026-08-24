@@ -183,6 +183,26 @@ def test_corrupt_bds_rolls_back_and_keeps_host_backup(toolkit: FakeToolkit) -> N
     _clean_stage(toolkit)
 
 
+def test_rollback_is_caught_when_adb_loses_the_exit_status(toolkit: FakeToolkit) -> None:
+    """Given an adbd that always exits 0, a rolled-back install is still rejected.
+
+    An adbd without shell protocol v2 does not propagate the remote exit status,
+    so `adb shell` reports success no matter what happened. The driver must fall
+    back on the device script's own sign-off mark, or it would tell the operator
+    the new chain is installed while the old one was restored underneath them.
+    """
+    _prepare(toolkit)
+    old_efisp = toolkit.device.efisp.read_bytes()
+    result = toolkit.run("canoe_stage", STUB_CORRUPT="1", STUB_LOSE_EXIT="1")
+    assert result.returncode != 0
+    assert "never signed off" in result.stderr
+    assert "CANOE-MARK: done" not in result.stdout
+    assert "CANOE-MARK: efisp-restored" in result.stdout
+    assert toolkit.device.efisp.read_bytes() == old_efisp
+    assert toolkit.root.joinpath("work/efisp-backup.img").read_bytes() == old_efisp
+    _clean_stage(toolkit)
+
+
 def test_first_install_reports_no_previous_generation(make_toolkit: ToolkitFactory) -> None:
     """Given no live generation, the first install succeeds and says so."""
     toolkit = make_toolkit(live=False)
