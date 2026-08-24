@@ -1,0 +1,7 @@
+# cmd.exe resolves `call :label` and `goto` by scanning the batch file for
+# CRLF line endings; in an LF-only file the scan's byte offsets drift, so
+# labels early in the file still resolve while later ones fail with
+# "The system cannot find the batch label specified". The release zips are
+# built on a Linux runner, which would check these out as LF without this
+# rule. Force CRLF in the working tree on every platform.
+*.bat text eol=crlf
