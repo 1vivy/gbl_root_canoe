@@ -37,6 +37,9 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         name: ${{ github.ref_name }}
+        # Beta/hotfix tags carry a hyphen (6.3.4-beta.1); they must not
+        # replace the stable release as "Latest".
+        prerelease: ${{ contains(github.ref_name, '-') }}
         generate_release_notes: false
         files: |
           toolkit_linux/toolkit_linux.zip
