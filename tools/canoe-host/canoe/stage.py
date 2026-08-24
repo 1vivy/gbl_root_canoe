@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import shlex
-import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +20,8 @@ from .layout import (
 )
 from .stage_mode import ModeRequest, set_preferred_mode
 from .stage_report import stage_report
-from .ui import emit, note, run_entry, step, warn
+from .stage_transaction import Context, check, pull_backup, quote, run_transaction
+from .ui import emit, note, run_entry, step
 
 PROG: Final = "canoe_stage"
 
@@ -34,15 +33,6 @@ class Options:  # noqa: D101
     install_bds: bool
     mode: int | None
     work: Path | None
-
-
-@dataclass(frozen=True, slots=True)
-class Context:  # noqa: D101
-    adb: Adb
-    toolkit: Toolkit
-    stage: str
-    boot_root: str
-    install_bds: bool
 
 
 Geometry = tuple[str, int]
@@ -122,14 +112,10 @@ def _options(argv: Sequence[str]) -> Options:
     return Options(parsed.serial, parsed.persist, not parsed.skip_bds, parsed.mode, work)
 
 
-def _q(path: str) -> str:
-    return shlex.quote(path)
-
-
 def _stage_inputs(context: Context) -> None:
     """Create the remote stage and push all files before validating it."""
     if not context.adb.shell(
-        f"rm -rf {_q(context.stage)} && mkdir -p {_q(context.stage + '/tools')}"
+        f"rm -rf {quote(context.stage)} && mkdir -p {quote(context.stage + '/tools')}"
     ).ok:
         raise CanoeError(f"could not create {context.stage}")
     files: list[tuple[Path, str]] = [
@@ -168,40 +154,17 @@ def _validate_stage(context: Context) -> None:
     note("staged set validated on device")
 
 
-def _output(out: str, err: str) -> None:
-    if out:
-        emit(out.rstrip("\n"))
-    if err:
-        print(err, file=sys.stderr, end="", flush=True)
+def _geometry(context: Context, mode: int | None) -> Geometry | None:
+    """Read the efisp geometry once, before the transaction, only if it is needed."""
+    if not (context.install_bds or mode is not None):
+        return None
+    device = resolve_part(context.adb, "efisp", None)
+    size = context.adb.partition_bytes(device)
+    note(f"efisp device: {device} ({size} bytes)")
+    return device, size
 
 
-def _transaction(context: Context, geometry: Geometry | None) -> tuple[int, bool]:
-    args = [_q(context.stage), _q(context.boot_root)]
-    if context.install_bds:
-        if geometry is None:
-            raise CanoeError("efisp geometry was not read")
-        args.extend((_q(geometry[0]), _q(f"{context.stage}/efisp-backup.img")))
-    result = context.adb.shell(
-        f"sh {_q(context.stage + '/canoe_device_install.sh')} {' '.join(args)}"
-    )
-    _output(result.out, result.err)
-    return result.code, "CANOE-MARK: first-install" in result.out
-
-
-def _pull_backup(context: Context, work: Path) -> None:
-    remote = f"{context.stage}/efisp-backup.img"
-    if not context.adb.test(f"-s {_q(remote)}"):
-        return
-    try:
-        local = work / "efisp-backup.img"
-        context.adb.pull(remote, local)
-    except CanoeError:
-        warn("could not retrieve the efisp backup from the device")
-    else:
-        note(f"efisp backup saved to {local}")
-
-
-def _run(argv: Sequence[str]) -> None:  # noqa: C901 - ordered transaction phases
+def _run(argv: Sequence[str]) -> None:
     """Run the complete host-side staging and install sequence."""
     options = _options(argv)
     toolkit = Toolkit.shipped()
@@ -221,7 +184,7 @@ def _run(argv: Sequence[str]) -> None:  # noqa: C901 - ordered transaction phase
     adb = Adb.connect(toolkit, options.serial)
     step("Locating the persist mount")
     persist = find_persist(adb, options.persist)
-    rwtest = _q(persist + "/.canoe.rwtest")
+    rwtest = quote(persist + "/.canoe.rwtest")
     if not adb.shell(f"touch {rwtest} && rm -f {rwtest}").ok:
         raise CanoeError(f"{persist} is not writable")
     note(f"persist: {persist} (writable)")
@@ -232,22 +195,17 @@ def _run(argv: Sequence[str]) -> None:  # noqa: C901 - ordered transaction phase
     try:
         _stage_inputs(context)
         _validate_stage(context)
-        if context.install_bds or options.mode is not None:
-            device = resolve_part(adb, "efisp", None)
-            size = adb.partition_bytes(device)
-            note(f"efisp device: {device} ({size} bytes)")
-            geometry = device, size
+        geometry = _geometry(context, options.mode)
         install_step = "Running the device-side install"
         if not context.install_bds:
             install_step += " (tree only)"
         step(install_step)
-        code, first_install = _transaction(context, geometry)
+        receipt = run_transaction(context, geometry[0] if geometry else None)
         if context.install_bds:
-            _pull_backup(context, work)
+            pull_backup(context, work)
     finally:
-        adb.shell(f"rm -rf {_q(context.stage)}")
-    if code != 0:
-        raise CanoeError(f"the device-side install failed and rolled back (exit {code})")
+        adb.shell(f"rm -rf {quote(context.stage)}")
+    check(receipt)
     if options.mode is not None:
         if geometry is None:
             raise CanoeError("efisp geometry was not read")
@@ -261,6 +219,6 @@ def _run(argv: Sequence[str]) -> None:  # noqa: C901 - ordered transaction phase
             destination=boot_root,
             install_bds=context.install_bds,
             mode=options.mode,
-            first_install=first_install,
+            first_install=receipt.first_install,
         )
     )

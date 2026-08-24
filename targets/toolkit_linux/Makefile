@@ -14,12 +14,15 @@ copy_resources:
 	mkdir -p build/toolkit/bin
 	cp -r resources/* build/toolkit/
 submodule_uefi: copy_resources
-	# Build the EDK2 tree at most once per workspace. A repeated `make build`
-	# relinks LinuxLoader with different bytes, which breaks the CI check that
-	# every package ships a byte-identical BDS.efi. Set UEFI_REBUILD=1 to force a
-	# rebuild after editing UEFI sources: `UEFI_REBUILD=1 make target_<name>`
-	# from the REPO ROOT, which discards the artifacts once for the whole
-	# invocation. Forcing per package here would relink BDS once per package.
+	# Build the EDK2 tree at most once per workspace, and at most once per
+	# invocation. `make build` in submodules/uefi relinks LinuxLoader with
+	# different bytes every time, so rebuilding once per package would ship a
+	# different BDS.efi in each archive and break the CI check that every
+	# package carries byte-identical boot artifacts. The guard is therefore a
+	# plain existence test: the first package to run does the single build and
+	# the rest reuse it. To pick up edited UEFI sources, run
+	# `UEFI_REBUILD=1 make target_<name>` from the REPO ROOT, whose uefi_discard
+	# target drops these artifacts once for the whole invocation.
 	# BDS and the standalone tools are guarded SEPARATELY. Rebuilding the tools
 	# must not drag in a second `make build`, because that relinks LinuxLoader
 	# with different bytes and breaks the byte-identical BDS.efi invariant.

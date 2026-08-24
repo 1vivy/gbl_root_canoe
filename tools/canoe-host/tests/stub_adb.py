@@ -33,6 +33,10 @@ from pathlib import Path
 DEV = Path(os.environ["STUB_DEV"])
 FAIL = os.environ.get("STUB_FAIL", "")
 CORRUPT = os.environ.get("STUB_CORRUPT") == "1"
+# Models an adbd without shell protocol v2: `adb shell` exits 0 whatever the
+# remote command did. Real recoveries in the wild still do this, and it is why
+# the driver cannot treat a zero exit as proof that the transaction committed.
+LOSE_EXIT = os.environ.get("STUB_LOSE_EXIT") == "1"
 LOG = DEV / "adb.log"
 
 EFISP = DEV / "efisp.bin"
@@ -153,7 +157,7 @@ def shell(command: str) -> int:
     done = subprocess.run(["sh", "-c", line], capture_output=True, text=True, check=False, env=env)
     sys.stdout.write(done.stdout)
     sys.stderr.write(done.stderr)
-    return done.returncode
+    return 0 if LOSE_EXIT else done.returncode
 
 
 def transfer(op: str, src: str, dst: str) -> int:

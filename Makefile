@@ -5,7 +5,33 @@
 	target_toolkit_windows target_toolkit_linux target_magisk_module \
 	target_toolkit_android dev_target_extract_and_patch \
 	tools_vbmetafixer_linux tools_vbmetafixer_windows \
-	tools_vbmetafixer_android test
+	tools_vbmetafixer_android test uefi_discard
+
+# UEFI_REBUILD=1 forces a from-scratch BDS, ONCE for the whole invocation.
+#
+# Once, not once per package, because the EDK2 build is not reproducible:
+# building the same sources clean twice in a row was measured to give
+# BDS.efi sha256 7ef5d010... and then 09a83e86.... Rebuilding per package would
+# therefore put different bytes in each archive and break the CI check that
+# every package carries byte-identical boot artifacts. Dropping the tree here
+# makes the first package that runs do the single build; the rest find the
+# artifacts present and reuse them.
+#
+# It is a full clean, not just a delete of build/*.efi, because
+# submodules/uefi's `build` target removes edk2's LinuxLoader.efi before
+# invoking EDK2, and EDK2 declines to regenerate a module it considers
+# up to date - so against a warm Build tree with no source change the rebuild
+# ends with no artifact at all. A clean makes the rebuild unconditional.
+#
+# Without this target, editing a UEFI source and running `make target_<name>`
+# silently packages the previous build, which is how a release ships a boot
+# menu stamped with the version before it.
+ifeq ($(UEFI_REBUILD),1)
+target_toolkit_windows target_toolkit_linux target_magisk_module \
+target_toolkit_android: uefi_discard
+uefi_discard:
+	$(MAKE) -C submodules/uefi clean
+endif
 
 submodule_uefi_clean:
 	cd submodules/uefi && make clean

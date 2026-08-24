@@ -19,16 +19,20 @@ copy_resources:
 	mkdir -p build/toolkit/bin
 	cp -r resources/* build/toolkit/
 submodule_uefi: copy_resources
-	# Build the EDK2 tree at most once per workspace. A repeated `make build`
-	# relinks LinuxLoader with different bytes, which breaks the CI check that
-	# every package ships a byte-identical BDS.efi. Set UEFI_REBUILD=1 to force a
-	# rebuild after editing UEFI sources.
+	# Build the EDK2 tree at most once per workspace, and at most once per
+	# invocation. `make build` in submodules/uefi relinks LinuxLoader with
+	# different bytes every time, so rebuilding once per package would ship a
+	# different BDS.efi in each archive and break the CI check that every package
+	# carries byte-identical boot artifacts. The guard is therefore a plain
+	# existence test. To pick up edited UEFI sources, run
+	# `UEFI_REBUILD=1 make target_<name>` from the REPO ROOT, whose uefi_discard
+	# target drops these artifacts once for the whole invocation.
 	# BDS and the standalone tools are guarded SEPARATELY. Rebuilding the tools
 	# must not drag in a second `make build`, because that relinks LinuxLoader
 	# with different bytes and breaks the byte-identical BDS.efi invariant.
 	cd ../../submodules/uefi && \
-		if [ "$(UEFI_REBUILD)" = 1 ] || [ ! -f build/BDS.efi ]; then make build; fi && \
-		if [ "$(UEFI_REBUILD)" = 1 ] || [ ! -f build/ArbTools.efi ] || \
+		if [ ! -f build/BDS.efi ]; then make build; fi && \
+		if [ ! -f build/ArbTools.efi ] || \
 		   [ ! -f build/BLTools.efi ] || [ ! -f build/RebootTools.efi ]; then make tools; fi
 	cp ../../submodules/uefi/build/BDS.efi ./build/toolkit/BDS.efi
 	cp ../../submodules/uefi/build/ArbTools.efi ./build/toolkit/efisp/tools/ArbTools.efi
@@ -109,11 +113,16 @@ python_embed: copy_resources $(PYTHON_EMBED_ARCHIVE)
 	unzip -q "$(PYTHON_EMBED_ARCHIVE)" -d build/toolkit/python; \
 	test -f build/toolkit/python/python.exe
 $(PYTHON_EMBED_ARCHIVE):
+	# GNU wget only. `--fail` and `--location` are curl options and GNU wget
+	# rejects them outright; it already exits non-zero on an HTTP error and
+	# follows redirects by default, so neither is needed. Download to a temp
+	# name and rename, so an interrupted fetch cannot leave a short archive
+	# that the checksum step would then have to catch.
 	@set -eu; \
 	mkdir -p "$(dir $@)"; \
 	tmp="$@.tmp"; \
 	rm -f "$$tmp"; \
-	wget --no-verbose --fail --location --output-document="$$tmp" "$(PYTHON_EMBED_URL)"; \
+	wget --no-verbose --tries=3 --output-document="$$tmp" "$(PYTHON_EMBED_URL)"; \
 	mv "$$tmp" "$@"
 build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host python_embed
 	# zip
