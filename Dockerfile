@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    python3 python3-pip python-is-python3 \
+    python3 python3-pip python-is-python3 python3-pytest \
     build-essential make ninja-build git \
     wget lsb-release software-properties-common gnupg \
     gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \

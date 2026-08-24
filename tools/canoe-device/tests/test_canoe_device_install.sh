@@ -1,14 +1,15 @@
 #!/bin/sh
 # Host fixture coverage for the device-side install transaction.
 # Run from the repository root with:
-#   sh targets/toolkit_linux/tests/test_canoe_device_install.sh
+#   sh tools/canoe-device/tests/test_canoe_device_install.sh
 #
 # tools/canoe-device/canoe_device_install.sh is the single implementation of the
-# install transaction; both host drivers (canoe_stage.sh and canoe_stage.bat) push
-# it to the device and invoke it. Because every absolute device path arrives as an
-# argument, the transaction runs unmodified against ordinary directories and a
-# regular file standing in for the efisp block device, so these cases exercise the
-# real code rather than a reimplementation.
+# install transaction; the host driver (canoe_stage, shared by the Linux and the
+# Windows toolkit) pushes it to the device and invokes it. It stays a shell
+# script because it runs on the device. Because every absolute device path
+# arrives as an argument, the transaction runs unmodified against ordinary
+# directories and a regular file standing in for the efisp block device, so
+# these cases exercise the real code rather than a reimplementation.
 #
 # Failures are injected by shadowing `mv`, `cmp` and `dd` on PATH.
 #

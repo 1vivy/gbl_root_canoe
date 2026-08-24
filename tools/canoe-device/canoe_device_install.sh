@@ -3,9 +3,9 @@
 # canoe_device_install.sh - the persist install transaction, run ON THE DEVICE.
 #
 # This is the single source of truth for the install transaction. The host-side
-# drivers (canoe_stage.sh on Linux, canoe_stage.bat on Windows) only stage files
-# and invoke this script, so there is exactly one implementation of the rollback
-# logic rather than one per host platform.
+# driver (canoe_stage, one Python implementation shared by the Linux and the
+# Windows toolkit) only stages files and invokes this script. This one stays
+# shell because it runs on the device, where there is no interpreter to ship.
 #
 #   sh canoe_device_install.sh <staging_dir> <efisp_dir> [<efisp_dev> <backup>]
 #

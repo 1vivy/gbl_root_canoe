@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""abl_tzmap: derive and validate the 256-byte TrustZone map.
+
+Fixture stand-in for the real toolkit binary. Records its call in $CANOE_TRACE
+so tests can assert the order the driver invokes the pipeline in.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def trace(line: str) -> None:
+    path = os.environ.get("CANOE_TRACE")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+BEHAVIOR = os.environ.get("STUB_TZMAP", "ok")
+
+
+def derive(argv: list[str]) -> int:
+    source = None
+    out = None
+    allow = False
+    rest = list(argv)
+    while rest:
+        head = rest.pop(0)
+        if head == "-o":
+            out = Path(rest.pop(0))
+        elif head == "--allow-incomplete":
+            allow = True
+        elif source is None:
+            source = Path(head)
+    trace(f"tzmap-derive {source.name if source else '?'} allow={int(allow)}")
+    # Installers must opt in, or an un-analysed device would fail to install.
+    if not allow:
+        return 50
+    # The sidecar is derived from the UNPATCHED loader, never the patched ABL.
+    if source is None or not source.read_bytes().startswith(b"LOADER-FROM-"):
+        sys.stderr.write("abl_tzmap: not the unpatched loader\n")
+        return 51
+    if BEHAVIOR == "derive":
+        sys.stderr.write("abl_tzmap: derive failed\n")
+        return 52
+    if out is None:
+        return 53
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(b"T" * (255 if BEHAVIOR == "size" else 256))
+    return 0
+
+
+def validate(argv: list[str]) -> int:
+    target = Path(argv[0])
+    trace(f"tzmap-validate {target.name}")
+    if BEHAVIOR == "missing-validate":
+        sys.stderr.write("abl_tzmap: validate unavailable\n")
+        return 127
+    if BEHAVIOR != "size" and target.stat().st_size != 256:
+        return 54
+    return 0
+
+
+if __name__ == "__main__":
+    command, *args = sys.argv[1:]
+    if command == "derive":
+        raise SystemExit(derive(args))
+    if command == "validate":
+        raise SystemExit(validate(args))
+    raise SystemExit(55)

@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""vbmetabackup: lift a vbmeta out of a local image with -f.
+
+Fixture stand-in for the real toolkit binary. Records its call in $CANOE_TRACE
+so tests can assert the order the driver invokes the pipeline in.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def trace(line: str) -> None:
+    path = os.environ.get("CANOE_TRACE")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+
+def main(argv: list[str]) -> int:
+    options = dict(zip(argv[::2], argv[1::2]))
+    image = Path(options["-f"])
+    out = Path(options.get("-o", "./vbmetas"))
+    name = options.get("-n") or image.stem
+    trace(f"vbmetabackup {image.name}")
+    if not image.is_file():
+        sys.stderr.write(f"vbmetabackup: no such image: {image}\n")
+        return 1
+    if os.environ.get("STUB_VBMETABACKUP") == "fail":
+        return 1
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"{name}.vbmeta").write_bytes(b"AVB0-VBMETA-OF-" + image.read_bytes())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

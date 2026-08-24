@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""canoe_build - derive the canoe boot chain from images/abl.img + images/vbmeta.img.
+
+Thin launcher. The implementation is canoe/build.py, shared by the Linux and
+the Windows toolkit, so both platforms run one driver instead of one each.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from canoe import build  # noqa: E402 - importable only after the path insert above
+
+if __name__ == "__main__":
+    raise SystemExit(build.entry(sys.argv[1:]))

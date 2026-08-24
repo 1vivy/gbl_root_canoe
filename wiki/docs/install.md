@@ -27,7 +27,7 @@ The ABL on the `abl` partition must contain the **GBL vulnerability** so it load
 | **KernelSU module (Recommended)** | Automated, from a booted rooted system: patches the current ABL, derives its matching profile from current-slot vbmeta, derives the optional map from the unpatched ABL, lays out the boot root, and flashes the BDS |
 | **Toolkit, standalone** (§4.1) | Host-driven over ADB from a custom recovery. Needs no firmware package, no graft, and no root on the running system |
 | **Toolkit, with a firmware package** (§4.2) | For the Super Flasher / RegionalHybrid workflow: prepare the package's inputs, run the package's own flasher unchanged, then stage |
-| **Toolkit, fully manual** (§4.3) | Run `build.sh` / `build.bat`, then place the tree and flash the BDS by hand |
+| **Toolkit, fully manual** (§4.3) | Run `./canoe_build` on Linux or `canoe_build.cmd` on Windows, then place the tree and flash the BDS by hand |
 
 ## 3. Module Install (KernelSU)
 
@@ -46,9 +46,9 @@ After each OTA, open the module WebUI and flash again to retain the BL version. 
 
 ## 4. Toolkit Install
 
-`build.sh` / `build.bat` only *derives* artifacts. Placing them is done by one of the three flows below. All of them produce the same on-device result; they differ only in where the inputs come from and who writes the partitions. Both the Linux and Windows toolkits ship the same scripts — Linux as `.sh`, Windows as `.bat`, with identical options and behaviour — so the commands below are written once and apply to either.
+`canoe_build` / `canoe_build.cmd` only *derive* artifacts. Placing them is done by one of the three flows below. All of them produce the same on-device result; they differ only in where the inputs come from and who writes the partitions. Linux uses the extensionless Python launchers; Windows uses `.cmd` wrappers around its bundled interpreter. Options and behaviour are identical.
 
-Outputs of a `build.sh` run:
+Outputs of a `canoe_build` or `canoe_build.cmd` run:
 
 - `efisp/boot.efi` — patched ABL
 - `efisp/boot.efi.gm2p` — matching 120-byte profile derived from the matching stock vbmeta
@@ -64,14 +64,28 @@ The `.tzmap` is generated locally and is not shipped inside the toolkit archive.
 The only prerequisite is a custom recovery with ADB enabled. Persist is writable there, so no root on the running system is needed.
 
 ```bash
-./canoe_prep_device.sh     # pull abl + vbmeta, derive boot.efi and its sidecars
-./canoe_stage.sh           # install the persist tree, then write the BDS
+./canoe_prep_device        # pull abl + vbmeta, derive boot.efi and its sidecars
+./canoe_stage              # install the persist tree, then write the BDS
+```
+
+On Windows, run the corresponding bundled-interpreter wrappers:
+
+```bat
+canoe_prep_device.cmd
+canoe_stage.cmd
 ```
 
 The pair is pulled from the **active** slot by default. When installing right after an `adb sideload` — the usual custom-ROM flow — the sideload has written the *other* slot and not booted it yet, so pass `--slot inactive` to derive from that slot instead:
 
+On Linux, pass `--slot inactive` to `./canoe_prep_device`; on Windows, pass it
+to `canoe_prep_device.cmd`:
+
 ```bash
-./canoe_prep_device.sh --slot inactive
+./canoe_prep_device --slot inactive
+```
+
+```bat
+canoe_prep_device.cmd --slot inactive
 ```
 
 Then, only if the `abl` partition is not already a GBL-vulnerable version:
@@ -80,41 +94,60 @@ Then, only if the `abl` partition is not already a GBL-vulnerable version:
 fastboot flash abl <vulnerable>.img
 ```
 
-**Order matters.** `boot.efi` is derived from `abl` and `boot.efi.gm2p` from `vbmeta`, and the two must describe the *same* firmware. Pulling both from the device yields a matching pair only while `abl` still holds its original image, so run `canoe_prep_device.sh` **before** downgrading. If the partition was already downgraded, supply a matching stock pair instead:
+**Order matters.** `boot.efi` is derived from `abl` and `boot.efi.gm2p` from `vbmeta`, and the two must describe the *same* firmware. Pulling both from the device yields a matching pair only while `abl` still holds its original image, so run `canoe_prep_device` **before** downgrading. If the partition was already downgraded, supply a matching stock pair instead:
+
+On Linux:
 
 ```bash
-./canoe_prep_device.sh --abl stock_abl.img --vbmeta stock_vbmeta.img
+./canoe_prep_device --abl stock_abl.img --vbmeta stock_vbmeta.img
 ```
 
-Both flags are required together; accepting one alone would reintroduce exactly the version mismatch they guard against. `canoe_prep_device.sh` reports whether the source ABL carried the vulnerability, so its output tells you whether the `fastboot flash abl` step is needed.
+On Windows:
+
+```bat
+canoe_prep_device.cmd --abl stock_abl.img --vbmeta stock_vbmeta.img
+```
+
+Both flags are required together; accepting one alone would reintroduce exactly the version mismatch they guard against. The preparation command reports whether the source ABL carried the vulnerability, so its output tells you whether the `fastboot flash abl` step is needed.
 
 ### 4.2 Alongside a firmware package
 
 For the Super Flasher / RegionalHybrid workflow. This flow does **not** reimplement the packaged flasher: it prepares correct inputs, and the package's own script then runs unmodified. Slot selection, `--slot=all` loops and logical-partition handling remain the flasher's business.
 
 ```bash
-# 1. host side, no device needed
-./canoe_prep.sh --pkg OOS_FILES_HERE \
-                --recovery <custom>.img \
-                --abl <vulnerable>.img \
-                --in-place
+# Linux: host side, no device needed
+./canoe_prep --pkg OOS_FILES_HERE \
+             --recovery <custom>.img \
+             --abl <vulnerable>.img \
+             --in-place
 
-# 2. run the package's own flasher, unchanged
+# run the package's own flasher, unchanged
 bash Super_Flasher.sh
 
-# 3. boot the custom recovery, enable ADB
-./canoe_stage.sh
+# boot the custom recovery, enable ADB
+./canoe_stage
+```
+
+On Windows, use the `.cmd` wrappers:
+
+```bat
+canoe_prep.cmd --pkg OOS_FILES_HERE ^
+               --recovery <custom>.img ^
+               --abl <vulnerable>.img ^
+               --in-place
+
+canoe_stage.cmd
 ```
 
 `--in-place` substitutes the prepared images into the package directory, keeping `<name>.img.canoe-orig` backups; rerunning never overwrites an existing backup with an already-substituted image.
 
-Because the flasher writes the package's own `recovery.img` to both slots, keeping a custom recovery means the image it writes has to be the custom one — which is why this flow has a graft step and §4.1 does not. `canoe_prep.sh` lifts the official recovery vbmeta out of the package's `recovery.img` with `vbmetabackup -f` (host-side, no device) and transplants it onto the custom recovery with `vbmetaport`, preserving the partition size and the custom payload.
+Because the flasher writes the package's own `recovery.img` to both slots, keeping a custom recovery means the image it writes has to be the custom one — which is why this flow has a graft step and §4.1 does not. `canoe_prep` lifts the official recovery vbmeta out of the package's `recovery.img` with `vbmetabackup -f` (host-side, no device) and transplants it onto the custom recovery with `vbmetaport`, preserving the partition size and the custom payload.
 
 `--abl` only changes which ABL image the flasher writes to the `abl` partition. The sidecars are always derived from the package's **stock** `abl.img` + `vbmeta.img` pair, because that is the pair `boot.efi` and `boot.efi.gm2p` must agree with.
 
 ### 4.3 Fully manual
 
-1. Place matching stock `abl.img` and `vbmeta.img` in the toolkit `images/` folder and run `build.sh` (Android/Linux) or `build.bat` (Windows).
+1. Place matching stock `abl.img` and `vbmeta.img` in the toolkit `images/` folder. On Linux run `./canoe_build`; on Windows run `canoe_build.cmd`. The Android toolkit deliberately retains its on-device shell `build.sh`, because Android does not guarantee Python.
 2. Create the boot root if needed — `/mnt/vendor/persist/efisp` from a booted system, `/persist/efisp` from recovery.
 3. Copy the complete generated `efisp/` tree into it:
    ```
@@ -129,7 +162,7 @@ Because the flasher writes the package's own `recovery.img` to both slots, keepi
 
 ### What the staging step guarantees
 
-`canoe_stage` is shared by §4.1 and §4.2, and is a thin driver: it validates and stages, then hands the transaction to `canoe_device_install.sh` running on the device. That single device-side script is the only implementation of the transaction, so the Linux and Windows drivers cannot drift apart.
+`canoe_stage` is shared by §4.1 and §4.2, and is a thin driver: it validates and stages, then hands the transaction to `canoe_device_install.sh` running on the device. That single device-side shell script is the only implementation of the transaction, so the Linux and Windows drivers cannot drift apart.
 
 - The staged set is pushed and validated before anything live is touched, so a failed transfer changes nothing.
 - Everything the commit overwrites is snapshotted first: the live triplet, the existing backup generation, `BOOTENTRIES` and `tools/`. A rollback therefore never leaves one generation's loader beside another's menu tree.

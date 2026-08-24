@@ -31,8 +31,10 @@ images/abl.img
 images/vbmeta.img
 ```
 
-Run `build.sh` on Linux/Android or `build.bat` on Windows. The script patches
-the ABL, derives `efisp/boot.efi.gm2p` (the exact 120-byte KeyMint profile)
+Run `./canoe_build` on the Linux toolkit or `canoe_build.cmd` on the Windows
+toolkit. The Android toolkit retains its `build.sh`: it runs on-device, where
+`python3` is not guaranteed. The host implementation patches the ABL, derives
+`efisp/boot.efi.gm2p` (the exact 120-byte KeyMint profile)
 from the matching root vbmeta image, and generates the local
 `efisp/boot.efi.tzmap` (the 256-byte `GTZM` ABL-derived TrustZone map) from the
 unpatched ABL. The `.tzmap` is stored beside the launched image as
@@ -46,34 +48,44 @@ recorded reverse-engineering evidence still receives a valid 256-byte sidecar
 with its identifier flags and protocol command table. Installation does not
 fail for that reason.
 
-## Host-side install scripts
+## Host-side install tools
 
-Both the Linux and Windows toolkits ship the install scripts beside `build.sh` /
-`build.bat` — Linux as `.sh`, Windows as `.bat`, with identical options. They are
-documented in `README.canoe.md` inside each archive and in the Installation Guide:
+The host drivers are now one Python implementation copied into both archives.
+This replaces two separately maintained drivers; the Windows one kept breaking
+on `cmd.exe` parsing details rather than on installation logic. Linux requires
+Python 3.11+ on the host; Windows needs no installation because its archive
+includes an embeddable CPython under `python/`.
+The source copy is `tools/canoe-host/` in the repository; each toolkit archive
+ships that same package under `canoe/`.
 
-| Script | Role |
-|--------|------|
-| `canoe_lib.sh` | Shared adb, slot and partition helpers for the Linux scripts (sourced, not run) |
-| `canoe_prep_device` | Standalone preparation: pull `abl` + `vbmeta` from the device and derive the triplet |
-| `canoe_prep` | Firmware-package preparation: graft a custom recovery and substitute prepared images into the package |
-| `canoe_stage` | Host driver: validate, stage into the boot root, invoke the device-side transaction |
-| `canoe_device_install.sh` | The install transaction itself, executed on the device |
+Both toolkits ship these host launchers with identical options:
 
-`canoe_device_install.sh` lives in `tools/canoe-device/` and is copied into both
-toolkits by their `canoe_device_script` make target, so the snapshot/commit/rollback
-logic has exactly one implementation rather than one per host platform. Every
-absolute device path arrives as an argument, which is also what lets it be tested
+| Linux | Windows | Role |
+|-------|---------|------|
+| `canoe_prep_device` | `canoe_prep_device.cmd` | Standalone preparation: pull `abl` + `vbmeta` and derive the triplet |
+| `canoe_prep` | `canoe_prep.cmd` | Firmware-package preparation: graft a custom recovery and substitute prepared images |
+| `canoe_stage` | `canoe_stage.cmd` | Host driver: validate, stage into the boot root, invoke the device-side transaction |
+
+They are documented in `README.canoe.md` inside each archive and in the
+Installation Guide. `canoe_device_install.sh` is deliberately still a shell
+script: it is the single install transaction executed on the device, where
+Python is not guaranteed.
+
+`canoe_device_install.sh` lives in `tools/canoe-device/` and is copied into
+both toolkits by their `canoe_device_script` make target. The snapshot,
+commit and rollback logic therefore has exactly one implementation. Every
+absolute device path arrives as an argument, which also lets it be tested
 directly on a host.
 
-None of the scripts touch the `abl` partition: making that partition carry the GBL
-vulnerability is a separate `fastboot flash abl` step.
+None of the host tools touch the `abl` partition: making that partition carry
+the GBL vulnerability is a separate `fastboot flash abl` step.
 
 Fixture coverage:
 
-- `targets/toolkit_linux/tests/test_canoe_device_install.sh` drives the transaction
-  natively against ordinary directories and a file standing in for the block device,
-  injecting commit, write and verification failures by shadowing `mv`, `dd` and `cmp`.
+- `targets/toolkit_linux/tests/test_canoe_device_install.sh` drives the
+  transaction natively against ordinary directories and a file standing in
+  for the block device, injecting commit, write and verification failures by
+  shadowing `mv`, `dd` and `cmp`.
 - `targets/toolkit_linux/tests/test_canoe_scripts.sh` drives both preparation
   pathways and the staging driver against `tests/stub_adb.py`.
 

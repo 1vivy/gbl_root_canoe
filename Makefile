@@ -28,9 +28,9 @@ targets_clean: clean_submodules target_toolkit_windows_clean target_toolkit_linu
 clean: targets_clean clean_submodules
 
 target_toolkit_windows:
-	cd targets/toolkit_windows && make build
+	cd targets/toolkit_windows && $(MAKE) build
 target_toolkit_linux:
-	cd targets/toolkit_linux && make build
+	cd targets/toolkit_linux && $(MAKE) build
 target_magisk_module:
 	cd targets/magisk_module && make build
 target_toolkit_android:
@@ -54,7 +54,6 @@ test:
 	$(MAKE) -C submodules/uefi test
 	sh targets/magisk_module/tests/test_flows.sh
 	sh targets/magisk_module/tests/test_webui.sh
-	sh targets/toolkit_linux/tests/test_build_scripts.sh
-	sh targets/toolkit_linux/tests/test_canoe_device_install.sh
-	sh targets/toolkit_linux/tests/test_canoe_scripts.sh
-	sh targets/toolkit_windows/tests/test_canoe_stage_bat.sh
+	sh tools/canoe-device/tests/test_canoe_device_install.sh
+	sh targets/toolkit_android/tests/test_build_script.sh
+	python3 -m pytest tools/canoe-host

@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""patch_abl: patch the unpatched loader into boot.efi.
+
+Fixture stand-in for the real toolkit binary. Records its call in $CANOE_TRACE
+so tests can assert the order the driver invokes the pipeline in.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def trace(line: str) -> None:
+    path = os.environ.get("CANOE_TRACE")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+
+def main(argv: list[str]) -> int:
+    source, target = Path(argv[0]), Path(argv[1])
+    trace("patch_abl")
+    payload = source.read_bytes()
+    if not payload.startswith(b"LOADER-FROM-"):
+        sys.stderr.write("patch_abl: input is not an extracted loader\n")
+        return 42
+    if os.environ.get("STUB_PATCH") == "fail":
+        print("patch_abl: exploded")
+        return 43
+    if os.environ.get("STUB_NO_GBL") == "1":
+        print("Warning: Failed to patch ABL GBL")
+    else:
+        print("GBL patched")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"PATCHED-" + payload)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
