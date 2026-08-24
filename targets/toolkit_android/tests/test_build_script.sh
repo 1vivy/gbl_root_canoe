@@ -1,6 +1,6 @@
 #!/bin/sh
-# Host fixture coverage for the Linux/Android toolkit build scripts.
-# Run from the repository root with: sh targets/toolkit_linux/tests/test_build_scripts.sh
+# Host fixture coverage for the Android toolkit build script.
+# Run from the repository root with: sh targets/toolkit_android/tests/test_build_script.sh
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -26,16 +26,17 @@ assert_order() {
 }
 
 make_fixture() {
-  flavor=$1
-  behavior=$2
-  work="$TMP/$flavor-$behavior"
+  behavior=$1
+  work="$TMP/$behavior"
   rm -rf "$work"
   mkdir -p "$work/bin" "$work/efisp" "$work/images"
-  cp "$ROOT/targets/toolkit_$flavor/resources/build.sh" "$work/build.sh"
+  cp "$ROOT/targets/toolkit_android/resources/build.sh" "$work/build.sh"
   printf 'synthetic-abl\n' > "$work/images/abl.img"
   printf 'synthetic-vbmeta\n' > "$work/images/vbmeta.img"
+  # Seed every output: each failure path must remove all three, not just its own.
   printf 'stale-abl\n' > "$work/efisp/boot.efi"
   printf 'stale-profile\n' > "$work/efisp/boot.efi.gm2p"
+  printf 'stale-tzmap\n' > "$work/efisp/boot.efi.tzmap"
   printf '%s\n' "$work" "$behavior" > "$work/fixture.env"
   TRACE="$work/trace.log" EXPECTED_ABL=synthetic-abl EXPECTED_VBMETA=synthetic-vbmeta
   export TRACE EXPECTED_ABL EXPECTED_VBMETA
@@ -147,12 +148,9 @@ EOF
 }
 
 run_fixture() {
-  flavor=$1
-  behavior=$2
-  make_fixture "$flavor" "$behavior"
-  work="$TMP/$flavor-$behavior"
-  runner=bash
-  [ "$flavor" = android ] && runner=sh
+  behavior=$1
+  make_fixture "$behavior"
+  work="$TMP/$behavior"
   output="$work/output.log"
   rc=0
   profile_behavior="$behavior"
@@ -163,72 +161,44 @@ run_fixture() {
   (cd "$work" && PROFILE_BEHAVIOR="$profile_behavior" \
     TZMAP_BEHAVIOR="$tzmap_behavior" TRACE="$work/trace.log" \
     EXPECTED_ABL=synthetic-abl EXPECTED_VBMETA=synthetic-vbmeta \
-    "$runner" ./build.sh > "$output" 2>&1) || rc=$?
+    sh ./build.sh > "$output" 2>&1) || rc=$?
   case "$behavior" in
     ok)
-      [ "$rc" -eq 0 ] || fail "$flavor success fixture failed"
+      [ "$rc" -eq 0 ] || fail "Android success fixture failed"
       assert_file "$work/efisp/boot.efi"
       assert_file "$work/efisp/boot.efi.gm2p"
       assert_file "$work/efisp/boot.efi.tzmap"
-      [ -s "$work/efisp/boot.efi" ] || fail "$flavor produced empty ABL"
+      [ -s "$work/efisp/boot.efi" ] || fail "Android produced empty ABL"
       assert_eq "$(wc -c < "$work/efisp/boot.efi.gm2p")" 120 \
-        "$flavor profile size"
+        "Android profile size"
       assert_eq "$(wc -c < "$work/efisp/boot.efi.tzmap")" 256 \
-        "$flavor tzmap size"
-      grep -F 'Patched. Outputs:' "$output" >/dev/null || fail "$flavor printed no success"
+        "Android tzmap size"
+      grep -F 'Patched. Outputs:' "$output" >/dev/null || fail "Android printed no success"
       assert_order "$work/trace.log" extractfv patch_abl \
         'derive ./images/vbmeta.img' 'validate ./efisp/boot.efi.gm2p' \
         'tzmap-derive ./ABL_original.efi allow=1' \
         'tzmap-validate ./efisp/boot.efi.tzmap'
-      pass "$flavor derives matching vbmeta, validates, and emits the triple"
+      pass 'Android derives matching vbmeta, validates, and emits the triple'
       ;;
     *)
-      [ "$rc" -ne 0 ] || fail "$flavor accepted $behavior failure"
+      [ "$rc" -ne 0 ] || fail "Android accepted $behavior failure"
       assert_absent "$work/efisp/boot.efi"
       assert_absent "$work/efisp/boot.efi.gm2p"
       assert_absent "$work/efisp/boot.efi.tzmap"
-      ! grep -F 'Patched. Outputs:' "$output" >/dev/null || fail "$flavor printed success after $behavior failure"
-      pass "$flavor removes the triple after $behavior failure"
+      ! grep -F 'Patched. Outputs:' "$output" >/dev/null || fail "Android printed success after $behavior failure"
+      pass "Android removes the triple after $behavior failure"
       ;;
   esac
 }
 
-for flavor in linux android; do
-  run_fixture "$flavor" ok
-  run_fixture "$flavor" derive
-  run_fixture "$flavor" missing-validate
-  run_fixture "$flavor" size
-  run_fixture "$flavor" wrong-vbmeta
-  run_fixture "$flavor" missing-vbmeta
-  run_fixture "$flavor" tzmap-derive
-  run_fixture "$flavor" tzmap-missing-validate
-  run_fixture "$flavor" tzmap-size
-done
+run_fixture ok
+run_fixture derive
+run_fixture missing-validate
+run_fixture size
+run_fixture wrong-vbmeta
+run_fixture missing-vbmeta
+run_fixture tzmap-derive
+run_fixture tzmap-missing-validate
+run_fixture tzmap-size
 
-WINDOWS="$ROOT/targets/toolkit_windows/resources/build.bat"
-derive=$(line_of "$WINDOWS" 'mode2_profile.exe derive --vbmeta images\vbmeta.img')
-validate=$(line_of "$WINDOWS" 'mode2_profile.exe validate --input efisp\boot.efi.gm2p')
-size=$(line_of "$WINDOWS" 'for %%A in (efisp\boot.efi.gm2p) do if not "%%~zA"=="120"')
-tz_derive=$(line_of "$WINDOWS" 'abl_tzmap.exe derive ABL_original.efi -o efisp\boot.efi.tzmap')
-tz_validate=$(line_of "$WINDOWS" 'abl_tzmap.exe validate efisp\boot.efi.tzmap')
-tz_size=$(line_of "$WINDOWS" 'for %%A in (efisp\boot.efi.tzmap) do if not "%%~zA"=="256"')
-success=$(line_of "$WINDOWS" 'Patched. Outputs:')
-success_exit=$(line_of "$WINDOWS" 'exit /b 0')
-[ -n "$derive" ] && [ -n "$validate" ] && [ -n "$size" ] && [ -n "$success" ] &&
-  [ -n "$success_exit" ] || fail 'Windows build script lacks profile assertions'
-[ -n "$tz_derive" ] && [ -n "$tz_validate" ] && [ -n "$tz_size" ] ||
-  fail 'Windows build script lacks tzmap assertions'
-[ "$derive" -lt "$validate" ] && [ "$validate" -lt "$size" ] &&
-  [ "$size" -lt "$tz_derive" ] && [ "$tz_derive" -lt "$tz_validate" ] &&
-  [ "$tz_validate" -lt "$tz_size" ] && [ "$tz_size" -lt "$success" ] &&
-  [ "$success" -lt "$success_exit" ] ||
-  fail 'Windows derive/validate/size/success checks are out of order'
-# The sidecar is derived from the unpatched loader, and installers opt in with
-# --allow-incomplete so an un-analysed device still installs.
-grep -F 'abl_tzmap.exe derive ABL_original.efi -o efisp\boot.efi.tzmap --allow-incomplete' "$WINDOWS" >/dev/null ||
-  fail 'Windows tzmap derive lacks the unpatched loader or --allow-incomplete'
-cleanup_count=$(awk 'index($0, "del /q efisp\\boot.efi efisp\\boot.efi.gm2p efisp\\boot.efi.tzmap") { count++ } END { print count + 0 }' "$WINDOWS")
-[ "$cleanup_count" -ge 6 ] || fail 'Windows failure paths do not clean all three outputs'
-pass 'Windows script statically preserves derive/validate/order/cleanup semantics'
-
-echo 'all toolkit build fixtures passed'
+echo 'all Android toolkit build fixtures passed'
