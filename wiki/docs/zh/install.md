@@ -27,7 +27,7 @@
 | **KernelSU 模块（推荐）** | 在已 Root 的运行系统上自动完成：修补当前 ABL、从当前槽位匹配 vbmeta 生成 profile、从未修补 ABL 生成可选映射、布置启动根目录并刷入 BDS |
 | **Toolkit，独立安装**（§4.1） | 从第三方 Recovery 通过 ADB 由电脑端驱动。无需固件包、无需 graft，也不需要运行系统具备 Root |
 | **Toolkit，配合固件包**（§4.2） | 适用于 Super Flasher / RegionalHybrid 流程：先准备好固件包的输入，原样运行固件包自带的刷机脚本，最后执行 staging |
-| **Toolkit，完全手动**（§4.3） | 运行 `build.sh` / `build.bat`，再手动复制目录并刷入 BDS |
+| **Toolkit，完全手动**（§4.3） | Linux 运行 `./canoe_build`，Windows 运行 `canoe_build.cmd`，再手动复制目录并刷入 BDS |
 
 ## 3. 模块安装（KernelSU）
 
@@ -46,9 +46,9 @@
 
 ## 4. Toolkit 安装
 
-`build.sh` / `build.bat` 只负责*派生*产物，放置工作由下面三种流程之一完成。三者在设备上的最终结果完全相同，区别只在于输入来自哪里、由谁写入分区。Linux 与 Windows 工具包附带同一套脚本——Linux 为 `.sh`，Windows 为 `.bat`，参数与行为完全一致——因此下面的命令只写一遍，两个平台通用。
+`canoe_build` / `canoe_build.cmd` 只负责*派生*产物，放置工作由下面三种流程之一完成。三者在设备上的最终结果完全相同，区别只在于输入来自哪里、由谁写入分区。Linux 使用无扩展名的 Python 启动器；Windows 使用调用内置解释器的 `.cmd` 包装器。参数与行为完全一致。
 
-一次 `build.sh` 运行的输出：
+一次 `canoe_build` 或 `canoe_build.cmd` 运行的输出：
 
 - `efisp/boot.efi` — 已修补 ABL
 - `efisp/boot.efi.gm2p` — 从匹配原厂 vbmeta 派生的 120 字节 profile
@@ -64,14 +64,28 @@
 唯一前置条件是一个已开启 ADB 的第三方 Recovery。persist 在该环境下可写，因此不需要运行系统具备 Root。
 
 ```bash
-./canoe_prep_device.sh     # 拉取 abl 与 vbmeta，派生 boot.efi 及其 sidecar
-./canoe_stage.sh           # 安装 persist 目录树，再写入 BDS
+./canoe_prep_device        # 拉取 abl 与 vbmeta，派生 boot.efi 及其 sidecar
+./canoe_stage              # 安装 persist 目录树，再写入 BDS
+```
+
+Windows 请使用调用内置解释器的对应包装器：
+
+```bat
+canoe_prep_device.cmd
+canoe_stage.cmd
 ```
 
 默认从**当前活动槽位**拉取。若在 `adb sideload` 之后立即安装（常见的第三方 ROM 刷机流程），sideload 写入的是*另一个*槽位且尚未启动它，此时应加 `--slot inactive` 从该槽位派生：
 
+Linux 请给 `./canoe_prep_device` 传入 `--slot inactive`；Windows 则传给
+`canoe_prep_device.cmd`：
+
 ```bash
-./canoe_prep_device.sh --slot inactive
+./canoe_prep_device --slot inactive
+```
+
+```bat
+canoe_prep_device.cmd --slot inactive
 ```
 
 随后，仅当 `abl` 分区尚未是带 GBL 漏洞的版本时：
@@ -80,13 +94,21 @@
 fastboot flash abl <vulnerable>.img
 ```
 
-**顺序很重要。** `boot.efi` 从 `abl` 派生，`boot.efi.gm2p` 从 `vbmeta` 派生，二者必须描述**同一个**固件版本。只有在 `abl` 仍保留原始镜像时，从设备同时拉取二者才能得到匹配的配对，因此请在降级之前运行 `canoe_prep_device.sh`。若分区已被降级，请改为显式提供匹配的原厂配对：
+**顺序很重要。** `boot.efi` 从 `abl` 派生，`boot.efi.gm2p` 从 `vbmeta` 派生，二者必须描述**同一个**固件版本。只有在 `abl` 仍保留原始镜像时，从设备同时拉取二者才能得到匹配的配对，因此请在降级之前运行 `canoe_prep_device`。若分区已被降级，请改为显式提供匹配的原厂配对：
+
+Linux：
 
 ```bash
-./canoe_prep_device.sh --abl stock_abl.img --vbmeta stock_vbmeta.img
+./canoe_prep_device --abl stock_abl.img --vbmeta stock_vbmeta.img
 ```
 
-两个参数必须同时给出；只接受其中之一会重新引入它们本要防止的版本不匹配问题。`canoe_prep_device.sh` 会报告源 ABL 是否带有该漏洞，因此其输出即可判断是否还需要执行 `fastboot flash abl` 这一步。
+Windows：
+
+```bat
+canoe_prep_device.cmd --abl stock_abl.img --vbmeta stock_vbmeta.img
+```
+
+两个参数必须同时给出；只接受其中之一会重新引入它们本要防止的版本不匹配问题。准备命令会报告源 ABL 是否带有该漏洞，因此其输出即可判断是否还需要执行 `fastboot flash abl` 这一步。
 
 ### 4.2 配合固件包安装
 
@@ -94,27 +116,38 @@ fastboot flash abl <vulnerable>.img
 
 ```bash
 # 1. 电脑端，无需连接设备
-./canoe_prep.sh --pkg OOS_FILES_HERE \
-                --recovery <custom>.img \
-                --abl <vulnerable>.img \
-                --in-place
+./canoe_prep --pkg OOS_FILES_HERE \
+             --recovery <custom>.img \
+             --abl <vulnerable>.img \
+             --in-place
 
 # 2. 原样运行固件包自带的刷机脚本
 bash Super_Flasher.sh
 
 # 3. 进入第三方 Recovery 并开启 ADB
-./canoe_stage.sh
+./canoe_stage
+```
+
+Windows 使用 `.cmd` 包装器：
+
+```bat
+canoe_prep.cmd --pkg OOS_FILES_HERE ^
+               --recovery <custom>.img ^
+               --abl <vulnerable>.img ^
+               --in-place
+
+canoe_stage.cmd
 ```
 
 `--in-place` 会把准备好的镜像替换进固件包目录，并保留 `<name>.img.canoe-orig` 备份；重复运行不会用已替换过的镜像覆盖已有备份。
 
-由于刷机脚本会把固件包自带的 `recovery.img` 写入两个槽位，想保留第三方 Recovery 就必须让它写入的正是这个第三方镜像——这也是本流程需要 graft 步骤而 §4.1 不需要的原因。`canoe_prep.sh` 使用 `vbmetabackup -f`（电脑端执行，无需设备）从固件包自带的 `recovery.img` 中提取官方 recovery vbmeta，再用 `vbmetaport` 移植到第三方 Recovery 上，同时保持分区大小与第三方镜像负载不变。
+由于刷机脚本会把固件包自带的 `recovery.img` 写入两个槽位，想保留第三方 Recovery 就必须让它写入的正是这个第三方镜像——这也是本流程需要 graft 步骤而 §4.1 不需要的原因。`canoe_prep` 使用 `vbmetabackup -f`（电脑端执行，无需设备）从固件包自带的 `recovery.img` 中提取官方 recovery vbmeta，再用 `vbmetaport` 移植到第三方 Recovery 上，同时保持分区大小与第三方镜像负载不变。
 
 `--abl` 只改变刷机脚本写入 `abl` 分区的 ABL 镜像。sidecar 始终从固件包的**原厂** `abl.img` + `vbmeta.img` 配对派生，因为这正是 `boot.efi` 与 `boot.efi.gm2p` 必须保持一致的那一对。
 
 ### 4.3 完全手动
 
-1. 将匹配的 stock `abl.img` 和 `vbmeta.img` 放入 toolkit 的 `images/` 目录，运行 `build.sh`（Android/Linux）或 `build.bat`（Windows）。
+1. 将匹配的 stock `abl.img` 和 `vbmeta.img` 放入 toolkit 的 `images/` 目录。Linux 运行 `./canoe_build`，Windows 运行 `canoe_build.cmd`。Android 工具包保留设备端的 shell `build.sh`，因为 Android 不保证提供 Python。
 2. 如有需要先创建启动根目录：已启动系统为 `/mnt/vendor/persist/efisp`，第三方 Recovery 为 `/persist/efisp`。
 3. 将生成的完整 `efisp/` 目录复制进去：
    ```
@@ -129,7 +162,7 @@ bash Super_Flasher.sh
 
 ### staging 步骤的保证
 
-`canoe_stage` 为 §4.1 与 §4.2 共用，且只是一个薄驱动：它负责校验与暂存，随后把事务交给在设备上运行的 `canoe_device_install.sh`。该设备端脚本是事务的唯一实现，因此 Linux 与 Windows 驱动不会各自漂移。
+`canoe_stage` 为 §4.1 与 §4.2 共用，且只是一个薄驱动：它负责校验与暂存，随后把事务交给在设备上运行的 `canoe_device_install.sh`。该设备端 shell 脚本是事务的唯一实现，因此 Linux 与 Windows 驱动不会各自漂移。
 
 - 暂存集合先推送并校验，之后才触碰任何在用文件，因此传输失败不会造成任何改动。
 - 提交将覆盖的一切都会先快照：在用三件套、上一代备份、`BOOTENTRIES` 与 `tools/`。因此回滚绝不会留下某一代的 loader 搭配另一代的菜单目录树。

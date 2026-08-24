@@ -17,11 +17,21 @@
 
 ### 编译依赖
 构建各种发布包必须在 **Linux** 环境下进行：
-- `gcc` / `clang`, `lld`, `make`, `zip`, `python3`
+- `gcc` / `clang`、`lld`、`make`、`zip`、`python3`
+- `pytest`（主机工具测试套件 `make test` 的开发依赖）
 - Rust 工具链（`cargo`/`rustup`，用于本机及交叉编译目标）
 - `liblzma-dev` (用于编译 `extractfv` 解包工具)
 - **Android NDK**（用于 `make target_magisk_module` 交叉编译 Android 平台的修补工具）
 - **MinGW-w64**
+
+### 电脑端工具
+
+电脑端工具现在是两个工具包共享的同一份 Python 实现，源代码位于 `tools/canoe-host/`，
+在各压缩包内以 `canoe/` 目录随包发布。此前它存在两份——一份 bash、一份 `cmd.exe`
+批处理——而 Windows 那份反复因批处理的*解析*细节出错，而非安装逻辑本身。
+
+运行它需要 Linux 主机上的 Python 3.11+。Windows 用户无需安装任何东西：Windows 压缩包在
+`python/` 目录下附带 embeddable CPython。
 
 ### 核心构建目标
 
@@ -65,15 +75,15 @@
 如果你下载的是 `target_toolkit_linux` 或 `target_toolkit_windows` 的发布压缩包：
 1. 请先解压该 zip 并进入套件文件夹。
 2. 提取出所用机型匹配的官方 `abl.img` 和 `vbmeta.img`，并将其拷贝至套件中的 `images/` 目录下。
-3. **Linux 平台：** 开启终端执行 `bash build.sh`。**Windows 平台：** 双击运行 `build.bat`。
+3. **Linux 平台：** 执行 `./canoe_build`。**Windows 平台：** 执行 `canoe_build.cmd`。
 4. 脚本会提取并修补 ABL，输出 `efisp/boot.efi`、从匹配原厂 vbmeta 派生的 120 字节 `efisp/boot.efi.gm2p` profile，以及从**未修补 ABL**派生的本地 256 字节 `efisp/boot.efi.tzmap` 映射，并保留原版 `ABL_original.efi`。`.tzmap` 不包含在工具包发布压缩包内。`BDS.efi` 已附带。请查看 `patch_log.txt`，若显示 "Warning: Failed to patch ABL GBL"，则该 ABL 没有漏洞，需将 `abl` 分区降级为带有 GBL 漏洞的旧版本 ABL。
 
-两个工具包随后都从第三方 Recovery 通过 ADB 安装：该环境下 `persist` 可写，且不需要运行系统具备 Root。Linux 提供 `.sh`，Windows 提供 `.bat`，参数与行为完全一致。两条彼此独立的路径，详见压缩包内的 `README.canoe.md` 以及 [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki)：
+两个工具包随后都从第三方 Recovery 通过 ADB 安装：该环境下 `persist` 可写，且不需要运行系统具备 Root。Linux 使用无扩展名的 Python 启动器（`canoe_build`、`canoe_prep`、`canoe_prep_device`、`canoe_stage`）；Windows 使用调用内置解释器的对应 `.cmd` 包装器（`canoe_build.cmd`、`canoe_prep.cmd`、`canoe_prep_device.cmd`、`canoe_stage.cmd`）。参数与行为完全一致。两条彼此独立的路径，详见压缩包内的 `README.canoe.md` 以及 [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki)：
 
 - **独立安装** —— 只需一个开启了 ADB 的第三方 Recovery。`canoe_prep_device` 从设备拉取 `abl`/`vbmeta` 配对并派生三件套，`canoe_stage` 安装 persist 目录树并写入 BDS。全程不涉及固件包，也不涉及 vbmeta graft。若 `abl` 分区尚未是带 GBL 漏洞的版本，请自行用 `fastboot flash abl <vulnerable>.img` 刷入。
-- **配合固件包**（Super Flasher / RegionalHybrid，二者同时提供 `.sh` 与 `.bat`）—— `canoe_prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place` 会把固件包自带的官方 recovery vbmeta 移植到你的第三方 Recovery 上，并将准备好的镜像替换进固件包（保留 `.canoe-orig` 备份）。随后原样运行固件包自带的刷机脚本，最后执行 `canoe_stage` 完成安装。
+- **配合固件包**（Super Flasher / RegionalHybrid，可能附带自己的 shell 或 batch 刷机脚本）—— `canoe_prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place` 会把固件包自带的官方 recovery vbmeta 移植到你的第三方 Recovery 上，并将准备好的镜像替换进固件包（保留 `.canoe-orig` 备份）。随后原样运行固件包自带的刷机脚本，最后执行 `canoe_stage` 完成安装。
 
-`canoe_stage` 只是一个薄驱动：它负责校验与暂存，随后把事务交给在设备上运行的 `canoe_device_install.sh`，因此两个平台共用同一份回滚实现。提交将覆盖的一切都会先快照——在用三件套、上一代备份、`BOOTENTRIES` 与 `tools/`——上一代被降级为 `boot_backup.efi`（可从 BDS 菜单选择）；persist 目录树在写入 BDS 之前完成 sync；写入 BDS 前先备份、写入后逐字节校验；任何失败都会将整套内容回滚。它始终不触碰 `abl` 分区与首选模式记录。
+`canoe_stage` 只是一个薄驱动：它负责校验与暂存，随后把事务交给在设备上运行的 `canoe_device_install.sh`。该脚本仍然是 shell，因为它在 Recovery/Android 设备上执行，而这些环境不保证提供 Python；因此两个平台共用同一份回滚实现。提交将覆盖的一切都会先快照——在用三件套、上一代备份、`BOOTENTRIES` 与 `tools/`——上一代被降级为 `boot_backup.efi`（可从 BDS 菜单选择）；persist 目录树在写入 BDS 之前完成 sync；写入 BDS 前先备份、写入后逐字节校验；任何失败都会将整套内容回滚。它始终不触碰 `abl` 分区，并且只有传入 `--mode 0|1|2` 时才写入首选模式记录（通过附带的 `bin/mode2_profile-arm64` 在设备端执行 `mode2_profile mode-write`，并重新读取验证）…
 
 **手动流程**（两个平台通用，完整步骤见 [Wiki](https://github.com/superturtlee/gbl_root_canoe/wiki)）：将包含 `boot.efi`、`boot.efi.gm2p`、`boot.efi.tzmap` 和 `BOOTENTRIES` 的整个 `efisp/` 目录复制到 persist 启动根目录（已启动系统为 `/mnt/vendor/persist/efisp/`，第三方 Recovery 为 `/persist/efisp/`），`sync`，再将 `BDS.efi` 刷入 `efisp`（`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`）。
 

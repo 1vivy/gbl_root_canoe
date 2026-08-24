@@ -30,8 +30,9 @@ images/abl.img
 images/vbmeta.img
 ```
 
-Linux/Android 运行 `build.sh`，Windows 运行 `build.bat`。脚本会修补
-ABL，从匹配的根 vbmeta 镜像生成精确 120 字节的
+Linux 工具包运行 `./canoe_build`，Windows 工具包运行 `canoe_build.cmd`。
+Android 工具包保留 `build.sh`：它在设备端执行，而设备上不保证提供
+`python3`。主机实现会修补 ABL，从匹配的根 vbmeta 镜像生成精确 120 字节的
 `efisp/boot.efi.gm2p` KeyMint profile，并从未修补 ABL 在本地生成
 256 字节的 `GTZM` `efisp/boot.efi.tzmap` TrustZone 映射。`.tzmap` 与启动镜像并列
 存放于 `/mnt/vendor/persist/efisp/boot.efi.tzmap`，不包含在工具包发布压缩包
@@ -42,26 +43,29 @@ sidecar；`.tzmap` 在运行时是可选的，因为 BDS 内置了回退映射�
 逆向分析证据，仍会得到带有标识符标志和协议命令表的有效 256 字节 sidecar。
 安装不会因缺少该证据而失败。
 
-## 电脑端安装脚本
+## 电脑端安装工具
 
-Linux 与 Windows 工具包都在 `build.sh` / `build.bat` 之外附带安装脚本 ——
-Linux 为 `.sh`，Windows 为 `.bat`，参数完全一致。详见各压缩包内的
-`README.canoe.md` 与《安装指南》：
+主机驱动现在由两个工具包共享同一份 Python 实现。这样不再需要维护两份驱动，
+也避免了 Windows 版本反复因 `cmd.exe` 解析细节（而非安装逻辑）出错。
+Linux 主机运行时要求 Python 3.11+；Windows 无需安装任何东西，因为工具包在
+`python/` 下附带 embeddable CPython。
+仓库中的源代码位于 `tools/canoe-host/`；每个工具包压缩包都在
+`canoe/` 下附带同一份实现。
 
-| 脚本 | 作用 |
-|------|------|
-| `canoe_lib.sh` | Linux 脚本共用的 adb、槽位与分区辅助函数（用于 source，不直接运行） |
-| `canoe_prep_device` | 独立准备：从设备拉取 `abl` + `vbmeta` 并派生三件套 |
-| `canoe_prep` | 固件包准备：移植第三方 Recovery 的 vbmeta，并将准备好的镜像替换进固件包 |
-| `canoe_stage` | 电脑端驱动：校验、暂存到启动根目录、调用设备端事务 |
-| `canoe_device_install.sh` | 事务本体，在设备上执行 |
+两个工具包都附带以下参数完全一致的主机启动器：
 
-`canoe_device_install.sh` 位于 `tools/canoe-device/`，由两个工具包各自的
-`canoe_device_script` make 目标复制进去，因此快照/提交/回滚逻辑只有一份实现，
-而不是每个宿主平台一份。所有设备端绝对路径都通过参数传入，这也正是它能直接在
-电脑上被测试的原因。
+| Linux | Windows | 作用 |
+|------|---------|------|
+| `canoe_prep_device` | `canoe_prep_device.cmd` | 独立准备：从设备拉取 `abl` + `vbmeta` 并派生三件套 |
+| `canoe_prep` | `canoe_prep.cmd` | 固件包准备：移植第三方 Recovery 的 vbmeta，并将准备好的镜像替换进固件包 |
+| `canoe_stage` | `canoe_stage.cmd` | 电脑端驱动：校验、暂存到启动根目录、调用设备端事务 |
 
-所有脚本都不触碰 `abl` 分区：让该分区带上 GBL 漏洞是独立的
+详见各压缩包内的 `README.canoe.md` 与《安装指南》。
+`canoe_device_install.sh` 位于 `tools/canoe-device/`，仍然是 shell 脚本，
+因为它是在设备端执行的唯一安装事务实现，而设备上不保证提供 Python。
+
+所有设备端绝对路径都通过参数传入，这也正是它能直接在电脑上被测试的原因。
+所有主机工具都不触碰 `abl` 分区：让该分区带上 GBL 漏洞是独立的
 `fastboot flash abl` 步骤。
 
 固定测试：
