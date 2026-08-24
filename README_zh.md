@@ -4,8 +4,6 @@
 
 > ⚠️ **本项目已归档。** 当前版本为最终版本——补丁引擎已在多个厂商、多个 ABL 版本上稳定运行，核心逻辑不再变动，因此停止主动维护。代码仍然可用，欢迎 Fork。详见 [ARCHIVE.md](ARCHIVE.md)。
 
-> ⚠️ **验证状态：** 主机端构建与测试夹具已通过验证。实机验证范围仅包括一加 Ace 6T（CPH2767，`macan`），运行 OxygenOS `CPH2767_16.0.9.401(EX01)`，通过仅驻留内存的 staged-BDS 路径完成；已确认 sidecar 加载、钩子武装、KeyMaster 重写和 SCM 丢弃。其他设备以及永久安装尚未验证。
-
 `gbl_root_canoe` 是一个基于 EDK2 的工作区，用于修补高通 ABL 内的 EFI 程序。它利用 GBL (Generic Bootloader Loader) 漏洞，让真实 ABL 从原始 `efisp` 分区加载内嵌的 **superfastboot BDS**，BDS 再扫描兼容分区（ext4/fat32）获取启动项并链式启动——主要目的是在骁龙 8 Gen 5 / 8 Elite (Gen 5) 设备上实现**假回锁**（绕过 Bootloader 的解锁状态检测）。
 
 `BDS.efi` 以原始方式刷入 `efisp` 分区；修补后的 ABL/profile/map 配对文件（`boot.efi`、`boot.efi.gm2p` 和 `boot.efi.tzmap`）以及启动项列表（`BOOTENTRIES`）存放在 `persist` 分区的 `efisp/` 目录下。

@@ -161,7 +161,7 @@ Mode 0/1/2 在被链式加载的 ABL 运行期间，都会吞掉对携带 fastbo
 
 `SFB: blocked unlock-token erase on oplusreserve1 LBA 1114; token preserved`
 
-每一次吞写都会带 `reason=` 字段记录到 `logfs` 分区的 `UefiLog<N>.txt`（`token-zero-write`、`token-block-write`、`unlock-record-write`、`reserve-write`）。`DEBUG` 输出永远不会到达 framebuffer，因此常规吞写只能在该日志中看到。
+每一次吞写都会带 `reason=` 字段记录（`token-zero-write`、`token-block-write`、`unlock-record-write`、`reserve-write`）。`DEBUG` 输出永远不会到达 framebuffer，因此常规吞写只能在日志中看到。日志只有一份，不做轮转：BDS 会在 ExitBootServices 之前挂载 `logfs`，平台自身的 flush 才能把 `UefiLog` 文本文件落到那里。在 Oplus 设备上，进系统后同一份缓冲也可以从 `/proc/bootloader_log` 读取。
 
 可在 BDS 菜单、模块 WebUI 中选择首选模式，或在安装时通过 `canoe_stage --mode N` 指定。选择保存在 `efisp` 固定尾部记录；记录缺失或损坏时默认使用 Mode 1。Mode 2 要求匹配的 120 字节 `.gm2p` profile；若该 profile 缺失或无效，启动会回退到 Mode 0。256 字节 `.tzmap` 是可选的；若缺失或无效，BDS 使用内置回退映射。
 

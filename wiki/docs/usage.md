@@ -67,5 +67,4 @@
 
 ## Notes
 
-- ⚠️ **Validation status:** Host builds and test fixtures are validated. On-device validation is scoped to a OnePlus Ace 6T (CPH2767, `macan`) running OxygenOS `CPH2767_16.0.9.401(EX01)`, using the RAM-only staged-BDS path; sidecar loading, hook arming, KeyMaster rewrites, and SCM drops were confirmed. No other device and no permanent installation have been validated.
 - When OEM unlocking is enabled and the white warning text appears on boot, **press Volume Up to enter Superfastboot mode.**

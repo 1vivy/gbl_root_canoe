@@ -1,7 +1,5 @@
 # Xiaomi & OnePlus System Update Security Warning
 
-> ⚠️ **Validation status:** Host builds and test fixtures are validated. On-device validation is scoped to a OnePlus Ace 6T (CPH2767, `macan`) running OxygenOS `CPH2767_16.0.9.401(EX01)`, using the RAM-only staged-BDS path; sidecar loading, hook arming, KeyMaster rewrites, and SCM drops were confirmed. No other device and no permanent installation have been validated.
-
 ## Universal SCM safeguards (all modes)
 
 All modes (0/1/2) best-effort suppress the TrustZone fuse and anti-rollback SCM requests during launch and OTA refresh. This prevents **further advancement only**: it cannot un-blow an already-blown fuse or lower an already-raised rollback floor. If the SCM protocol is absent, launch continues and the `hooks-armed ... scm=0` marker records that the safeguard was unavailable.
