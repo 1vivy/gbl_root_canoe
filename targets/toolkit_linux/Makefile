@@ -1,7 +1,7 @@
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_mode2_profile_android \
 	submodule_abl_tzmap submodule_ablfvextractor \
-	submodule_vbmetafixer canoe_device_script build
+	submodule_vbmetafixer canoe_device_script canoe_host build
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -58,7 +58,7 @@ submodule_ablfvextractor: copy_resources
 	cp ../../submodules/ablfvextractor/build/extractfv ./build/toolkit/bin/extractfv
 submodule_vbmetafixer: copy_resources
 	# vbmetaport grafts an official vbmeta onto a third-party image; vbmetabackup
-	# -f lifts that vbmeta out of a local firmware image. canoe_prep.sh needs both.
+	# -f lifts that vbmeta out of a local firmware image. canoe_prep needs both.
 	# Guarded like submodule_uefi: the vbmetafixer `build` target is not phony, so
 	# a stale build/ directory would otherwise make a plain `make build` a no-op.
 	cd ../../tools/vbmetafixer && \
@@ -73,6 +73,20 @@ canoe_device_script: copy_resources
 	cp ../../tools/canoe-device/canoe_device_install.sh ./build/toolkit/canoe_device_install.sh
 	chmod +x ./build/toolkit/canoe_device_install.sh
 	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script
+canoe_host: copy_resources
+	# Host-side Canoe tools are shared by Linux and Windows and copied from
+	# one source tree so the two toolkits cannot drift.
+	cp -r ../../tools/canoe-host/canoe ./build/toolkit/canoe
+	find ./build/toolkit/canoe -type d -name __pycache__ -prune -exec rm -rf {} +
+	cp ../../tools/canoe-host/canoe_build \
+		../../tools/canoe-host/canoe_prep \
+		../../tools/canoe-host/canoe_prep_device \
+		../../tools/canoe-host/canoe_stage \
+		./build/toolkit/
+	chmod +x ./build/toolkit/canoe_build \
+		./build/toolkit/canoe_prep \
+		./build/toolkit/canoe_prep_device \
+		./build/toolkit/canoe_stage
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host
 	# zip
 	cd build/toolkit && zip -r ../toolkit_linux.zip ./

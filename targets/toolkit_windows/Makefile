@@ -1,10 +1,15 @@
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_mode2_profile_android \
 	submodule_abl_tzmap submodule_ablfvextractor \
-	submodule_vbmetafixer canoe_device_script build
+	submodule_vbmetafixer canoe_device_script canoe_host python_embed build
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
+PYTHON_EMBED_VERSION ?= 3.14.7
+PYTHON_EMBED_SHA256 ?= d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15
+PYTHON_EMBED_URL ?= https://www.python.org/ftp/python/$(PYTHON_EMBED_VERSION)/python-$(PYTHON_EMBED_VERSION)-embed-amd64.zip
+PYTHON_EMBED_CACHE ?= ../../.cache/python-embed
+PYTHON_EMBED_ARCHIVE = $(PYTHON_EMBED_CACHE)/python-$(PYTHON_EMBED_VERSION)-embed-amd64.zip
 
 clean:
 	rm -rf build || true
@@ -56,7 +61,7 @@ submodule_ablfvextractor: copy_resources
 	cp ../../submodules/ablfvextractor/build/extractfv.exe ./build/toolkit/bin/extractfv.exe
 submodule_vbmetafixer: copy_resources
 	# vbmetaport grafts an official vbmeta onto a third-party image; vbmetabackup
-	# -f lifts that vbmeta out of a local firmware image. canoe_prep.bat needs both.
+	# -f lifts that vbmeta out of a local firmware image. canoe_prep needs both.
 	# Guarded like submodule_uefi: the vbmetafixer `build_windows` target is not
 	# phony, so a stale build/ directory would otherwise make a plain make build a no-op.
 	cd ../../tools/vbmetafixer && \
@@ -71,6 +76,45 @@ canoe_device_script: copy_resources
 	cp ../../tools/canoe-device/canoe_device_install.sh ./build/toolkit/canoe_device_install.sh
 	chmod +x ./build/toolkit/canoe_device_install.sh
 	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script
+canoe_host: copy_resources
+	# Host-side Canoe tools are shared by Linux and Windows and copied from
+	# one source tree so the two toolkits cannot drift.
+	cp -r ../../tools/canoe-host/canoe ./build/toolkit/canoe
+	find ./build/toolkit/canoe -type d -name __pycache__ -prune -exec rm -rf {} +
+	cp ../../tools/canoe-host/canoe_build \
+		../../tools/canoe-host/canoe_prep \
+		../../tools/canoe-host/canoe_prep_device \
+		../../tools/canoe-host/canoe_stage \
+		./build/toolkit/
+	chmod +x ./build/toolkit/canoe_build \
+		./build/toolkit/canoe_prep \
+		./build/toolkit/canoe_prep_device \
+		./build/toolkit/canoe_stage
+	cp ../../tools/canoe-host/canoe_build.cmd \
+		../../tools/canoe-host/canoe_prep.cmd \
+		../../tools/canoe-host/canoe_prep_device.cmd \
+		../../tools/canoe-host/canoe_stage.cmd \
+		./build/toolkit/
+python_embed: copy_resources $(PYTHON_EMBED_ARCHIVE)
+	@set -eu; \
+	expected="$(PYTHON_EMBED_SHA256)"; \
+	actual="$$(sha256sum "$(PYTHON_EMBED_ARCHIVE)" | cut -d' ' -f1)"; \
+	if [ "$$actual" != "$$expected" ]; then \
+		echo "Python embed sha256 mismatch: expected $$expected, got $$actual" >&2; \
+		exit 1; \
+	fi; \
+	echo "Verified Python embed sha256: $$actual"; \
+	rm -rf build/toolkit/python; \
+	mkdir -p build/toolkit/python; \
+	unzip -q "$(PYTHON_EMBED_ARCHIVE)" -d build/toolkit/python; \
+	test -f build/toolkit/python/python.exe
+$(PYTHON_EMBED_ARCHIVE):
+	@set -eu; \
+	mkdir -p "$(dir $@)"; \
+	tmp="$@.tmp"; \
+	rm -f "$$tmp"; \
+	wget --no-verbose --fail --location --output-document="$$tmp" "$(PYTHON_EMBED_URL)"; \
+	mv "$$tmp" "$@"
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host python_embed
 	# zip
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./

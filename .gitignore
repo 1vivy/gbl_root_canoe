@@ -17,6 +17,8 @@ __pycache__/
 *$py.class
 .venv/
 venv/
+# Download cache for the pinned Windows embeddable CPython archive
+.cache/python-embed/
 # Rust — every in-tree tool, not just the first one
 tools/*/target/
 

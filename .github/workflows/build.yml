@@ -12,6 +12,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install pytest
+      run: python3 -m pip install pytest
 
     - name: Install dependencies
       run: |
@@ -82,9 +89,21 @@ jobs:
         test -x artifacts/toolkit_android/bin/extractfv
         test -x artifacts/magisk_module/bin/extractfv
         test -x artifacts/magisk_module/bin/patch_tools
-        test -f artifacts/toolkit_linux/build.sh
-        test -f artifacts/toolkit_windows/build.bat
+        for launcher in canoe_build canoe_prep canoe_prep_device canoe_stage; do
+          test -x "artifacts/toolkit_linux/$launcher"
+        done
+        for launcher in canoe_build canoe_prep canoe_prep_device canoe_stage; do
+          # Both halves must ship: the .cmd only picks the interpreter, and the
+          # extensionless file beside it is the script that interpreter runs.
+          test -f "artifacts/toolkit_windows/$launcher"
+          test -f "artifacts/toolkit_windows/$launcher.cmd"
+        done
+        test -f artifacts/toolkit_windows/python/python.exe
         test -f artifacts/toolkit_android/build.sh
+        for package in toolkit_linux toolkit_windows; do
+          test -d "artifacts/$package/canoe"
+          test -z "$(find "artifacts/$package" -type d -name __pycache__ -print -quit)"
+        done
         test -f artifacts/magisk_module/customize.sh
         test -f artifacts/magisk_module/bin/bl_flasher.sh
         test -f artifacts/magisk_module/webroot/app.js
@@ -218,20 +237,26 @@ jobs:
       run: |
         # Zip here, in the job that produced the tree. Artifact upload/download
         # does not preserve the executable bit, so zipping after that round-trip
-        # publishes mode-644 scripts and binaries: `./build.sh` and
-        # `./canoe_stage.sh` fail with Permission denied and bin/* cannot be
-        # exec'd even via `bash build.sh`. A zip stores the modes itself, and
+        # publishes mode-644 scripts and binaries: `./canoe_build` and
+        # `./canoe_stage` fail with Permission denied and bin/* cannot be
+        # exec'd even via `bash canoe_build`. A zip stores the modes itself, and
         # uploading the zip round-trips its bytes intact.
         mkdir -p release
         for package in toolkit_linux toolkit_windows toolkit_android magisk_module \
                        vbmetafixer_linux vbmetafixer_windows vbmetafixer_android; do
           ( cd "artifacts/$package" && zip -qr "../../release/$package.zip" . )
         done
+        for package in toolkit_linux toolkit_windows; do
+          archive_entries="$(unzip -Z1 "release/$package.zip")"
+          case "$archive_entries" in
+            *__pycache__*) echo "__pycache__ leaked into $package archive"; exit 1 ;;
+          esac
+        done
 
         # The archive is the deliverable, so assert the modes inside the archive
         # rather than in the build tree they came from.
         rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
-        for exe in build.sh canoe_prep.sh canoe_prep_device.sh canoe_stage.sh \
+        for exe in canoe_build canoe_prep canoe_prep_device canoe_stage \
                    canoe_device_install.sh bin/patch_abl bin/mode2_profile \
                    bin/mode2_profile-arm64 bin/abl_tzmap bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do

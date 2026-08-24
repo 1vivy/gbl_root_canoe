@@ -3,5 +3,12 @@
 # labels early in the file still resolve while later ones fail with
 # "The system cannot find the batch label specified". The release zips are
 # built on a Linux runner, which would check these out as LF without this
-# rule. Force CRLF in the working tree on every platform.
-*.bat text eol=crlf
+# rule. Force CRLF for cmd wrappers, but keep Python source and extensionless
+# launchers at LF: Python reads both, and CRLF would make the Linux launcher
+# shebang fail when invoked directly.
+*.cmd text eol=crlf
+*.py text eol=lf
+canoe_build text eol=lf
+canoe_prep text eol=lf
+canoe_prep_device text eol=lf
+canoe_stage text eol=lf
