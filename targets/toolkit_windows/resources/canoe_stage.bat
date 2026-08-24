@@ -78,8 +78,8 @@ if not "%SERIAL%"=="" set "ADBARGS=-s %SERIAL%"
 
 rem ------------------------------------------------------ local inputs -----
 for %%F in ("efisp\boot.efi" "efisp\boot.efi.gm2p" "efisp\boot.efi.tzmap" "efisp\BOOTENTRIES") do (
-  if not exist %%F (
-    echo canoe_stage: error: missing %%F ^(run canoe_prep.bat or canoe_prep_device.bat first^) 1>&2
+  if not exist "%%~F" (
+    echo canoe_stage: error: missing %%~F ^(run canoe_prep.bat or canoe_prep_device.bat first^) 1>&2
     exit /b 1
   )
 )
@@ -231,7 +231,10 @@ if errorlevel 1 (
   echo canoe_stage: error: efisp partition not found 1>&2
   goto stage_fail
 )
-set "PART_BYTES="
+rem Sentinel, not cleared: `%VAR: =%` on an undefined variable expands to the
+rem literal ` =`, so an empty probe would be reported as that instead of as a
+rem failed read.
+set "PART_BYTES=none"
 rem %ADB% stays unquoted inside FOR /F command strings on purpose: it is
 rem always either "adb" or "Platform-Tools\adb.exe" - never a path with
 rem spaces - and an opening quote there is what made cmd /c strip the outer
@@ -318,10 +321,15 @@ if not "%MODE%"=="" (
     echo canoe_stage: error: mode-write failed 1>&2
     exit /b 1
   )
-  set "MODE_AFTER="
+  set "MODE_AFTER=none"
   for /f "delims=" %%S in ('%ADB% %ADBARGS% shell "/tmp/canoe-mode2_profile mode-read --device /dev/block/by-name/efisp --partition-bytes %PART_BYTES% --block-size !BLOCK!" 2^>nul') do set "MODE_AFTER=%%S"
   "%ADB%" %ADBARGS% shell "rm -f /tmp/canoe-mode2_profile" >nul 2>&1
-  echo !MODE_AFTER!|findstr /C:"MODE=%MODE%|" |findstr /C:"MODE_DEFAULTED=0" >nul || (
+  rem The record is one fixed line, `MODE=<n>|MODE_DEFAULTED=<n>`, so compare it
+  rem whole. It must NOT be piped into findstr: each side of a pipe is re-parsed
+  rem by a fresh cmd, so the `|` the record carries would be re-read as a pipe
+  rem there and the check could never pass. Inside an IF comparison the quotes
+  rem keep it a literal character.
+  if not "!MODE_AFTER!"=="MODE=%MODE%|MODE_DEFAULTED=0" (
     echo canoe_stage: error: mode record reread does not show mode %MODE% non-defaulted: !MODE_AFTER! 1>&2
     exit /b 1
   )
@@ -359,7 +367,19 @@ echo     %~2
 exit /b 0
 
 :devsize
-set "DEVSIZE="
-for /f "delims=" %%S in ('%ADB% %ADBARGS% shell "wc -c ^< %~1" 2^>nul') do set "DEVSIZE=%%S"
-set "DEVSIZE=%DEVSIZE: =%"
+rem No caret before the `<`. A caret is only an escape character OUTSIDE double
+rem quotes; inside the quoted adb argument the parser passes it through
+rem verbatim, so `^<` reached the device as a word and it ran `wc -c ^` with
+rem stdin redirected from the file: the operand error goes to stderr and stdout
+rem stays EMPTY. The `<` needs no escape here for the same reason - it sits
+rem inside the quotes, where neither this parser nor the cmd /c that FOR /F
+rem spawns treats it as a redirection.
+rem
+rem DEVSIZE carries a sentinel instead of being cleared: `%VAR: =%` on an
+rem undefined variable expands to the literal ` =`, which is precisely the
+rem nonsense the size checks reported as their "got" value when this probe
+rem came back empty.
+set "DEVSIZE=none"
+for /f "delims=" %%S in ('%ADB% %ADBARGS% shell "wc -c < %~1" 2^>nul') do set "DEVSIZE=%%S"
+set "DEVSIZE=!DEVSIZE: =!"
 exit /b 0
