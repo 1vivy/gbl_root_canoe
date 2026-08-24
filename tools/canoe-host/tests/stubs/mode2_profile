@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""mode2_profile: derive and validate the 120-byte KeyMint profile.
+
+Fixture stand-in for the real toolkit binary. Records its call in $CANOE_TRACE
+so tests can assert the order the driver invokes the pipeline in.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+
+def trace(line: str) -> None:
+    path = os.environ.get("CANOE_TRACE")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+BEHAVIOR = os.environ.get("STUB_PROFILE", "ok")
+
+
+def derive(argv: list[str]) -> int:
+    options = dict(zip(argv[::2], argv[1::2]))
+    vbmeta, out = Path(options["--vbmeta"]), Path(options["--out"])
+    trace(f"derive {vbmeta.name}")
+    if not vbmeta.is_file():
+        return 44
+    if BEHAVIOR == "derive":
+        sys.stderr.write("mode2_profile: derive failed\n")
+        return 46
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(b"G" * (119 if BEHAVIOR == "size" else 120))
+    return 0
+
+
+def validate(argv: list[str]) -> int:
+    target = Path(dict(zip(argv[::2], argv[1::2]))["--input"])
+    trace(f"validate {target.name}")
+    if BEHAVIOR == "missing-validate":
+        sys.stderr.write("mode2_profile: validate unavailable\n")
+        return 127
+    if BEHAVIOR != "size" and target.stat().st_size != 120:
+        return 48
+    return 0
+
+
+if __name__ == "__main__":
+    command, *args = sys.argv[1:]
+    if command == "derive":
+        raise SystemExit(derive(args))
+    if command == "validate":
+        raise SystemExit(validate(args))
+    raise SystemExit(49)
