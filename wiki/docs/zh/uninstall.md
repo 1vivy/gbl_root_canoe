@@ -8,12 +8,7 @@
 
 ## 2. 硬件真回锁要求
 
-若 Bootloader 已被**硬件真回锁**（通过 `fastboot flashing lock` 执行的真实回锁，并非 BDS 启动模式），必须**先解锁 BL**，再进行后续操作：
-
-| 设备 | 解锁方式 |
-|------|----------|
-| **Twoplus** | 深度测试解锁 |
-| **Dami** | Super Fastboot 解锁 |
+若 Bootloader 已被**硬件真回锁**（通过 `fastboot flashing lock` 执行的真实回锁，并非 BDS 启动模式），必须**先解锁 BL**，再进行后续操作。用你的设备支持的任一解锁途径：厂商自己的账号解锁，或在启动链仍在的情况下用 Superfastboot 的 `fastboot flashing unlock`。reserve token 保护机制正是为了让这条路在回锁后仍然可用 —— 但前提是回锁发生时启动链已经装好。
 
 
 ## 3. 卸载步骤

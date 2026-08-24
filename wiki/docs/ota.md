@@ -29,7 +29,7 @@ If the abl avb version changes, this method will cause a **hard brick**.
 
 ## OnePlus
 
-The vulnerability is not yet fixed, but given the previous "fuse" incident, it is still recommended to use Hail to freeze system updates.
+Newer builds fix the loader path, so an older vulnerable ABL stays on the `abl` partition; given the previous "fuse" incident, it is still recommended to use Hail to freeze system updates.
 
 **⚠️ Warnings：**
 - **Do NOT update unless necessary / on a primary device**
@@ -40,7 +40,7 @@ The vulnerability is not yet fixed, but given the previous "fuse" incident, it i
 - You can also use the module for OTA
 
 **Version info：**
-- version **761** is fixed
+- Vulnerable through `16.0.5.7xx` and below; newer builds are fixed, so keep a vulnerable ABL for the `abl` partition and let the patched loader track your firmware.
 
 
 ## Regarding future fuse of abl anti-rollback versions

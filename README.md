@@ -52,13 +52,13 @@ The module is designed to run directly on your rooted Android device.
 **Requirements:**
 - Device must be Snapdragon 8 Gen 5 / 8 Elite (Gen 5).
 - Bootloader must be unlocked.
-- Kernel must NOT have Baseband Guard.
+- Kernel must permit writes to `abl` and `efisp`. Baseband Guard blocks them; a kernel that allows them (WildKernel reportedly does now) works. If writes are refused, switch to LKM or stock boot images.
 - The ABL on the `abl` partition must contain the GBL vulnerability. If it does not, flash an older ABL with the vulnerability first; `boot.efi` and its matching `boot.efi.gm2p` profile still describe the current stock ABL/vbmeta pair, while the optional `boot.efi.tzmap` describes the unpatched ABL used to produce `boot.efi`; neither needs to match the downgraded `abl` partition.
 
 **Installation & Usage:**
 When flashing the module via a root manager (KernelSU, Magisk, or APatch), the script interacts with you using the volume keys:
 - **Volume Up (First-time installation):** The script extracts and patches the current-slot ABL, derives `boot.efi.gm2p` from the matching current-slot vbmeta, generates the local `boot.efi.tzmap` from the unpatched ABL, installs the validated pair plus map, `BOOTENTRIES` and tools under `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`. The `.tzmap` is generated locally and is not shipped inside the module archive. After this, reboot into Recovery and **format Data**. Once booted, install this module again (Volume Down the second time) to complete the installation.
-- **Volume Down (post-format or module-only install):** Skips boot-chain writes and completes module/WebUI installation. After each OTA, open the WebUI and flash again to retain the BL version.
+- **Volume Down (post-format or module-only install):** Skips boot-chain writes and completes module/WebUI installation. After each OTA, open the WebUI and flash again to retain the BL version; the WebUI writes the retained BL to the **inactive** slot and is also where the preferred mode (0/1/2) is selected. The host toolkits set the same record at install time with `canoe_stage --mode`.
 
 ### 2. Using the PC Toolkits (Linux / Windows)
 

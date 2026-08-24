@@ -8,12 +8,7 @@ Before performing any uninstall operation, make sure to **fully back up all impo
 
 ## 2. Hardware Re-lock Requirement
 
-If the bootloader has been **hardware re-locked** (a real `fastboot flashing lock` — not a BDS boot mode), it **must be unlocked first** before proceeding:
-
-| Device | Unlock Method |
-|--------|---------------|
-| **Twoplus** | Deep Test Unlock |
-| **Dami** | Super Fastboot Unlock |
+If the bootloader has been **hardware re-locked** (a real `fastboot flashing lock` — not a BDS boot mode), it **must be unlocked first** before proceeding. Use whichever unlock path your device supports: the vendor's own account-based unlock, or Superfastboot's `fastboot flashing unlock` while the chain is still installed. The reserve-token safeguard exists so that path survives a relock — but only if the chain was in place when the relock happened.
 
 
 ## 3. Uninstall Steps

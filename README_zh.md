@@ -52,7 +52,7 @@
 **设备要求：**
 - 必须是骁龙 8 Gen 5 / 8 Elite (Gen 5) 芯片设备。
 - 设备 BL 锁已经解锁。
-- 内核**没有** Baseband Guard 拦截。
+- 内核必须允许写入 `abl` 与 `efisp`。Baseband Guard 会拦截；允许写入的内核（据称 WildKernel 现在可以）没有问题。若写入被拒绝，请改用 LKM 或原厂 boot 镜像。
 - `abl` 分区上的 ABL 必须包含 GBL 漏洞。若没有，请先刷写一个带有该漏洞的旧版本 ABL；`boot.efi` 及其匹配的 `boot.efi.gm2p` profile 仍描述当前官方 ABL/vbmeta 配对，而可选的 `boot.efi.tzmap` 描述生成 `boot.efi` 时使用的未修补 ABL；两者都不必与降级后的 `abl` 分区版本一致。
 
 **刷入及使用流程：**
