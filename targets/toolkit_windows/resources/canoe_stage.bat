@@ -232,7 +232,13 @@ if errorlevel 1 (
   goto stage_fail
 )
 set "PART_BYTES="
-for /f "delims=" %%S in ('"%ADB%" %ADBARGS% shell "blockdev --getsize64 /dev/block/by-name/efisp"') do set "PART_BYTES=%%S"
+rem %ADB% stays unquoted inside FOR /F command strings on purpose: it is
+rem always either "adb" or "Platform-Tools\adb.exe" - never a path with
+rem spaces - and an opening quote there is what made cmd /c strip the outer
+rem quote pair and turn the probe into the garbage command adb" ... . The
+rem trailing 2^>nul keeps the string from ending on a quote for the same
+rem reason.
+for /f "delims=" %%S in ('%ADB% %ADBARGS% shell "blockdev --getsize64 /dev/block/by-name/efisp" 2^>nul') do set "PART_BYTES=%%S"
 set "PART_BYTES=%PART_BYTES: =%"
 echo %PART_BYTES%|findstr /r "^[0-9][0-9]*$" >nul || (
   echo canoe_stage: error: could not read the size of efisp 1>&2
@@ -313,7 +319,7 @@ if not "%MODE%"=="" (
     exit /b 1
   )
   set "MODE_AFTER="
-  for /f "delims=" %%S in ('"%ADB%" %ADBARGS% shell "/tmp/canoe-mode2_profile mode-read --device /dev/block/by-name/efisp --partition-bytes %PART_BYTES% --block-size !BLOCK!"') do set "MODE_AFTER=%%S"
+  for /f "delims=" %%S in ('%ADB% %ADBARGS% shell "/tmp/canoe-mode2_profile mode-read --device /dev/block/by-name/efisp --partition-bytes %PART_BYTES% --block-size !BLOCK!" 2^>nul') do set "MODE_AFTER=%%S"
   "%ADB%" %ADBARGS% shell "rm -f /tmp/canoe-mode2_profile" >nul 2>&1
   echo !MODE_AFTER!|findstr /C:"MODE=%MODE%|" |findstr /C:"MODE_DEFAULTED=0" >nul || (
     echo canoe_stage: error: mode record reread does not show mode %MODE% non-defaulted: !MODE_AFTER! 1>&2
@@ -353,6 +359,7 @@ echo     %~2
 exit /b 0
 
 :devsize
-for /f "delims=" %%S in ('"%ADB%" %ADBARGS% shell "wc -c ^< %~1"') do set "DEVSIZE=%%S"
+set "DEVSIZE="
+for /f "delims=" %%S in ('%ADB% %ADBARGS% shell "wc -c ^< %~1" 2^>nul') do set "DEVSIZE=%%S"
 set "DEVSIZE=%DEVSIZE: =%"
 exit /b 0
