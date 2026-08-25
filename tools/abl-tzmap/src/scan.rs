@@ -197,7 +197,7 @@ fn cap_commands(commands: &mut Vec<CommandRecord>) -> Result<(), ScanError> {
     Ok(())
 }
 
-fn digest(data: &[u8]) -> [u8; 32] {
+pub(crate) fn digest(data: &[u8]) -> [u8; 32] {
     let digest = Sha256::digest(data);
     let mut output = [0u8; 32];
     output.copy_from_slice(&digest);

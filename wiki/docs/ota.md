@@ -65,6 +65,15 @@ for img in os.listdir(img_dir):
 3. Flash these partitions using fastboot
 
 
+## Boot failure symptoms
+
+| Symptom | Likely cause | Recovery |
+|---------|--------------|----------|
+| Black screen after the vendor logo, no fastboot text; the host sees `QUSB_BULK_CID` (EDL 9008) | Pre-ABL failure: the ABL on the active slot cannot run — e.g. a foreign ABL was flashed, or the bootloader swapped onto a slot the module never paired | Authorized EDL flash of the matching current firmware |
+| Bootloader and recovery still work, but the system will not boot | Mismatched or half-installed chain: the BDS in `efisp` and the sidecar set in `persist` come from different generations, and nothing paired them | Re-run the full install or toolkit staging flow as one unit, so `BDS.efi`, `boot.efi`, `.gm2p` and `.tzmap` are all from one generation |
+| Red screen | Verified-boot state refused by the firmware | Boot into recovery and refresh or remove the chain |
+
+
 ## About the module
 
 The module installer and WebUI support both Chinese and English.

@@ -11,7 +11,7 @@ BY_NAME="$TMP/by-name"
 PERSIST="$TMP/persist"
 EFISP="$PERSIST/efisp"
 MODE_MISMATCH_USED="$TMP/mode-mismatch.used"
-PAIR_TARGET=""
+ABL_READBACK_USED="$TMP/abl-readback.used"
 PAIR_SYNC_FAILED="$TMP/pair-sync-failed"
 RAW_SYNC_FAILED="$TMP/raw-sync-failed"
 RAW_SYNC_REACHED="$TMP/raw-sync-reached"
@@ -33,7 +33,12 @@ assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3" ;; esac; }
 # ordering and transaction logic; these commands only model Android services.
 cat > "$BIN/getprop" <<'EOF'
 #!/bin/sh
-[ "$1" = ro.boot.slot_suffix ] && { echo _a; exit 0; }
+case "$1" in
+  ro.boot.slot_suffix) echo _a ;;
+  ro.product.name) echo test-device ;;
+  ro.product.model) echo Test Model ;;
+  ro.board.platform) echo sm8850 ;;
+esac
 exit 0
 EOF
 cat > "$BIN/blockdev" <<'EOF'
@@ -53,12 +58,32 @@ for arg in "$@"; do
   case "$arg" in if=*) in=${arg#*=} ;; of=*) out=${arg#*=} ;; esac
 done
 printf 'dd %s -> %s\n' "$in" "$out" >> "$FLOW_LOG"
-[ -n "$in" ] && [ -n "$out" ] && [ -f "$in" ] && /bin/cp "$in" "$out"
-EOF
-cat > "$BIN/grep" <<'EOF'
-#!/bin/sh
-case "$*" in *persist*) exit 0 ;; esac
-exec /usr/bin/grep "$@"
+if [ -z "$out" ]; then
+  # Verification read: real dd streams the device to stdout. Corrupt that
+  # stream once when the case under test asks for a readback mismatch.
+  case "$in" in
+    */by-name/abl_*)
+      if [ "${FAIL_ABL_READBACK:-0}" = 1 ] &&
+         [ ! -e "$ABL_READBACK_USED" ]; then
+        : > "$ABL_READBACK_USED"
+        printf 'readback-corrupt\n'
+        exit 0
+      fi
+      ;;
+  esac
+  [ -n "$in" ] && [ -f "$in" ] && /bin/cat "$in"
+  exit 0
+fi
+if [ -n "$in" ] && [ -f "$in" ]; then
+  /bin/cp "$in" "$out"
+fi
+case "$out" in
+  */by-name/abl_b)
+    if [ "${FAIL_INACTIVE_PAIR:-0}" = 1 ]; then
+      printf 'inactive-pair-corrupt\n' > "$out"
+    fi
+    ;;
+esac
 EOF
 cat > "$BIN/extractfv" <<'EOF'
 #!/bin/sh
@@ -71,7 +96,11 @@ while [ "$#" -gt 0 ]; do
     *) shift ;;
   esac
 done
-printf 'linux-loader:%s\n' "$abl" > "$out/LinuxLoader.efi"
+{
+  printf 'linux-loader:%s:' "$abl"
+  cat "$abl"
+  printf '\n'
+} > "$out/LinuxLoader.efi"
 printf 'extractfv %s\n' "$abl" >> "$FLOW_LOG"
 EOF
 cat > "$BIN/patch_abl" <<'EOF'
@@ -80,9 +109,17 @@ cat "$1" > "$2"
 # GBL_VULNERABLE=1 models an ABL that still carries the GBL bug (patch
 # succeeds); 0 models a fixed ABL, which is what drives the downgrade path.
 if [ "${GBL_VULNERABLE:-1}" != 1 ]; then
-  printf 'Warning: Failed to patch ABL GBL\n'
+  if ! /usr/bin/grep -q candidate-good "$1" ||
+     [ "${FAIL_POST_DOWNGRADE_GBL:-0}" = 1 ]; then
+    printf 'Warning: Failed to patch ABL GBL\n'
+  fi
 fi
 printf 'patch_abl %s -> %s\n' "$1" "$2" >> "$FLOW_LOG"
+EOF
+cat > "$BIN/grep" <<'EOF'
+#!/bin/sh
+case "$*" in *persist*) exit 0 ;; esac
+exec /usr/bin/grep "$@"
 EOF
 cat > "$BIN/abl_tzmap" <<'EOF'
 #!/bin/sh
@@ -110,6 +147,22 @@ case "$cmd" in
     echo "tzmap validate $input" >> "$FLOW_LOG"
     [ "${FAIL_TZMAP_VALIDATE:-0}" = 1 ] && exit 1
     [ -s "$input" ]
+    ;;
+  verify)
+    sidecar= abl=
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --sidecar) sidecar=$2; shift 2 ;;
+        --abl) abl=$2; shift 2 ;;
+        --allow-zero-digest) shift ;;
+        *) shift ;;
+      esac
+    done
+    echo "tzmap verify $sidecar $abl" >> "$FLOW_LOG"
+    [ "${FAIL_TZMAP_VERIFY:-0}" = 0 ] || exit 1
+    [ -s "$sidecar" ] && [ -s "$abl" ] || exit 1
+    case "$(cat "$sidecar")" in *"$(cat "$abl")"*) exit 0 ;; esac
+    exit 1
     ;;
   *) exit 1 ;;
 esac
@@ -267,6 +320,7 @@ run() {
     PAIR_SYNC_FAILED="$PAIR_SYNC_FAILED" RAW_SYNC_FAILED="$RAW_SYNC_FAILED" \
     RAW_SYNC_REACHED="$RAW_SYNC_REACHED" STATIC_SYNC_FAILED="$STATIC_SYNC_FAILED" \
     DEBUG_SYNC_FAILED="$DEBUG_SYNC_FAILED" ABL_SYNC_FAILED="$ABL_SYNC_FAILED" \
+    KEY_STATE="$TMP/key.state" ABL_READBACK_USED="$TMP/abl-readback.used" \
     FAIL_DERIVE="${FAIL_DERIVE:-0}" FAIL_MODE_READ="${FAIL_MODE_READ:-0}" \
     FAIL_MODE_WRITE="${FAIL_MODE_WRITE:-0}" FAIL_MODE_WRITE_MISMATCH="${FAIL_MODE_WRITE_MISMATCH:-0}" \
     FAIL_COMMIT_SYNC="${FAIL_COMMIT_SYNC:-0}" FAIL_BDS_SYNC="${FAIL_BDS_SYNC:-0}" \
@@ -297,12 +351,15 @@ run_customize() {
     PAIR_SYNC_FAILED="$PAIR_SYNC_FAILED" RAW_SYNC_FAILED="$RAW_SYNC_FAILED" \
     RAW_SYNC_REACHED="$RAW_SYNC_REACHED" STATIC_SYNC_FAILED="$STATIC_SYNC_FAILED" \
     DEBUG_SYNC_FAILED="$DEBUG_SYNC_FAILED" ABL_SYNC_FAILED="$ABL_SYNC_FAILED" \
-    KEY_STATE="$TMP/key.state" FAIL_DERIVE="${FAIL_DERIVE:-0}" \
-    FAIL_MODE_READ="${FAIL_MODE_READ:-0}" FAIL_MODE_WRITE="${FAIL_MODE_WRITE:-0}" \
-    FAIL_MODE_WRITE_MISMATCH="${FAIL_MODE_WRITE_MISMATCH:-0}" \
+    KEY_STATE="$TMP/key.state" ABL_READBACK_USED="$TMP/abl-readback.used" \
+    FAIL_DERIVE="${FAIL_DERIVE:-0}" FAIL_MODE_READ="${FAIL_MODE_READ:-0}" \
+    FAIL_MODE_WRITE="${FAIL_MODE_WRITE:-0}" FAIL_MODE_WRITE_MISMATCH="${FAIL_MODE_WRITE_MISMATCH:-0}" \
     FAIL_COMMIT_SYNC="${FAIL_COMMIT_SYNC:-0}" FAIL_BDS_SYNC="${FAIL_BDS_SYNC:-0}" \
     FAIL_STATIC_SYNC="${FAIL_STATIC_SYNC:-0}" FAIL_DEBUG_SYNC="${FAIL_DEBUG_SYNC:-0}" \
-    FAIL_ABL_SYNC="${FAIL_ABL_SYNC:-0}" FORCE_NO_GBL="${FORCE_NO_GBL:-0}" \
+    FAIL_ABL_SYNC="${FAIL_ABL_SYNC:-0}" FAIL_TZMAP_VERIFY="${FAIL_TZMAP_VERIFY:-0}" \
+    FAIL_INACTIVE_PAIR="${FAIL_INACTIVE_PAIR:-0}" FAIL_ABL_READBACK="${FAIL_ABL_READBACK:-0}" \
+    FAIL_POST_DOWNGRADE_GBL="${FAIL_POST_DOWNGRADE_GBL:-0}" \
+    FORCE_NO_GBL="${FORCE_NO_GBL:-0}" \
     GBL_VULNERABLE="${GBL_VULNERABLE:-1}" \
     FINAL_INSTALL_DOWN="${FINAL_INSTALL_DOWN:-0}" REPO_CONFIRM_UP="${REPO_CONFIRM_UP:-0}" \
     FAIL_PAIR_CP="${FAIL_PAIR_CP:-0}" FAIL_PAIR_MV="${FAIL_PAIR_MV:-0}" \
@@ -384,8 +441,125 @@ assert_file "$EFISP/boot.efi.gm2p"
 assert_file "$EFISP/boot.efi.tzmap"
 assert_contains "$(cat "$MODE_STATE")" 'MODE=1' "fresh install did not materialize default Mode 1"
 pass "fresh install preflight ordering and paired install"
+
+make_repo_image() {
+  rm -rf "$MOD/ablrepo"
+  mkdir -p "$MOD/ablrepo/test-device"
+  printf '%s\n' "$1" > "$MOD/ablrepo/test-device/abl.img"
+  sha256sum "$MOD/ablrepo/test-device/abl.img" \
+    > "$MOD/ablrepo/test-device/abl.sha256"
+  repo_sha256=$(sha256sum "$MOD/ablrepo/test-device/abl.img" |
+    cut -d' ' -f1)
+  repo_bytes=$(wc -c < "$MOD/ablrepo/test-device/abl.img" |
+    tr -d '[:space:]')
+  cat > "$MOD/ablrepo/test-device/abl.meta" <<EOF
+product=test-device
+model=Test Model
+soc=sm8850
+abl_version=fixture
+sha256=$repo_sha256
+bytes=$repo_bytes
+EOF
+}
+
+# A vulnerable inactive slot is left alone; the fresh install completes
+# without a cross-slot ABL write.
+! /usr/bin/grep -q "dd .*abl_a -> .*abl_b" "$LOG" ||
+  fail "fresh install rewrote an already-vulnerable inactive ABL"
+pass "fresh install skips vulnerable inactive-slot pairing"
+
+# Sidecar binding failure rolls back the staged pair before any BDS write.
+sidecar_live_before=$(cat "$EFISP/boot.efi")
+sidecar_profile_before=$(cat "$EFISP/boot.efi.gm2p")
+sidecar_tzmap_before=$(cat "$EFISP/boot.efi.tzmap")
+: > "$LOG"
+printf '0\n' > "$TMP/key.state"
+sidecar_rc=0
+FAIL_TZMAP_VERIFY=1 run_customize >/dev/null 2>&1 || sidecar_rc=$?
+[ "$sidecar_rc" -ne 0 ] || fail "sidecar/ABL mismatch was accepted"
+assert_eq "$(cat "$EFISP/boot.efi")" "$sidecar_live_before" \
+  "sidecar mismatch changed live EFI"
+assert_eq "$(cat "$EFISP/boot.efi.gm2p")" "$sidecar_profile_before" \
+  "sidecar mismatch changed profile"
+assert_eq "$(cat "$EFISP/boot.efi.tzmap")" "$sidecar_tzmap_before" \
+  "sidecar mismatch changed tzmap"
+! /usr/bin/grep -q '^dd .*by-name/efisp' "$LOG" ||
+  fail "sidecar mismatch wrote BDS"
+pass "sidecar/ABL mismatch rolls back staged pair"
+
+# A candidate image with no successful GBL patch is rejected before setrw or
+# any ABL write.
+make_repo_image candidate-fixed
+: > "$LOG"
+printf '0\n' > "$TMP/key.state"
+candidate_rc=0
+GBL_VULNERABLE=0 REPO_CONFIRM_UP=1 run_customize >/dev/null 2>&1 ||
+  candidate_rc=$?
+[ "$candidate_rc" -ne 0 ] || fail "unpatchable candidate ABL was accepted"
+! /usr/bin/grep -q '^setrw .*abl_a\|^dd .*abl_a' "$LOG" ||
+  fail "candidate preflight wrote the active ABL"
+pass "candidate ABL patch preflight rejects fixed image"
+
+# A candidate that patches cleanly but leaves a warning after downgrade must
+# not stage a pair.
+make_repo_image candidate-good
+: > "$LOG"
+printf '0\n' > "$TMP/key.state"
+surviving_warning_rc=0
+GBL_VULNERABLE=0 REPO_CONFIRM_UP=1 FAIL_POST_DOWNGRADE_GBL=1 \
+  run_customize >/dev/null 2>&1 || surviving_warning_rc=$?
+[ "$surviving_warning_rc" -ne 0 ] ||
+  fail "post-downgrade GBL warning was accepted"
+! /usr/bin/grep -q '^mv .*canoe.new\|^cp .*canoe.new' "$LOG" ||
+  fail "pair was staged after post-downgrade GBL warning"
+pass "post-downgrade GBL warning blocks staging"
+
+# A readback mismatch restores the full outgoing ABL and reports that the
+# restore succeeded.
+printf 'abl-a-original\n' > "$BY_NAME/abl_a"
+: > "$LOG"
+printf '0\n' > "$TMP/key.state"
+rm -f "$ABL_READBACK_USED"
+readback_rc=0
+GBL_VULNERABLE=0 REPO_CONFIRM_UP=1 FAIL_ABL_READBACK=1 \
+  run_customize >/tmp/canoe-customize-readback.$$.out 2>&1 || readback_rc=$?
+[ "$readback_rc" -ne 0 ] || fail "ABL readback mismatch was accepted"
+assert_eq "$(cat "$BY_NAME/abl_a")" 'abl-a-original' \
+  "ABL readback mismatch did not restore outgoing ABL"
+assert_contains "$(cat /tmp/canoe-customize-readback.$$.out)" \
+  'restore succeeded' "ABL readback failure omitted restore status"
+rm -f /tmp/canoe-customize-readback.$$.out
+pass "ABL readback mismatch restores and reports outgoing ABL"
+
+# A non-vulnerable inactive slot is paired only after the active install has
+# committed.
+printf 'abl-a-original\n' > "$BY_NAME/abl_a"
+printf 'abl-b-fixed\n' > "$BY_NAME/abl_b"
+: > "$LOG"
+printf '0\n' > "$TMP/key.state"
+GBL_VULNERABLE=0 REPO_CONFIRM_UP=1 run_customize >/dev/null
+assert_contains "$(cat "$LOG")" "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
+  "inactive ABL pairing was not attempted"
+assert_eq "$(cat "$BY_NAME/abl_b")" 'candidate-good' \
+  "inactive ABL was not copied from active slot"
+pass "inactive-slot ABL pairing copies known-good active image"
+
+# A failed inactive-slot copy is warning-only after pair_commit: the
+# committed efisp pair remains installed.
+printf 'abl-b-fixed-again\n' > "$BY_NAME/abl_b"
+make_repo_image candidate-good
+pair_live_expected=$(cat "$EFISP/boot.efi")
+printf '0\n' > "$TMP/key.state"
+FAIL_INACTIVE_PAIR=1 run_customize >/dev/null
+assert_eq "$(cat "$EFISP/boot.efi")" "$pair_live_expected" \
+  "inactive pairing failure rolled back committed install"
+assert_contains "$(cat "$LOG")" "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
+  "inactive pairing failure did not attempt copy"
+pass "failed inactive-slot pairing retains committed install"
+
 # A selected optional patch must not run before the user can decline a required
 # ABL downgrade. Without the ordering fix, patch_tools appears before abort.
+printf 'abl-a\n' > "$BY_NAME/abl_a"
 : > "$LOG"
 printf '0\n' > "$TMP/key.state"
 optional_live_before=$(cat "$EFISP/boot.efi")
@@ -401,6 +575,8 @@ assert_eq "$(cat "$EFISP/boot.efi")" "$optional_live_before" \
   fail "declined ABL downgrade performed a live write"
 pass "declined ABL downgrade leaves optional patch untouched"
 
+printf 'abl-a\n' > "$BY_NAME/abl_a"
+printf 'abl-b\n' > "$BY_NAME/abl_b"
 # Reset the pair so OTA rotation assertions have a stable independent fixture.
 printf 'old-live\n' > "$EFISP/boot.efi"
 printf 'old-live-profile\n' > "$EFISP/boot.efi.gm2p"

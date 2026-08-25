@@ -15,12 +15,15 @@
 #
 #   1  success with a previous generation: rotation, menu install, BDS verified
 #   2  invalid staged set aborts before touching anything
-#   3  BDS verification failure rolls back the triplet AND the menu tree
+#   3  BDS verification failure rolls back the triplet, menu tree and stamp
 #   4  first install creates no bogus backup
-#   5  failed first install leaves nothing behind
+#   5  failed first install leaves nothing behind, including the stamp
 #   6  commit failure restores everything
 #   7  BDS write failure restores efisp and the pair
-#   8  tree-only mode leaves the block device untouched
+#   8  tree-only mode leaves the block device untouched and stamps `-`
+#   9  foreign file is set aside and reported
+#  10  foreign file is preserved when the destination name collides
+#  11  foreign disclosure rolls back with the transaction
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -31,7 +34,8 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok - $*"; }
 sha()  { if [ -f "$1" ]; then sha256sum "$1" | cut -c1-12; else echo ABSENT; fi; }
-temps() { find "$1" -maxdepth 1 -name '.canoe.*' -print 2>/dev/null | wc -l | tr -d ' '; }
+sha_full() { sha256sum "$1" | cut -d ' ' -f1; }
+temps() { find "$1" -maxdepth 1 -name '.canoe.*' ! -name '.canoe.gen' ! -name '.canoe.foreign' -print 2>/dev/null | wc -l | tr -d ' '; }
 
 [ -f "$SCRIPT" ] || fail "missing $SCRIPT"
 
@@ -90,6 +94,8 @@ run_install "$ST" "$D" "$DEV" "$BK" || fail "1: transaction failed: $(cat "$ERR"
 [ "$(sha "$D/tools/BLTools.efi")" != "$tool" ] || fail '1: tools/ was not installed'
 [ "$(temps "$D")" = 0 ] || fail '1: snapshot files were left behind'
 [ -s "$BK" ] || fail '1: no efisp backup was taken'
+expected_gen="CANOEG1|$(sha_full "$ST/BDS.efi")|$(sha_full "$D/boot.efi")|$(sha_full "$D/boot.efi.gm2p")|$(sha_full "$D/boot.efi.tzmap")"
+[ "$(cat "$D/.canoe.gen")" = "$expected_gen" ] || fail '1: generation stamp does not describe installed bytes'
 grep -q 'CANOE-MARK: efisp-verified' "$OUT" || fail '1: BDS was not verified'
 pass 'success rotates the generation, installs the menu tree and verifies the BDS'
 
@@ -106,6 +112,7 @@ pass 'an invalid staged set aborts before touching anything'
 
 # ------------------------------------------------------------------ case 3 --
 setup c3 yes 120 256
+printf 'CANOEG1|old-generation\n' > "$D/.canoe.gen"
 OUT="$TMP/c3/out"; ERR="$TMP/c3/err"
 live=$(sha "$D/boot.efi"); back=$(sha "$D/boot_backup.efi")
 menu=$(sha "$D/BOOTENTRIES"); tool=$(sha "$D/tools/BLTools.efi"); dev=$(sha "$DEV")
@@ -115,6 +122,7 @@ if run_install "$ST" "$D" "$DEV" "$BK"; then fail '3: accepted a failed verifica
 grep -q 'verification' "$ERR" || fail '3: wrong failure message'
 [ "$(sha "$D/boot.efi")" = "$live" ] || fail '3: live triplet not restored'
 [ "$(sha "$D/boot_backup.efi")" = "$back" ] || fail '3: backup not restored'
+[ "$(cat "$D/.canoe.gen")" = 'CANOEG1|old-generation' ] || fail '3: generation stamp not restored'
 [ "$(sha "$D/BOOTENTRIES")" = "$menu" ] || fail '3: BOOTENTRIES not restored'
 [ "$(sha "$D/tools/BLTools.efi")" = "$tool" ] || fail '3: tools/ not restored'
 [ "$(sha "$DEV")" = "$dev" ] || fail '3: efisp not restored'
@@ -138,6 +146,7 @@ dev=$(sha "$DEV")
 shadow c5 cmp '#!/bin/sh
 exit 1'
 if run_install "$ST" "$D" "$DEV" "$BK"; then fail '5: accepted a failed verification'; fi
+[ "$(sha "$D/.canoe.gen")" = ABSENT ] || fail '5: generation stamp left behind'
 [ "$(sha "$D/boot.efi")" = ABSENT ] || fail '5: partial boot.efi left behind'
 [ "$(sha "$D/boot_backup.efi")" = ABSENT ] || fail '5: invented a backup'
 [ "$(sha "$D/BOOTENTRIES")" = ABSENT ] || fail '5: left a menu with no loader'
@@ -184,9 +193,47 @@ setup c8 yes 120 256
 OUT="$TMP/c8/out"; ERR="$TMP/c8/err"; SHADOW=""
 new=$(sha "$ST/boot.efi"); dev=$(sha "$DEV")
 run_install "$ST" "$D" || fail "8: tree-only install failed: $(cat "$ERR")"
+[ "$(cut -d '|' -f1 "$D/.canoe.gen")" = 'CANOEG1' ] || fail '8: generation stamp missing'
+[ "$(cut -d '|' -f2 "$D/.canoe.gen")" = '-' ] || fail '8: tree-only stamp has a BDS digest'
 [ "$(sha "$D/boot.efi")" = "$new" ] || fail '8: tree not installed'
 [ "$(sha "$DEV")" = "$dev" ] || fail '8: device written without being asked'
 ! grep -q 'CANOE-MARK: efisp-verified' "$OUT" || fail '8: reported a BDS write'
 pass 'tree-only mode leaves the block device untouched'
+
+# ------------------------------------------------------------------ case 9 --
+setup c9 yes 120 256
+printf 'STALE-CHAINLOAD-TREE' > "$D/stale-chainload.bin"
+OUT="$TMP/c9/out"; ERR="$TMP/c9/err"; SHADOW=""
+run_install "$ST" "$D" || fail "9: foreign-file install failed: $(cat "$ERR")"
+[ ! -e "$D/stale-chainload.bin" ] || fail '9: foreign file remained in the boot root'
+[ "$(cat "$D/.canoe.foreign/stale-chainload.bin")" = STALE-CHAINLOAD-TREE ] ||
+  fail '9: foreign file was not preserved'
+grep -q 'set aside foreign entry stale-chainload.bin' "$OUT" ||
+  fail '9: foreign-file disclosure was not reported'
+pass 'foreign files are set aside and reported'
+
+# ----------------------------------------------------------------- case 10 --
+setup c10 yes 120 256
+mkdir -p "$D/.canoe.foreign"
+printf 'OLD-FOREIGN' > "$D/.canoe.foreign/stale-tree"
+printf 'NEW-FOREIGN' > "$D/stale-tree"
+OUT="$TMP/c10/out"; ERR="$TMP/c10/err"; SHADOW=""
+run_install "$ST" "$D" || fail "10: foreign collision install failed: $(cat "$ERR")"
+[ "$(cat "$D/.canoe.foreign/stale-tree")" = OLD-FOREIGN ] ||
+  fail '10: existing foreign entry was overwritten'
+[ "$(cat "$D/.canoe.foreign/stale-tree.1")" = NEW-FOREIGN ] ||
+  fail '10: colliding foreign entry was not suffixed'
+pass 'foreign files never overwrite an existing set-aside entry'
+# ----------------------------------------------------------------- case 11 --
+setup c11 yes 120 256
+printf 'ROLLBACK-FOREIGN' > "$D/foreign-before-failure"
+OUT="$TMP/c11/out"; ERR="$TMP/c11/err"
+shadow c11 cmp '#!/bin/sh
+exit 1'
+if run_install "$ST" "$D" "$DEV" "$BK"; then fail '11: accepted a failed verification'; fi
+[ "$(cat "$D/foreign-before-failure")" = ROLLBACK-FOREIGN ] ||
+  fail '11: foreign file was not restored on rollback'
+[ ! -e "$D/.canoe.foreign" ] || fail '11: rollback left a new foreign directory'
+pass 'foreign-file disclosure rolls back with the transaction'
 
 echo 'all canoe device-install fixtures passed'

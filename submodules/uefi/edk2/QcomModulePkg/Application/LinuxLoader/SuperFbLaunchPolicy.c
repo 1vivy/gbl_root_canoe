@@ -178,6 +178,12 @@ SfbLoadTzMap (
     ZeroMem (Map, sizeof (*Map));
     return EFI_COMPROMISED_DATA;
   }
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK tzmap-digest abl=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+          (UINT32)Map->AblDigest[0], (UINT32)Map->AblDigest[1],
+          (UINT32)Map->AblDigest[2], (UINT32)Map->AblDigest[3],
+          (UINT32)Map->AblDigest[4], (UINT32)Map->AblDigest[5],
+          (UINT32)Map->AblDigest[6], (UINT32)Map->AblDigest[7]));
   return EFI_SUCCESS;
 }
 

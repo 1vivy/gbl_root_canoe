@@ -22,17 +22,13 @@
 #
 # Transaction:
 #   1. validate the staged set (sizes are exact contract values)
-#   2. snapshot everything the commit will overwrite: the live triplet, the
-#      existing backup generation, BOOTENTRIES and tools/
-#   3. commit: live -> boot_backup.*, staged -> live
-#   4. install BOOTENTRIES and tools, sync
+#   2. snapshot everything the commit will overwrite: the live triplet,
+#      existing backup generation, BOOTENTRIES, tools/ and .canoe.gen
+#   3. set aside foreign boot-root entries, then commit live -> boot_backup.*,
+#      staged -> live
+#   4. install BOOTENTRIES and tools, write the informational .canoe.gen stamp,
+#      sync
 #   5. optionally back up efisp, write the BDS, verify it byte-for-byte
-#
-# Any failure from step 3 onward restores every snapshotted item, so the boot root
-# is never left with one generation's loader beside another's menu tree. A failed
-# BDS write or verification also restores the partition from the backup taken in
-# step 5. The persist tree is complete and synced before the BDS is written, so an
-# interrupted run never leaves a live BDS pointing at half-installed sidecars.
 #
 # The preferred-mode record is never touched: only the leading len(BDS.efi) bytes
 # of the partition are written, and the record lives 3072 bytes before its end.
@@ -43,6 +39,7 @@ STAGING=${1:-}
 D=${2:-}
 EFISP_DEV=${3:-}
 BACKUP=${4:-}
+STAGING_NAME=${STAGING##*/}
 
 say()  { printf 'canoe-device: %s\n' "$1"; }
 mark() { printf 'CANOE-MARK: %s\n' "$1"; }
@@ -56,6 +53,9 @@ if [ -n "$EFISP_DEV" ] && [ -z "$BACKUP" ]; then
 fi
 
 size_of() { wc -c < "$1" | tr -d ' \n\r'; }
+sha256_file() {
+  sha256sum "$1" 2>/dev/null | cut -d ' ' -f1
+}
 
 # ------------------------------------------------------ 1. validate staged ---
 [ -s "$STAGING/boot.efi" ]       || die "staged boot.efi is missing or empty"
@@ -77,7 +77,7 @@ mkdir -p "$D" "$D/tools" || die "could not create $D"
 # ------------------------------------------- 2. snapshot what commit touches --
 # The menu tree is part of the transaction: a rollback that restored only the
 # triplet would leave the old loader beside the new BOOTENTRIES and tools.
-rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* "$D/.canoe.oldmenu" || :
+rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* "$D/.canoe.oldmenu" "$D/.canoe.oldgen" "$D/.canoe.foreign.moves" "$D/.canoe.gen.tmp" || :
 mkdir -p "$D/.canoe.oldmenu" || die "could not create the snapshot directory"
 
 [ -s "$D/boot.efi" ]              && cp -f "$D/boot.efi" "$D/.canoe.live.efi"
@@ -87,6 +87,9 @@ mkdir -p "$D/.canoe.oldmenu" || die "could not create the snapshot directory"
 [ -s "$D/boot_backup.efi.gm2p" ]  && cp -f "$D/boot_backup.efi.gm2p" "$D/.canoe.oldbak.gm2p"
 [ -s "$D/boot_backup.efi.tzmap" ] && cp -f "$D/boot_backup.efi.tzmap" "$D/.canoe.oldbak.tzmap"
 [ -f "$D/BOOTENTRIES" ]           && cp -f "$D/BOOTENTRIES" "$D/.canoe.oldmenu/BOOTENTRIES"
+if [ -e "$D/.canoe.gen" ]; then
+  cp -f "$D/.canoe.gen" "$D/.canoe.oldgen" || die "could not snapshot .canoe.gen"
+fi
 if [ -d "$D/tools" ]; then
   mkdir -p "$D/.canoe.oldmenu/tools"
   for t in "$D"/tools/*; do
@@ -103,6 +106,51 @@ else
 fi
 
 COMMITTED=no
+
+FOREIGN_EXISTED=no
+[ -d "$D/.canoe.foreign" ] && FOREIGN_EXISTED=yes
+
+set_aside_foreign() {
+  foreign_entry=
+  for foreign_entry in "$D"/* "$D"/.[!.]* "$D"/..?*; do
+    [ -e "$foreign_entry" ] || [ -L "$foreign_entry" ] || continue
+    foreign_name=${foreign_entry##*/}
+    case "$foreign_name" in
+      boot.efi|boot.efi.gm2p|boot.efi.tzmap|boot_backup.efi|boot_backup.efi.gm2p|boot_backup.efi.tzmap|BOOTENTRIES|tools|.canoe.gen|.canoe.foreign|.canoe.live.*|.canoe.oldbak.*|.canoe.oldmenu|.canoe.oldgen|.canoe.foreign.moves|.canoe.gen.tmp|"$STAGING_NAME")
+        continue
+        ;;
+    esac
+    if [ ! -d "$D/.canoe.foreign" ]; then
+      mkdir -p "$D/.canoe.foreign" || fail "could not create .canoe.foreign"
+    fi
+    foreign_target="$D/.canoe.foreign/$foreign_name"
+    foreign_suffix=1
+    while [ -e "$foreign_target" ] || [ -L "$foreign_target" ]; do
+      foreign_target="$D/.canoe.foreign/$foreign_name.$foreign_suffix"
+      foreign_suffix=$((foreign_suffix + 1))
+    done
+    foreign_target_name=${foreign_target##*/}
+    printf '%s\t%s\n' "$foreign_name" "$foreign_target_name" >> "$D/.canoe.foreign.moves" ||
+      fail "could not record foreign entry $foreign_name"
+    mv -f "$foreign_entry" "$foreign_target" ||
+      fail "could not set aside foreign entry $foreign_name"
+    say "set aside foreign entry $foreign_name in .canoe.foreign/$foreign_target_name"
+  done
+}
+
+restore_foreign() {
+  [ -f "$D/.canoe.foreign.moves" ] || return 0
+  old_ifs=$IFS
+  IFS='	'
+  while read -r foreign_name foreign_target_name; do
+    [ -n "$foreign_name" ] || continue
+    mv -f "$D/.canoe.foreign/$foreign_target_name" "$D/$foreign_name" || :
+  done < "$D/.canoe.foreign.moves"
+  IFS=$old_ifs
+  if [ "$FOREIGN_EXISTED" = no ]; then
+    rmdir "$D/.canoe.foreign" 2>/dev/null || :
+  fi
+}
 
 restore_pair() {
   [ "$COMMITTED" = no ] && return 0
@@ -156,6 +204,13 @@ restore_pair() {
     done
   fi
 
+  if [ -e "$D/.canoe.oldgen" ]; then
+    cp -f "$D/.canoe.oldgen" "$D/.canoe.gen" || :
+  else
+    rm -f "$D/.canoe.gen"
+  fi
+
+
   sync || :
   mark "pair-restored"
 }
@@ -173,17 +228,20 @@ restore_efisp() {
 }
 
 cleanup() {
-  rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* "$D/.canoe.oldmenu" 2>/dev/null || :
+  rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* "$D/.canoe.oldmenu" "$D/.canoe.oldgen" "$D/.canoe.foreign.moves" "$D/.canoe.gen.tmp" 2>/dev/null || :
 }
 
 fail() {
   restore_efisp
+  restore_foreign
   restore_pair
   cleanup
   die "$1"
 }
 
 # ------------------------------------------------------------- 3. commit -----
+set_aside_foreign
+
 COMMITTED=yes
 if [ -s "$D/.canoe.live.efi" ]; then
   cp -f "$D/.canoe.live.efi" "$D/boot_backup.efi" || fail "could not write boot_backup.efi"
@@ -209,11 +267,31 @@ cp -f "$STAGING/BOOTENTRIES" "$D/BOOTENTRIES" || fail "could not install BOOTENT
 if [ -d "$STAGING/tools" ]; then
   for t in "$STAGING"/tools/*; do
     [ -e "$t" ] || continue
+
     cp -f "$t" "$D/tools/" || fail "could not install $(basename "$t")"
   done
 fi
 sync || fail "sync of the persist tree failed"
 mark "tree-synced"
+write_generation() {
+  boot_digest=$(sha256_file "$D/boot.efi")
+  [ -n "$boot_digest" ] || fail "could not hash installed boot.efi"
+  gm2p_digest=$(sha256_file "$D/boot.efi.gm2p")
+  [ -n "$gm2p_digest" ] || fail "could not hash installed boot.efi.gm2p"
+  tzmap_digest=$(sha256_file "$D/boot.efi.tzmap")
+  [ -n "$tzmap_digest" ] || fail "could not hash installed boot.efi.tzmap"
+  bds_field=-
+  if [ -n "$EFISP_DEV" ]; then
+    bds_field=$(sha256_file "$STAGING/BDS.efi")
+    [ -n "$bds_field" ] || fail "could not hash installed BDS.efi"
+  fi
+  printf 'CANOEG1|%s|%s|%s|%s\n' "$bds_field" "$boot_digest" "$gm2p_digest" "$tzmap_digest" > "$D/.canoe.gen.tmp" ||
+    fail "could not write .canoe.gen"
+  mv -f "$D/.canoe.gen.tmp" "$D/.canoe.gen" || fail "could not install .canoe.gen"
+  mark "generation-stamped"
+}
+
+write_generation
 
 # ---------------------------------------------------------------- 5. BDS -----
 if [ -n "$EFISP_DEV" ]; then

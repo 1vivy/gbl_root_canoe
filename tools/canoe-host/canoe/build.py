@@ -154,4 +154,18 @@ def _derive_tzmap(toolkit: Toolkit) -> None:
         "abl_tzmap derive failed",
     )
     _check(run([tool, "validate", toolkit.tzmap]), "abl_tzmap validate failed")
+    _check(
+        run(
+            [
+                tool,
+                "verify",
+                "--sidecar",
+                toolkit.tzmap,
+                "--abl",
+                toolkit.abl_original,
+                "--allow-zero-digest",
+            ]
+        ),
+        "abl_tzmap verify failed",
+    )
     require_exact(toolkit.tzmap, TZMAP_BYTES, "abl_tzmap output")

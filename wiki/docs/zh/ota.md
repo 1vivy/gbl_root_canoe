@@ -65,6 +65,15 @@ for img in os.listdir(img_dir):
 3. 使用 fastboot 刷写这些分区
 
 
+## 启动故障症状对照
+
+| 症状 | 可能原因 | 恢复方式 |
+|------|----------|----------|
+| 厂商 logo 之后黑屏，没有 fastboot 界面；电脑端识别为 `QUSB_BULK_CID`（EDL 9008） | ABL 启动之前就已失败：当前槽位上的 ABL 无法运行——例如刷入了不属于本机的 ABL，或 Bootloader 切换到了模块从未配对过的槽位 | 通过授权 EDL 刷写与设备匹配的当前固件 |
+| Bootloader 和 Recovery 都正常，但系统无法启动 | 启动链不匹配或只装了一半：`efisp` 里的 BDS 与 `persist` 里的 sidecar 来自不同世代，彼此之间没有配对 | 将整条启动链作为整体重装（重装模块或重新走工具包 staging 流程），确保 `BDS.efi`、`boot.efi`、`.gm2p`、`.tzmap` 同属一套 |
+| 红屏 | 固件拒绝了 verified-boot 状态 | 进入 Recovery，刷新或移除启动链 |
+
+
 ## 关于模块
 
 模块安装脚本与 WebUI 均支持中文和英文。
