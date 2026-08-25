@@ -55,7 +55,6 @@ const i18n = {
     clearLog: "清空日志",
     fatSection: "USB 存储文件窗口",
     fatSize: "文件大小（字节）",
-    fatImage: "主机镜像暂存路径（可选）",
     fatProvision: "创建 / 写入 FAT 文件",
     fatVerify: "验证 FAT 文件",
     fatRestamp: "重新写入 extent stamp",
@@ -139,7 +138,6 @@ const i18n = {
     clearLog: "Clear Log",
     fatSection: "USB storage file window",
     fatSize: "File size (bytes)",
-    fatImage: "Host image staging path (optional)",
     fatProvision: "Create / write FAT file",
     fatVerify: "Verify FAT file",
     fatRestamp: "Restamp extents",
@@ -226,7 +224,6 @@ const elements = {
   patchPartButton: document.getElementById("patchPartButton"),
   clearLogButton: document.getElementById("clearLogButton"),
   fatSizeInput: document.getElementById("fatSizeInput"),
-  fatImageInput: document.getElementById("fatImageInput"),
   fatProvisionButton: document.getElementById("fatProvisionButton"),
   fatVerifyButton: document.getElementById("fatVerifyButton"),
   fatRestampButton: document.getElementById("fatRestampButton"),
@@ -733,8 +730,7 @@ async function runFatAction(action) {
   elements.fatStatusText.textContent = t.fatWaiting;
   try {
     const size = elements.fatSizeInput.value;
-    const image = elements.fatImageInput.value;
-    const args = action === "provision" ? [size, image] : [size];
+    const args = [size];
     renderFatResult(await runScriptAt(state.fatScriptPath, action, ...args));
   } catch (e) {
     elements.fatStatusText.textContent = `${t.startFail}: ${e.message}`;

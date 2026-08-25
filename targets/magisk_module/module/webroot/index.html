@@ -100,11 +100,7 @@
       </div>
       <label class="option-check" for="fatSizeInput">
         <span data-i18n="fatSize">文件大小（字节）</span>
-        <input id="fatSizeInput" type="number" min="8192" step="512" value="16777216" />
-      </label>
-      <label class="option-check" for="fatImageInput">
-        <span data-i18n="fatImage">主机镜像暂存路径（可选）</span>
-        <input id="fatImageInput" type="text" placeholder="/data/local/tmp/efisp.fat" />
+        <input id="fatSizeInput" type="number" min="2129920" step="4096" value="16777216" />
       </label>
       <div class="action-strip">
         <button class="primary-button" id="fatProvisionButton" type="button" data-i18n="fatProvision">创建 / 写入 FAT 文件</button>

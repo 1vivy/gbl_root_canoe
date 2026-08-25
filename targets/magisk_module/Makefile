@@ -1,5 +1,6 @@
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
-	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_magisk_tools build
+	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
+	submodule_magisk_tools submodule_fiemap build
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -52,6 +53,11 @@ submodule_ablfvextractor: copy_resources
 submodule_magisk_tools: copy_resources
 	cd ../../submodules/magisk_tools && make build_android
 	cp ../../submodules/magisk_tools/build/patch_tools ./build/module/bin/patch_tools
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_magisk_tools
+submodule_fiemap: copy_resources
+	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for fiemap"; exit 1; }
+	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
+	"$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" -O2 -Wall -Wextra -D_FILE_OFFSET_BITS=64 ../../submodules/magisk_tools/fiemap.c -o ./build/module/bin/fiemap
+	test -x ./build/module/bin/fiemap
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_magisk_tools submodule_fiemap
 	# zip
 	cd build/module && zip -r ../module_android.zip ./

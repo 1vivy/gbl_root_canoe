@@ -4,106 +4,182 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
 TMP=${TMPDIR:-/tmp}/canoe-fat-provision.$$
 PERSIST=$TMP/persist
+SOURCE=$PERSIST/efisp
 BIN=$TMP/bin
 RUNTIME=$TMP/runtime
+STATE=$TMP/state
+CAPTURE=$TMP/capture
 FAT=$PERSIST/efisp.fat
-IMAGE=$TMP/host-image.fat
 SCRIPT=$ROOT/targets/magisk_module/module/bin/canoe_fat_provision.sh
-SIZE=8192
-EXTENT_SOURCE=filefrag
-
+HELPER=$BIN/fiemap
+SIZE=2129920
+VOLUME_SECTORS=4152
 trap 'rm -rf "$TMP"' EXIT INT TERM HUP
-mkdir -p "$PERSIST" "$BIN" "$RUNTIME"
+mkdir -p "$SOURCE/tools" "$BIN" "$RUNTIME" "$STATE" "$CAPTURE"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok - $*"; }
 assert_file() { [ -f "$1" ] || fail "missing file: $1"; }
-assert_not_file() { [ ! -e "$1" ] || fail "unexpected file: $1"; }
+assert_not_exists() { [ ! -e "$1" ] || fail "unexpected path: $1"; }
 assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3 (got '$1')" ;; esac; }
 run_script() {
-  PERSIST_MNT="$PERSIST" FAT_FILE="$FAT" FAT_SIZE="$SIZE" PERSIST_FREE_BYTES=1048576 \
-    EXTENT_SOURCE="$EXTENT_SOURCE" FIEMAP_HELPER="$BIN/fiemap" RUNTIME_DIR="$RUNTIME" \
-    PATH="$BIN:/usr/bin:/bin" sh "$SCRIPT" "$@"
+  PERSIST_MNT="$PERSIST" SOURCE_EFISP="$SOURCE" FAT_FILE="$FAT" FAT_SIZE="$SIZE" \
+  FIEMAP_HELPER="${FIEMAP_HELPER:-$HELPER}" RUNTIME_DIR="$RUNTIME" PATH="$BIN:/usr/bin:/bin" sh "$SCRIPT" "$@"
 }
 
-cat > "$BIN/filefrag" <<'EOF'
-#!/bin/sh
-printf 'Filesystem type is: fake\n 0: 0..1: 100..101: 2: last,eof\n'
-EOF
-cat > "$BIN/debugfs" <<'EOF'
-#!/bin/sh
-printf 'debugfs fake invocation: %s\n 0: 0..1: 300..301: 2: last,eof\n' "$*"
-EOF
 cat > "$BIN/fiemap" <<'EOF'
 #!/bin/sh
-printf '400:2\n'
+printf 'blocksize:4096\n%s\n' "${FIEMAP_RUN:-1000:520}"
 EOF
-chmod +x "$BIN/filefrag" "$BIN/debugfs" "$BIN/fiemap"
+cat > "$BIN/losetup" <<'EOF'
+#!/bin/sh
+printf 'losetup %s\n' "$*" >> "$FLOW_LOG"
+case "$1" in
+  -f) printf '/dev/block/loop7\n' ;;
+  -d) rm -f "$LOOP_STATE" ;;
+  *) [ "${FAIL_ATTACH:-0}" -eq 0 ] || exit 1; : > "$LOOP_STATE" ;;
+esac
+EOF
+cat > "$BIN/newfs_msdos" <<'EOF'
+#!/bin/sh
+printf 'newfs_msdos %s\n' "$*" >> "$FLOW_LOG"
+[ "${FAIL_FORMAT:-0}" -eq 0 ]
+EOF
+cat > "$BIN/fsck_msdos" <<'EOF'
+#!/bin/sh
+printf 'fsck_msdos %s\n' "$*" >> "$FLOW_LOG"
+[ "${FAIL_FSCK:-0}" -eq 0 ]
+EOF
+cat > "$BIN/mount" <<'EOF'
+#!/bin/sh
+printf 'mount %s\n' "$*" >> "$FLOW_LOG"
+mkdir -p "$6"
+printf '%s\n' "$6" > "$MOUNT_STATE"
+EOF
+cat > "$BIN/umount" <<'EOF'
+#!/bin/sh
+printf 'umount %s\n' "$*" >> "$FLOW_LOG"
+if [ -n "${CAPTURE_DIR:-}" ]; then
+  mkdir -p "$CAPTURE_DIR"
+  /bin/cp -pr "$1/." "$CAPTURE_DIR/"
+fi
+rm -f "$MOUNT_STATE"
+[ "${FAIL_UMOUNT:-0}" -eq 0 ]
+EOF
+cat > "$BIN/cp" <<'EOF'
+#!/bin/sh
+case "${FAIL_COPY:-0}:$*" in
+  1:*tools*) exit 1 ;;
+esac
+printf 'cp %s\n' "$*" >> "$FLOW_LOG"
+exec /bin/cp "$@"
+EOF
+cat > "$BIN/stat" <<'EOF'
+#!/bin/sh
+if [ "${FAIL_ALLOC:-0}" -eq 1 ] && [ "$2" = '%b' ] && [ "$3" = "$FAT_FILE" ]; then
+  printf '0\n'
+  exit 0
+fi
+exec /usr/bin/stat "$@"
+EOF
+chmod +x "$BIN"/*
+: > "$TMP/flow.log"
+FLOW_LOG=$TMP/flow.log LOOP_STATE=$STATE/loop MOUNT_STATE=$STATE/mount \
+CAPTURE_DIR=$CAPTURE export FLOW_LOG LOOP_STATE MOUNT_STATE CAPTURE_DIR
 
-# Creation uses ordinary zero writes, not a sparse seek, and writes a valid trailer.
-EXTENT_SOURCE=filefrag run_script provision "$SIZE" > "$TMP/create.out"
-assert_file "$FAT"
-allocated=$(stat -c %b "$FAT")
-[ "$allocated" -gt 0 ] || fail "zero-filled file has no allocated blocks"
-assert_contains "$(cat "$TMP/create.out")" 'STAMP_VALID=1' 'creation did not verify trailer'
-pass 'provision creates a fully allocated file and verifies its stamp'
+printf 'BOOTENTRIES fixture\n' > "$SOURCE/BOOTENTRIES"
+printf 'boot fixture\n' > "$SOURCE/boot.efi"
+printf 'profile fixture\n' > "$SOURCE/boot.efi.gm2p"
+printf 'tzmap fixture\n' > "$SOURCE/boot.efi.tzmap"
+printf 'backup fixture\n' > "$SOURCE/boot_backup.efi"
+printf 'backup profile fixture\n' > "$SOURCE/boot_backup.efi.gm2p"
+printf 'backup tzmap fixture\n' > "$SOURCE/boot_backup.efi.tzmap"
+printf 'tool fixture\n' > "$SOURCE/tools/ENTRIES"
 
-# The free-space guard runs before creation and leaves no partial file.
-rm -f "$FAT"
-if PERSIST_MNT="$PERSIST" FAT_FILE="$FAT" FAT_SIZE="$SIZE" PERSIST_FREE_BYTES=1 \
-   EXTENT_SOURCE=filefrag RUNTIME_DIR="$RUNTIME" PATH="$BIN:/usr/bin:/bin" \
-   sh "$SCRIPT" provision "$SIZE" > "$TMP/space.out" 2>&1; then fail 'insufficient space was accepted'; fi
-assert_not_file "$FAT"
+# Given a size that is not aligned to the trailer's block contract, provision refuses it.
+if run_script provision 8193 > "$TMP/alignment.out" 2>&1; then fail 'non-4096 size was accepted'; fi
+assert_contains "$(cat "$TMP/alignment.out")" '4096-byte multiple' 'alignment refusal missing'
+assert_not_exists "$FAT"
+pass 'non-4096 size is refused before creation'
+
+# Given a volume below the computed FAT16 cluster floor, no image is created.
+if run_script provision 2097152 > "$TMP/floor.out" 2>&1; then fail 'below-floor size was accepted'; fi
+assert_contains "$(cat "$TMP/floor.out")" 'FAT16 minimum' 'cluster-floor refusal missing'
+assert_not_exists "$FAT"
+pass 'FAT16 cluster floor is computed and enforced'
+
+# Given too little persist space, the guard runs before the zero-fill.
+if PERSIST_FREE_BYTES=1 run_script provision > "$TMP/space.out" 2>&1; then fail 'insufficient space was accepted'; fi
+assert_contains "$(cat "$TMP/space.out")" 'insufficient persist free space' 'space refusal missing'
+assert_not_exists "$FAT"
 pass 'insufficient space leaves no file behind'
 
-# An image must match exactly and is copied in place after zero allocation.
-rm -f "$FAT"
-dd if=/dev/zero of="$IMAGE" bs=1 count="$SIZE" 2>/dev/null
-printf 'IMAGE-DATA' | dd of="$IMAGE" bs=1 conv=notrunc 2>/dev/null
-EXTENT_SOURCE=filefrag run_script provision "$SIZE" "$IMAGE" > "$TMP/image.out"
-assert_contains "$(dd if="$FAT" bs=1 count=10 2>/dev/null)" 'IMAGE-DATA' 'image was not copied in place'
-rm -f "$FAT"
-if EXTENT_SOURCE=filefrag run_script provision "$SIZE" "$TMP/missing-size-image" > "$TMP/mismatch.out" 2>&1; then fail 'missing image was accepted'; fi
-assert_not_file "$FAT"
-dd if=/dev/zero of="$TMP/wrong-size" bs=1 count=512 2>/dev/null
-if EXTENT_SOURCE=filefrag run_script provision "$SIZE" "$TMP/wrong-size" > "$TMP/mismatch.out" 2>&1; then fail 'wrong-size image was accepted'; fi
-assert_not_file "$FAT"
-pass 'in-place image copy accepts exact size and refuses mismatches'
+# Given enough space, the file is filled by real zero writes and checked for allocation.
+run_script provision > "$TMP/provision.out"
+assert_file "$FAT"
+allocated=$(/usr/bin/stat -c %b "$FAT")
+[ "$allocated" -ge $((SIZE / 512)) ] || fail 'zero-filled file is short-allocated'
+assert_contains "$(cat "$TMP/provision.out")" 'STAMP_VALID=1' 'provision did not verify the trailer'
+assert_contains "$(cat "$TMP/flow.log")" 'newfs_msdos -F 16 -c 1 -L CANOEFAT -s 4152 /dev/block/loop7' 'format did not protect trailer boundary'
+assert_contains "$(cat "$TMP/flow.log")" 'mount -t vfat -o rw /dev/block/loop7' 'mount did not use loop node'
+assert_contains "$(cat "$TMP/flow.log")" 'fsck_msdos -n /dev/block/loop7' 'fsck did not run on loop node'
+assert_not_exists "$STATE/loop"
+assert_not_exists "$STATE/mount"
+assert_contains "$(cat "$CAPTURE/BOOTENTRIES")" 'BOOTENTRIES fixture' 'BOOTENTRIES was not copied'
+assert_contains "$(cat "$CAPTURE/boot.efi")" 'boot fixture' 'boot.efi was not copied'
+assert_contains "$(cat "$CAPTURE/boot.efi.gm2p")" 'profile fixture' 'profile was not copied'
+assert_contains "$(cat "$CAPTURE/tools/ENTRIES")" 'tool fixture' 'tools tree was not copied'
+pass 'device format, allocation check, FAT boundary, and tree copy'
 
-# Exercise each resolver independently and assert the selected path is reported.
-EXTENT_SOURCE=debugfs run_script provision "$SIZE" > "$TMP/debugfs.out"
-assert_contains "$(cat "$TMP/debugfs.out")" 'EXTENT_SOURCE=debugfs' 'debugfs resolver was not selected'
-rm -f "$FAT"
-EXTENT_SOURCE=fiemap run_script provision "$SIZE" > "$TMP/fiemap.out"
-assert_contains "$(cat "$TMP/fiemap.out")" 'EXTENT_SOURCE=fiemap' 'FIEMAP resolver was not selected'
-pass 'filefrag, debugfs, and FIEMAP extent sources are selectable'
+# A mid-copy failure still unmounts, detaches, and removes the incomplete file.
+rm -f "$FAT" "$STATE/loop" "$STATE/mount"
+rm -rf "$CAPTURE"
+if FAIL_COPY=1 run_script provision > "$TMP/copy-fail.out" 2>&1; then fail 'copy failure was accepted'; fi
+assert_not_exists "$FAT"
+assert_not_exists "$STATE/loop"
+assert_not_exists "$STATE/mount"
+assert_contains "$(cat "$TMP/flow.log")" 'umount' 'copy failure did not release mount point'
+assert_contains "$(cat "$TMP/flow.log")" 'losetup -d /dev/block/loop7' 'copy failure did not release loop node'
+pass 'mid-way failure cleans mount and loop resources'
 
-# A changed physical run simulates relocation: verify reports a mismatch, then
-# restamp repairs it; repeated verify/restamp remain idempotent.
-EXTENT_SOURCE=fiemap run_script verify "$SIZE" > "$TMP/verify1.out" || fail 'valid stamp did not verify'
-assert_contains "$(cat "$TMP/verify1.out")" 'STAMP_MATCH=1' 'valid stamp was not reported'
-cat > "$BIN/fiemap" <<'EOF'
-#!/bin/sh
-printf '500:2\n'
-EOF
-chmod +x "$BIN/fiemap"
-if EXTENT_SOURCE=fiemap run_script verify "$SIZE" > "$TMP/relocated.out"; then fail 'relocated run was accepted'; fi
+# Recreate a valid file, then relocation of the resolved run invalidates the stamp.
+run_script provision > /dev/null
+if FIEMAP_RUN=2000:520 run_script verify > "$TMP/relocated.out"; then fail 'relocated extent run was accepted'; fi
 assert_contains "$(cat "$TMP/relocated.out")" 'STAMP_MATCH=0' 'relocation mismatch was not reported'
-EXTENT_SOURCE=fiemap run_script restamp > "$TMP/restamp.out"
-assert_contains "$(cat "$TMP/restamp.out")" 'STAMP_VALID=1' 'restamp did not repair the stamp'
-EXTENT_SOURCE=fiemap run_script verify "$SIZE" > "$TMP/verify2.out"
-assert_contains "$(cat "$TMP/verify2.out")" 'STAMP_MATCH=1' 'repeated verify was not idempotent'
-EXTENT_SOURCE=fiemap run_script restamp > "$TMP/restamp2.out"
+assert_contains "$(cat "$TMP/relocated.out")" 'FAT_BOUNDARY_MATCH=1' 'boundary status was lost on mismatch'
+pass 'verify reports relocated extents and preserves boundary diagnostics'
+
+# Restamp uses the relocated runs and remains idempotent.
+FIEMAP_RUN=2000:520 run_script restamp > "$TMP/restamp.out"
+assert_contains "$(cat "$TMP/restamp.out")" 'STAMP_VALID=1' 'restamp did not repair relocation'
+FIEMAP_RUN=2000:520 run_script verify > "$TMP/verify.out"
+assert_contains "$(cat "$TMP/verify.out")" 'STAMP_MATCH=1' 'restamped file did not verify'
+FIEMAP_RUN=2000:520 run_script restamp > "$TMP/restamp2.out"
 assert_contains "$(cat "$TMP/restamp2.out")" 'STAMP_VALID=1' 'repeated restamp was not idempotent'
-pass 'trailer mismatch, restamp, and repeated verify are safe'
+pass 'relocation mismatch and idempotent restamp are covered'
 
-# Verify detects a sparse file separately from a stamp mismatch.
+# A missing helper has a direct diagnosis when no explicit fallback is selected.
+# Invoked directly rather than through run_script: a prefix assignment on a
+# shell function is not reliably visible inside it, so the override has to be
+# part of the command's own environment.
+if EXTENT_SOURCE=fiemap PERSIST_MNT="$PERSIST" SOURCE_EFISP="$SOURCE" FAT_FILE="$FAT" \
+   FAT_SIZE="$SIZE" FIEMAP_HELPER="$TMP/missing-fiemap" RUNTIME_DIR="$RUNTIME" \
+   PATH="$BIN:/usr/bin:/bin" sh "$SCRIPT" verify > "$TMP/helper-missing.out" 2>&1; then
+  fail 'missing helper was accepted'
+fi
+assert_contains "$(cat "$TMP/helper-missing.out")" 'fiemap helper missing' 'missing helper diagnosis was obscure'
+pass 'missing FIEMAP helper is reported clearly'
+
+# The allocation guard rejects a post-fill file whose allocated blocks are short.
 rm -f "$FAT"
-mkdir -p "$PERSIST"
-: > "$FAT"
-dd if=/dev/zero of="$FAT" bs=1 count=1 seek=$((SIZE - 1)) 2>/dev/null
-if EXTENT_SOURCE=filefrag run_script verify "$SIZE" > "$TMP/sparse.out"; then fail 'sparse file was accepted'; fi
-assert_contains "$(cat "$TMP/sparse.out")" 'NON_SPARSE=0' 'sparse file was not detected'
-pass 'verify reports sparse files'
+if FAIL_ALLOC=1 run_script provision > "$TMP/alloc.out" 2>&1; then fail 'short allocation was accepted'; fi
+assert_contains "$(cat "$TMP/alloc.out")" 'allocation is short' 'short allocation refusal missing'
+assert_not_exists "$FAT"
+pass 'post-fill allocation shortfall is refused'
 
+# The host-image argument is gone: formatting always starts from device-side zero fill.
+if run_script provision "$SIZE" "$TMP/host-image" > "$TMP/image.out" 2>&1; then fail 'host image argument was accepted'; fi
+assert_contains "$(cat "$TMP/image.out")" 'usage: provision [size]' 'host image dependency remains'
+
+sh -n "$SCRIPT"
 echo 'ok - FAT provisioning coverage complete'
