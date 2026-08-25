@@ -73,7 +73,7 @@ typedef enum {
   /* Built-in entries; no backing file, handled in code. */
   SfbEntryFastboot,
   SfbEntrySelector,
-  /* Preferred boot policy selector. */
+  SfbEntryMassStorage,
   SfbEntryMode,
   /* "Back" row at the foot of a submenu: returns to the parent menu. */
   SfbEntryBack,
@@ -152,6 +152,14 @@ SfbStartFatStack (VOID);
  */
 VOID
 SfbMountLogfs (VOID);
+
+/*
+ * Map \efisp.fat on the ext4 persist volume as a writable FAT volume and bind it
+ * as the configuration store. Fails soft: with nothing bound, the store answers
+ * from the legacy records at the tail of the efisp partition exactly as before.
+ */
+VOID
+SfbBindWritableStore (VOID);
 
 /*
  * Snapshot of the boot volumes currently in the system: FAT32 volumes plus the

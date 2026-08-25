@@ -253,6 +253,12 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     }
 
     /*
+     * Bind the writable store before the first mode read, so `\efisp.fat`
+     * answers when it is present and the legacy efisp tail only when it is not.
+     */
+    SfbBindWritableStore ();
+
+    /*
      * With the filesystem drivers up, mount logfs so the earlier boot-chain
      * BDS log flush has somewhere to land; the chainloaded ABL inherits the
      * mounted volume.

@@ -3,15 +3,20 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
 .PHONY: test clean
 
-test: test_store_mode test_profile test_tzmap test_fat test_hooks test_launch
+test: test_store_mode test_profile test_tzmap test_fat test_hooks test_launch test_filewindow test_msc
 	./test_store_mode
 	./test_profile
 	./test_tzmap
 	./test_fat
 	./test_hooks
 	./test_launch
+	./test_filewindow
+	./test_msc
 
-test_store_mode: test_store_mode.c
+test_store_mode: test_store_mode.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbStore.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.h
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
 test_profile: test_profile.c \
@@ -55,5 +60,22 @@ test_launch: test_launch.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
+test_filewindow: test_filewindow.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbFileWindow.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbFileWindow.h
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -Wno-unused-function -fno-builtin \
+		-fshort-wchar $(HOOK_INCLUDES) -o $@ test_filewindow.c \
+		../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbFileWindow.c
+
+test_msc: test_msc.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMsc.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMsc.h \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMscScsi.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMscScsi.h
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -Wno-unused-function -fno-builtin \
+		-fshort-wchar $(HOOK_INCLUDES) -o $@ test_msc.c \
+		../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMsc.c \
+		../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMscScsi.c
+
 clean:
-	rm -f test_store_mode test_profile test_tzmap test_fat test_hooks test_launch
+	rm -f test_store_mode test_profile test_tzmap test_fat test_hooks test_launch test_filewindow test_msc

@@ -91,6 +91,19 @@
 	Hook/SpssHook.c
 	Hook/ScmHook.c
 	Hook/BlockIoHook.c
+	# Writable store: a fixed-extent file on the read-only ext4 volume, mapped
+	# as a block window so the in-image FAT driver can mount it read-write.
+	SuperFbFileWindow.h
+	SuperFbFileWindow.c
+	SuperFbConfig.h
+	SuperFbConfig.c
+	# USB mass storage target, driven from the boot menu over the same
+	# EFI_USB_DEVICE_PROTOCOL that fastboot uses.
+	SuperFbMsc.h
+	SuperFbMsc.c
+	SuperFbMscScsi.h
+	SuperFbMscScsi.c
+	SuperFbMscDescriptors.c
 
 [Packages]
 	ArmPkg/ArmPkg.dec
@@ -187,6 +200,9 @@
 	gEfiPartitionRecordGuid
 	gEfiResetReasonProtocolGuid
 	gQcomRngProtocolGuid
+	# USB device (peripheral) side, shared with fastboot: the boot menu drives it
+	# directly when it exports a partition over mass storage.
+	gEfiUsbDeviceProtocolGuid
 	# Patched around FAT32 image launches so the boot menu can run unsigned
 	# loaders on an unlocked device.
 	gEfiSecurityArchProtocolGuid

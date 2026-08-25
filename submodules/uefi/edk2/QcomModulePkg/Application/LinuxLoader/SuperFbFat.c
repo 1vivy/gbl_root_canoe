@@ -11,6 +11,8 @@
  */
 
 #include "SuperFbFatClassify.h"
+#include "SuperFbConfig.h"
+#include "SuperFbFileWindow.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -190,6 +192,63 @@ SfbStartFatStack (VOID)
   SfbConnectAll ();
 
   return EFI_SUCCESS;
+}
+
+/*
+ * Bind the writable configuration store.
+ *
+ * persist is ext4 and its driver is read-only by construction, so mutable menu
+ * state cannot be an ordinary file there. `\efisp.fat` on that volume is a
+ * fixed-extent image whose physical blocks are republished as a block window;
+ * the FAT driver already linked into this application binds to that window and
+ * what comes out is an ordinary writable volume. Fails soft by design: with no
+ * image, an unmappable one, or one the FAT driver declines, nothing is bound and
+ * the store keeps answering from the legacy records in the efisp tail.
+ */
+VOID
+SfbBindWritableStore (VOID)
+{
+  EFI_STATUS            Status;
+  EFI_HANDLE            *Volumes = NULL;
+  UINTN                 Count = 0;
+  UINTN                 Index;
+  EFI_HANDLE            Window = NULL;
+  SFB_FILE_WINDOW_INFO  Info;
+  VOID                  *FileSystem = NULL;
+
+  Status = SfbLocateVolumes (&Volumes, &Count);
+  if (EFI_ERROR (Status) || Volumes == NULL) {
+    return;
+  }
+
+  for (Index = 0; Index < Count; Index++) {
+    if (!SfbVolumeIsExt4 (Volumes[Index])) {
+      continue;
+    }
+    Status = SfbOpenFileWindow (Volumes[Index], L"\\efisp.fat", &Window, &Info);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((EFI_D_INFO, "SFB: MARK store-window status=%r\n", Status));
+      continue;
+    }
+    /* The window publishes Block I/O only; Disk I/O and FAT bind on connect. */
+    SfbConnectAll ();
+    Status = gBS->HandleProtocol (Window, &gEfiSimpleFileSystemProtocolGuid,
+                                  &FileSystem);
+    if (EFI_ERROR (Status) || FileSystem == NULL) {
+      DEBUG ((EFI_D_WARN, "SFB: MARK store-window unmounted status=%r\n",
+              Status));
+      SfbCloseFileWindow (Window);
+      Window = NULL;
+      continue;
+    }
+    SfbConfigBindVolume (Window);
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK store-bound runs=%u bytes=%Lu stamp=%u\n",
+            (UINT32)Info.RunCount, Info.VolumeBytes, (UINT32)Info.StampValid));
+    break;
+  }
+
+  FreePool (Volumes);
 }
 
 /* ---- logfs -------------------------------------------------------------- */
