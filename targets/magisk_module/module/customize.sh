@@ -79,6 +79,20 @@ if [ "$LANG" = "zh" ]; then
   T_ABLREPO_FAIL="ABL repo 查找失败，请手动刷写带 GBL 漏洞的旧版本 ABL 到 abl 分区后重试"
   T_ABLREPO_DOWNGRADE="正在降级 abl 分区..."
   T_ABLREPO_OK="abl 分区已降级"
+  T_ABL_META_FAIL="ABL repo 元数据校验失败"
+  T_ABL_CANDIDATE_FAIL="候选 ABL 未通过 GBL 补丁预检，已中止安装"
+  T_ABL_DOWNGRADE_GBL_FAIL="降级后的 ABL 仍无 GBL 漏洞，已中止安装"
+  T_ABL_NO_DOWNGRADE="当前 ABL 无 GBL 漏洞且未完成降级，已中止安装"
+  T_ABL_SIZE_FAIL="ABL 镜像大于目标分区，已中止安装"
+  T_ABL_SNAPSHOT_FAIL="ABL 原分区快照失败，已中止安装"
+  T_ABL_READBACK_FAIL="ABL 回读校验失败，已中止安装"
+  T_ABL_RESTORE_OK="ABL 回读失败，原 ABL 已成功恢复；安装已中止"
+  T_ABL_RESTORE_FAIL="ABL 回读失败，原 ABL 恢复失败；安装已中止"
+  T_TZMAP_BIND_FAIL="TrustZone map 与闪存中的 ABL 不匹配，已回滚安装"
+  T_INACTIVE_SLOT_UNRESOLVED="无法解析非活动槽位，跳过配对"
+  T_INACTIVE_SLOT_VULN_SKIP="非活动槽位已有 GBL 漏洞，跳过配对"
+  T_INACTIVE_SLOT_PAIRING="正在配对非活动槽位 ABL"
+  T_INACTIVE_SLOT_PAIR_WARN="警告：非活动槽位 ABL 配对失败，当前安装已保留"
   T_ABL_SETRW_FAIL="abl 分区设置可写失败"
   T_ABL_FLASH_FAIL="abl 分区降级刷写失败"
   T_SETRW_FAIL="efisp 分区设置可写失败"
@@ -135,6 +149,20 @@ else
   T_ABLREPO_OK="abl partition downgraded"
   T_ABL_SETRW_FAIL="Failed to set abl to read‑write"
   T_ABL_FLASH_FAIL="Failed to flash abl partition"
+  T_ABL_META_FAIL="ABL repo metadata verification failed"
+  T_ABL_CANDIDATE_FAIL="Candidate ABL failed the GBL patch preflight; aborting"
+  T_ABL_DOWNGRADE_GBL_FAIL="Downgraded ABL still lacks the GBL vulnerability; aborting"
+  T_ABL_NO_DOWNGRADE="Current ABL lacks GBL and no downgrade completed; aborting"
+  T_ABL_SIZE_FAIL="ABL image is larger than the target partition; aborting"
+  T_ABL_SNAPSHOT_FAIL="Failed to snapshot the outgoing ABL partition; aborting"
+  T_ABL_READBACK_FAIL="ABL readback verification failed; aborting"
+  T_ABL_RESTORE_OK="ABL readback failed; the original ABL was restored; aborting"
+  T_ABL_RESTORE_FAIL="ABL readback failed; restoring the original ABL failed; aborting"
+  T_TZMAP_BIND_FAIL="TrustZone map does not match the ABL on flash; install rolled back"
+  T_INACTIVE_SLOT_UNRESOLVED="Cannot resolve the inactive slot; skipping ABL pairing"
+  T_INACTIVE_SLOT_VULN_SKIP="Inactive-slot ABL already has the GBL vulnerability; skipping pairing"
+  T_INACTIVE_SLOT_PAIRING="Pairing the inactive-slot ABL"
+  T_INACTIVE_SLOT_PAIR_WARN="Warning: inactive-slot ABL pairing failed; committed install retained"
   T_SETRW_FAIL="Failed to set efisp to read‑write"
   T_FLASH_FAIL="Failed to flash efisp"
   T_PERSIST_NOT_MOUNTED="persist is not mounted at /mnt/vendor/persist"
@@ -237,6 +265,52 @@ download_url() {
   fi
 }
 
+# Read a required key from the ABL repository metadata file.
+abl_meta_value() {
+  sed -n "s/^$1=//p" "$2" | tail -n 1
+}
+
+verify_abl_metadata() {
+  metadata="$1"
+  image="$2"
+  product=$(getprop ro.product.name 2>/dev/null)
+  model=$(getprop ro.product.model 2>/dev/null)
+  soc=$(getprop ro.board.platform 2>/dev/null)
+  [ -f "$metadata" ] && [ -f "$image" ] || return 1
+  meta_product=$(abl_meta_value product "$metadata")
+  meta_model=$(abl_meta_value model "$metadata")
+  meta_soc=$(abl_meta_value soc "$metadata")
+  meta_abl_version=$(abl_meta_value abl_version "$metadata")
+  meta_sha256=$(abl_meta_value sha256 "$metadata")
+  meta_bytes=$(abl_meta_value bytes "$metadata")
+  [ "$meta_product" = "$product" ] || return 1
+  [ -n "$meta_model" ] && [ -n "$meta_soc" ] &&
+    [ -n "$meta_abl_version" ] || return 1
+  [ -n "$meta_sha256" ] && [ -n "$meta_bytes" ] || return 1
+  image_sha256=$(sha256sum "$image" | cut -d' ' -f1 | tr -d '[:space:]')
+  image_bytes=$(wc -c < "$image" | tr -d '[:space:]')
+  [ "$meta_sha256" = "$image_sha256" ] || return 1
+  [ "$meta_bytes" = "$image_bytes" ] || return 1
+  if [ "$meta_model" != "unknown" ] && [ "$meta_model" != "$model" ]; then
+    return 1
+  fi
+  if [ "$meta_soc" != "unknown" ] && [ "$meta_soc" != "$soc" ]; then
+    return 1
+  fi
+  return 0
+}
+
+# Download $1 into $2 using whichever fetcher is available.
+download_url() {
+  if command -v wget >/dev/null 2>&1; then
+    timeout 60 wget -O "$2" "$1" >/dev/null 2>&1
+  elif command -v curl >/dev/null 2>&1; then
+    timeout 60 curl -fL -o "$2" "$1" >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
 # Fetch an older ABL with the GBL vulnerability. Looks up the local module
 # bundle first, then the cloud. On success, leaves the image at
 # $RUNTIME_DIR/repo_abl.img and returns 0; otherwise returns 1.
@@ -245,20 +319,30 @@ fetch_abl_from_repo() {
   [ -z "$product" ] && return 1
   local_dir="$MODPATH/ablrepo/$product"
   if [ -f "$local_dir/abl.img" ]; then
-    if [ -f "$local_dir/abl.sha256" ] && verify_sha256 "$local_dir/abl.img" "$local_dir/abl.sha256"; then
-      cp "$local_dir/abl.img" "$RUNTIME_DIR/repo_abl.img"
+    if [ ! -f "$local_dir/abl.sha256" ] ||
+       ! verify_sha256 "$local_dir/abl.img" "$local_dir/abl.sha256"; then
+      ui_print "$T_ABLREPO_LOCAL_BAD"
+    elif ! verify_abl_metadata "$local_dir/abl.meta" "$local_dir/abl.img"; then
+      ui_print "$T_ABL_META_FAIL"
+    elif ! cp "$local_dir/abl.img" "$RUNTIME_DIR/repo_abl.img"; then
+      ui_print "$T_ABLREPO_LOCAL_BAD"
+    else
       ui_print "$T_ABLREPO_LOCAL"
       return 0
     fi
-    ui_print "$T_ABLREPO_LOCAL_BAD"
   fi
   ui_print "$T_ABLREPO_CLOUD"
-  if download_url "$ABLREPO_URL/$product/abl.sha256" "$RUNTIME_DIR/repo_abl.sha256" && \
+  if download_url "$ABLREPO_URL/$product/abl.meta" "$RUNTIME_DIR/repo_abl.meta" &&
+     download_url "$ABLREPO_URL/$product/abl.sha256" "$RUNTIME_DIR/repo_abl.sha256" &&
      download_url "$ABLREPO_URL/$product/abl.img" "$RUNTIME_DIR/repo_abl.img"; then
-    if verify_sha256 "$RUNTIME_DIR/repo_abl.img" "$RUNTIME_DIR/repo_abl.sha256"; then
+    if ! verify_sha256 "$RUNTIME_DIR/repo_abl.img" "$RUNTIME_DIR/repo_abl.sha256"; then
+      ui_print "$T_ABLREPO_CLOUD_BAD"
+    elif ! verify_abl_metadata "$RUNTIME_DIR/repo_abl.meta" \
+         "$RUNTIME_DIR/repo_abl.img"; then
+      ui_print "$T_ABL_META_FAIL"
+    else
       return 0
     fi
-    ui_print "$T_ABLREPO_CLOUD_BAD"
   fi
   return 1
 }
@@ -267,15 +351,38 @@ ABL_TZMAP="$MODPATH/bin/abl_tzmap"
 abl_part="$BY_NAME_DIR/abl$current_slot_suffix"
 vbmeta_part="$BY_NAME_DIR/vbmeta$current_slot_suffix"
 
+preflight_candidate_abl() {
+  candidate="$1"
+  candidate_dir="$RUNTIME_DIR/candidate"
+  rm -rf "$candidate_dir"
+  mkdir -p "$candidate_dir" || return 1
+  if ! "$MODPATH/bin/extractfv" -o "$candidate_dir" -v "$candidate" \
+       > "$RUNTIME_DIR/candidate.extract.log" 2>&1 ||
+     ! "$MODPATH/bin/patch_abl" "$candidate_dir/LinuxLoader.efi" \
+       "$candidate_dir/patched.efi" > "$RUNTIME_DIR/candidate.patch.log" 2>&1 ||
+     [ ! -s "$candidate_dir/patched.efi" ]; then
+    return 1
+  fi
+  if grep -q "Warning: Failed to patch ABL GBL" \
+       "$RUNTIME_DIR/candidate.patch.log"; then
+    return 1
+  fi
+  return 0
+}
+
 preflight_current_pair() {
   rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" \
     "$RUNTIME_DIR/patch.log" "$RUNTIME_DIR/boot.efi.gm2p" \
     "$RUNTIME_DIR/boot.efi.tzmap"
+  CURRENT_PAIR_GBL_VULNERABLE=1
   if ! "$MODPATH/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl_part" > "$RUNTIME_DIR/extract.log" 2>&1 ||
      ! "$MODPATH/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" > "$RUNTIME_DIR/patch.log" 2>&1 ||
      [ ! -s "$RUNTIME_DIR/patched.efi" ]; then
     ui_print "$T_PATCH_FAIL"
     return 1
+  fi
+  if grep -q "Warning: Failed to patch ABL GBL" "$RUNTIME_DIR/patch.log"; then
+    CURRENT_PAIR_GBL_VULNERABLE=0
   fi
   if [ ! -x "$MODE2_PROFILE" ] ||
      ! "$MODE2_PROFILE" derive --vbmeta "$vbmeta_part" --out "$RUNTIME_DIR/boot.efi.gm2p" > "$RUNTIME_DIR/profile.log" 2>&1 ||
@@ -297,6 +404,126 @@ preflight_current_pair() {
     rm -f "$RUNTIME_DIR/boot.efi.tzmap"
     return 1
   fi
+  return 0
+}
+
+abl_source_bytes() {
+  if [ -b "$1" ]; then
+    blockdev --getsize64 "$1" 2>/dev/null
+    return
+  fi
+  wc -c < "$1" 2>/dev/null | tr -d '[:space:]'
+}
+
+abl_hash() {
+  sha256sum "$1" 2>/dev/null | cut -d' ' -f1 | tr -d '[:space:]'
+}
+
+# Hash the first $2 bytes of $1 without materialising a copy: a byte-at-a-time
+# readback of a firmware partition costs minutes on device.
+abl_region_hash() {
+  region_dev="$1"
+  region_bytes="$2"
+  region_blocks=$(( (region_bytes + 4095) / 4096 ))
+  dd if="$region_dev" bs=4096 count="$region_blocks" 2>/dev/null |
+    head -c "$region_bytes" | sha256sum | cut -d' ' -f1 | tr -d '[:space:]'
+}
+
+restore_abl_snapshot() {
+  restore_target="$1"
+  restore_snapshot="$2"
+  restore_bytes="$3"
+  if ! dd if="$restore_snapshot" of="$restore_target" bs=4M conv=fsync \
+       >> "$RUNTIME_DIR/flash.log" 2>&1 ||
+     ! sync; then
+    return 1
+  fi
+  [ "$(abl_hash "$restore_snapshot")" = \
+    "$(abl_region_hash "$restore_target" "$restore_bytes")" ]
+}
+
+flash_abl_image() {
+  flash_source="$1"
+  flash_target="$2"
+  flash_snapshot="$3"
+  ABL_FLASH_STATUS=""
+  flash_target_bytes=$(blockdev --getsize64 "$flash_target" 2>/dev/null)
+  flash_source_bytes=$(abl_source_bytes "$flash_source")
+  case "$flash_target_bytes" in ''|*[!0-9]*) ABL_FLASH_STATUS=size; return 1 ;; esac
+  case "$flash_source_bytes" in ''|*[!0-9]*) ABL_FLASH_STATUS=size; return 1 ;; esac
+  if [ "$flash_source_bytes" -le 0 ] ||
+     [ "$flash_source_bytes" -gt "$flash_target_bytes" ]; then
+    ABL_FLASH_STATUS=size
+    return 1
+  fi
+  if ! blockdev --setrw "$flash_target" >> "$RUNTIME_DIR/flash.log" 2>&1; then
+    ABL_FLASH_STATUS=setrw
+    return 1
+  fi
+  rm -f "$flash_snapshot"
+  if ! dd if="$flash_target" of="$flash_snapshot" bs=4M conv=fsync \
+       >> "$RUNTIME_DIR/flash.log" 2>&1 ||
+     ! sync; then
+    ABL_FLASH_STATUS=snapshot
+    return 1
+  fi
+  if ! dd if="$flash_source" of="$flash_target" bs=4M conv=fsync \
+       >> "$RUNTIME_DIR/flash.log" 2>&1; then
+    ABL_FLASH_STATUS=flash
+    return 1
+  fi
+  if ! sync; then
+    ABL_FLASH_STATUS=sync
+    return 1
+  fi
+  if [ "$(abl_hash "$flash_source")" != \
+       "$(abl_region_hash "$flash_target" "$flash_source_bytes")" ]; then
+    if restore_abl_snapshot "$flash_target" "$flash_snapshot" \
+         "$flash_target_bytes"; then
+      ABL_FLASH_STATUS=readback_restore_ok
+    else
+      ABL_FLASH_STATUS=readback_restore_fail
+    fi
+    return 1
+  fi
+  return 0
+}
+
+abl_is_gbl_vulnerable() {
+  inspect_abl="$1"
+  inspect_dir="$2"
+  rm -rf "$inspect_dir"
+  mkdir -p "$inspect_dir" || return 1
+  if ! "$MODPATH/bin/extractfv" -o "$inspect_dir" -v "$inspect_abl" \
+       > "$inspect_dir/extract.log" 2>&1 ||
+     ! "$MODPATH/bin/patch_abl" "$inspect_dir/LinuxLoader.efi" \
+       "$inspect_dir/patched.efi" > "$inspect_dir/patch.log" 2>&1; then
+    return 1
+  fi
+  if ! grep -q "Warning: Failed to patch ABL GBL" "$inspect_dir/patch.log"; then
+    return 0
+  fi
+  return 1
+}
+
+pair_inactive_abl() {
+  inactive_slot_suffix=
+  case "$current_slot_suffix" in
+    _a) inactive_slot_suffix=_b ;;
+    _b) inactive_slot_suffix=_a ;;
+    *) ui_print "$T_INACTIVE_SLOT_UNRESOLVED"; return 0 ;;
+  esac
+  inactive_abl_part="$BY_NAME_DIR/abl$inactive_slot_suffix"
+  if abl_is_gbl_vulnerable "$inactive_abl_part" "$RUNTIME_DIR/inactive-abl"; then
+    ui_print "$T_INACTIVE_SLOT_VULN_SKIP"
+    return 0
+  fi
+  ui_print "$T_INACTIVE_SLOT_PAIRING"
+  if flash_abl_image "$abl_part" "$inactive_abl_part" \
+       "$RUNTIME_DIR/inactive_abl_pre.img"; then
+    return 0
+  fi
+  ui_print "$T_INACTIVE_SLOT_PAIR_WARN"
   return 0
 }
 
@@ -757,7 +984,9 @@ while true; do
     if ! pair_recover "$EFISP_DIR"; then
       abort "pair transaction recovery failed before optional patch"
     fi
-    if grep -q "Warning: Failed to patch ABL GBL" "$RUNTIME_DIR/patch.log"; then
+    initial_pair_gbl_vulnerable="$CURRENT_PAIR_GBL_VULNERABLE"
+    abl_downgrade_done=0
+    if [ "$initial_pair_gbl_vulnerable" = "0" ]; then
       ui_print "$T_NO_GBL"
       ui_print "$T_ABLREPO_CONFIRM"
       ui_print "$T_ABLREPO_CONFIRM_YES"
@@ -779,24 +1008,61 @@ while true; do
         ui_print "$T_ABLREPO_FAIL"
         abort "abl repo lookup failed"
       fi
+      if ! preflight_candidate_abl "$RUNTIME_DIR/repo_abl.img"; then
+        ui_print "$T_ABL_CANDIDATE_FAIL"
+        abort "candidate ABL preflight failed"
+      fi
       ui_print "$T_ABLREPO_DOWNGRADE"
       if ! pair_recover "$EFISP_DIR"; then
         abort "pair transaction recovery failed before ABL downgrade"
       fi
-
-      if ! blockdev --setrw "$abl_part" >> "$RUNTIME_DIR/flash.log" 2>&1; then
-        ui_print "$T_ABL_SETRW_FAIL"
-        abort "setrw abl failed"
+      if ! flash_abl_image "$RUNTIME_DIR/repo_abl.img" "$abl_part" \
+           "$RUNTIME_DIR/abl_pre.img"; then
+        case "$ABL_FLASH_STATUS" in
+          setrw)
+            ui_print "$T_ABL_SETRW_FAIL"
+            abort "setrw abl failed"
+            ;;
+          size)
+            ui_print "$T_ABL_SIZE_FAIL"
+            abort "abl image does not fit"
+            ;;
+          snapshot)
+            ui_print "$T_ABL_SNAPSHOT_FAIL"
+            abort "abl snapshot failed"
+            ;;
+          readback_restore_ok)
+            ui_print "$T_ABL_RESTORE_OK"
+            abort "abl readback mismatch; restore succeeded"
+            ;;
+          readback_restore_fail)
+            ui_print "$T_ABL_RESTORE_FAIL"
+            abort "abl readback mismatch; restore failed"
+            ;;
+          sync)
+            ui_print "$T_ABL_FLASH_FAIL"
+            abort "sync downgraded abl failed"
+            ;;
+          *)
+            ui_print "$T_ABL_FLASH_FAIL"
+            abort "downgrade abl failed"
+            ;;
+        esac
       fi
-      if ! dd if="$RUNTIME_DIR/repo_abl.img" of="$abl_part" bs=4M conv=fsync >> "$RUNTIME_DIR/flash.log" 2>&1; then
-        ui_print "$T_ABL_FLASH_FAIL"
-        abort "downgrade abl failed"
+      if ! preflight_current_pair; then
+        abort "ABL/vbmeta/profile preflight after downgrade failed"
       fi
-      if ! sync; then
-        ui_print "$T_ABL_FLASH_FAIL"
-        abort "sync downgraded abl failed"
+      if [ "$CURRENT_PAIR_GBL_VULNERABLE" != "1" ]; then
+        ui_print "$T_ABL_DOWNGRADE_GBL_FAIL"
+        abort "downgraded ABL is not GBL-vulnerable"
       fi
+      abl_downgrade_done=1
       ui_print "$T_ABLREPO_OK"
+    fi
+    if [ "$initial_pair_gbl_vulnerable" = "0" ] &&
+       [ "$abl_downgrade_done" != "1" ]; then
+      ui_print "$T_ABL_NO_DOWNGRADE"
+      abort "non-vulnerable ABL was not downgraded"
     fi
 
     ui_print "$T_PLACE_BOOT"
@@ -818,6 +1084,15 @@ while true; do
       fi
       ui_print "$T_EFISP_WRITE_FAIL"
       abort "efisp pair write failed"
+    fi
+    if ! "$ABL_TZMAP" verify --sidecar "$EFISP_DIR/boot.efi.tzmap" \
+         --abl "$RUNTIME_DIR/LinuxLoader.efi" --allow-zero-digest \
+         >> "$RUNTIME_DIR/tzmap.log" 2>&1; then
+      if ! pair_restore "$EFISP_DIR"; then
+        ui_print "$T_EFISP_WRITE_FAIL"
+      fi
+      ui_print "$T_TZMAP_BIND_FAIL"
+      abort "ABL TrustZone map binding failed"
     fi
 
     ui_print "$T_FLASH_BDS"
@@ -877,6 +1152,7 @@ while true; do
         abort "efisp pair commit failed"
         ;;
     esac
+    pair_inactive_abl
     ui_print "$T_DONE_YES"
     rm -rf "$RUNTIME_DIR"
     break
