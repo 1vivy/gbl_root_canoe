@@ -177,6 +177,11 @@ pub enum VerifyFileError {
     ZeroDigest,
     #[error("sidecar digest mismatch: sidecar={sidecar}, actual={actual}")]
     DigestMismatch { sidecar: String, actual: String },
+    #[error(
+        "ABL input is not a regular file: {0}. The digest covers the extracted, \
+         unpatched loader, never the abl partition; extract it first."
+    )]
+    AblNotRegularFile(String),
 }
 
 pub fn verify_file(
@@ -191,6 +196,12 @@ pub fn verify_file(
     let zero_digest = map.abl_digest == [0; 32];
     if zero_digest && !allow_zero_digest {
         return Err(VerifyFileError::ZeroDigest);
+    }
+    let abl_meta = fs::metadata(abl_path).map_err(VerifyFileError::ReadAbl)?;
+    if !abl_meta.is_file() {
+        return Err(VerifyFileError::AblNotRegularFile(
+            abl_path.display().to_string(),
+        ));
     }
     let mut file = File::open(abl_path).map_err(VerifyFileError::ReadAbl)?;
     let mut bytes = Vec::new();

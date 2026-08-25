@@ -44,6 +44,24 @@ fn mismatching_digest_fails_with_both_digests() {
 }
 
 #[test]
+fn non_regular_abl_input_is_refused() {
+    let abl = b"fixture ABL";
+    let (directory, sidecar, _abl_path) = fixture(abl_digest(abl));
+    // A partition path is the mistake this refusal exists for; a directory is
+    // the portable stand-in for "not a regular file".
+    let not_a_file = directory.path().join("as-a-directory");
+    fs::create_dir(&not_a_file).expect("create directory");
+
+    let error = verify_file(&sidecar, &not_a_file, false).expect_err("must refuse");
+    match error {
+        VerifyFileError::AblNotRegularFile(path) => {
+            assert!(path.ends_with("as-a-directory"), "unexpected path: {path}");
+        }
+        other => panic!("expected non-regular-file refusal, got {other:?}"),
+    }
+}
+
+#[test]
 fn truncated_and_oversized_sidecars_fail_to_parse() {
     let (_directory, sidecar, abl_path) = fixture(abl_digest(b"fixture ABL"));
     fs::write(&sidecar, vec![0u8; TZMAP_SIZE - 1]).expect("write truncated sidecar");
