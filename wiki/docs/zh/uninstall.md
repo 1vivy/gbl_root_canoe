@@ -31,6 +31,32 @@
    ```bash
    fastboot -w
    ```
+ 
+## 补充参考：没有官方 fastboot
+
+> **孤立参考页面：** 本页不属于主安装流程。
+
+如果设备永远不会出现官方 fastboot，唯一可用的 fastboot 是 BDS 提供的
+superfastboot，请在同一次会话中完成回锁和启动链擦除：
+
+1. 从 BDS 进入 **superfastboot**。
+2. 按以下顺序执行：
+
+   ```bash
+   fastboot flashing lock
+   fastboot erase efisp
+   ```
+
+本项目的所有锁定状态 hook 都会有意将真实的 RPMB/DeviceInfo 状态改写为
+**未锁定**，而不是仅吞掉写入；正是这样才能避免红屏。因此，链式加载的
+ABL 运行期间设备确实处于解锁状态，必须趁 superfastboot 仍可进入时，在其中
+执行回锁。
+
+顺序不可颠倒。`fastboot flashing lock` 必须在启动链仍存在时完成；如果先擦除
+`efisp`，投影会停止，之后可能没有官方 fastboot 可用于回锁。对于确实提供
+官方 fastboot 的设备，请改用上面的[常规卸载步骤](./uninstall.md#3-卸载步骤)。
+
+
 
 
 ## ⚠️ 注意事项
