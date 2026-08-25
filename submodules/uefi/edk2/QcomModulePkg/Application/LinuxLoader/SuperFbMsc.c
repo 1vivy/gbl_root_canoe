@@ -228,6 +228,9 @@ SfbMscExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo, IN CONST CHAR8 *Tag)
   DEBUG ((EFI_D_INFO, "SFB: MARK msc-started target=%a\n",
           (Tag != NULL) ? Tag : "?"));
 
+  /* Pump exactly like the Mu-Silicium reference client: EventHandler back to
+   * back, no stall - the driver is poll-driven and the bulk endpoints answer
+   * only from inside this call. */
   while (TRUE) {
     if (SfbMscCancelled ()) {
       Cancelled = TRUE;
@@ -240,7 +243,6 @@ SfbMscExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo, IN CONST CHAR8 *Tag)
        * is over either way. */
       break;
     }
-    gBS->Stall (1000);
   }
 
   Msd->StopDevice (Msd);
