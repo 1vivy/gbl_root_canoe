@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""canoe_fatimg - build and inspect the host-side efisp FAT image."""
+"""canoe_fatimg - rewrite and verify efisp FAT image trailers."""
 
 from __future__ import annotations
 
