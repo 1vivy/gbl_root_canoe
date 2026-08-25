@@ -196,11 +196,24 @@ STATIC CONST UINT8 mMscSerial[] = {
   12, USB_DESC_TYPE_STRING, 'c', 0, 'a', 0, 'n', 0, 'o', 0, 'e', 0
 };
 
+/*
+ * Both interface descriptors reference this as iInterface = 4. With the table
+ * ending at index 3 the platform stalls GET_DESCRIPTOR(string 4), and the host
+ * abandons the device after a few retries: observed on hardware as a stall
+ * storm (bRequest 0x06, wValue 0x0304) followed by the disk vanishing.
+ */
+STATIC CONST UINT8 mMscInterface[] = {
+  26, USB_DESC_TYPE_STRING,
+  'M', 0, 'a', 0, 's', 0, 's', 0, ' ', 0,
+  'S', 0, 't', 0, 'o', 0, 'r', 0, 'a', 0, 'g', 0, 'e', 0
+};
+
 STATIC EFI_USB_STRING_DESCRIPTOR *mMscStrings[] = {
   (EFI_USB_STRING_DESCRIPTOR *)mMscString0,
   (EFI_USB_STRING_DESCRIPTOR *)mMscManufacturer,
   (EFI_USB_STRING_DESCRIPTOR *)mMscProduct,
-  (EFI_USB_STRING_DESCRIPTOR *)mMscSerial
+  (EFI_USB_STRING_DESCRIPTOR *)mMscSerial,
+  (EFI_USB_STRING_DESCRIPTOR *)mMscInterface
 };
 
 /*
@@ -274,7 +287,7 @@ SfbMscBuildDescriptorSet (OUT USB_DEVICE_DESCRIPTOR_SET *DescriptorSet)
   DescriptorSet->SSDescriptors = mMscSsDescriptors;
   DescriptorSet->DeviceQualifierDescriptor = &mMscDeviceQualifier;
   DescriptorSet->BinaryDeviceOjectStore = (VOID *)&mMscBinaryObjectStore;
-  DescriptorSet->StringDescriptorCount = 4;
+  DescriptorSet->StringDescriptorCount = 5;
   DescriptorSet->StringDescritors = mMscStrings;
   return EFI_SUCCESS;
 }
