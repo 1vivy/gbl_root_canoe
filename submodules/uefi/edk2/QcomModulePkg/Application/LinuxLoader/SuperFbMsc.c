@@ -216,12 +216,17 @@ VOID
 SfbMscDrainKeys (VOID)
 {
   EFI_INPUT_KEY Key;
+  UINTN         Drained = 0;
 
   if (gST == NULL || gST->ConIn == NULL) {
     return;
   }
   while (!EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
-    /* Nothing: the point is to empty the queue. */
+    Drained++;
+  }
+  if (Drained != 0) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-drained keys=%u last-scan=0x%x\n",
+            (UINT32)Drained, Key.ScanCode));
   }
 }
 
@@ -242,6 +247,10 @@ SfbMscCancelled (VOID)
   if (EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
     return FALSE;
   }
+  /* Sessions end with reason=cancelled and no operator keypress: log every
+   * key the run loop sees so the phantom source is named, not guessed. */
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-key scancode=0x%x char=0x%x\n",
+          Key.ScanCode, Key.UnicodeChar));
   return (BOOLEAN)(Key.ScanCode == SCAN_DOWN);
 }
 
