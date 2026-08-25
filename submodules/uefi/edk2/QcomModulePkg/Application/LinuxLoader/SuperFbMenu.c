@@ -394,24 +394,11 @@ SfbFindGptVolume (
   return (*Volume == NULL) ? EFI_NOT_FOUND : EFI_SUCCESS;
 }
 
-STATIC
-VOID
-SfbMscName (OUT CHAR8 *Destination, IN UINTN Length, IN CONST CHAR8 *Source)
-{
-  UINTN Index;
-
-  for (Index = 0; Index < Length; Index++) {
-    Destination[Index] = (Source != NULL && Source[Index] != '\0') ?
-                         Source[Index] : ' ';
-  }
-}
-
 /*
- * Export exactly one LUN. The platform's device state machine stalls the
- * class-specific Get Max LUN request (it answers standard requests only),
- * which the BOT spec permits precisely for single-LUN devices - the host
- * assumes LUN 0 and carries on, as observed on hardware. Offering two LUNs
- * would advertise the second through a handshake we cannot complete.
+ * Export exactly one disk, chosen by the operator. The platform's UsbMsdDxe
+ * owns everything above the BlockIo we hand it - descriptors, enumeration,
+ * the EP0 class requests (Get Max LUN, BOT reset), BOT and SCSI - so one
+ * assigned LUN is the whole contract.
  */
 STATIC
 EFI_STATUS
@@ -434,7 +421,6 @@ SfbRunMassStorageMode (VOID)
   UINTN                   RowCount;
   UINTN                   Cursor = 0;
   UINTN                   Index;
-  SFB_MSC_LUN             Lun;
   SFB_KEY                 Key;
 
   Status = SfbFindGptVolume (L"persist", &PersistVolume, &PersistBlockIo);
@@ -519,25 +505,17 @@ SfbRunMassStorageMode (VOID)
     return EFI_SUCCESS;
   }
 
-  ZeroMem (&Lun, sizeof (Lun));
-  Lun.BlockIo  = Disks[Cursor];
-  Lun.ReadOnly = ReadOnly[Cursor];
-  SfbMscName (Lun.Vendor, sizeof (Lun.Vendor), "CANOE");
-  SfbMscName (Lun.Product, sizeof (Lun.Product), Tags[Cursor]);
-
   /*
-   * Draw the export screen and hand straight over to SfbMscRun: any key wait
-   * here would both delay the device start and then satisfy the run loop's
-   * cancel test, so the session would die before it could enumerate.
+   * Draw the export screen and hand straight over to SfbMscExportDisk: any
+   * key wait here would both delay the device start and then satisfy the run
+   * loop's cancel test, so the session would die before it could enumerate.
    */
   SfbBeginScreen (L"USB Mass Storage",
                   L"Edit the boot chain from the connected PC.");
   Print (L"Exporting: %s\r\n", Rows[Cursor]);
-  Print (L"\r\nEject the disk on the host to return,\r\n");
-  Print (L"or press Volume Down to stop.\r\n");
-  DEBUG ((EFI_D_INFO, "SFB: MARK msc-export target=%a\n", Tags[Cursor]));
+  Print (L"\r\nUnplug the cable or press Volume Down to stop.\r\n");
 
-  Status = SfbMscRun (&Lun, 1);
+  Status = SfbMscExportDisk (Disks[Cursor], Tags[Cursor]);
   if (WindowHandle != NULL) {
     SfbCloseFileWindow (WindowHandle);
   }

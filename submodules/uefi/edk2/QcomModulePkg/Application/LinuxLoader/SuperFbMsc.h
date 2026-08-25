@@ -1,5 +1,5 @@
 /*
- * USB mass-storage Bulk-Only Transport target.
+ * USB mass-storage export over the platform's EFI_USB_MSD_PROTOCOL.
  *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -8,59 +8,19 @@
 #ifndef __SUPER_FB_MSC_H__
 #define __SUPER_FB_MSC_H__
 
-#include "SuperFbMscScsi.h"
+#include <Uefi.h>
+#include <Protocol/BlockIo.h>
 
-#define SFB_MSC_CBW_SIGNATURE  0x43425355U
-#define SFB_MSC_CSW_SIGNATURE  0x53425355U
-#define SFB_MSC_CBW_BYTES      31
-#define SFB_MSC_CSW_BYTES      13
-#define SFB_MSC_TRANSFER_BYTES (64 * 1024)
-
-#pragma pack(1)
-typedef struct {
-  UINT32 Signature;
-  UINT32 Tag;
-  UINT32 DataTransferLength;
-  UINT8  Flags;
-  UINT8  Lun;
-  UINT8  CdbLength;
-  UINT8  Cdb[16];
-} SFB_MSC_CBW;
-
-typedef struct {
-  UINT32 Signature;
-  UINT32 Tag;
-  UINT32 DataResidue;
-  UINT8  Status;
-} SFB_MSC_CSW;
-#pragma pack()
-
-/* The CSW reaches the wire as a byte copy of this struct, so its packed layout
- * IS the protocol. Assert it here rather than discover it as a host-side
- * "invalid CSW" that only reproduces on a device. */
-STATIC_ASSERT (sizeof (SFB_MSC_CSW) == SFB_MSC_CSW_BYTES,
-               "BOT command status wrapper must be exactly 13 bytes");
-
+/*
+ * Export one disk to the connected PC as USB mass-storage LUN 0. Returns
+ * EFI_ABORTED when the operator stopped the session with Volume Down,
+ * EFI_SUCCESS when the host side ended it (unplug or link loss), or the
+ * platform error if the session could not be started at all.
+ */
 EFI_STATUS
-SfbMscParseCbw (
-  IN CONST VOID *Buffer,
-  IN UINTN       BufferBytes,
-  OUT SFB_MSC_CBW *Cbw,
-  IN UINTN       LunCount
-  );
+SfbMscExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo, IN CONST CHAR8 *Tag);
 
-VOID
-SfbMscBuildCsw (
-  OUT SFB_MSC_CSW *Csw,
-  IN UINT32        Tag,
-  IN UINT32        Residue,
-  IN UINT8         Status
-  );
-
-EFI_STATUS
-SfbMscRun (IN CONST SFB_MSC_LUN *Luns, IN UINTN LunCount);
 VOID
 SfbUsbCensus (VOID);
-
 
 #endif

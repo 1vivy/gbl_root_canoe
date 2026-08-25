@@ -97,13 +97,10 @@
 	SuperFbFileWindow.c
 	SuperFbConfig.h
 	SuperFbConfig.c
-	# USB mass storage target, driven from the boot menu over the same
-	# EFI_USB_DEVICE_PROTOCOL that fastboot uses.
+	# USB mass storage export, driven from the boot menu over the platform's
+	# own EFI_USB_MSD_PROTOCOL (the vendor UsbMsdDxe owns BOT and SCSI).
 	SuperFbMsc.h
 	SuperFbMsc.c
-	SuperFbMscScsi.h
-	SuperFbMscScsi.c
-	SuperFbMscDescriptors.c
 
 [Packages]
 	ArmPkg/ArmPkg.dec

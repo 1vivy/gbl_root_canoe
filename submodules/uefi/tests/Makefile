@@ -3,7 +3,7 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
 .PHONY: test clean
 
-test: test_store_mode test_profile test_tzmap test_fat test_hooks test_launch test_filewindow test_msc
+test: test_store_mode test_profile test_tzmap test_fat test_hooks test_launch test_filewindow
 	./test_store_mode
 	./test_profile
 	./test_tzmap
@@ -11,7 +11,6 @@ test: test_store_mode test_profile test_tzmap test_fat test_hooks test_launch te
 	./test_hooks
 	./test_launch
 	./test_filewindow
-	./test_msc
 
 test_store_mode: test_store_mode.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbStore.c \
@@ -67,15 +66,5 @@ test_filewindow: test_filewindow.c \
 		-fshort-wchar $(HOOK_INCLUDES) -o $@ test_filewindow.c \
 		../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbFileWindow.c
 
-test_msc: test_msc.c \
-	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMsc.c \
-	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMsc.h \
-	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMscScsi.c \
-	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMscScsi.h
-	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -Wno-unused-function -fno-builtin \
-		-fshort-wchar $(HOOK_INCLUDES) -o $@ test_msc.c \
-		../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMsc.c \
-		../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMscScsi.c
-
 clean:
-	rm -f test_store_mode test_profile test_tzmap test_fat test_hooks test_launch test_filewindow test_msc
+	rm -f test_store_mode test_profile test_tzmap test_fat test_hooks test_launch test_filewindow
