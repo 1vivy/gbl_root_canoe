@@ -8,6 +8,7 @@ const state = {
   pendingAction: null,
   moduleDir: "",
   scriptPath: "",
+  fatScriptPath: "",
   status: null,
   pollTimer: null,
   pollInFlight: false,
@@ -52,6 +53,15 @@ const i18n = {
     toastStartBdsTools: "BDS/Tools 更新任务已启动",
     toastBdsToolsDone: "BDS/Tools 更新任务运行成功",
     clearLog: "清空日志",
+    fatSection: "USB 存储文件窗口",
+    fatSize: "文件大小（字节）",
+    fatImage: "主机镜像暂存路径（可选）",
+    fatProvision: "创建 / 写入 FAT 文件",
+    fatVerify: "验证 FAT 文件",
+    fatRestamp: "重新写入 extent stamp",
+    fatWaiting: "等待 FAT 操作",
+    fatStamp: "Stamp: 未验证",
+    fatRuns: "Extent runs: -",
     updateEfisp: "更新 efisp（默认开启）",
     debugMode: "调试模式（仅处理不刷写，efisp 目录使用模块 tmp/efisp）",
     lblPatchVendorBoot: "修补 vendor_boot 分区",
@@ -126,9 +136,18 @@ const i18n = {
     modeProfileToolMissing: "mode2_profile is missing; reinstall the module",
     flash: "Flash To Other Slot",
     bdsTools: "Update BDS & Tools Only",
-    patchPart: "Patch Partitions",
-    confirmBdsTools: "Confirm BDS/Tools Update",
-    confirmPatchPart: "Confirm Partition Patch",
+    clearLog: "Clear Log",
+    fatSection: "USB storage file window",
+    fatSize: "File size (bytes)",
+    fatImage: "Host image staging path (optional)",
+    fatProvision: "Create / write FAT file",
+    fatVerify: "Verify FAT file",
+    fatRestamp: "Restamp extents",
+    fatWaiting: "Waiting for FAT operation",
+    fatStamp: "Stamp: not verified",
+    fatRuns: "Extent runs: -",
+    updateEfisp: "Update efisp (on by default)",
+    debugMode: "Debug Mode (process only, no flash; efisp dir uses module tmp/efisp)",
     modalBdsStep1: "Will flash BDS.efi to the efisp partition and replace the persist boot root with the bundled efisp folder (BOOTENTRIES and tools). The ABL and boot.efi are not touched.",
     modalBdsStep2: "2nd Confirm: This is a high-risk write. A wrong BDS or efisp write may prevent the boot menu from loading. It starts immediately after confirm.",
     modalPatchStep1: "Will patch the active slot with selected options. No actual patch in debug mode.",
@@ -186,12 +205,12 @@ const i18n = {
     confirmSlot: "Please confirm slot is correct.",
     taskRunning:"Task Running",
     waitOperate:"Waiting",
-    copyPart:"Copy",
-    statusReadFail:"Status Read Failed",
-    startFail:"Start Failed"
+    patchPart: "Patch Partitions",
+    copyPart: "Copy",
+    statusReadFail: "Status Read Failed",
+    startFail: "Start Failed"
   }
 };
-
 const elements = {
   stateChip: document.getElementById("stateChip"),
   slotChip: document.getElementById("slotChip"),
@@ -206,6 +225,13 @@ const elements = {
   bdsToolsButton: document.getElementById("bdsToolsButton"),
   patchPartButton: document.getElementById("patchPartButton"),
   clearLogButton: document.getElementById("clearLogButton"),
+  fatSizeInput: document.getElementById("fatSizeInput"),
+  fatImageInput: document.getElementById("fatImageInput"),
+  fatProvisionButton: document.getElementById("fatProvisionButton"),
+  fatVerifyButton: document.getElementById("fatVerifyButton"),
+  fatRestampButton: document.getElementById("fatRestampButton"),
+  fatStatusText: document.getElementById("fatStatusText"),
+  fatRunsText: document.getElementById("fatRunsText"),
   refreshButton: document.getElementById("refreshButton"),
   preferredModeSelect: document.getElementById("preferredModeSelect"),
   saveModeButton: document.getElementById("saveModeButton"),
@@ -259,9 +285,6 @@ function applyLanguage(lang) {
   if (elements.stateChip.textContent === "等待检测" || elements.stateChip.textContent === "Waiting") {
     elements.stateChip.textContent = t.waitingStatus;
   }
-  if (elements.slotChip.textContent === "槽位未知" || elements.slotChip.textContent === "Slot Unknown") {
-    elements.slotChip.textContent = t.slotUnknown;
-  }
   document.querySelectorAll("[data-i18n]").forEach(el => {
     const key = el.dataset.i18n;
     if (t[key]) el.textContent = t[key];
@@ -277,9 +300,9 @@ function moduleInfo() {
   return typeof raw === "string" ? JSON.parse(raw) : raw;
 }
 
-async function runScript(action, arg) {
-  const parts = [`MODDIR=${shellQuote(state.moduleDir)}`, "sh", shellQuote(state.scriptPath), action];
-  if (arg) parts.push(shellQuote(arg));
+async function runScriptAt(path, action, ...args) {
+  const parts = [`MODDIR=${shellQuote(state.moduleDir)}`, "sh", shellQuote(path), action];
+  args.filter(arg => arg !== undefined && arg !== "").forEach(arg => parts.push(shellQuote(arg)));
   const command = parts.join(" ");
   const timeout = new Promise((_, reject) => {
     setTimeout(() => reject(new Error("KernelSU exec timeout")), 8000);
@@ -291,6 +314,9 @@ async function runScript(action, arg) {
     throw error;
   }
   return stdout || "";
+}
+async function runScript(action, ...args) {
+  return runScriptAt(state.scriptPath, action, ...args);
 }
 function parseKeyValueOutput(output) {
   const info = {};
@@ -691,6 +717,34 @@ async function clearLog() {
   } catch (e) { toast(`${state.lang === "zh" ? "清空失败" : "Clear Failed"}: ${e.message}`); }
   await manualRefresh();
 }
+function renderFatResult(raw) {
+  const info = parseKeyValueOutput(raw);
+  const t = i18n[state.lang];
+  if (info.RUN_COUNT !== undefined) elements.fatRunsText.textContent = `${t.fatRuns.replace(": -", ":")} ${info.RUN_COUNT} (${info.RUNS || "-"})`;
+  if (info.STAMP_MATCH === "1") elements.fatStatusText.textContent = `${t.fatStamp.replace("未验证", "匹配").replace("not verified", "match")}`;
+  else if (info.STAMP_MATCH === "0") elements.fatStatusText.textContent = `${t.fatStamp.replace("未验证", "不匹配").replace("not verified", "mismatch")}`;
+  elements.logOutput.textContent = `${elements.logOutput.textContent}\n${raw}`.trim();
+}
+async function runFatAction(action) {
+  const t = i18n[state.lang];
+  elements.fatProvisionButton.disabled = true;
+  elements.fatVerifyButton.disabled = true;
+  elements.fatRestampButton.disabled = true;
+  elements.fatStatusText.textContent = t.fatWaiting;
+  try {
+    const size = elements.fatSizeInput.value;
+    const image = elements.fatImageInput.value;
+    const args = action === "provision" ? [size, image] : [size];
+    renderFatResult(await runScriptAt(state.fatScriptPath, action, ...args));
+  } catch (e) {
+    elements.fatStatusText.textContent = `${t.startFail}: ${e.message}`;
+    if (e.commandOutput) renderFatResult(e.commandOutput);
+  } finally {
+    elements.fatProvisionButton.disabled = false;
+    elements.fatVerifyButton.disabled = false;
+    elements.fatRestampButton.disabled = false;
+  }
+}
 
 function schedulePoll(delay) {
   if (state.pollTimer !== null) clearTimeout(state.pollTimer);
@@ -743,6 +797,7 @@ async function init() {
     if(!info) return;
     state.moduleDir = info.moduleDir;
     state.scriptPath = `${state.moduleDir}/bin/bl_flasher.sh`;
+    state.fatScriptPath = `${state.moduleDir}/bin/canoe_fat_provision.sh`;
     initPatchCheckboxMutual();
     try {
       state.activeTaskId = localStorage.getItem("blFlasherPendingTaskId") || "";
@@ -778,6 +833,9 @@ async function init() {
   });
 
   elements.patchPartButton.addEventListener("click", () => openConfirmModal("patch-part"));
+  elements.fatProvisionButton.addEventListener("click", () => runFatAction("provision"));
+  elements.fatVerifyButton.addEventListener("click", () => runFatAction("verify"));
+  elements.fatRestampButton.addEventListener("click", () => runFatAction("restamp"));
   elements.clearLogButton.addEventListener("click", clearLog);
   elements.cancelConfirmButton.addEventListener("click", closeConfirmModal);
   elements.nextConfirmButton.addEventListener("click", handleConfirmProgress);

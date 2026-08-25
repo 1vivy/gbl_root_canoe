@@ -26,10 +26,10 @@ window.__ksuMock = {
   status: "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=other-task|PREFERRED_MODE=2|MODE_DEFAULTED=0|MODE_READ_ERROR=0|USER_LANG=en",
   failStatus: false,
   toasts: [],
-  lastStartModeCommand: "",
   startModeFailure: false,
   modeTaskNumber: 0,
   lastModeTaskId: "",
+  fatCommands: [],
 };
 window.ksu = {
   moduleInfo() {
@@ -39,6 +39,11 @@ window.ksu = {
     window.__ksuMock.toasts.push(message);
   },
   exec(command, _options, callbackName) {
+    if (command.includes("canoe_fat_provision.sh")) {
+      window.__ksuMock.fatCommands.push(command);
+      window[callbackName](0, "EXISTS=1|NON_SPARSE=1|SIZE_OK=1|RUN_COUNT=2|RUNS=100:8,200:4|EXTENT_SOURCE=filefrag|STAMP_VALID=1|STAMP_MATCH=1", "");
+      return;
+    }
     if (command.includes(" status")) {
       if (window.__ksuMock.failStatus) {
         window[callbackName](1, "", "status unavailable");
@@ -106,6 +111,20 @@ try {
     "preferred mode Save action label is missing");
   assert(localStorage.getItem("blFlasherPendingTaskId") === null,
     "stale pending task was not reconciled");
+  assert(document.querySelector("#fatProvisionButton")?.textContent === "Create / write FAT file",
+    "FAT provision control is missing");
+  assert(document.querySelector("#fatVerifyButton")?.textContent === "Verify FAT file",
+    "FAT verify control is missing");
+  assert(document.querySelector("#fatRestampButton")?.textContent === "Restamp extents",
+    "FAT restamp control is missing");
+  assert(window.__ksuMock.fatCommands.length === 0,
+    "FAT provisioning ran automatically during WebUI initialization");
+  document.querySelector("#fatVerifyButton").click();
+  await waitFor(
+    () => window.__ksuMock.fatCommands.length === 1 &&
+      document.querySelector("#fatRunsText").textContent.includes("2"),
+    "FAT verify action did not render its extent run count"
+  );
 
   window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=defaulted-task|PREFERRED_MODE=1|MODE_DEFAULTED=1|MODE_READ_ERROR=0|USER_LANG=en";
   document.querySelector("#refreshButton").click();
