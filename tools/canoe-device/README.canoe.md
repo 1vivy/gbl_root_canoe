@@ -152,6 +152,19 @@ Guarantees:
 - The BDS write is preceded by a full backup of `efisp` and followed by a
   byte-for-byte comparison of the written region; either failing restores the
   partition. The backup is pulled to the host either way.
+- On each successful install the transaction writes an informational
+  `.canoe.gen` record beside the triplet. Its exact format is
+  `CANOEG1|<bds-sha256>|<boot.efi-sha256>|<gm2p-sha256>|<tzmap-sha256>`.
+  The four digests describe the BDS image and installed files from that run;
+  tree-only installs use `-` for the BDS field. The record is snapshotted and
+  rolled back with the rest of the tree, and nothing refuses to install or boot
+  because of its contents.
+- Before replacing managed files, the transaction enumerates the boot root.
+  Entries outside the managed triplet and backup generation, `BOOTENTRIES`,
+  `tools/`, transaction markers/temporaries and `.canoe.gen` are moved into
+  `.canoe.foreign/` and reported one per line. Existing entries there are never
+  overwritten; a suffixed name is used instead. This move is transactional:
+  a failed install puts the entries back.
 - The preferred-mode record is left untouched unless `--mode N` is passed, in
   which case it is written after a successful install by an on-device
   `mode2_profile mode-write` (aligned read-modify-write, verified by reread)
