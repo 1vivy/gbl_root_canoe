@@ -203,6 +203,56 @@ STATIC EFI_USB_STRING_DESCRIPTOR *mMscStrings[] = {
   (EFI_USB_STRING_DESCRIPTOR *)mMscSerial
 };
 
+/*
+ * Binary Device Object Store.
+ *
+ * StartEx rejected a set that offered a SuperSpeed device descriptor with a NULL
+ * BOS: the device reports bcdUSB 0x0300, so the platform needs somewhere to
+ * answer GET_DESCRIPTOR(BOS) from, and refuses the whole set with
+ * EFI_INVALID_PARAMETER when there is nowhere. Values mirror the set fastboot
+ * hands the same protocol on this platform, which it demonstrably accepts;
+ * fastboot's copy is file-local, so it cannot be shared.
+ */
+STATIC CONST struct {
+  EFI_USB_BOS_DESCRIPTOR               Bos;
+  EFI_USB_USB_20_EXTENSION_DESCRIPTOR  Usb2Extension;
+  EFI_USB_SUPERSPEED_USB_DESCRIPTOR    SuperSpeed;
+  EFI_USB_SUPERSPEEDPLUS_USB_DESCRIPTOR SuperSpeedPlus;
+} mMscBinaryObjectStore = {
+  {
+    sizeof (EFI_USB_BOS_DESCRIPTOR),
+    USB_DESC_TYPE_BOS,
+    sizeof (mMscBinaryObjectStore),
+    3
+  },
+  {
+    sizeof (EFI_USB_USB_20_EXTENSION_DESCRIPTOR),
+    USB_DESC_TYPE_DEVICE_CAPABILITY,
+    USB_DEV_CAP_TYPE_USB_20_EXTENSION,
+    0x6
+  },
+  {
+    sizeof (EFI_USB_SUPERSPEED_USB_DESCRIPTOR),
+    USB_DESC_TYPE_DEVICE_CAPABILITY,
+    USB_DEV_CAP_TYPE_SUPERSPEED_USB,
+    0x00,
+    0x0E,
+    0x01,
+    0x07,
+    0x65
+  },
+  {
+    sizeof (EFI_USB_SUPERSPEEDPLUS_USB_DESCRIPTOR),
+    USB_DESC_TYPE_DEVICE_CAPABILITY,
+    USB_DEV_CAP_TYPE_SUPERSPEEDPLUS_USB,
+    0x00,
+    0x00000001,
+    0x1100,
+    0x00,
+    { 0x000A4030, 0x000A40B0 }
+  }
+};
+
 STATIC VOID *mMscHsDescriptors[] = {
   &mMscHsTree
 };
@@ -223,7 +273,7 @@ SfbMscBuildDescriptorSet (OUT USB_DEVICE_DESCRIPTOR_SET *DescriptorSet)
   DescriptorSet->SSDeviceDescriptor = &mMscSsDeviceDescriptor;
   DescriptorSet->SSDescriptors = mMscSsDescriptors;
   DescriptorSet->DeviceQualifierDescriptor = &mMscDeviceQualifier;
-  DescriptorSet->BinaryDeviceOjectStore = NULL;
+  DescriptorSet->BinaryDeviceOjectStore = (VOID *)&mMscBinaryObjectStore;
   DescriptorSet->StringDescriptorCount = 4;
   DescriptorSet->StringDescritors = mMscStrings;
   return EFI_SUCCESS;

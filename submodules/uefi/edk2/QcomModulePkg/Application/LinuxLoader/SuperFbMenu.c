@@ -324,14 +324,13 @@ SfbShowEnteringMenu (VOID)
 }
 STATIC
 BOOLEAN
-SfbGptNameIsPersist (IN CONST CHAR16 *Stored)
+SfbGptNameMatches (IN CONST CHAR16 *Stored, IN CONST CHAR16 *Want)
 {
-  STATIC CONST CHAR16 Want[] = L"persist";
-  UINTN               Index;
-  CHAR16              A;
-  CHAR16              B;
+  UINTN  Index;
+  CHAR16 A;
+  CHAR16 B;
 
-  if (Stored == NULL) {
+  if (Stored == NULL || Want == NULL) {
     return FALSE;
   }
   for (Index = 0; Index < 36 && Want[Index] != L'\0'; Index++) {
@@ -350,7 +349,8 @@ SfbGptNameIsPersist (IN CONST CHAR16 *Stored)
 
 STATIC
 EFI_STATUS
-SfbFindPersistVolume (
+SfbFindGptVolume (
+  IN CONST CHAR16              *Name,
   OUT EFI_HANDLE               *Volume,
   OUT EFI_BLOCK_IO_PROTOCOL   **BlockIo
   )
@@ -362,7 +362,7 @@ SfbFindPersistVolume (
   EFI_BLOCK_IO_PROTOCOL *Candidate;
   EFI_PARTITION_ENTRY *PartEntry;
 
-  if (Volume == NULL || BlockIo == NULL) {
+  if (Name == NULL || Volume == NULL || BlockIo == NULL) {
     return EFI_INVALID_PARAMETER;
   }
   *Volume = NULL;
@@ -383,7 +383,7 @@ SfbFindPersistVolume (
     Status = gBS->HandleProtocol (Volumes[Index], &gEfiPartitionRecordGuid,
                                   (VOID **)&PartEntry);
     if (EFI_ERROR (Status) || PartEntry == NULL ||
-        !SfbGptNameIsPersist (PartEntry->PartitionName)) {
+        !SfbGptNameMatches (PartEntry->PartitionName, Name)) {
       continue;
     }
     *Volume = Volumes[Index];
@@ -406,6 +406,13 @@ SfbMscName (OUT CHAR8 *Destination, IN UINTN Length, IN CONST CHAR8 *Source)
   }
 }
 
+/*
+ * Export exactly one LUN. The platform's device state machine stalls the
+ * class-specific Get Max LUN request (it answers standard requests only),
+ * which the BOT spec permits precisely for single-LUN devices - the host
+ * assumes LUN 0 and carries on, as observed on hardware. Offering two LUNs
+ * would advertise the second through a handshake we cannot complete.
+ */
 STATIC
 EFI_STATUS
 SfbRunMassStorageMode (VOID)
@@ -413,59 +420,124 @@ SfbRunMassStorageMode (VOID)
   EFI_STATUS              Status;
   EFI_HANDLE              PersistVolume;
   EFI_BLOCK_IO_PROTOCOL  *PersistBlockIo;
+  EFI_HANDLE              LogfsVolume;
+  EFI_BLOCK_IO_PROTOCOL  *LogfsBlockIo = NULL;
   EFI_HANDLE              WindowHandle = NULL;
-  EFI_BLOCK_IO_PROTOCOL  *WindowBlockIo;
+  EFI_BLOCK_IO_PROTOCOL  *WindowBlockIo = NULL;
   SFB_FILE_WINDOW_INFO    WindowInfo;
-  SFB_MSC_LUN             Luns[2];
-  UINTN                   LunCount = 1;
+  BOOLEAN                 WindowReady = FALSE;
+  EFI_BLOCK_IO_PROTOCOL  *Disks[3];
+  BOOLEAN                 ReadOnly[3];
+  CONST CHAR8             *Tags[3];
+  CHAR16                  Rows[4][48];
+  UINTN                   DiskCount = 0;
+  UINTN                   RowCount;
+  UINTN                   Cursor = 0;
+  UINTN                   Index;
+  SFB_MSC_LUN             Lun;
+  SFB_KEY                 Key;
 
-  Status = SfbFindPersistVolume (&PersistVolume, &PersistBlockIo);
+  Status = SfbFindGptVolume (L"persist", &PersistVolume, &PersistBlockIo);
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
-  ZeroMem (Luns, sizeof (Luns));
-  Luns[0].BlockIo = PersistBlockIo;
-  Luns[0].ReadOnly = PersistBlockIo->Media->ReadOnly;
-  SfbMscName (Luns[0].Vendor, sizeof (Luns[0].Vendor), "CANOE");
-  SfbMscName (Luns[0].Product, sizeof (Luns[0].Product), "persist");
-
+  /*
+   * Probe every candidate up front so the chooser only offers disks that can
+   * actually be exported. persist is mandatory (the file window lives on it);
+   * the efisp.fat image and logfs appear only when present.
+   */
   Status = SfbOpenFileWindow (PersistVolume, L"\\efisp.fat", &WindowHandle,
                               &WindowInfo);
   if (!EFI_ERROR (Status) && WindowHandle != NULL) {
     WindowBlockIo = SfbFileWindowBlockIo (WindowHandle);
-    if (WindowBlockIo != NULL && WindowBlockIo->Media != NULL &&
-        WindowBlockIo->Media->MediaPresent) {
-      Luns[1].BlockIo = WindowBlockIo;
-      Luns[1].ReadOnly = (BOOLEAN)(!WindowInfo.StampValid ||
-                                   WindowBlockIo->Media->ReadOnly);
-      SfbMscName (Luns[1].Vendor, sizeof (Luns[1].Vendor), "CANOE");
-      SfbMscName (Luns[1].Product, sizeof (Luns[1].Product), "efisp.fat");
-      LunCount = 2;
-    } else {
+    WindowReady = (BOOLEAN)(WindowBlockIo != NULL &&
+                            WindowBlockIo->Media != NULL &&
+                            WindowBlockIo->Media->MediaPresent);
+    if (!WindowReady) {
       SfbCloseFileWindow (WindowHandle);
       WindowHandle = NULL;
+      WindowBlockIo = NULL;
     }
+  } else {
+    WindowHandle = NULL;
+  }
+  if (EFI_ERROR (SfbFindGptVolume (L"logfs", &LogfsVolume, &LogfsBlockIo))) {
+    LogfsBlockIo = NULL;
   }
 
+  if (WindowReady) {
+    Disks[DiskCount]    = WindowBlockIo;
+    ReadOnly[DiskCount] = (BOOLEAN)(!WindowInfo.StampValid ||
+                                    WindowBlockIo->Media->ReadOnly);
+    Tags[DiskCount]     = "efisp.fat";
+    UnicodeSPrint (Rows[DiskCount], sizeof (Rows[DiskCount]),
+                   L"efisp.fat image (%s)",
+                   ReadOnly[DiskCount] ? L"read-only" : L"read/write");
+    DiskCount++;
+  }
+  Disks[DiskCount]    = PersistBlockIo;
+  ReadOnly[DiskCount] = PersistBlockIo->Media->ReadOnly;
+  Tags[DiskCount]     = "persist";
+  UnicodeSPrint (Rows[DiskCount], sizeof (Rows[DiskCount]),
+                 L"persist raw ext4 (%s)",
+                 ReadOnly[DiskCount] ? L"read-only" : L"read/write");
+  DiskCount++;
+  if (LogfsBlockIo != NULL) {
+    Disks[DiskCount]    = LogfsBlockIo;
+    ReadOnly[DiskCount] = LogfsBlockIo->Media->ReadOnly;
+    Tags[DiskCount]     = "logfs";
+    UnicodeSPrint (Rows[DiskCount], sizeof (Rows[DiskCount]),
+                   L"logfs raw (%s)",
+                   ReadOnly[DiskCount] ? L"read-only" : L"read/write");
+    DiskCount++;
+  }
+  UnicodeSPrint (Rows[DiskCount], sizeof (Rows[DiskCount]), L"Back");
+  RowCount = DiskCount + 1;
+
+  while (TRUE) {
+    SfbBeginScreen (L"USB Mass Storage",
+                    L"Choose the disk to export to the connected PC.");
+    for (Index = 0; Index < RowCount; Index++) {
+      SfbDrawRow ((BOOLEAN)(Index == Cursor), L" ", Rows[Index]);
+    }
+    SfbEndScreen (L"Vol Up/Down: move   Power: select");
+
+    Key = SfbWaitForKey (0);
+    if (Key == SfbKeyUp || Key == SfbKeyDown) {
+      SfbMoveCursor (&Cursor, RowCount, Key);
+      continue;
+    }
+    break;
+  }
+
+  if (Cursor == DiskCount) {
+    /* Back */
+    if (WindowHandle != NULL) {
+      SfbCloseFileWindow (WindowHandle);
+    }
+    return EFI_SUCCESS;
+  }
+
+  ZeroMem (&Lun, sizeof (Lun));
+  Lun.BlockIo  = Disks[Cursor];
+  Lun.ReadOnly = ReadOnly[Cursor];
+  SfbMscName (Lun.Vendor, sizeof (Lun.Vendor), "CANOE");
+  SfbMscName (Lun.Product, sizeof (Lun.Product), Tags[Cursor]);
+
   /*
-   * Draw the screen and hand straight over to SfbMscRun. SfbEndScreen must not
-   * be used here: it ends in a blocking key wait, so the device would not start
-   * until the operator pressed a key, and that same keypress then satisfied the
-   * run loop's cancel test - a session that could never enumerate.
+   * Draw the export screen and hand straight over to SfbMscRun: any key wait
+   * here would both delay the device start and then satisfy the run loop's
+   * cancel test, so the session would die before it could enumerate.
    */
   SfbBeginScreen (L"USB Mass Storage",
                   L"Edit the boot chain from the connected PC.");
-  Print (L"LUN 0: persist (%s)\r\n",
-         Luns[0].ReadOnly ? L"read-only" : L"read/write");
-  if (LunCount > 1) {
-    Print (L"LUN 1: efisp.fat (%s)\r\n",
-           Luns[1].ReadOnly ? L"read-only" : L"read/write");
-  }
-  Print (L"\r\nExporting now. Eject every disk on the host to return,\r\n");
+  Print (L"Exporting: %s\r\n", Rows[Cursor]);
+  Print (L"\r\nEject the disk on the host to return,\r\n");
   Print (L"or press Volume Down to stop.\r\n");
+  DEBUG ((EFI_D_INFO, "SFB: MARK msc-export target=%a\n", Tags[Cursor]));
 
-  Status = SfbMscRun (Luns, LunCount);
+  Status = SfbMscRun (&Lun, 1);
   if (WindowHandle != NULL) {
     SfbCloseFileWindow (WindowHandle);
   }
