@@ -1,0 +1,14 @@
+#!/usr/bin/env python3
+"""canoe_fatimg - build and inspect the host-side efisp FAT image."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from canoe import fatimg  # noqa: E402 - importable only after the path insert above
+
+if __name__ == "__main__":
+    raise SystemExit(fatimg.entry(sys.argv[1:]))
