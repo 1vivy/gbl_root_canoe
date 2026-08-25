@@ -216,6 +216,24 @@ SfbBindWritableStore (VOID)
   SFB_FILE_WINDOW_INFO  Info;
   VOID                  *FileSystem = NULL;
 
+
+  /*
+   * A temp-booted BDS runs nested inside the flashed one, so a window from the
+   * outer instance may already be published over this file. Reuse it: two
+   * Block I/O handles over the same blocks would mean two FAT mounts and two
+   * writers on one filesystem.
+   */
+  if (!EFI_ERROR (SfbFindFileWindow (&Window)) && Window != NULL) {
+    if (!EFI_ERROR (gBS->HandleProtocol (Window,
+                                         &gEfiSimpleFileSystemProtocolGuid,
+                                         &FileSystem)) && FileSystem != NULL) {
+      SfbConfigBindVolume (Window);
+      DEBUG ((EFI_D_INFO, "SFB: MARK store-bind status=reused\n"));
+      return;
+    }
+    Window = NULL;
+    FileSystem = NULL;
+  }
   ZeroMem (&Info, sizeof (Info));
   Status = SfbLocateVolumes (&Volumes, &Count);
   if (EFI_ERROR (Status) || Volumes == NULL) {

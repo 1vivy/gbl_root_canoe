@@ -496,6 +496,41 @@ STATIC EFI_GUID mSfbFileWindowTagGuid = {
   { 0x92, 0x72, 0x65, 0x5d, 0x1f, 0xe7, 0x04, 0x2f }
 };
 
+/*
+ * Find a window an earlier instance of this loader already published.
+ *
+ * A temp-booted BDS runs nested inside the flashed one: superfastboot loads it
+ * with LoadImage/StartImage, so the outer instance's drivers and any window it
+ * installed are still live. Opening a second window over the same file would
+ * put two Block I/O handles, and therefore two FAT mounts, over identical
+ * blocks - two writers on one filesystem. Reuse instead of republish.
+ */
+EFI_STATUS
+SfbFindFileWindow (
+  OUT EFI_HANDLE *WindowHandle
+  )
+{
+  EFI_STATUS  Status;
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       Count = 0;
+
+  if (WindowHandle == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *WindowHandle = NULL;
+  Status = gBS->LocateHandleBuffer (ByProtocol, &mSfbFileWindowTagGuid, NULL,
+                                    &Count, &Handles);
+  if (EFI_ERROR (Status) || Handles == NULL) {
+    return EFI_NOT_FOUND;
+  }
+  /* One window per file is the invariant; the first is the live one. */
+  if (Count > 0) {
+    *WindowHandle = Handles[0];
+  }
+  FreePool (Handles);
+  return (*WindowHandle != NULL) ? EFI_SUCCESS : EFI_NOT_FOUND;
+}
+
 STATIC EFI_STATUS
 SfbBuildRuns (
   IN  EXT4_PARTITION      *Partition,

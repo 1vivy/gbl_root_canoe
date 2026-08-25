@@ -23,6 +23,16 @@ SfbCloseFileWindow (
   IN EFI_HANDLE WindowHandle
   );
 
+/*
+ * Hand back a window an earlier instance of this loader published, if any. A
+ * temp-booted BDS runs nested inside the flashed one, so both would otherwise
+ * mount the same blocks twice. EFI_NOT_FOUND when nothing is published.
+ */
+EFI_STATUS
+SfbFindFileWindow (
+  OUT EFI_HANDLE *WindowHandle
+  );
+
 EFI_BLOCK_IO_PROTOCOL *
 SfbFileWindowBlockIo (
   IN EFI_HANDLE WindowHandle
