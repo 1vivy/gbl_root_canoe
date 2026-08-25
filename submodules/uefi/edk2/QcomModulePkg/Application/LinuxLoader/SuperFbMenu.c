@@ -448,6 +448,12 @@ SfbRunMassStorageMode (VOID)
     }
   }
 
+  /*
+   * Draw the screen and hand straight over to SfbMscRun. SfbEndScreen must not
+   * be used here: it ends in a blocking key wait, so the device would not start
+   * until the operator pressed a key, and that same keypress then satisfied the
+   * run loop's cancel test - a session that could never enumerate.
+   */
   SfbBeginScreen (L"USB Mass Storage",
                   L"Edit the boot chain from the connected PC.");
   Print (L"LUN 0: persist (%s)\r\n",
@@ -456,8 +462,8 @@ SfbRunMassStorageMode (VOID)
     Print (L"LUN 1: efisp.fat (%s)\r\n",
            Luns[1].ReadOnly ? L"read-only" : L"read/write");
   }
-  Print (L"\r\nEject every disk to return, or press any key to cancel.\r\n");
-  SfbEndScreen (L"USB mass storage active");
+  Print (L"\r\nExporting now. Eject every disk on the host to return,\r\n");
+  Print (L"or press Volume Down to stop.\r\n");
 
   Status = SfbMscRun (Luns, LunCount);
   if (WindowHandle != NULL) {

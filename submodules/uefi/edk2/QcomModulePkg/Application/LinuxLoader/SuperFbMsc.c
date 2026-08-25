@@ -185,6 +185,10 @@ typedef struct {
   BOOLEAN                   Started;
   BOOLEAN                   Connected;
   BOOLEAN                   Disconnected;
+  /* Commands the host actually issued. Zero with Connected set means the bus
+   * enumerated us and the host then asked nothing, which is a different
+   * failure from never being seen at all. */
+  UINT32                    CbwCount;
 } SFB_MSC_CONTEXT;
 
 STATIC
@@ -201,14 +205,44 @@ SfbMscAllEjected (IN CONST SFB_MSC_CONTEXT *Context)
   return TRUE;
 }
 
+/*
+ * Discard anything already queued. The menu screen that precedes this hands
+ * over with the operator's confirm keystroke, and sometimes its trailing event,
+ * still in the queue; a cancel test that accepted those would abort the session
+ * before the host ever saw the device.
+ */
+STATIC
+VOID
+SfbMscDrainKeys (VOID)
+{
+  EFI_INPUT_KEY Key;
+
+  if (gST == NULL || gST->ConIn == NULL) {
+    return;
+  }
+  while (!EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
+    /* Nothing: the point is to empty the queue. */
+  }
+}
+
+/*
+ * Cancel on volume-down only. "Any key" made the confirm press that started
+ * the session cancel it, and it also meant a stray keypress could yank a disk
+ * out from under a host mid-write.
+ */
 STATIC
 BOOLEAN
 SfbMscCancelled (VOID)
 {
   EFI_INPUT_KEY Key;
 
-  return (BOOLEAN)(gST != NULL && gST->ConIn != NULL &&
-                   !EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key)));
+  if (gST == NULL || gST->ConIn == NULL) {
+    return FALSE;
+  }
+  if (EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
+    return FALSE;
+  }
+  return (BOOLEAN)(Key.ScanCode == SCAN_DOWN);
 }
 
 STATIC
@@ -303,6 +337,8 @@ SfbMscBeginCommand (IN OUT SFB_MSC_CONTEXT *Context)
   UINT8      Direction;
   UINT32     Expected;
   UINTN      Index;
+
+  Context->CbwCount++;
 
   Status = SfbMscScsiCommand (Context->Cbw.Cdb, Context->Cbw.CdbLength,
                              Context->Luns, Context->LunCount, Context->Cbw.Lun,
@@ -452,11 +488,16 @@ SfbMscRun (IN CONST SFB_MSC_LUN *Luns, IN UINTN LunCount)
   UINTN                        Index;
 
   if (Luns == NULL || LunCount == 0 || LunCount > SFB_MSC_MAX_LUNS) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run luns=%u exported=0 status=%r "
+            "reason=bad-lun-table\n", (UINT32)LunCount, EFI_INVALID_PARAMETER));
     return EFI_INVALID_PARAMETER;
   }
   for (Index = 0; Index < LunCount; Index++) {
     if (Luns[Index].BlockIo == NULL || Luns[Index].BlockIo->Media == NULL ||
         !Luns[Index].BlockIo->Media->MediaPresent) {
+      DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run luns=%u exported=%u status=%r "
+              "reason=no-media\n", (UINT32)LunCount, (UINT32)Index,
+              EFI_NOT_READY));
       return EFI_NOT_READY;
     }
   }
@@ -464,10 +505,14 @@ SfbMscRun (IN CONST SFB_MSC_LUN *Luns, IN UINTN LunCount)
   Status = gBS->LocateProtocol (&gEfiUsbDeviceProtocolGuid, NULL,
                                 (VOID **)&Usb);
   if (EFI_ERROR (Status) || Usb == NULL) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run luns=%u exported=0 status=%r "
+            "reason=no-usb-protocol\n", (UINT32)LunCount, Status));
     return EFI_NOT_FOUND;
   }
   Status = SfbMscBuildDescriptorSet (&DescriptorSet);
   if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run luns=%u exported=0 status=%r "
+            "reason=descriptors\n", (UINT32)LunCount, Status));
     return Status;
   }
 
@@ -478,11 +523,17 @@ SfbMscRun (IN CONST SFB_MSC_LUN *Luns, IN UINTN LunCount)
   Context.Luns = Luns;
   Context.LunCount = LunCount;
 
+  /* Nothing queued may reach the cancel test: the confirm press that opened
+   * this screen is still in the queue at this point. */
+  SfbMscDrainKeys ();
   Status = Usb->StartEx (&DescriptorSet);
   if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run luns=%u exported=0 status=%r "
+            "reason=start\n", (UINT32)LunCount, Status));
     return Status;
   }
   Context.Started = TRUE;
+  DEBUG ((EFI_D_INFO, "SFB: MARK msc-started luns=%u\n", (UINT32)LunCount));
   Status = Usb->AllocateTransferBuffer (SFB_MSC_TRANSFER_BYTES,
                                         &Context.RxBuffer);
   if (EFI_ERROR (Status)) {
@@ -545,6 +596,11 @@ Done:
   if (Context.Started) {
     Usb->Stop ();
   }
+  DEBUG ((EFI_D_INFO, "SFB: MARK msc-run luns=%u connected=%u cbw=%u status=%r "
+          "reason=%a\n", (UINT32)LunCount, (UINT32)Context.Connected,
+          (UINT32)Context.CbwCount, Status,
+          Status == EFI_ABORTED ? "cancelled" :
+          Context.Disconnected ? "host-gone-or-ejected" : "loop-exit"));
   return Status;
 }
 
