@@ -78,6 +78,7 @@
 #include <Protocol/EFICardInfo.h>
 #include <Protocol/SimpleTextIn.h>
 #include "SuperFbMenu.h"
+#include "SuperFbMsc.h"
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -257,6 +258,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
      * answers when it is present and the legacy efisp tail only when it is not.
      */
     SfbBindWritableStore ();
+    SfbUsbCensus ();
 
     /*
      * With the filesystem drivers up, mount logfs so the earlier boot-chain

@@ -216,18 +216,26 @@ SfbBindWritableStore (VOID)
   SFB_FILE_WINDOW_INFO  Info;
   VOID                  *FileSystem = NULL;
 
+  ZeroMem (&Info, sizeof (Info));
   Status = SfbLocateVolumes (&Volumes, &Count);
   if (EFI_ERROR (Status) || Volumes == NULL) {
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK store-bind status=%r runs=%u bytes=%Lu stamp=%u\n",
+            Status, 0U, 0ULL, 0U));
+    if (Volumes != NULL) {
+      FreePool (Volumes);
+    }
     return;
   }
 
+  Status = EFI_NOT_FOUND;
   for (Index = 0; Index < Count; Index++) {
     if (!SfbVolumeIsExt4 (Volumes[Index])) {
       continue;
     }
+    ZeroMem (&Info, sizeof (Info));
     Status = SfbOpenFileWindow (Volumes[Index], L"\\efisp.fat", &Window, &Info);
     if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_INFO, "SFB: MARK store-window status=%r\n", Status));
       continue;
     }
     /* The window publishes Block I/O only; Disk I/O and FAT bind on connect. */
@@ -235,19 +243,20 @@ SfbBindWritableStore (VOID)
     Status = gBS->HandleProtocol (Window, &gEfiSimpleFileSystemProtocolGuid,
                                   &FileSystem);
     if (EFI_ERROR (Status) || FileSystem == NULL) {
-      DEBUG ((EFI_D_WARN, "SFB: MARK store-window unmounted status=%r\n",
-              Status));
       SfbCloseFileWindow (Window);
       Window = NULL;
+      ZeroMem (&Info, sizeof (Info));
       continue;
     }
     SfbConfigBindVolume (Window);
-    DEBUG ((EFI_D_INFO,
-            "SFB: MARK store-bound runs=%u bytes=%Lu stamp=%u\n",
-            (UINT32)Info.RunCount, Info.VolumeBytes, (UINT32)Info.StampValid));
+    Status = EFI_SUCCESS;
     break;
   }
 
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK store-bind status=%r runs=%u bytes=%Lu stamp=%u\n",
+          Status, (UINT32)Info.RunCount, Info.VolumeBytes,
+          (UINT32)Info.StampValid));
   FreePool (Volumes);
 }
 

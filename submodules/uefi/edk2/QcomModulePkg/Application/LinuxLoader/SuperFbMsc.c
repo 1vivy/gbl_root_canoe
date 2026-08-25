@@ -76,6 +76,75 @@ SfbMscBuildCsw (
 #include <Library/UefiLib.h>
 #include <Protocol/EFIUsbDevice.h>
 #include <Protocol/SimpleTextIn.h>
+/*
+ * UsbfnIo and UsbDevice are declared in QcomModulePkg.dec. The remaining
+ * GUIDs are unconfirmed candidates extracted from the same-platform
+ * UsbMsdDxe.efi.
+ */
+STATIC CONST EFI_GUID mSfbUsbfnIoProtocolGuid = {
+  0x32d2963a, 0xfe5d, 0x4f30,
+  { 0xb6, 0x33, 0x6e, 0x5d, 0xc5, 0x58, 0x03, 0xcc }
+};
+STATIC CONST EFI_GUID mSfbUsbDeviceProtocolGuid = {
+  0xd9d9ce48, 0x44b8, 0x4f49,
+  { 0x8e, 0x3e, 0x2a, 0x3b, 0x92, 0x7d, 0xc6, 0xc1 }
+};
+STATIC CONST EFI_GUID mSfbUsbMsdModuleGuid = {
+  0x5af77f10, 0x90df, 0x4e7e,
+  { 0x83, 0x25, 0xa1, 0x7e, 0xc0, 0x9d, 0x54, 0x43 }
+};
+STATIC CONST EFI_GUID mSfbUsbMsdCandidateAGuid = {
+  0xc8591faf, 0xdbcc, 0x479e,
+  { 0x9e, 0xf2, 0xfd, 0x08, 0x5b, 0xc3, 0x7b, 0xc7 }
+};
+STATIC CONST EFI_GUID mSfbUsbMsdCandidateBGuid = {
+  0x88e71196, 0x80d3, 0x4548,
+  { 0x93, 0x6e, 0x57, 0x09, 0x3f, 0x6d, 0xd2, 0x11 }
+};
+
+VOID
+SfbUsbCensus (VOID)
+{
+  EFI_STATUS Status;
+  EFI_HANDLE *Handles = NULL;
+  UINTN      HandleCount = 0;
+  VOID       *Protocol = NULL;
+  UINTN      Usbfn = 0;
+  UINTN      UsbDevice = 0;
+  UINTN      MsdModule = 0;
+  UINTN      MsdCandidateA = 0;
+  UINTN      MsdCandidateB = 0;
+
+  Status = gBS->LocateHandleBuffer (AllHandles, NULL, NULL, &HandleCount,
+                                    &Handles);
+  if (EFI_ERROR (Status)) {
+    HandleCount = 0;
+  }
+  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbfnIoProtocolGuid, NULL,
+                                &Protocol);
+  Usbfn = (UINTN)!EFI_ERROR (Status);
+  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbDeviceProtocolGuid, NULL,
+                                &Protocol);
+  UsbDevice = (UINTN)!EFI_ERROR (Status);
+  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdModuleGuid, NULL,
+                                &Protocol);
+  MsdModule = (UINTN)!EFI_ERROR (Status);
+  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdCandidateAGuid, NULL,
+                                &Protocol);
+  MsdCandidateA = (UINTN)!EFI_ERROR (Status);
+  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdCandidateBGuid, NULL,
+                                &Protocol);
+  MsdCandidateB = (UINTN)!EFI_ERROR (Status);
+
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK usb-census handles=%u usbfn=%u usbdev=%u msdmod=%u msda=%u msdb=%u\n",
+          (UINT32)HandleCount, (UINT32)Usbfn, (UINT32)UsbDevice,
+          (UINT32)MsdModule, (UINT32)MsdCandidateA, (UINT32)MsdCandidateB));
+  if (Handles != NULL) {
+    FreePool (Handles);
+  }
+}
+
 
 extern EFI_STATUS
 SfbMscBuildDescriptorSet (OUT USB_DEVICE_DESCRIPTOR_SET *DescriptorSet);

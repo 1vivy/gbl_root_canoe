@@ -59,5 +59,8 @@ SfbMscBuildCsw (
 
 EFI_STATUS
 SfbMscRun (IN CONST SFB_MSC_LUN *Luns, IN UINTN LunCount);
+VOID
+SfbUsbCensus (VOID);
+
 
 #endif

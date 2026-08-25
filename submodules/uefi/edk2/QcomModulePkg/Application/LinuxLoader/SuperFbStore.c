@@ -537,6 +537,29 @@ SfbStoreReadTail (IN UINT64   TailDistance,
 
 STATIC EFI_HANDLE  mSfbMigrationVolume;
 STATIC BOOLEAN     mSfbMigrationAttempted;
+STATIC BOOLEAN     mSfbMigrationMarkerLogged;
+STATIC BOOLEAN     mSfbConfigSourceLogged;
+
+STATIC
+VOID
+SfbStoreMarkConfigSource (IN CONST CHAR8 *Source)
+{
+  if (!mSfbConfigSourceLogged) {
+    DEBUG ((EFI_D_INFO, "SFB: MARK config-source src=%a\n", Source));
+    mSfbConfigSourceLogged = TRUE;
+  }
+}
+
+STATIC
+VOID
+SfbStoreMarkMigration (IN EFI_STATUS Status)
+{
+  if (!mSfbMigrationMarkerLogged) {
+    DEBUG ((EFI_D_INFO, "SFB: MARK config-migrate status=%r\n", Status));
+    mSfbMigrationMarkerLogged = TRUE;
+  }
+}
+
 
 VOID
 SfbStoreResetMigration (VOID)
@@ -569,24 +592,23 @@ SfbStoreMigrateIfNeeded (VOID)
   Status = SfbStoreReadTail (SFB_STORE_MODE_TAIL_DISTANCE, Mode,
                               sizeof (Mode));
   if (EFI_ERROR (Status)) {
+    SfbStoreMarkMigration (Status);
     return Status;
   }
   Status = SfbStoreReadTail (SFB_STORE_DEFAULT_TAIL_DISTANCE, Default,
                              sizeof (Default));
   if (EFI_ERROR (Status)) {
+    SfbStoreMarkMigration (Status);
     return Status;
   }
   Status = SfbStoreReadTail (SFB_STORE_CUSTOM_TAIL_DISTANCE, Custom,
                              sizeof (Custom));
   if (EFI_ERROR (Status)) {
+    SfbStoreMarkMigration (Status);
     return Status;
   }
   Status = SfbConfigMigrate (Mode, Default, Custom, &Wrote);
-  if (!EFI_ERROR (Status) && Wrote) {
-    DEBUG ((EFI_D_INFO, "SFB: MARK store-migrated\n"));
-  } else if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: MARK store-write-refused status=%r\n", Status));
-  }
+  SfbStoreMarkMigration (Status);
   return Status;
 }
 
@@ -609,14 +631,19 @@ SfbStoreReadPreferred (IN UINTN Slot,
     /* A damaged host-edited file must not make the menu unreachable. */
     Status = SfbStoreReadTail (SfbLegacyTailDistance (Slot), Out, OutBytes);
     if (!EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_INFO, "SFB: MARK store-source=legacy-tail\n"));
+      SfbStoreMarkConfigSource (
+        (Out[0] == '\0') ? "default" : "legacy-tail");
+    } else {
+      SfbStoreMarkConfigSource ("default");
     }
     return Status;
   }
   if (FilePresent) {
-    DEBUG ((EFI_D_INFO, "SFB: MARK store-source=bootconfig\n"));
     if (!ValuePresent) {
       Out[0] = '\0';
+      SfbStoreMarkConfigSource ("default");
+    } else {
+      SfbStoreMarkConfigSource ("bootconfig");
     }
     return EFI_SUCCESS;
   }
@@ -626,8 +653,10 @@ SfbStoreReadPreferred (IN UINTN Slot,
   }
   Status = SfbStoreReadTail (SfbLegacyTailDistance (Slot), Out, OutBytes);
   if (!EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_INFO, "SFB: MARK store-source=%a\n",
-            (Out[0] == '\0') ? "default" : "legacy-tail"));
+    SfbStoreMarkConfigSource (
+      (Out[0] == '\0') ? "default" : "legacy-tail");
+  } else {
+    SfbStoreMarkConfigSource ("default");
   }
   return Status;
 }
@@ -645,12 +674,14 @@ SfbStoreRead (IN UINTN Slot, OUT CHAR8 *Out, IN UINTN OutBytes)
   }
   Status = SfbStoreReadTail (SfbLegacyTailDistance (Slot), Out, OutBytes);
   if (!EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_INFO, "SFB: MARK store-source=%a\n",
-            (Out[0] == '\0') ? "default" : "legacy-tail"));
+    SfbStoreMarkConfigSource (
+      (Out[0] == '\0') ? "default" : "legacy-tail");
+  } else {
+    SfbStoreMarkConfigSource ("default");
   }
   return Status;
-}
 
+}
 STATIC
 EFI_STATUS
 SfbStoreWriteTail (IN UINT64      TailDistance,
@@ -723,9 +754,6 @@ SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text)
   }
   if (SfbConfigVolumeBound ()) {
     Status = SfbConfigWriteSlot (Slot + 1, Text);
-    if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "SFB: MARK store-write-refused status=%r\n", Status));
-    }
     return Status;
   }
   return SfbStoreWriteTail (SfbLegacyTailDistance (Slot), Text);
@@ -797,9 +825,8 @@ SfbStoreReadMode (OUT SFB_BOOT_MODE *Mode, OUT BOOLEAN *Defaulted)
       FilePresent = FALSE;
     }
     if (FilePresent) {
-      DEBUG ((EFI_D_INFO, "SFB: MARK store-source=bootconfig\n"));
       if (!ValuePresent) {
-        DEBUG ((EFI_D_INFO, "SFB: MARK store-source=default\n"));
+        SfbStoreMarkConfigSource ("default");
         return EFI_SUCCESS;
       }
       if (Record[0] == '0') {
@@ -810,6 +837,7 @@ SfbStoreReadMode (OUT SFB_BOOT_MODE *Mode, OUT BOOLEAN *Defaulted)
         *Mode = SfbBootModeAblFakeLocked;
       }
       *Defaulted = FALSE;
+      SfbStoreMarkConfigSource ("bootconfig");
       return EFI_SUCCESS;
     }
     Status = SfbStoreMigrateIfNeeded ();
@@ -820,6 +848,7 @@ SfbStoreReadMode (OUT SFB_BOOT_MODE *Mode, OUT BOOLEAN *Defaulted)
 
   Status = SfbStoreReadRawTail (SFB_STORE_MODE_TAIL_DISTANCE, Record);
   if (EFI_ERROR (Status)) {
+    SfbStoreMarkConfigSource ("default");
     return Status;
   }
   if (SfbModeRecordMatches (Record, "SFBM1|0")) {
@@ -832,10 +861,10 @@ SfbStoreReadMode (OUT SFB_BOOT_MODE *Mode, OUT BOOLEAN *Defaulted)
     *Mode = SfbBootModeKmProfile;
     *Defaulted = FALSE;
   } else {
-    DEBUG ((EFI_D_INFO, "SFB: MARK store-source=default\n"));
+    SfbStoreMarkConfigSource ("default");
     return EFI_SUCCESS;
   }
-  DEBUG ((EFI_D_INFO, "SFB: MARK store-source=legacy-tail\n"));
+  SfbStoreMarkConfigSource ("legacy-tail");
   return EFI_SUCCESS;
 }
 
@@ -865,9 +894,6 @@ SfbStoreWriteMode (IN SFB_BOOT_MODE Mode)
 
   if (SfbConfigVolumeBound ()) {
     Status = SfbConfigWriteSlot (SFB_CONFIG_MODE, Value);
-    if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "SFB: MARK store-write-refused status=%r\n", Status));
-    }
     return Status;
   }
   return SfbStoreWriteTail (SFB_STORE_MODE_TAIL_DISTANCE, Record);

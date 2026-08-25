@@ -28,6 +28,14 @@ STATIC CONST CHAR8 *mSfbConfigKeys[SFB_CONFIG_KEYS] = {
 };
 
 STATIC
+VOID
+SfbConfigMarkWriteRefused (IN EFI_STATUS Status)
+{
+  DEBUG ((EFI_D_ERROR, "SFB: MARK store-write-refused status=%r\n", Status));
+}
+
+
+STATIC
 BOOLEAN
 SfbConfigValidValue (IN UINTN Slot, IN CONST CHAR8 *Value, IN UINTN Length)
 {
@@ -240,6 +248,7 @@ SfbConfigWriteText (IN CONST CHAR8 *Text, IN UINTN TextBytes)
   if (gBS != NULL && !EFI_ERROR (gBS->HandleProtocol (
       mSfbConfigVolume, &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo)) &&
       BlockIo != NULL && BlockIo->Media != NULL && BlockIo->Media->ReadOnly) {
+    SfbConfigMarkWriteRefused (EFI_WRITE_PROTECTED);
     return EFI_WRITE_PROTECTED;
   }
 
@@ -374,11 +383,13 @@ SfbConfigWriteSlot (IN UINTN Slot, IN CONST CHAR8 *Value)
     return EFI_INVALID_PARAMETER;
   }
   if (mSfbConfigVolume == NULL) {
+    SfbConfigMarkWriteRefused (EFI_WRITE_PROTECTED);
     return EFI_WRITE_PROTECTED;
   }
   if (gBS != NULL && !EFI_ERROR (gBS->HandleProtocol (
       mSfbConfigVolume, &gEfiBlockIoProtocolGuid, (VOID **)&BlockIo)) &&
       BlockIo != NULL && BlockIo->Media != NULL && BlockIo->Media->ReadOnly) {
+    SfbConfigMarkWriteRefused (EFI_WRITE_PROTECTED);
     return EFI_WRITE_PROTECTED;
   }
   Status = SfbConfigReadAll (Values, Present, &FilePresent);
@@ -393,7 +404,7 @@ SfbConfigWriteSlot (IN UINTN Slot, IN CONST CHAR8 *Value)
   }
   Status = SfbConfigWriteText (Text, TextBytes);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: MARK store-write-refused status=%r\n", Status));
+    SfbConfigMarkWriteRefused (Status);
     return Status;
   }
   return SfbConfigVerify (Values, Present);
@@ -443,7 +454,7 @@ SfbConfigMigrate (IN CONST CHAR8 *Mode,
   }
   Status = SfbConfigWriteText (Text, TextBytes);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: MARK store-write-refused status=%r\n", Status));
+    SfbConfigMarkWriteRefused (Status);
     return Status;
   }
   Status = SfbConfigVerify (Values, Present);
