@@ -36,6 +36,10 @@ cat > "$BIN/losetup" <<'EOF'
 printf 'losetup %s\n' "$*" >> "$FLOW_LOG"
 case "$1" in
   -f) printf '/dev/block/loop7\n' ;;
+  # `-a` lists what is still attached. The real kernel drops an autoclear node
+  # when umount releases it, which is what AUTOCLEAR_ON_UMOUNT models here.
+  -a)
+    if [ -e "$LOOP_STATE" ]; then printf '/dev/block/loop7: [0000]:1 (image)\n'; fi ;;
   -d) rm -f "$LOOP_STATE" ;;
   *) [ "${FAIL_ATTACH:-0}" -eq 0 ] || exit 1; : > "$LOOP_STATE" ;;
 esac
@@ -64,6 +68,10 @@ if [ -n "${CAPTURE_DIR:-}" ]; then
   /bin/cp -pr "$1/." "$CAPTURE_DIR/"
 fi
 rm -f "$MOUNT_STATE"
+# The kernel releases an autoclear loop node when umount drops its last
+# reference, which is what the device actually does; the script must treat an
+# already-detached node as success rather than an error.
+[ "${AUTOCLEAR_ON_UMOUNT:-1}" -eq 0 ] || rm -f "$LOOP_STATE"
 [ "${FAIL_UMOUNT:-0}" -eq 0 ]
 EOF
 cat > "$BIN/cp" <<'EOF'

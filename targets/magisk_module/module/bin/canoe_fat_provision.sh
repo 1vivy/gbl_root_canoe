@@ -34,6 +34,19 @@ cleanup() {
   [ -z "$MOUNT_POINT" ] || rmdir "$MOUNT_POINT" >/dev/null 2>&1 || :
   exit "$status"
 }
+
+# The kernel drops an autoclear loop node when its last reference goes away, so
+# on Android the umount usually detaches it for us. Detach only what is still
+# attached, and never fail a finished image over a node that is already gone:
+# `losetup -d` on a released node reports ENXIO.
+detach_loop() {
+  [ -n "$LOOP_NODE" ] || return 0
+  if losetup -a 2>/dev/null | grep -q "^$LOOP_NODE:"; then
+    losetup -d "$LOOP_NODE" 2>/dev/null ||
+      printf 'WARNING=loop detach failed: %s\n' "$LOOP_NODE" >&2
+  fi
+  LOOP_NODE=
+}
 trap cleanup 0
 trap 'exit 1' INT TERM HUP
 
@@ -288,8 +301,7 @@ provision() {
   copy_tree
   umount "$MOUNT_POINT" || fail 'FAT unmount failed'
   MOUNTED=0
-  losetup -d "$LOOP_NODE" || fail 'loop detach failed'
-  LOOP_NODE=
+  detach_loop
   stamp_and_report || fail 'extent stamp failed'
   REMOVE_ON_FAIL=0
 }
