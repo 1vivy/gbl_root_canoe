@@ -18,6 +18,7 @@ from .layout import (
     require_exact,
     require_nonempty,
 )
+from .proc import Completed, run
 from .stage_mode import ModeRequest, set_preferred_mode
 from .stage_report import stage_report
 from .stage_transaction import Context, check, pull_backup, quote, run_transaction
@@ -154,6 +155,36 @@ def _validate_stage(context: Context) -> None:
     note("staged set validated on device")
 
 
+def _check_verify(result: Completed, message: str) -> None:
+    """Fail with `message`, quoting the verifier's diagnosis."""
+    if result.ok:
+        return
+    detail = (result.err or result.out).strip()
+    raise CanoeError(f"{message}: {detail}" if detail else message)
+
+
+def _verify_tzmap(toolkit: Toolkit) -> None:
+    """Verify the staged tzmap against its recorded unpatched ABL loader."""
+    if not toolkit.abl_original.is_file():
+        note("skipping ABL/tzmap consistency check: ABL_original.efi is unavailable")
+        return
+    tool = toolkit.tool("abl_tzmap")
+    _check_verify(
+        run(
+            [
+                tool,
+                "verify",
+                "--sidecar",
+                toolkit.tzmap,
+                "--abl",
+                toolkit.abl_original,
+                "--allow-zero-digest",
+            ]
+        ),
+        "abl_tzmap verify failed",
+    )
+
+
 def _geometry(context: Context, mode: int | None) -> Geometry | None:
     """Read the efisp geometry once, before the transaction, only if it is needed."""
     if not (context.install_bds or mode is not None):
@@ -175,6 +206,7 @@ def _run(argv: Sequence[str]) -> None:
         raise CanoeError("missing canoe_device_install.sh")
     require_exact(toolkit.gm2p, GM2P_BYTES, "boot.efi.gm2p")
     require_exact(toolkit.tzmap, TZMAP_BYTES, "boot.efi.tzmap")
+    _verify_tzmap(toolkit)
     if options.install_bds:
         require_nonempty(
             toolkit.bds, "missing or empty: BDS.efi (use --skip-bds to install the tree only)"

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING
 
 import pytest
 
 if TYPE_CHECKING:
     from tests.conftest import FakeToolkit, ToolkitFactory
+
 GM2P_BYTES = 120
 TZMAP_BYTES = 256
 
@@ -43,9 +45,26 @@ def test_build_success_derives_and_validates_the_matching_triplet(toolkit: FakeT
         "validate boot.efi.gm2p",
         "tzmap-derive ABL_original.efi allow=1",
         "tzmap-validate boot.efi.tzmap",
+        "tzmap-verify boot.efi.tzmap ABL_original.efi",
     ]
     assert "\n3. Flash BDS.efi" in result.stdout
     assert "\n4." not in result.stdout
+
+
+def test_build_tzmap_digest_mismatch_names_both_digests(toolkit: FakeToolkit) -> None:
+    # Given a complete fixture toolkit and a verifier that detects a mismatch:
+    _plant_images(toolkit)
+    # When the real launcher runs:
+    result = toolkit.run("canoe_build", STUB_TZMAP="verify")
+
+    # Then the failure identifies both values that were compared.
+    assert result.returncode != 0
+    sidecar_digest = hashlib.sha256(b"T" * TZMAP_BYTES).hexdigest()
+    abl_digest = hashlib.sha256(b"LOADER-FROM-ABL-IMAGE").hexdigest()
+    assert f"sidecar={sidecar_digest}" in result.stderr
+    assert f"abl={abl_digest}" in result.stderr
+    _assert_triplet_absent(toolkit)
+
 
 
 @pytest.mark.parametrize(
@@ -69,6 +88,13 @@ def test_build_success_derives_and_validates_the_matching_triplet(toolkit: FakeT
             "abl_tzmap validate failed",
             id="tzmap-validate",
         ),
+        pytest.param(
+            {"STUB_TZMAP": "missing-verify"},
+            None,
+            "abl_tzmap verify failed",
+            id="tzmap-verify",
+        ),
+        pytest.param({"STUB_TZMAP": "verify"}, None, "abl_tzmap verify failed", id="tzmap-digest"),
         pytest.param({"STUB_TZMAP": "size"}, None, "abl_tzmap output", id="tzmap-size"),
         pytest.param({}, "images/abl.img", "extractfv failed", id="missing-abl"),
     ],

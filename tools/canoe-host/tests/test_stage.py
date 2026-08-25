@@ -16,12 +16,19 @@ if TYPE_CHECKING:
 
 def _clean_stage(toolkit: FakeToolkit) -> None:
     """Assert the transaction cleanup contract through the fixture surface."""
-    assert not list(toolkit.device.boot_root.glob(".canoe.*"))
+    assert not toolkit.device.boot_root.joinpath(".canoe.stage").exists()
 
 
 def _prepare(toolkit: FakeToolkit) -> None:
     """Install the fixture's valid derived triplet before a stage run."""
     toolkit.plant_triplet()
+
+
+def _prepare_with_loader(toolkit: FakeToolkit) -> None:
+    """Install a triplet and the unpatched loader used to derive its tzmap."""
+    _prepare(toolkit)
+    (toolkit.root / "ABL_original.efi").write_bytes(b"STAGE-ABL")
+
 
 
 def _run_size_probe(
@@ -77,8 +84,37 @@ def test_green_install_commits_tree_bds_and_backup(toolkit: FakeToolkit) -> None
         "BDS.efi"
     )
     assert toolkit.root.joinpath("work/efisp-backup.img").read_bytes() == old_efisp
+
     assert "preferred-mode record was left untouched" in result.stdout
     _clean_stage(toolkit)
+
+
+def test_stage_verifies_tzmap_when_abl_loader_is_available(toolkit: FakeToolkit) -> None:
+    """Given the recorded loader, staging verifies the tzmap before transaction."""
+    _prepare_with_loader(toolkit)
+    result = toolkit.run("canoe_stage")
+
+    assert result.returncode == 0, result.stderr
+    assert "tzmap-verify boot.efi.tzmap ABL_original.efi" in toolkit.trace()
+
+
+def test_stage_rejects_a_tzmap_digest_mismatch_before_transaction(toolkit: FakeToolkit) -> None:
+    """Given a mismatched tzmap, staging stops before the device transaction."""
+    _prepare_with_loader(toolkit)
+    result = toolkit.run("canoe_stage", STUB_TZMAP="verify")
+
+    assert result.returncode != 0
+    assert "abl_tzmap verify failed" in result.stderr
+    assert not toolkit.device.saw("sh /persist/efisp/.canoe.stage/canoe_device_install.sh")
+
+
+def test_stage_skips_tzmap_check_when_abl_loader_is_missing(toolkit: FakeToolkit) -> None:
+    """Given a prepared folder without its loader, staging reports an explicit skip."""
+    _prepare(toolkit)
+    result = toolkit.run("canoe_stage")
+
+    assert result.returncode == 0, result.stderr
+    assert "skipping ABL/tzmap consistency check: ABL_original.efi is unavailable" in result.stdout
 
 
 def test_failed_push_never_invokes_transaction(toolkit: FakeToolkit) -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""abl_tzmap: derive and validate the 256-byte TrustZone map.
+"""abl_tzmap: derive, validate, and verify the 256-byte TrustZone map.
 
 Fixture stand-in for the real toolkit binary. Records its call in $CANOE_TRACE
 so tests can assert the order the driver invokes the pipeline in.
@@ -7,9 +7,11 @@ so tests can assert the order the driver invokes the pipeline in.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
+
 
 
 def trace(line: str) -> None:
@@ -63,10 +65,44 @@ def validate(argv: list[str]) -> int:
     return 0
 
 
+def verify(argv: list[str]) -> int:
+    sidecar = None
+    abl = None
+    rest = list(argv)
+    while rest:
+        head = rest.pop(0)
+        if head == "--sidecar":
+            sidecar = Path(rest.pop(0))
+        elif head == "--abl":
+            abl = Path(rest.pop(0))
+        elif head == "--allow-zero-digest":
+            continue
+    trace(
+        f"tzmap-verify {sidecar.name if sidecar else '?'} "
+        f"{abl.name if abl else '?'}"
+    )
+    if sidecar is None or abl is None or not sidecar.is_file() or not abl.is_file():
+        sys.stderr.write("abl_tzmap: verify input is missing\n")
+        return 57
+    if BEHAVIOR == "missing-verify":
+        sys.stderr.write("abl_tzmap: verify unavailable\n")
+        return 127
+    if BEHAVIOR == "verify":
+        sidecar_digest = hashlib.sha256(sidecar.read_bytes()).hexdigest()
+        abl_digest = hashlib.sha256(abl.read_bytes()).hexdigest()
+        sys.stderr.write(
+            f"abl_tzmap: AblDigest mismatch: sidecar={sidecar_digest} abl={abl_digest}\n"
+        )
+        return 56
+    return 0
+
+
 if __name__ == "__main__":
     command, *args = sys.argv[1:]
     if command == "derive":
         raise SystemExit(derive(args))
+    if command == "verify":
+        raise SystemExit(verify(args))
     if command == "validate":
         raise SystemExit(validate(args))
     raise SystemExit(55)
