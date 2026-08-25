@@ -12,13 +12,206 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <Library/BaseLib.h>
+#include <Protocol/SimpleFileSystem.h>
+#include <Guid/FileInfo.h>
+#include <Library/MemoryAllocationLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 
+static UINT8 mConfigData[4096];
+static UINTN mConfigBytes;
+static UINT8 mTempData[4096];
+static UINTN mTempBytes;
+static UINTN mFileKind;
+static UINTN mFilePosition;
+static BOOLEAN mConfigPresent;
+static BOOLEAN mTempPresent;
+static BOOLEAN mFailFileWrite;
+static BOOLEAN mFailRename;
+
+static EFI_STATUS EFIAPI
+FakeRootClose(IN EFI_FILE_PROTOCOL *This)
+{
+  (void)This;
+  return EFI_SUCCESS;
+}
+
+static BOOLEAN
+FakePathIs (IN CONST CHAR16 *Path, IN CONST CHAR16 *Expected)
+{
+  while (*Path != L'\0' && *Expected != L'\0' && *Path == *Expected) {
+    ++Path;
+    ++Expected;
+  }
+  return (BOOLEAN)(*Path == L'\0' && *Expected == L'\0');
+}
+
+static UINT8 *
+FakeFileBytes (VOID)
+{
+  return (mFileKind == 1) ? mConfigData : mTempData;
+}
+
+static UINTN *
+FakeFileSize (VOID)
+{
+  return (mFileKind == 1) ? &mConfigBytes : &mTempBytes;
+}
+
+static EFI_FILE_PROTOCOL mFakeRoot;
+static EFI_STATUS EFIAPI
+FakeOpen (IN EFI_FILE_PROTOCOL *This, OUT EFI_FILE_PROTOCOL **NewHandle,
+          IN CHAR16 *FileName, IN UINT64 OpenMode, IN UINT64 Attributes)
+{
+  (void)This;
+  (void)Attributes;
+  if (NewHandle == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  if (FakePathIs (FileName, L"\\BOOTCONFIG")) {
+    if ((OpenMode & EFI_FILE_MODE_CREATE) == 0 && !mConfigPresent) {
+      return EFI_NOT_FOUND;
+    }
+    mFileKind = 1;
+    if ((OpenMode & EFI_FILE_MODE_CREATE) != 0) {
+      mConfigPresent = TRUE;
+      mConfigBytes = 0;
+    }
+  } else if (FakePathIs (FileName, L"\\BOOTCONFIG.$$$")) {
+    mFileKind = 2;
+    mTempPresent = TRUE;
+    mTempBytes = 0;
+  } else {
+    return EFI_NOT_FOUND;
+  }
+  mFilePosition = 0;
+  *NewHandle = &mFakeRoot;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeDelete (IN EFI_FILE_PROTOCOL *This)
+{
+  (void)This;
+  if (mFileKind == 1) {
+    mConfigPresent = FALSE;
+    mConfigBytes = 0;
+  } else {
+    mTempPresent = FALSE;
+    mTempBytes = 0;
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeRead (IN EFI_FILE_PROTOCOL *This, IN OUT UINTN *BufferSize,
+          OUT VOID *Buffer)
+{
+  UINTN Size;
+  (void)This;
+  if (BufferSize == NULL || Buffer == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  Size = *FakeFileSize ();
+  if (mFilePosition > Size) {
+    return EFI_DEVICE_ERROR;
+  }
+  if (*BufferSize > Size - mFilePosition) {
+    *BufferSize = Size - mFilePosition;
+  }
+  CopyMem (Buffer, FakeFileBytes () + mFilePosition, *BufferSize);
+  mFilePosition += *BufferSize;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeWrite (IN EFI_FILE_PROTOCOL *This, IN OUT UINTN *BufferSize,
+           IN VOID *Buffer)
+{
+  UINTN Size;
+  (void)This;
+  if (mFailFileWrite) {
+    return EFI_DEVICE_ERROR;
+  }
+  if (BufferSize == NULL || Buffer == NULL ||
+      *BufferSize > sizeof (mConfigData) - mFilePosition) {
+    return EFI_INVALID_PARAMETER;
+  }
+  Size = *BufferSize;
+  CopyMem (FakeFileBytes () + mFilePosition, Buffer, Size);
+  mFilePosition += Size;
+  if (mFilePosition > *FakeFileSize ()) {
+    *FakeFileSize () = mFilePosition;
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeGetPosition (IN EFI_FILE_PROTOCOL *This, OUT UINT64 *Position)
+{
+  (void)This;
+  *Position = mFilePosition;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeSetPosition (IN EFI_FILE_PROTOCOL *This, IN UINT64 Position)
+{
+  (void)This;
+  if (Position > sizeof (mConfigData)) {
+    return EFI_INVALID_PARAMETER;
+  }
+  mFilePosition = (UINTN)Position;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeSetInfo (IN EFI_FILE_PROTOCOL *This, IN EFI_GUID *InformationType,
+             IN UINTN BufferSize, IN VOID *Buffer)
+{
+  EFI_FILE_INFO *Info = Buffer;
+  (void)This;
+  (void)InformationType;
+  (void)BufferSize;
+  if (mFailRename) {
+    return EFI_DEVICE_ERROR;
+  }
+  if (mFileKind != 2 || Info == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  CopyMem (mConfigData, mTempData, mTempBytes);
+  mConfigBytes = Info->FileSize;
+  mConfigPresent = TRUE;
+  mTempPresent = FALSE;
+  mTempBytes = 0;
+  mFileKind = 1;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeFlush (IN EFI_FILE_PROTOCOL *This)
+{
+  (void)This;
+  return EFI_SUCCESS;
+}
+
+static EFI_FILE_PROTOCOL mFakeRoot = {
+  .Revision = EFI_FILE_PROTOCOL_REVISION,
+  .Open = FakeOpen,
+  .Close = FakeRootClose,
+  .Delete = FakeDelete,
+  .Read = FakeRead,
+  .Write = FakeWrite,
+  .GetPosition = FakeGetPosition,
+  .SetPosition = FakeSetPosition,
+  .SetInfo = FakeSetInfo,
+  .Flush = FakeFlush
+};
+
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbStore.c"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c"
 
 #define MEDIA_BYTES (1u << 20)
 
@@ -26,6 +219,7 @@ EFI_BOOT_SERVICES *gBS;
 EFI_GUID gEfiPartTypeSystemPartGuid;
 EFI_GUID gEfiBlockIoProtocolGuid;
 EFI_GUID gEfiPartitionInfoProtocolGuid;
+EFI_GUID gEfiFileInfoGuid;
 
 static UINT8 mMediaBytes[MEDIA_BYTES];
 static EFI_BLOCK_IO_MEDIA mMedia;
@@ -36,6 +230,21 @@ static EFI_LBA mLastWriteLba;
 static UINTN mLastWriteBytes;
 static _Alignas(4096) UINT8 mAllocation[8192];
 static UINTN mModeSelectedMarkerCount;
+static EFI_BOOT_SERVICES mBootServices;
+static UINTN mRefusedMarkerCount;
+
+static EFI_STATUS EFIAPI
+FakeHandleProtocol (IN EFI_HANDLE Handle, IN EFI_GUID *Protocol,
+                    OUT VOID **Interface)
+{
+  if (Handle == (EFI_HANDLE)&mFakeRoot &&
+      CompareMem (Protocol, &gEfiBlockIoProtocolGuid,
+                  sizeof (EFI_GUID)) == 0) {
+    *Interface = &mBlockIo;
+    return EFI_SUCCESS;
+  }
+  return EFI_NOT_FOUND;
+}
 
 void *
 memcpy(void *Destination, const void *Source, size_t Length)
@@ -127,6 +336,9 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
   if (strstr(Format, "SFB: MARK mode-selected") != NULL) {
     ++mModeSelectedMarkerCount;
   }
+  if (strstr(Format, "SFB: MARK store-write-refused") != NULL) {
+    ++mRefusedMarkerCount;
+  }
 }
 
 VOID EFIAPI
@@ -176,6 +388,52 @@ __AsciiStrLen(IN CONST CHAR8 *String)
 }
 
 INTN EFIAPI
+AsciiStrCmp (IN CONST CHAR8 *FirstString, IN CONST CHAR8 *SecondString)
+{
+  while (*FirstString != '\0' && *FirstString == *SecondString) {
+    ++FirstString;
+    ++SecondString;
+  }
+  return (INTN)(UINT8)*FirstString - (INTN)(UINT8)*SecondString;
+}
+
+EFI_STATUS
+SfbOpenVolumeRoot (IN EFI_HANDLE Volume, OUT EFI_FILE_PROTOCOL **Root)
+{
+  if (Root == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *Root = NULL;
+  if (Volume != (EFI_HANDLE)&mFakeRoot) {
+    return EFI_NOT_FOUND;
+  }
+  *Root = &mFakeRoot;
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS
+SfbReadFileBytes (IN EFI_FILE_PROTOCOL *Root,
+                  IN CONST CHAR16      *Path,
+                  OUT VOID             *Buffer,
+                  IN UINTN             MaxBytes,
+                  OUT UINTN            *BytesRead)
+{
+  UINTN Bytes;
+  (void)Path;
+  if (Root != &mFakeRoot || Buffer == NULL || BytesRead == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  if (!mConfigPresent) {
+    *BytesRead = 0;
+    return EFI_NOT_FOUND;
+  }
+  Bytes = (mConfigBytes < MaxBytes) ? mConfigBytes : MaxBytes;
+  CopyMem (Buffer, mConfigData, Bytes);
+  *BytesRead = Bytes;
+  return EFI_SUCCESS;
+}
+
+INTN EFIAPI
 StrCmp(IN CONST CHAR16 *FirstString, IN CONST CHAR16 *SecondString)
 {
   while (*FirstString != L'\0' && *FirstString == *SecondString) {
@@ -204,6 +462,24 @@ FreeAlignedPages(IN VOID *Buffer, IN UINTN Pages)
 {
   (void)Buffer;
   (void)Pages;
+}
+
+UINTN EFIAPI
+__StrSize (IN CONST CHAR16 *String)
+{
+  UINTN Length = 0;
+  while (String[Length] != L'\0') {
+    ++Length;
+  }
+  return (Length + 1) * sizeof (CHAR16);
+}
+
+VOID *EFIAPI
+AllocateZeroPool (IN UINTN AllocationSize)
+{
+  assert(AllocationSize <= sizeof (mAllocation));
+  ZeroMem (mAllocation, sizeof (mAllocation));
+  return mAllocation;
 }
 
 VOID EFIAPI
@@ -263,6 +539,20 @@ static void
 ResetStore(UINT32 BlockSize)
 {
   assert(BlockSize != 0 && MEDIA_BYTES % BlockSize == 0);
+  ZeroMem (&mBootServices, sizeof (mBootServices));
+  mBootServices.HandleProtocol = FakeHandleProtocol;
+  gBS = &mBootServices;
+  ZeroMem (mConfigData, sizeof (mConfigData));
+  ZeroMem (mTempData, sizeof (mTempData));
+  mConfigBytes = 0;
+  mTempBytes = 0;
+  mFileKind = 0;
+  mFilePosition = 0;
+  mConfigPresent = FALSE;
+  mTempPresent = FALSE;
+  mFailFileWrite = FALSE;
+  mFailRename = FALSE;
+  SfbConfigUnbindVolume ();
   memset(mMediaBytes, 0, sizeof(mMediaBytes));
   memset(&mMedia, 0, sizeof(mMedia));
   memset(&mBlockIo, 0, sizeof(mBlockIo));
@@ -281,6 +571,7 @@ ResetStore(UINT32 BlockSize)
   mLastWriteLba = 0;
   mLastWriteBytes = 0;
   mModeSelectedMarkerCount = 0;
+  mRefusedMarkerCount = 0;
 
   memset(&mSfbStore, 0, sizeof(mSfbStore));
   mSfbStore.BlockIo = &mBlockIo;
@@ -379,11 +670,108 @@ TestInvalidGeometry(void)
 }
 
 
+static void
+SeedModeRecord (CHAR8 Digit)
+{
+  UINTN Offset = MEDIA_BYTES - SFB_STORE_MODE_TAIL_DISTANCE;
+
+  ZeroMem (mMediaBytes + Offset, SFB_STORE_SLOT_BYTES);
+  mMediaBytes[Offset + 0] = 'S';
+  mMediaBytes[Offset + 1] = 'F';
+  mMediaBytes[Offset + 2] = 'B';
+  mMediaBytes[Offset + 3] = 'M';
+  mMediaBytes[Offset + 4] = '1';
+  mMediaBytes[Offset + 5] = '|';
+  mMediaBytes[Offset + 6] = Digit;
+}
+
+static void
+SetConfigText (IN CONST CHAR8 *Text)
+{
+  mConfigBytes = AsciiStrLen (Text);
+  CopyMem (mConfigData, Text, mConfigBytes);
+  mConfigPresent = TRUE;
+}
+
+static void
+TestConfigReadAndMigration (VOID)
+{
+  SFB_BOOT_MODE Mode;
+  BOOLEAN Defaulted;
+  CHAR8 Record[SFB_STORE_SLOT_BYTES];
+  UINT8 TailBefore[SFB_STORE_SLOT_BYTES * 3];
+  UINTN WritesBefore;
+
+  ResetStore (512);
+  SeedModeRecord ('2');
+  SetConfigText ("mode=0\nmode=bad\ndefault=GOOD\ncustom=PATH\n");
+  SfbConfigBindVolume ((EFI_HANDLE)&mFakeRoot);
+  assert(SfbStoreReadMode (&Mode, &Defaulted) == EFI_SUCCESS);
+  assert(Mode == SfbBootModeHonestUnlocked && !Defaulted);
+  assert(SfbStoreRead (SFB_STORE_DEFAULT, Record, sizeof (Record)) ==
+         EFI_SUCCESS);
+  assert(AsciiStrCmp (Record, "GOOD") == 0);
+  assert(SfbStoreRead (SFB_STORE_CUSTOM, Record, sizeof (Record)) ==
+         EFI_SUCCESS);
+  assert(AsciiStrCmp (Record, "PATH") == 0);
+  SfbConfigUnbindVolume ();
+
+  ResetStore (512);
+  SeedModeRecord ('2');
+  SfbConfigBindVolume ((EFI_HANDLE)&mFakeRoot);
+  CopyMem (TailBefore, mMediaBytes + MEDIA_BYTES -
+           SFB_STORE_MODE_TAIL_DISTANCE, sizeof (TailBefore));
+  assert(SfbStoreReadMode (&Mode, &Defaulted) == EFI_SUCCESS);
+  assert(Mode == SfbBootModeKmProfile && !Defaulted);
+  assert(mConfigPresent && mTempPresent == FALSE);
+  WritesBefore = mTempBytes;
+  assert(SfbStoreReadMode (&Mode, &Defaulted) == EFI_SUCCESS);
+  assert(mTempBytes == WritesBefore);
+  assert(memcmp(TailBefore, mMediaBytes + MEDIA_BYTES -
+                SFB_STORE_MODE_TAIL_DISTANCE, sizeof (TailBefore)) == 0);
+  SfbConfigUnbindVolume ();
+
+  ResetStore (512);
+  SfbConfigBindVolume ((EFI_HANDLE)&mFakeRoot);
+  assert(SfbStoreReadMode (&Mode, &Defaulted) == EFI_SUCCESS);
+  assert(Mode == SfbBootModeAblFakeLocked && Defaulted);
+  SfbConfigUnbindVolume ();
+}
+
+static void
+TestConfigFailures (VOID)
+{
+  SFB_BOOT_MODE Mode;
+  BOOLEAN Defaulted;
+
+  ResetStore (512);
+  SeedModeRecord ('2');
+  SfbConfigBindVolume ((EFI_HANDLE)&mFakeRoot);
+  mFailRename = TRUE;
+  assert(SfbStoreReadMode (&Mode, &Defaulted) == EFI_SUCCESS);
+  assert(Mode == SfbBootModeKmProfile && !Defaulted);
+  assert(!mConfigPresent && !mTempPresent && mRefusedMarkerCount != 0);
+  SfbConfigUnbindVolume ();
+
+  ResetStore (512);
+  SeedModeRecord ('2');
+  SfbConfigBindVolume ((EFI_HANDLE)&mFakeRoot);
+  mMedia.ReadOnly = TRUE;
+  assert(SfbStoreWriteMode (SfbBootModeHonestUnlocked) ==
+         EFI_WRITE_PROTECTED);
+  assert(mRefusedMarkerCount != 0);
+  assert(SfbStoreReadMode (&Mode, &Defaulted) == EFI_SUCCESS);
+  assert(Mode == SfbBootModeKmProfile && !Defaulted);
+  SfbConfigUnbindVolume ();
+}
+
 int
 main(void)
 {
   TestBlockSize(512);
   TestBlockSize(4096);
   TestInvalidGeometry();
+  TestConfigReadAndMigration ();
+  TestConfigFailures ();
   return 0;
 }
