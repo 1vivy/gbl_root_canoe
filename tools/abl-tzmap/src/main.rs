@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use abl_tzmap::{DeriveFileError, ScanFileError, ValidateFileError, derive_to_file, enumeration_text, scan_file, validate_file};
+use abl_tzmap::{
+    DeriveFileError, ScanFileError, ValidateFileError, VerifyFileError, derive_to_file,
+    enumeration_text, scan_file, validate_file, verify_file,
+};
 use clap::{Parser, Subcommand};
 use thiserror::Error;
 
@@ -29,6 +32,15 @@ enum Command {
     },
     /// Strictly validate one 256-byte .tzmap sidecar.
     Validate { file: PathBuf },
+    /// Verify a sidecar's ABL digest against an ABL file.
+    Verify {
+        #[arg(long)]
+        sidecar: PathBuf,
+        #[arg(long)]
+        abl: PathBuf,
+        #[arg(long)]
+        allow_zero_digest: bool,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -39,6 +51,8 @@ enum CliError {
     Derive(#[from] DeriveFileError),
     #[error("validate: {0}")]
     Validate(#[from] ValidateFileError),
+    #[error("verify: {0}")]
+    Verify(#[from] VerifyFileError),
 }
 
 fn run(cli: Cli) -> Result<(), CliError> {
@@ -58,6 +72,10 @@ fn run(cli: Cli) -> Result<(), CliError> {
             derive_to_file(&abl, &out, allow_incomplete).map_err(CliError::from)
         }
         Command::Validate { file } => { validate_file(&file)?; Ok(()) }
+        Command::Verify { sidecar, abl, allow_zero_digest } => {
+            verify_file(&sidecar, &abl, allow_zero_digest)?;
+            Ok(())
+        }
     }
 }
 

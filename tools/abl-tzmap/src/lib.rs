@@ -165,6 +165,50 @@ pub enum ValidateFileError {
     Invalid(#[from] ManifestError),
 }
 
+#[derive(Debug, Error)]
+pub enum VerifyFileError {
+    #[error("unreadable sidecar input: {0}")]
+    ReadSidecar(#[source] io::Error),
+    #[error("sidecar parse failed: {0}")]
+    Parse(#[from] ManifestError),
+    #[error("unreadable ABL input: {0}")]
+    ReadAbl(#[source] io::Error),
+    #[error("sidecar contains an all-zero ABL digest; pass --allow-zero-digest to permit it")]
+    ZeroDigest,
+    #[error("sidecar digest mismatch: sidecar={sidecar}, actual={actual}")]
+    DigestMismatch { sidecar: String, actual: String },
+}
+
+pub fn verify_file(
+    sidecar_path: &Path,
+    abl_path: &Path,
+    allow_zero_digest: bool,
+) -> Result<(), VerifyFileError> {
+    let map = validate_file(sidecar_path).map_err(|error| match error {
+        ValidateFileError::Read(source) => VerifyFileError::ReadSidecar(source),
+        ValidateFileError::Invalid(source) => VerifyFileError::Parse(source),
+    })?;
+    let zero_digest = map.abl_digest == [0; 32];
+    if zero_digest && !allow_zero_digest {
+        return Err(VerifyFileError::ZeroDigest);
+    }
+    let mut file = File::open(abl_path).map_err(VerifyFileError::ReadAbl)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(VerifyFileError::ReadAbl)?;
+    let actual = scan::digest(&bytes);
+    if zero_digest {
+        return Ok(());
+    }
+    if map.abl_digest != actual {
+        return Err(VerifyFileError::DigestMismatch {
+            sidecar: hex_digest(&map.abl_digest),
+            actual: hex_digest(&actual),
+        });
+    }
+    Ok(())
+}
+
+
 pub fn validate_file(input_path: &Path) -> Result<TzMap, ValidateFileError> {
     let file = File::open(input_path).map_err(ValidateFileError::Read)?;
     let mut bytes = Vec::with_capacity(TZMAP_SIZE + 1);
