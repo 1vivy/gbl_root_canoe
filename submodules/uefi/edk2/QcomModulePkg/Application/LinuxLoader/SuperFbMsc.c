@@ -1,0 +1,482 @@
+/*
+ * USB mass-storage Bulk-Only Transport target.
+ *
+ * Copyright (c) 2026, contributors to the canoe ABL tree.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#include "SuperFbMsc.h"
+
+STATIC
+UINT32
+SfbMscLe32 (IN CONST UINT8 *Bytes)
+{
+  return (UINT32)Bytes[0] | ((UINT32)Bytes[1] << 8) |
+         ((UINT32)Bytes[2] << 16) | ((UINT32)Bytes[3] << 24);
+}
+
+EFI_STATUS
+SfbMscParseCbw (
+  IN CONST VOID *Buffer,
+  IN UINTN       BufferBytes,
+  OUT SFB_MSC_CBW *Cbw,
+  IN UINTN       LunCount
+  )
+{
+  CONST UINT8 *Bytes;
+  UINTN        Index;
+
+  if (Buffer == NULL || Cbw == NULL || BufferBytes != SFB_MSC_CBW_BYTES ||
+      LunCount == 0 || LunCount > SFB_MSC_MAX_LUNS) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Bytes = (CONST UINT8 *)Buffer;
+  if (SfbMscLe32 (Bytes) != SFB_MSC_CBW_SIGNATURE ||
+      (Bytes[12] & 0x7F) != 0 || Bytes[14] == 0 || Bytes[14] > 16 ||
+      Bytes[13] >= LunCount) {
+    return EFI_COMPROMISED_DATA;
+  }
+
+  Cbw->Signature = SFB_MSC_CBW_SIGNATURE;
+  Cbw->Tag = SfbMscLe32 (Bytes + 4);
+  Cbw->DataTransferLength = SfbMscLe32 (Bytes + 8);
+  Cbw->Flags = Bytes[12];
+  Cbw->Lun = Bytes[13];
+  Cbw->CdbLength = Bytes[14];
+  for (Index = 0; Index < sizeof (Cbw->Cdb); Index++) {
+    Cbw->Cdb[Index] = Bytes[15 + Index];
+  }
+  return EFI_SUCCESS;
+}
+
+VOID
+SfbMscBuildCsw (
+  OUT SFB_MSC_CSW *Csw,
+  IN UINT32        Tag,
+  IN UINT32        Residue,
+  IN UINT8         Status
+  )
+{
+  if (Csw == NULL) {
+    return;
+  }
+  Csw->Signature = SFB_MSC_CSW_SIGNATURE;
+  Csw->Tag = Tag;
+  Csw->DataResidue = Residue;
+  Csw->Status = Status;
+}
+
+#ifndef SFB_HOST_BUILD
+
+#include <Library/BaseMemoryLib.h>
+#include <Library/DebugLib.h>
+#include <Library/MemoryAllocationLib.h>
+#include <Library/UefiBootServicesTableLib.h>
+#include <Library/UefiLib.h>
+#include <Protocol/EFIUsbDevice.h>
+#include <Protocol/SimpleTextIn.h>
+
+extern EFI_STATUS
+SfbMscBuildDescriptorSet (OUT USB_DEVICE_DESCRIPTOR_SET *DescriptorSet);
+
+#define USB_INDEX_TO_EP(Index)  ((Index) & 0x0f)
+
+#define SFB_MSC_EP_OUT  0x01
+#define SFB_MSC_EP_IN   0x81
+#define SFB_MSC_EP_NUM  1
+#define SFB_MSC_BOT_OK  0
+#define SFB_MSC_BOT_FAIL 1
+#define SFB_MSC_BOT_PHASE 2
+
+typedef enum {
+  SfbMscStateCbw,
+  SfbMscStateDataIn,
+  SfbMscStateDataOut,
+  SfbMscStateCsw
+} SFB_MSC_STATE;
+
+typedef struct {
+  EFI_USB_DEVICE_PROTOCOL  *Usb;
+  CONST SFB_MSC_LUN        *Luns;
+  UINTN                     LunCount;
+  SFB_MSC_SENSE             Sense[SFB_MSC_MAX_LUNS];
+  VOID                     *RxBuffer;
+  VOID                     *TxBuffer;
+  SFB_MSC_CBW               Cbw;
+  SFB_MSC_SCSI_RESPONSE     Response;
+  SFB_MSC_STATE              State;
+  UINT32                    BlocksLeft;
+  EFI_LBA                   CurrentLba;
+  UINT32                    HostLength;
+  UINT32                    Transferred;
+  UINT32                    ChunkBytes;
+  UINT8                     BotStatus;
+  BOOLEAN                   Ejected[SFB_MSC_MAX_LUNS];
+  BOOLEAN                   Started;
+  BOOLEAN                   Connected;
+  BOOLEAN                   Disconnected;
+} SFB_MSC_CONTEXT;
+
+STATIC
+BOOLEAN
+SfbMscAllEjected (IN CONST SFB_MSC_CONTEXT *Context)
+{
+  UINTN Index;
+
+  for (Index = 0; Index < Context->LunCount; Index++) {
+    if (!Context->Ejected[Index]) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+STATIC
+BOOLEAN
+SfbMscCancelled (VOID)
+{
+  EFI_INPUT_KEY Key;
+
+  return (BOOLEAN)(gST != NULL && gST->ConIn != NULL &&
+                   !EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key)));
+}
+
+STATIC
+EFI_STATUS
+SfbMscQueueCbw (IN OUT SFB_MSC_CONTEXT *Context)
+{
+  Context->State = SfbMscStateCbw;
+  return Context->Usb->Send (SFB_MSC_EP_OUT, SFB_MSC_CBW_BYTES,
+                             Context->RxBuffer);
+}
+
+STATIC
+EFI_STATUS
+SfbMscQueueCsw (IN OUT SFB_MSC_CONTEXT *Context)
+{
+  SFB_MSC_CSW Csw;
+  UINT32      Residue;
+  UINTN       Index;
+
+  if (Context->HostLength >= Context->Transferred) {
+    Residue = Context->HostLength - Context->Transferred;
+  } else {
+    Residue = 0;
+  }
+  SfbMscBuildCsw (&Csw, Context->Cbw.Tag, Residue, Context->BotStatus);
+  for (Index = 0; Index < sizeof (Csw); Index++) {
+    ((UINT8 *)Context->TxBuffer)[Index] = ((CONST UINT8 *)&Csw)[Index];
+  }
+  Context->State = SfbMscStateCsw;
+  return Context->Usb->Send (SFB_MSC_EP_IN, sizeof (Csw), Context->TxBuffer);
+}
+
+STATIC
+EFI_STATUS
+SfbMscQueueReadChunk (IN OUT SFB_MSC_CONTEXT *Context)
+{
+  UINT32  MaxBlocks;
+  UINT32  Blocks;
+  UINTN   Bytes;
+  EFI_STATUS Status;
+
+  if (Context->BlocksLeft == 0) {
+    return SfbMscQueueCsw (Context);
+  }
+  MaxBlocks = SFB_MSC_TRANSFER_BYTES / Context->Response.BlockSize;
+  if (MaxBlocks == 0) {
+    return EFI_BAD_BUFFER_SIZE;
+  }
+  Blocks = (Context->BlocksLeft < MaxBlocks) ? Context->BlocksLeft : MaxBlocks;
+  Bytes = (UINTN)Blocks * Context->Response.BlockSize;
+  Status = Context->Luns[Context->Cbw.Lun].BlockIo->ReadBlocks (
+             Context->Luns[Context->Cbw.Lun].BlockIo,
+             Context->Luns[Context->Cbw.Lun].BlockIo->Media->MediaId,
+             Context->CurrentLba, Bytes, Context->TxBuffer);
+  if (EFI_ERROR (Status)) {
+    SfbMscScsiSetSense (&Context->Sense[Context->Cbw.Lun],
+                        SFB_MSC_SENSE_MEDIUM_ERROR, 0x11, 0);
+    Context->BotStatus = SFB_MSC_BOT_FAIL;
+    return SfbMscQueueCsw (Context);
+  }
+  Context->ChunkBytes = (UINT32)Bytes;
+  Context->State = SfbMscStateDataIn;
+  return Context->Usb->Send (SFB_MSC_EP_IN, Bytes, Context->TxBuffer);
+}
+
+STATIC
+EFI_STATUS
+SfbMscQueueWriteChunk (IN OUT SFB_MSC_CONTEXT *Context)
+{
+  UINT32 MaxBlocks;
+  UINT32 Blocks;
+
+  if (Context->BlocksLeft == 0) {
+    return SfbMscQueueCsw (Context);
+  }
+  MaxBlocks = SFB_MSC_TRANSFER_BYTES / Context->Response.BlockSize;
+  if (MaxBlocks == 0) {
+    return EFI_BAD_BUFFER_SIZE;
+  }
+  Blocks = (Context->BlocksLeft < MaxBlocks) ? Context->BlocksLeft : MaxBlocks;
+  Context->ChunkBytes = Blocks * Context->Response.BlockSize;
+  Context->State = SfbMscStateDataOut;
+  return Context->Usb->Send (SFB_MSC_EP_OUT, Context->ChunkBytes,
+                             Context->RxBuffer);
+}
+
+STATIC
+EFI_STATUS
+SfbMscBeginCommand (IN OUT SFB_MSC_CONTEXT *Context)
+{
+  EFI_STATUS Status;
+  UINT8      Direction;
+  UINT32     Expected;
+  UINTN      Index;
+
+  Status = SfbMscScsiCommand (Context->Cbw.Cdb, Context->Cbw.CdbLength,
+                             Context->Luns, Context->LunCount, Context->Cbw.Lun,
+                             &Context->Sense[Context->Cbw.Lun],
+                             &Context->Response);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Context->HostLength = Context->Cbw.DataTransferLength;
+  Context->Transferred = 0;
+  Context->BotStatus = (Context->Response.ScsiStatus ==
+                        SFB_MSC_SCSI_CHECK_CONDITION) ? SFB_MSC_BOT_FAIL :
+                        SFB_MSC_BOT_OK;
+  Context->BlocksLeft = Context->Response.Blocks;
+  Context->CurrentLba = Context->Response.Lba;
+
+  if (Context->Response.Eject) {
+    Context->Ejected[Context->Cbw.Lun] = TRUE;
+  }
+  if (Context->Response.Flush && Context->Luns[Context->Cbw.Lun].BlockIo != NULL &&
+      Context->Luns[Context->Cbw.Lun].BlockIo->FlushBlocks != NULL) {
+    Status = Context->Luns[Context->Cbw.Lun].BlockIo->FlushBlocks (
+               Context->Luns[Context->Cbw.Lun].BlockIo);
+    if (EFI_ERROR (Status)) {
+      SfbMscScsiSetSense (&Context->Sense[Context->Cbw.Lun],
+                          SFB_MSC_SENSE_MEDIUM_ERROR, 0x0C, 0);
+      Context->BotStatus = SFB_MSC_BOT_FAIL;
+    }
+  }
+
+  if (Context->BotStatus != SFB_MSC_BOT_OK ||
+      Context->Response.DataDirection == SFB_MSC_SCSI_DIR_NONE) {
+    return SfbMscQueueCsw (Context);
+  }
+
+  Direction = (Context->Cbw.Flags & 0x80) != 0 ?
+              SFB_MSC_SCSI_DIR_IN : SFB_MSC_SCSI_DIR_OUT;
+  Expected = (Context->Response.Blocks != 0) ? Context->Response.DataLength :
+             Context->Response.DataLength;
+  if (Direction != Context->Response.DataDirection ||
+      Context->HostLength != Expected) {
+    Context->BotStatus = SFB_MSC_BOT_PHASE;
+    return SfbMscQueueCsw (Context);
+  }
+
+  if (Context->Response.Blocks != 0) {
+    if (Context->Response.DataDirection == SFB_MSC_SCSI_DIR_IN) {
+      return SfbMscQueueReadChunk (Context);
+    }
+    return SfbMscQueueWriteChunk (Context);
+  }
+
+  for (Index = 0; Index < Context->Response.DataLength; Index++) {
+    ((UINT8 *)Context->TxBuffer)[Index] = Context->Response.Data[Index];
+  }
+  Context->ChunkBytes = Context->Response.DataLength;
+  Context->State = SfbMscStateDataIn;
+  return Context->Usb->Send (SFB_MSC_EP_IN, Context->ChunkBytes,
+                             Context->TxBuffer);
+}
+
+STATIC
+EFI_STATUS
+SfbMscTransferComplete (
+  IN OUT SFB_MSC_CONTEXT             *Context,
+  IN CONST USB_DEVICE_TRANSFER_OUTCOME *Outcome
+  )
+{
+  EFI_STATUS Status;
+  EFI_BLOCK_IO_PROTOCOL *BlockIo;
+  UINTN                  Lun;
+
+  if (Outcome->Status != UsbDeviceTransferStatusCompleteOK) {
+    return EFI_ABORTED;
+  }
+  Lun = Context->Cbw.Lun;
+  BlockIo = Context->Luns[Lun].BlockIo;
+
+  if (Context->State == SfbMscStateCbw) {
+    Status = SfbMscParseCbw (Context->RxBuffer, Outcome->BytesCompleted,
+                             &Context->Cbw, Context->LunCount);
+    if (EFI_ERROR (Status)) {
+      Context->Usb->SetEndpointStallState (SFB_MSC_EP_OUT, TRUE);
+      Context->Usb->SetEndpointStallState (SFB_MSC_EP_IN, TRUE);
+      Context->Usb->SetEndpointStallState (SFB_MSC_EP_OUT, FALSE);
+      Context->Usb->SetEndpointStallState (SFB_MSC_EP_IN, FALSE);
+      return SfbMscQueueCbw (Context);
+    }
+    return SfbMscBeginCommand (Context);
+  }
+
+  if ((Context->State == SfbMscStateDataIn ||
+       Context->State == SfbMscStateDataOut) &&
+      Outcome->BytesCompleted != Context->ChunkBytes) {
+    Context->BotStatus = SFB_MSC_BOT_PHASE;
+    return SfbMscQueueCsw (Context);
+  }
+
+  if (Context->State == SfbMscStateDataIn) {
+    Context->Transferred += Context->ChunkBytes;
+    if (Context->BlocksLeft != 0) {
+      Context->BlocksLeft -= Context->ChunkBytes / Context->Response.BlockSize;
+      Context->CurrentLba += Context->ChunkBytes / Context->Response.BlockSize;
+      return SfbMscQueueReadChunk (Context);
+    }
+    return SfbMscQueueCsw (Context);
+  }
+
+  if (Context->State == SfbMscStateDataOut) {
+    Status = BlockIo->WriteBlocks (BlockIo, BlockIo->Media->MediaId,
+                                   Context->CurrentLba, Context->ChunkBytes,
+                                   Context->RxBuffer);
+    if (EFI_ERROR (Status)) {
+      SfbMscScsiSetSense (&Context->Sense[Lun], SFB_MSC_SENSE_MEDIUM_ERROR,
+                          0x0C, 0);
+      Context->BotStatus = SFB_MSC_BOT_FAIL;
+      return SfbMscQueueCsw (Context);
+    }
+    Context->Transferred += Context->ChunkBytes;
+    Context->BlocksLeft -= Context->ChunkBytes / Context->Response.BlockSize;
+    Context->CurrentLba += Context->ChunkBytes / Context->Response.BlockSize;
+    return SfbMscQueueWriteChunk (Context);
+  }
+
+  if (Context->State == SfbMscStateCsw) {
+    if (SfbMscAllEjected (Context)) {
+      Context->Disconnected = TRUE;
+      return EFI_SUCCESS;
+    }
+    return SfbMscQueueCbw (Context);
+  }
+
+  return EFI_DEVICE_ERROR;
+}
+
+EFI_STATUS
+SfbMscRun (IN CONST SFB_MSC_LUN *Luns, IN UINTN LunCount)
+{
+  EFI_STATUS                  Status;
+  EFI_USB_DEVICE_PROTOCOL    *Usb = NULL;
+  USB_DEVICE_DESCRIPTOR_SET   DescriptorSet;
+  SFB_MSC_CONTEXT              Context;
+  USB_DEVICE_EVENT             Event;
+  USB_DEVICE_EVENT_DATA        EventData;
+  UINTN                        EventDataSize;
+  UINTN                        Index;
+
+  if (Luns == NULL || LunCount == 0 || LunCount > SFB_MSC_MAX_LUNS) {
+    return EFI_INVALID_PARAMETER;
+  }
+  for (Index = 0; Index < LunCount; Index++) {
+    if (Luns[Index].BlockIo == NULL || Luns[Index].BlockIo->Media == NULL ||
+        !Luns[Index].BlockIo->Media->MediaPresent) {
+      return EFI_NOT_READY;
+    }
+  }
+
+  Status = gBS->LocateProtocol (&gEfiUsbDeviceProtocolGuid, NULL,
+                                (VOID **)&Usb);
+  if (EFI_ERROR (Status) || Usb == NULL) {
+    return EFI_NOT_FOUND;
+  }
+  Status = SfbMscBuildDescriptorSet (&DescriptorSet);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  for (Index = 0; Index < sizeof (Context); Index++) {
+    ((UINT8 *)&Context)[Index] = 0;
+  }
+  Context.Usb = Usb;
+  Context.Luns = Luns;
+  Context.LunCount = LunCount;
+
+  Status = Usb->StartEx (&DescriptorSet);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+  Context.Started = TRUE;
+  Status = Usb->AllocateTransferBuffer (SFB_MSC_TRANSFER_BYTES,
+                                        &Context.RxBuffer);
+  if (EFI_ERROR (Status)) {
+    goto Done;
+  }
+  Status = Usb->AllocateTransferBuffer (SFB_MSC_TRANSFER_BYTES,
+                                        &Context.TxBuffer);
+  if (EFI_ERROR (Status)) {
+    goto Done;
+  }
+
+
+  while (!Context.Disconnected) {
+    if (SfbMscCancelled ()) {
+      Status = EFI_ABORTED;
+      break;
+    }
+    Status = Usb->HandleEvent (&Event, &EventDataSize, &EventData);
+    if (EFI_ERROR (Status)) {
+      break;
+    }
+    if (Event == UsbDeviceEventNoEvent) {
+      gBS->Stall (1000);
+      continue;
+    }
+    if (Event == UsbDeviceEventDeviceStateChange) {
+      if (EventData.DeviceState == UsbDeviceStateConnected &&
+          !Context.Connected) {
+        Context.Connected = TRUE;
+        Status = SfbMscQueueCbw (&Context);
+        if (EFI_ERROR (Status)) {
+          break;
+        }
+      } else if (EventData.DeviceState == UsbDeviceStateDisconnected) {
+        Context.Disconnected = TRUE;
+      }
+      continue;
+    }
+    if (Event == UsbDeviceEventTransferNotification &&
+        USB_INDEX_TO_EP (EventData.TransferOutcome.EndpointIndex) == SFB_MSC_EP_NUM) {
+      Status = SfbMscTransferComplete (&Context, &EventData.TransferOutcome);
+      if (EFI_ERROR (Status)) {
+        break;
+      }
+    }
+  }
+
+Done:
+  for (Index = 0; Index < LunCount; Index++) {
+    if (Luns[Index].BlockIo != NULL && Luns[Index].BlockIo->FlushBlocks != NULL) {
+      Luns[Index].BlockIo->FlushBlocks (Luns[Index].BlockIo);
+    }
+  }
+  if (Context.TxBuffer != NULL) {
+    Usb->FreeTransferBuffer (Context.TxBuffer);
+  }
+  if (Context.RxBuffer != NULL) {
+    Usb->FreeTransferBuffer (Context.RxBuffer);
+  }
+  if (Context.Started) {
+    Usb->Stop ();
+  }
+  return Status;
+}
+
+#endif /* SFB_HOST_BUILD */

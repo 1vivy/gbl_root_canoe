@@ -9,7 +9,10 @@
  */
 
 #include "SuperFbMenu.h"
+#include "SuperFbFileWindow.h"
+#include "SuperFbMsc.h"
 
+#include <Guid/Gpt.h>
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
@@ -18,7 +21,10 @@
 #include <Library/ShutdownServices.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
+#include <Protocol/BlockIo.h>
 #include <Protocol/SimpleTextIn.h>
+
+extern EFI_GUID gEfiPartitionRecordGuid;
 
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
@@ -311,9 +317,153 @@ SfbShowEnteringMenu (VOID)
   /* Wait for the key to be released... */
   gBS->Stall (SFB_ENTER_MENU_DELAY_S * 1000 * 1000);
 
+
   /* ...then drop anything typed or held during the wait so it does not leak
    * into the menu as a spurious keypress. */
   gST->ConIn->Reset (gST->ConIn, FALSE);
+}
+STATIC
+BOOLEAN
+SfbGptNameIsPersist (IN CONST CHAR16 *Stored)
+{
+  STATIC CONST CHAR16 Want[] = L"persist";
+  UINTN               Index;
+  CHAR16              A;
+  CHAR16              B;
+
+  if (Stored == NULL) {
+    return FALSE;
+  }
+  for (Index = 0; Index < 36 && Want[Index] != L'\0'; Index++) {
+    A = Stored[Index];
+    B = Want[Index];
+    if (A >= L'A' && A <= L'Z') {
+      A = (CHAR16)(A | 0x20);
+    }
+    if (A != B) {
+      return FALSE;
+    }
+  }
+  return (BOOLEAN)(Index == 36 || Stored[Index] == L'\0' ||
+                   Stored[Index] == L' ');
+}
+
+STATIC
+EFI_STATUS
+SfbFindPersistVolume (
+  OUT EFI_HANDLE               *Volume,
+  OUT EFI_BLOCK_IO_PROTOCOL   **BlockIo
+  )
+{
+  EFI_STATUS         Status;
+  EFI_HANDLE        *Volumes = NULL;
+  UINTN              VolumeCount = 0;
+  UINTN              Index;
+  EFI_BLOCK_IO_PROTOCOL *Candidate;
+  EFI_PARTITION_ENTRY *PartEntry;
+
+  if (Volume == NULL || BlockIo == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *Volume = NULL;
+  *BlockIo = NULL;
+  Status = SfbLocateVolumes (&Volumes, &VolumeCount);
+  if (EFI_ERROR (Status) || Volumes == NULL) {
+    return EFI_NOT_FOUND;
+  }
+  for (Index = 0; Index < VolumeCount; Index++) {
+    Candidate = NULL;
+    PartEntry = NULL;
+    Status = gBS->HandleProtocol (Volumes[Index], &gEfiBlockIoProtocolGuid,
+                                  (VOID **)&Candidate);
+    if (EFI_ERROR (Status) || Candidate == NULL || Candidate->Media == NULL ||
+        !Candidate->Media->MediaPresent) {
+      continue;
+    }
+    Status = gBS->HandleProtocol (Volumes[Index], &gEfiPartitionRecordGuid,
+                                  (VOID **)&PartEntry);
+    if (EFI_ERROR (Status) || PartEntry == NULL ||
+        !SfbGptNameIsPersist (PartEntry->PartitionName)) {
+      continue;
+    }
+    *Volume = Volumes[Index];
+    *BlockIo = Candidate;
+    break;
+  }
+  FreePool (Volumes);
+  return (*Volume == NULL) ? EFI_NOT_FOUND : EFI_SUCCESS;
+}
+
+STATIC
+VOID
+SfbMscName (OUT CHAR8 *Destination, IN UINTN Length, IN CONST CHAR8 *Source)
+{
+  UINTN Index;
+
+  for (Index = 0; Index < Length; Index++) {
+    Destination[Index] = (Source != NULL && Source[Index] != '\0') ?
+                         Source[Index] : ' ';
+  }
+}
+
+STATIC
+EFI_STATUS
+SfbRunMassStorageMode (VOID)
+{
+  EFI_STATUS              Status;
+  EFI_HANDLE              PersistVolume;
+  EFI_BLOCK_IO_PROTOCOL  *PersistBlockIo;
+  EFI_HANDLE              WindowHandle = NULL;
+  EFI_BLOCK_IO_PROTOCOL  *WindowBlockIo;
+  SFB_FILE_WINDOW_INFO    WindowInfo;
+  SFB_MSC_LUN             Luns[2];
+  UINTN                   LunCount = 1;
+
+  Status = SfbFindPersistVolume (&PersistVolume, &PersistBlockIo);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  ZeroMem (Luns, sizeof (Luns));
+  Luns[0].BlockIo = PersistBlockIo;
+  Luns[0].ReadOnly = PersistBlockIo->Media->ReadOnly;
+  SfbMscName (Luns[0].Vendor, sizeof (Luns[0].Vendor), "CANOE");
+  SfbMscName (Luns[0].Product, sizeof (Luns[0].Product), "persist");
+
+  Status = SfbOpenFileWindow (PersistVolume, L"\\efisp.fat", &WindowHandle,
+                              &WindowInfo);
+  if (!EFI_ERROR (Status) && WindowHandle != NULL) {
+    WindowBlockIo = SfbFileWindowBlockIo (WindowHandle);
+    if (WindowBlockIo != NULL && WindowBlockIo->Media != NULL &&
+        WindowBlockIo->Media->MediaPresent) {
+      Luns[1].BlockIo = WindowBlockIo;
+      Luns[1].ReadOnly = (BOOLEAN)(!WindowInfo.StampValid ||
+                                   WindowBlockIo->Media->ReadOnly);
+      SfbMscName (Luns[1].Vendor, sizeof (Luns[1].Vendor), "CANOE");
+      SfbMscName (Luns[1].Product, sizeof (Luns[1].Product), "efisp.fat");
+      LunCount = 2;
+    } else {
+      SfbCloseFileWindow (WindowHandle);
+      WindowHandle = NULL;
+    }
+  }
+
+  SfbBeginScreen (L"USB Mass Storage",
+                  L"Edit the boot chain from the connected PC.");
+  Print (L"LUN 0: persist (%s)\r\n",
+         Luns[0].ReadOnly ? L"read-only" : L"read/write");
+  if (LunCount > 1) {
+    Print (L"LUN 1: efisp.fat (%s)\r\n",
+           Luns[1].ReadOnly ? L"read-only" : L"read/write");
+  }
+  Print (L"\r\nEject every disk to return, or press any key to cancel.\r\n");
+  SfbEndScreen (L"USB mass storage active");
+
+  Status = SfbMscRun (Luns, LunCount);
+  if (WindowHandle != NULL) {
+    SfbCloseFileWindow (WindowHandle);
+  }
+  return Status;
 }
 
 /* ---- boot menu ---------------------------------------------------------- */
@@ -577,6 +727,14 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
       Rebuild = TRUE;
       break;
 
+    case SfbEntryMassStorage:
+      Status = SfbRunMassStorageMode ();
+      if (EFI_ERROR (Status)) {
+        SfbReportStatus (L"USB mass storage unavailable", Status);
+      }
+      /* The host may have rewritten BOOTENTRIES while the LUN was exported. */
+      Rebuild = TRUE;
+      break;
     case SfbEntrySubmenu:
       SfbRunSubMenu (Menu.Entry[Chosen].Volume,
                      Menu.Entry[Chosen].Path,

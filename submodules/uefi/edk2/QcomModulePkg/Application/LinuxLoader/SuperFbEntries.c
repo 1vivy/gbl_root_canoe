@@ -961,11 +961,12 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   SfbAppendBuiltIn (Menu, SfbEntryMode, SfbModeLabel (Mode));
   SfbScanVolumes (Menu);
   /*
-   * Preserve one slot for a saved custom entry and four for the mandatory
+   * Preserve one slot for a saved custom entry and five for the mandatory
    * recovery actions below. Discovery is best-effort; fastboot, selector,
-   * power-off, and restart must never disappear when BOOTENTRIES is full.
+   * mass storage, power-off, and restart must never disappear when
+   * BOOTENTRIES is full.
    */
-  while (Menu->Count >= SFB_MAX_ENTRIES - 4) {
+  while (Menu->Count >= SFB_MAX_ENTRIES - 5) {
     Menu->Count--;
     SfbFreeEntry (&Menu->Entry[Menu->Count]);
   }
@@ -973,6 +974,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
 
   SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Fastboot");
   SfbAppendBuiltIn (Menu, SfbEntrySelector, L"Enter EFI Program Selector");
+  SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");
   SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power Off");
   SfbAppendBuiltIn (Menu, SfbEntryRestart, L"Restart");
 
