@@ -89,7 +89,7 @@ echo "  BDS.efi            - superfastboot BDS (flash raw to the efisp partition
 echo "  ABL_original.efi   - original unpatched loader (for analysis; do NOT flash)"
 echo ""
 echo "Note: this toolkit has no automated installer; place the files by hand."
-echo "The Linux and Windows toolkits ship canoe_prep_device / canoe_prep / canoe_stage"
+echo "The Linux and Windows toolkits ship canoe prep-device / prep / install"
 echo "for an ADB-driven install from a custom recovery."
 echo ""
 echo "---- Manual install flow (English) ----"

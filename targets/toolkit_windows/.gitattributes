@@ -8,7 +8,4 @@
 # shebang fail when invoked directly.
 *.cmd text eol=crlf
 *.py text eol=lf
-canoe_build text eol=lf
-canoe_prep text eol=lf
-canoe_prep_device text eol=lf
-canoe_stage text eol=lf
+canoe text eol=lf
