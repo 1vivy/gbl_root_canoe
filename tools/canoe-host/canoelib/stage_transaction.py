@@ -9,21 +9,18 @@ from __future__ import annotations
 import shlex
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Final
 
 from .adb import Adb
 from .errors import CanoeError
 from .layout import Toolkit
-from .ui import emit, note, warn
+from .ui import emit
 
 # The device script's own marks. `done` is its last line and it prints only on
 # success, so it is the receipt; `first-install` distinguishes a device that had
 # no previous generation to demote.
 DONE_MARK: Final = "CANOE-MARK: done"
 FIRST_INSTALL_MARK: Final = "CANOE-MARK: first-install"
-
-BACKUP_NAME: Final = "efisp-backup.img"
 
 NO_SIGNOFF: Final = "the device-side install never signed off; adb's exit status is no proof"
 
@@ -36,8 +33,6 @@ class Context:
     toolkit: Toolkit
     stage: str
     boot_root: str
-    install_bds: bool
-
 
 @dataclass(frozen=True, slots=True)
 class Receipt:
@@ -46,7 +41,6 @@ class Receipt:
     code: int
     completed: bool
     first_install: bool
-
 
 def quote(path: str) -> str:
     """Quote a device-shell path, leaving ordinary paths readable in logs."""
@@ -61,15 +55,16 @@ def _output(out: str, err: str) -> None:
         print(err, file=sys.stderr, end="", flush=True)
 
 
-def run_transaction(context: Context, efisp_device: str | None) -> Receipt:
+def run_transaction(context: Context, mode: int, boot_entry: str) -> Receipt:
     """Invoke the device-side install and report what it said about itself."""
     args = [quote(context.stage), quote(context.boot_root)]
-    if context.install_bds:
-        if efisp_device is None:
-            raise CanoeError("efisp device was not resolved")
-        args.extend((quote(efisp_device), quote(f"{context.stage}/{BACKUP_NAME}")))
     script = quote(f"{context.stage}/canoe_device_install.sh")
-    result = context.adb.shell(f"sh {script} {' '.join(args)}")
+    command = (
+        f"CANOE_MODE={quote(str(mode))} "
+        f"CANOE_BOOT_ENTRY={quote(boot_entry)} "
+        f"sh {script} {' '.join(args)}"
+    )
+    result = context.adb.shell(command)
     _output(result.out, result.err)
     return Receipt(
         code=result.code,
@@ -93,20 +88,3 @@ def check(receipt: Receipt) -> None:
     if not receipt.completed:
         raise CanoeError(NO_SIGNOFF)
 
-
-def pull_backup(context: Context, work: Path) -> None:
-    """Retrieve the pre-write efisp image, whether or not the write succeeded.
-
-    On failure it is the recovery artifact and on success the rollback one, so
-    it is fetched either way, and failing to fetch it is not itself fatal.
-    """
-    remote = f"{context.stage}/{BACKUP_NAME}"
-    if not context.adb.test(f"-s {quote(remote)}"):
-        return
-    local = work / BACKUP_NAME
-    try:
-        context.adb.pull(remote, local)
-    except CanoeError:
-        warn("could not retrieve the efisp backup from the device")
-    else:
-        note(f"efisp backup saved to {local}")

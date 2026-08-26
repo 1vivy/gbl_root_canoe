@@ -5,36 +5,37 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tests.conftest import FakeToolkit
+    from tests.conftest import FakeToolkit, ToolkitFactory
 
 
 def _prepare(toolkit: FakeToolkit) -> None:
     toolkit.plant_triplet()
 
 
-def test_install_writes_config_and_bds_without_tail_records(toolkit: FakeToolkit) -> None:
-    """Given a prepared triplet, install writes canoe.cfg and the raw BDS image."""
+def test_install_writes_config_without_raw_bds_write(toolkit: FakeToolkit) -> None:
+    """Given a prepared triplet, install writes canoe.cfg but leaves efisp raw bytes alone."""
     _prepare(toolkit)
+    before_efisp = toolkit.device.efisp.read_bytes()
     result = toolkit.run("canoe", "install", "--mode", "2")
-    before_config = toolkit.root / "efisp" / "canoe.cfg"
+
     assert result.returncode == 0, result.stderr
     config = (toolkit.device.boot_root / "canoe.cfg").read_text(encoding="ascii")
     assert "version 1" in config
-    assert "mode 2" in before_config.read_text(encoding="ascii")
+    assert "mode 2" in config
     assert "role active" in config
-    assert toolkit.device.efisp.read_bytes().startswith(b"MZ-NEW-BDS-IMAGE")
+    assert toolkit.device.efisp.read_bytes() == before_efisp
+    assert not (toolkit.root / "efisp" / "canoe.cfg").exists()
 
 
-def test_install_skip_bds_changes_only_the_boot_root(toolkit: FakeToolkit) -> None:
-    """Given --skip-bds, the config tree commits while the raw efisp bytes stay intact."""
+
+def test_install_mode_zero_reaches_installed_config(toolkit: FakeToolkit) -> None:
+    """Given mode zero, the shared writer stores mode zero in the installed entry."""
     _prepare(toolkit)
-    before = toolkit.device.efisp.read_bytes()
-    result = toolkit.run("canoe", "install", "--skip-bds", "--mode", "0")
+    result = toolkit.run("canoe", "install", "--mode", "0")
 
     assert result.returncode == 0, result.stderr
-    assert toolkit.device.efisp.read_bytes() == before
-    assert (toolkit.device.boot_root / "canoe.cfg").is_file()
-
+    config = (toolkit.device.boot_root / "canoe.cfg").read_text(encoding="ascii")
+    assert "  mode 0\n" in config
 
 def test_install_rejects_unknown_mode_before_adb(toolkit: FakeToolkit) -> None:
     """Given an unsupported mode, install rejects it without contacting the device."""
@@ -44,6 +45,26 @@ def test_install_rejects_unknown_mode_before_adb(toolkit: FakeToolkit) -> None:
     assert result.returncode != 0
     assert "must be 0, 1 or 2" in result.stderr
     assert toolkit.device.log == ""
+
+
+def test_install_mass_storage_uses_the_same_transaction(make_toolkit: ToolkitFactory) -> None:
+    """Given a mounted persist path, mass storage runs the shared transaction locally."""
+    toolkit = make_toolkit()
+    _prepare(toolkit)
+    result = toolkit.run(
+        "canoe",
+        "install",
+        "--boot-root",
+        str(toolkit.device.persist),
+        "--slot",
+        "a",
+        "--mode",
+        "0",
+    )
+
+    assert result.returncode == 0, result.stderr
+    config = (toolkit.device.boot_root / "canoe.cfg").read_text(encoding="ascii")
+    assert "  mode 0\n" in config
 
 
 def test_oneshot_writes_only_explicit_host_output(toolkit: FakeToolkit) -> None:

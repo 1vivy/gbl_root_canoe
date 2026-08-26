@@ -61,10 +61,11 @@ def _parser() -> argparse.ArgumentParser:
         epilog=(
             "Run from a custom recovery with ADB enabled, then canoe install. This never "
             "touches the abl partition: making it carry the GBL vulnerability is your own "
-            "'fastboot flash abl <vulnerable>.img' step, and boot.efi does not have to match "
-            "the abl partition's version. Order matters: boot.efi comes from abl and "
-            "boot.efi.gm2p from vbmeta, so pulling both gives a matching pair only while abl "
-            "still holds its original image. Run this BEFORE flashing a downgraded ABL."
+            "'fastboot flash abl <vulnerable>.img' step, only when the installed ABL lacks "
+            "the GBL vulnerability; boot.efi does not have to match the abl partition's "
+            "version. Order matters: boot.efi comes from abl and boot.efi.gm2p from vbmeta, "
+            "so pulling both gives a matching pair only while abl still holds its original "
+            "image. Run this BEFORE flashing a downgraded ABL."
         ),
         exit_on_error=False,
     )
@@ -162,6 +163,13 @@ def _pull_pair(toolkit: Toolkit, adb: Adb, options: _Options) -> str:
     note(f"images/abl.img: {size_of(toolkit.abl_image)} bytes")
     dump_part(adb, vbmeta, toolkit.vbmeta_image)
     note(f"images/vbmeta.img: {size_of(toolkit.vbmeta_image)} bytes")
+    try:
+        if selected is None:
+            toolkit.slot_receipt.unlink(missing_ok=True)
+        else:
+            toolkit.slot_receipt.write_text(f"{selected}\n", encoding="ascii")
+    except OSError as exc:
+        raise CanoeError(f"could not record the source slot: {exc}") from exc
     return f"{abl} + {vbmeta}"
 
 
@@ -188,6 +196,10 @@ def _run(argv: Sequence[str]) -> None:
     # Mixing one supplied image with one pulled image recreates the
     # boot.efi/.gm2p version mismatch this pathway exists to prevent.
     if options.abl is not None and options.vbmeta is not None:
+        try:
+            toolkit.slot_receipt.unlink(missing_ok=True)
+        except OSError as exc:
+            raise CanoeError(f"could not clear the source slot: {exc}") from exc
         abl = _toolkit_path(toolkit, options.abl)
         vbmeta = _toolkit_path(toolkit, options.vbmeta)
         if not abl.is_file():

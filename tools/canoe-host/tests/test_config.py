@@ -1,14 +1,23 @@
-"""Contract tests for the host canoe.cfg reader and writer."""
+"""Contract tests for the host canoe.cfg parser and verifier."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from canoelib.config import Config, ConfigEntry, read_config, write_config
+import pytest
+
+from canoelib.config import (
+    Config,
+    ConfigEntry,
+    ConfigError,
+    read_config,
+    serialize_config,
+    verify_config,
+)
 
 
-def test_writer_round_trips_a_config_and_bumps_generation(tmp_path: Path) -> None:
-    """Given one generated config, reading the file preserves values and increments generation."""
+def test_verifier_round_trips_a_canonical_config(tmp_path: Path) -> None:
+    """Given canonical bytes from the shared format, verification preserves values."""
     path = tmp_path / "canoe.cfg"
     original = Config(
         (ConfigEntry("android-a", "Android (slot A)", "boot.efi", 1, "active"),),
@@ -18,16 +27,15 @@ def test_writer_round_trips_a_config_and_bumps_generation(tmp_path: Path) -> Non
         mode=1,
         devinfo_repair="asneeded",
     )
+    path.write_text(serialize_config(original, generation=4), encoding="ascii")
 
-    generation = write_config(path, original)
-    parsed = read_config(path)
+    parsed = verify_config(path)
 
-    assert generation == 5
-    assert parsed == Config(original.entries, 5, 5, "android-a", 1, "asneeded")
+    assert parsed == original
 
 
-def test_writer_emits_active_inactive_and_backup_entries(tmp_path: Path) -> None:
-    """Given three slot roles, the generated file keeps each image policy distinct."""
+def test_verifier_rejects_noncanonical_bytes(tmp_path: Path) -> None:
+    """Given a parseable config with an extra byte, verification refuses it."""
     path = tmp_path / "canoe.cfg"
     config = Config(
         (
@@ -38,10 +46,12 @@ def test_writer_emits_active_inactive_and_backup_entries(tmp_path: Path) -> None
         default="android-a",
         mode=1,
     )
+    path.write_text(serialize_config(config) + "\n", encoding="ascii")
 
-    write_config(path, config)
+    with pytest.raises(ConfigError, match="byte-identical"):
+        verify_config(path)
+
     parsed = read_config(path)
-
     assert parsed.entries == config.entries
     assert [entry.role for entry in parsed.entries] == ["active", "inactive", "backup"]
     assert [entry.mode for entry in parsed.entries] == [1, 2, 0]

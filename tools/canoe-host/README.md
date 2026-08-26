@@ -30,9 +30,13 @@ One implementation, driven by real tests, removes the class.
 - **No shell strings.** Every child process is an argv list through
   `canoe.proc.run`, which is what retires the quoting and word-splitting class of
   bug for good.
-- The install transaction is deliberately *not* here. It runs on the device, so
-  it stays in `tools/canoe-device/canoe_device_install.sh`, and both platforms
-  invoke that one copy.
+- The install transaction is deliberately *not* here. It runs through the shared
+  `tools/canoe-device/canoe_device_install.sh` and `canoe_boot_entry.sh` scripts,
+  so ADB and USB Mass Storage invoke exactly the same implementation.
+- `canoe install` defaults to ADB. For a BDS `oem mass-storage:persist` export,
+  use `canoe install --via mass-storage`; for an already-mounted persist export,
+  use `canoe install --boot-root <drive>:\`. Host-run transactions require
+  `--slot a|b`, unless `canoe prep-device` recorded the source slot.
 
 ## Development
 

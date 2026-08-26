@@ -42,6 +42,7 @@ def test_prep_device_supplied_pair_never_contacts_device(toolkit: FakeToolkit) -
     assert toolkit.device.log == ""
     assert toolkit.read("images/abl.img") == abl.read_bytes()
     assert toolkit.read("images/vbmeta.img") == vbmeta.read_bytes()
+    assert not toolkit.slot_receipt.exists(), "a supplied pair has no slot to record"
 
 
 def test_prep_device_inactive_uses_the_non_active_slot(toolkit: FakeToolkit) -> None:
@@ -51,6 +52,7 @@ def test_prep_device_inactive_uses_the_non_active_slot(toolkit: FakeToolkit) -> 
     result = toolkit.run("canoe", "prep-device", "--slot", "inactive", "--keep-images")
     assert result.returncode == 0, result.stderr
     assert "the slot an adb sideload has just written" in result.stdout
+    assert toolkit.slot_receipt.read_text(encoding="ascii") == "_b\n"
     assert b"INACTIVE-ABL-PAYLOAD" in toolkit.read("efisp/boot.efi")
     assert toolkit.read("images/abl.img") == b"INACTIVE-ABL-PAYLOAD"
 
