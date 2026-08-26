@@ -23,13 +23,16 @@ features:
     details: Release download & flashing guide — BDS Modes 0/1/2 (honest unlocked / ABL fake locked / KM-SPSS profile spoof); hardware re-lock is a separate, non-BDS operation
     link: /install
   - title: Usage
-    details: Superfastboot command reference — lock/unlock BL, flash, reboot
+    details: Superfastboot command reference — boot menu, mass storage, lock/unlock BL, flash, reboot
     link: /usage
+  - title: USB Mass Storage
+    details: Export persist or logfs, repair the boot root without ADB, and mount ext4 on Windows
+    link: /mass-storage
   - title: OTA
-    details: Xiaomi & OnePlus update security warnings, anti-rollback fuse risk
+    details: Xiaomi & OnePlus update security warnings, OTA watcher, anti-rollback fuse risk
     link: /ota
   - title: Uninstall
-    details: Erase efisp partition, restore unlocked root state
+    details: Remove the efisp chain and canoe.cfg, restore unlocked root state
     link: /uninstall
   - title: Build
     details: Device-specific and generic builds from source
