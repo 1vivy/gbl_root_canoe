@@ -1,9 +1,8 @@
 /*
  * Simple FAT32 file browser for the super-fastboot boot menu.
  *
- * Pick a volume, walk directories with the volume keys, and open an EFI
- * application with power to boot it once or add it to the boot menu.
- *
+ * Pick a volume, walk directories with the volume keys, and launch an EFI
+ * application for this boot only.
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
  */
@@ -369,8 +368,7 @@ SfbDriverActionMenu (IN EFI_HANDLE   Volume,
 
 /*
  * Offer what can be done with one .efi. Returns TRUE when the browser should
- * unwind all the way back to the boot menu, which is what adding an entry does
- * so the user immediately sees it listed.
+ * unwind all the way back to the boot menu after a launch.
  */
 STATIC
 BOOLEAN
@@ -380,8 +378,7 @@ SfbEfiActionMenu (IN EFI_HANDLE    Volume,
                   IN SFB_BOOT_MODE Mode)
 {
   STATIC CONST CHAR16  *Actions[] = {
-    L"Boot (temporary)",
-    L"Add to BootMenu",
+    L"Boot (this boot)",
     L"Back"
   };
 
@@ -425,24 +422,12 @@ SfbEfiActionMenu (IN EFI_HANDLE    Volume,
     }
 
     if (Cursor == 0) {
-      /* Temporary: deliberately does not touch the default-entry variable.
-       * Menu-driven launch, so clear the screen for the "Booting" banner. */
-      Status = SfbLaunchEntry (&Entry, TRUE, TRUE, Mode);
+      /* Browsed images are explicitly temporary and never become a menu row. */
+      Status = SfbLaunchEntry (&Entry, TRUE, Mode);
       if (EFI_ERROR (Status)) {
         SfbReportStatus (L"Boot failed", Status);
       }
       continue;
-    }
-
-    if (Cursor == 1) {
-      Status = SfbSaveCustomEntry (&Entry);
-      if (EFI_ERROR (Status)) {
-        SfbReportStatus (L"Could not save entry", Status);
-        continue;
-      }
-      SfbReportStatus (L"Added to boot menu", Status);
-      SfbFreeEntry (&Entry);
-      return TRUE;
     }
 
     SfbFreeEntry (&Entry);

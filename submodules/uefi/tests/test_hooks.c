@@ -17,6 +17,7 @@
 #include <Protocol/BlockIo.h>
 
 #include <assert.h>
+#include <stdarg.h>
 #include <string.h>
 
 EFI_GUID gEfiQcomVerifiedBootProtocolGuid = EFI_VERIFIEDBOOT_PROTOCOL_GUID;
@@ -64,6 +65,11 @@ static UINTN mStallCount;
 static UINTN mStallTotalUs;
 static UINTN mReserveSwallowMarkerCount;
 static UINTN mReserveAbsentMarkerCount;
+static UINTN mEfispHideMarkerCount;
+static UINTN mLockstateNoneMarkerCount;
+static UINTN mLockstateRepairMarkerCount;
+static UINTN mLockstateRefusedMarkerCount;
+static UINTN mLockstateMarkerCount;
 static void
 ResetMarkerCounters(void)
 {
@@ -84,6 +90,11 @@ ResetMarkerCounters(void)
   mTokenNoticeCount = 0;
   mReserveSwallowMarkerCount = 0;
   mReserveAbsentMarkerCount = 0;
+  mEfispHideMarkerCount = 0;
+  mLockstateNoneMarkerCount = 0;
+  mLockstateRepairMarkerCount = 0;
+  mLockstateRefusedMarkerCount = 0;
+  mLockstateMarkerCount = 0;
   mStallCount = 0;
   mStallTotalUs = 0;
 }
@@ -318,6 +329,34 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
   if (strstr(Format, "component=reserve universal=1 present=0") != NULL) {
     ++mReserveAbsentMarkerCount;
   }
+  if (strstr(Format, "SFB: MARK efisp-hide status=") != NULL) {
+    ++mEfispHideMarkerCount;
+  }
+  if (strstr(Format, "SFB: MARK lockstate") != NULL) {
+    va_list Args;
+    UINT32 ObservedUnlocked;
+    UINT32 ObservedCritical;
+    UINT32 Required;
+    CONST CHAR8 *Action;
+
+    va_start(Args, Format);
+    ObservedUnlocked = va_arg(Args, UINT32);
+    ObservedCritical = va_arg(Args, UINT32);
+    Required = va_arg(Args, UINT32);
+    Action = va_arg(Args, CONST CHAR8 *);
+    va_end(Args);
+    (void)ObservedUnlocked;
+    (void)ObservedCritical;
+    (void)Required;
+    ++mLockstateMarkerCount;
+    if (AsciiStrCmp(Action, "none") == 0) {
+      ++mLockstateNoneMarkerCount;
+    } else if (AsciiStrCmp(Action, "repair") == 0) {
+      ++mLockstateRepairMarkerCount;
+    } else if (AsciiStrCmp(Action, "refused") == 0) {
+      ++mLockstateRefusedMarkerCount;
+    }
+  }
 }
 
 static EFI_STATUS EFIAPI
@@ -348,16 +387,17 @@ FakeLocateProtocol(IN EFI_GUID *Protocol, IN VOID *Registration,
   return EFI_NOT_FOUND;
 }
 
-/* A minimal two-entry GPT: one vendor reserve partition and one ordinary
- * partition that must stay untouched. mReserveName is what the first entry is
- * called, so a non-Oplus device is modelled by renaming it. */
-#define FAKE_PART_COUNT  2u
+/* A minimal three-entry GPT: one vendor reserve partition, one ordinary
+ * partition that must stay untouched, and the efisp image partition. */
+#define FAKE_PART_COUNT  3u
 
 static EFI_PARTITION_ENTRY mPartEntries[FAKE_PART_COUNT];
 static EFI_BLOCK_IO_PROTOCOL mPartBlockIo[FAKE_PART_COUNT];
 static EFI_BLOCK_IO_MEDIA mPartMedia[FAKE_PART_COUNT];
 static EFI_HANDLE mPartHandles[FAKE_PART_COUNT];
 static UINTN mPartWriteCount[FAKE_PART_COUNT];
+static UINTN mPartReadCount[FAKE_PART_COUNT];
+static UINTN mPartFlushCount[FAKE_PART_COUNT];
 static CONST CHAR16 *mReserveName = L"oplusreserve1";
 
 static EFI_STATUS EFIAPI
@@ -370,6 +410,36 @@ FakePartWriteBlocks(IN EFI_BLOCK_IO_PROTOCOL *This, IN UINT32 MediaId,
   for (Index = 0; Index < FAKE_PART_COUNT; ++Index) {
     if (&mPartBlockIo[Index] == This) {
       ++mPartWriteCount[Index];
+      return EFI_SUCCESS;
+    }
+  }
+  return EFI_INVALID_PARAMETER;
+}
+
+static EFI_STATUS EFIAPI
+FakePartReadBlocks(IN EFI_BLOCK_IO_PROTOCOL *This, IN UINT32 MediaId,
+                   IN EFI_LBA Lba, IN UINTN BufferSize, OUT VOID *Buffer)
+{
+  UINTN Index;
+
+  (void)MediaId; (void)Lba; (void)BufferSize; (void)Buffer;
+  for (Index = 0; Index < FAKE_PART_COUNT; ++Index) {
+    if (&mPartBlockIo[Index] == This) {
+      ++mPartReadCount[Index];
+      return EFI_SUCCESS;
+    }
+  }
+  return EFI_INVALID_PARAMETER;
+}
+
+static EFI_STATUS EFIAPI
+FakePartFlushBlocks(IN EFI_BLOCK_IO_PROTOCOL *This)
+{
+  UINTN Index;
+
+  for (Index = 0; Index < FAKE_PART_COUNT; ++Index) {
+    if (&mPartBlockIo[Index] == This) {
+      ++mPartFlushCount[Index];
       return EFI_SUCCESS;
     }
   }
@@ -397,14 +467,22 @@ InitializePartitions(void)
     memset(&mPartMedia[Index], 0, sizeof(mPartMedia[Index]));
     mPartMedia[Index].BlockSize = 4096;
     mPartMedia[Index].LastBlock = 0x2000;
+    mPartMedia[Index].MediaPresent = TRUE;
     memset(&mPartBlockIo[Index], 0, sizeof(mPartBlockIo[Index]));
     mPartBlockIo[Index].Media = &mPartMedia[Index];
     mPartBlockIo[Index].WriteBlocks = FakePartWriteBlocks;
+    if (Index == 2) {
+      mPartBlockIo[Index].ReadBlocks = FakePartReadBlocks;
+      mPartBlockIo[Index].FlushBlocks = FakePartFlushBlocks;
+    }
     mPartHandles[Index] = (EFI_HANDLE)&mPartBlockIo[Index];
     mPartWriteCount[Index] = 0;
+    mPartReadCount[Index] = 0;
+    mPartFlushCount[Index] = 0;
   }
   SetPartitionName(0, mReserveName);
   SetPartitionName(1, L"userdata");
+  SetPartitionName(2, L"efisp");
 }
 
 static EFI_STATUS EFIAPI
@@ -753,6 +831,13 @@ TestPreflightAndVerifiedBoot(void)
 {
   QCOM_VB_RW_DEVICE_STATE OriginalRw = mVerifiedBoot.VBRwDeviceState;
   QCOM_VB_DEVICE_INIT OriginalInit = mVerifiedBoot.VBDeviceInit;
+  EFI_BLOCK_READ OriginalEfispRead = mPartBlockIo[2].ReadBlocks;
+  EFI_BLOCK_WRITE OriginalEfispWrite = mPartBlockIo[2].WriteBlocks;
+  EFI_BLOCK_FLUSH OriginalEfispFlush = mPartBlockIo[2].FlushBlocks;
+  UINTN BeforeWrites;
+  UINTN BeforeReads;
+  UINTN PriorVbRead;
+  UINTN PriorVbWrite;
   QCOM_VB_RESET_STATE OriginalReset = mVerifiedBoot.VBDeviceResetState;
   QCOM_QSEECOM_SEND_CMD_APP OriginalSend = mQseecom.QseecomSendCmd;
   device_info_vb_t Compact;
@@ -766,7 +851,8 @@ TestPreflightAndVerifiedBoot(void)
 
   MakeValidStoredInfo(FALSE, FALSE);
   mQseecom.QseecomSendCmd = NULL;
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) == EFI_NOT_READY);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_NOT_READY);
   assert(mHooksArmedMarkerCount == 0);
   assert(mVbReadMarkerCount == 0);
   assert(mVbWriteMarkerCount == 0);
@@ -780,11 +866,13 @@ TestPreflightAndVerifiedBoot(void)
   assert(mQseecom.QseecomSendCmd == NULL);
   mQseecom.QseecomSendCmd = OriginalSend;
 
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) == EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   assert(mHooksArmedMarkerCount == 1);
 
   PriorReads = mReadCount;
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) == EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   assert(mReadCount == PriorReads + 1);
   assert(mWriteCount == 1);
   PriorReads = mVbReadMarkerCount;
@@ -846,7 +934,8 @@ TestPreflightAndVerifiedBoot(void)
   MakeValidStoredInfo(TRUE, TRUE);
   PriorArmed = mHooksArmedMarkerCount;
   mCorruptQseeOnRepair = TRUE;
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) == EFI_NOT_READY);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_NOT_READY);
   assert(!SfbHooksActive());
   assert(mHooksArmedMarkerCount == PriorArmed);
   assert(mVerifiedBoot.VBRwDeviceState == OriginalRw);
@@ -862,7 +951,29 @@ TestPreflightAndVerifiedBoot(void)
   assert(mResetCount == PriorResets + 1);
 
   MakeValidStoredInfo(TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeHonestUnlocked, NULL, NULL) == EFI_SUCCESS);
+  BeforeReads = mReadCount;
+  BeforeWrites = mWriteCount;
+  PriorVbRead = mVbReadMarkerCount;
+  PriorVbWrite = mVbWriteMarkerCount;
+  assert(SfbPrepareManagedAblHooks(SfbBootModeHonestUnlocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
+  assert(mReadCount == BeforeReads);
+  assert(mWriteCount == BeforeWrites);
+  assert(mVbReadMarkerCount == PriorVbRead);
+  assert(mVbWriteMarkerCount == PriorVbWrite);
+  assert(!SfbHooksActive());
+  assert(mVerifiedBoot.VBRwDeviceState == OriginalRw);
+  assert(mVerifiedBoot.VBDeviceInit == OriginalInit);
+  assert(mVerifiedBoot.VBDeviceResetState == OriginalReset);
+  assert(mQseecom.QseecomStartApp == FakeStartApp);
+  assert(mQseecom.QseecomSendCmd == OriginalSend);
+  assert(mScm.ScmSipSysCall == FakeScmSipSysCall);
+  assert(mScm.ScmQseeSysCall == FakeScmQseeSysCall);
+  assert(mSpss.SPSSDxe_ShareKeyMintInfo == FakeShareKeyMintInfo);
+  assert(mPartBlockIo[2].ReadBlocks != OriginalEfispRead);
+  assert(mPartBlockIo[2].WriteBlocks != OriginalEfispWrite);
+  assert(mPartBlockIo[2].FlushBlocks != OriginalEfispFlush);
+  assert(mPartMedia[2].MediaPresent == FALSE);
   memset(&View, 0, sizeof(View));
   assert(mVerifiedBoot.VBRwDeviceState(&mVerifiedBoot, READ_CONFIG,
                                        (UINT8 *)&View, sizeof(View)) == EFI_SUCCESS);
@@ -874,7 +985,8 @@ TestPreflightAndVerifiedBoot(void)
 
   SfbDisarmManagedAblHooks ();
   MakeValidStoredInfo (TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks (SfbBootModeKmProfile, &Profile, NULL) ==
+  assert(SfbPrepareManagedAblHooks (SfbBootModeKmProfile, &Profile, NULL,
+                                    SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   memset (&View, 0, sizeof (View));
   assert(mVerifiedBoot.VBRwDeviceState (&mVerifiedBoot, READ_CONFIG,
@@ -899,19 +1011,108 @@ TestPreflightAndVerifiedBoot(void)
 
   SfbDisarmManagedAblHooks ();
   MakeValidStoredInfo (TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks (SfbBootModeHonestUnlocked, NULL, NULL) ==
+  BeforeReads = mReadCount;
+  BeforeWrites = mWriteCount;
+  assert(SfbPrepareManagedAblHooks (SfbBootModeHonestUnlocked, NULL, NULL,
+                                    SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
+  assert(mReadCount == BeforeReads);
+  assert(mWriteCount == BeforeWrites);
   Write = mStoredInfo;
   Write.is_unlocked = FALSE;
   Write.is_unlock_critical = FALSE;
   assert(mVerifiedBoot.VBRwDeviceState (&mVerifiedBoot, WRITE_CONFIG,
                                         (UINT8 *)&Write, sizeof (Write)) ==
          EFI_SUCCESS);
-  assert(mLastWrittenInfo.is_unlocked == TRUE);
-  assert(mLastWrittenInfo.is_unlock_critical == TRUE);
+  assert(mWriteCount == BeforeWrites + 1);
+  assert(mLastWrittenInfo.is_unlocked == FALSE);
+  assert(mLastWrittenInfo.is_unlock_critical == FALSE);
   assert(Write.is_unlocked == FALSE && Write.is_unlock_critical == FALSE);
 
   SfbDisarmManagedAblHooks ();
+}
+
+static void
+TestLockstatePolicy(void)
+{
+  UINTN BeforeReads;
+  UINTN BeforeWrites;
+  UINTN PriorNone;
+  UINTN PriorRefused;
+
+  SfbDisarmManagedAblHooks();
+  InitializePartitions();
+  MakeValidStoredInfo(FALSE, FALSE);
+  ResetMarkerCounters();
+  BeforeReads = mReadCount;
+  BeforeWrites = mWriteCount;
+  PriorRefused = mLockstateRefusedMarkerCount;
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockNever) == EFI_ACCESS_DENIED);
+  assert(mReadCount == BeforeReads + 1);
+  assert(mWriteCount == BeforeWrites);
+  assert(mLockstateRefusedMarkerCount == PriorRefused + 1);
+  assert(mVerifiedBoot.VBRwDeviceState == FakeRwDeviceState);
+  assert(mQseecom.QseecomSendCmd == FakeSendCmd);
+  assert(mScm.ScmSipSysCall == FakeScmSipSysCall);
+  assert(mScm.ScmQseeSysCall == FakeScmQseeSysCall);
+  assert(mPartMedia[2].MediaPresent == TRUE);
+
+  SfbDisarmManagedAblHooks();
+  InitializePartitions();
+  MakeValidStoredInfo(TRUE, TRUE);
+  ResetMarkerCounters();
+  BeforeReads = mReadCount;
+  BeforeWrites = mWriteCount;
+  PriorNone = mLockstateNoneMarkerCount;
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
+  assert(mReadCount == BeforeReads + 1);
+  assert(mWriteCount == BeforeWrites);
+  assert(mLockstateNoneMarkerCount == PriorNone + 1);
+  SfbDisarmManagedAblHooks();
+}
+
+static void
+TestEfispHide(void)
+{
+  EFI_BLOCK_READ OriginalRead;
+  EFI_BLOCK_WRITE OriginalWrite;
+  EFI_BLOCK_FLUSH OriginalFlush;
+  UINT8 Buffer[4096];
+  UINTN Before;
+
+  SfbDisarmManagedAblHooks();
+  InitializePartitions();
+  MakeValidStoredInfo(TRUE, TRUE);
+  ResetMarkerCounters();
+  OriginalRead = mPartBlockIo[2].ReadBlocks;
+  OriginalWrite = mPartBlockIo[2].WriteBlocks;
+  OriginalFlush = mPartBlockIo[2].FlushBlocks;
+  memset(Buffer, 0, sizeof(Buffer));
+
+  assert(SfbPrepareManagedAblHooks(SfbBootModeHonestUnlocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
+  assert(mEfispHideMarkerCount == 1);
+  assert(mPartMedia[2].MediaPresent == FALSE);
+  assert(mPartBlockIo[2].ReadBlocks(&mPartBlockIo[2], 0, 0,
+                                    sizeof(Buffer), Buffer) == EFI_NO_MEDIA);
+  assert(mPartBlockIo[2].WriteBlocks(&mPartBlockIo[2], 0, 0,
+                                     sizeof(Buffer), Buffer) == EFI_NO_MEDIA);
+  assert(mPartBlockIo[2].FlushBlocks(&mPartBlockIo[2]) == EFI_NO_MEDIA);
+  assert(mPartReadCount[2] == 0);
+  assert(mPartWriteCount[2] == 0);
+  assert(mPartFlushCount[2] == 0);
+
+  SfbDisarmManagedAblHooks();
+  assert(mPartBlockIo[2].ReadBlocks == OriginalRead);
+  assert(mPartBlockIo[2].WriteBlocks == OriginalWrite);
+  assert(mPartBlockIo[2].FlushBlocks == OriginalFlush);
+  assert(mPartMedia[2].MediaPresent == TRUE);
+  Before = mPartWriteCount[2];
+  assert(mPartBlockIo[2].WriteBlocks(&mPartBlockIo[2], 0, 0,
+                                     sizeof(Buffer), Buffer) == EFI_SUCCESS);
+  assert(mPartWriteCount[2] == Before + 1);
 }
 
 static void
@@ -937,7 +1138,8 @@ TestQseecomAndSpss(void)
   KeymintSharedInfoStruct Info;
 
   MakeValidStoredInfo(TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, NULL) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, NULL,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
 
   /* The all-ones sentinel is never a live app handle. Before any app is
@@ -1029,7 +1231,8 @@ TestQseecomAndSpss(void)
 
   SfbDisarmManagedAblHooks ();
   MakeValidStoredInfo (TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks (SfbBootModeHonestUnlocked, NULL, NULL) ==
+  assert(SfbPrepareManagedAblHooks (SfbBootModeHonestUnlocked, NULL, NULL,
+                                    SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   mNextHandle = 55;
   assert(mQseecom.QseecomStartApp (&mQseecom, "keymaster", &Handle) ==
@@ -1045,7 +1248,8 @@ TestQseecomAndSpss(void)
   assert(memcmp (Buffer, Original, SFB_KM_SET_ROT_BYTES) == 0);
 
   SfbDisarmManagedAblHooks ();
-  assert(SfbPrepareManagedAblHooks (SfbBootModeAblFakeLocked, NULL, NULL) ==
+  assert(SfbPrepareManagedAblHooks (SfbBootModeAblFakeLocked, NULL, NULL,
+                                    SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   mNextHandle = 56;
   assert(mQseecom.QseecomStartApp (&mQseecom, "keymaster64", &Handle) ==
@@ -1064,7 +1268,8 @@ TestQseecomAndSpss(void)
   SfbDisarmManagedAblHooks();
   mExposeSpss = FALSE;
   mSpssWarningCount = 0;
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, NULL) == EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   assert(SfbHooksMode() == SfbBootModeKmProfile);
   assert(SfbHooksProfile() != NULL);
   assert(mSpssWarningCount == 1);
@@ -1122,7 +1327,8 @@ TestQseecomAndSpss(void)
   SfbDisarmManagedAblHooks();
   mExposeSpss = TRUE;
   MakeValidStoredInfo(TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, NULL) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, NULL,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   memset(&Info, 0, sizeof(Info));
   mReenterSpss = TRUE;
@@ -1190,7 +1396,8 @@ TestManifestDrivenKeymasterPolicy(void)
 
   MakeValidStoredInfo(TRUE, TRUE);
   Map = MakeSingleTzMap(SFB_KM_SET_ROT, 12, SFB_TZ_SEMANTIC_SET_ROT);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   mNextHandle = 70;
   assert(mQseecom.QseecomStartApp(&mQseecom, "keymaster", &Handle) ==
@@ -1210,7 +1417,8 @@ TestManifestDrivenKeymasterPolicy(void)
   SfbDisarmManagedAblHooks();
   Map = MakeSingleTzMap(SFB_KM_SET_ROT, SFB_KM_SET_ROT_BYTES,
                         SFB_TZ_SEMANTIC_SET_ROT);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   mNextHandle = 71;
   mUnknownCommandWarningCount = 0;
@@ -1231,7 +1439,8 @@ TestManifestDrivenKeymasterPolicy(void)
    * absent from the scan. */
   SfbDisarmManagedAblHooks();
   Map = MakeSingleTzMap(0x219u, 44, SFB_TZ_SEMANTIC_GENERATE_FRS_UDS);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   mNextHandle = 72;
   mUnknownCommandWarningCount = 0;
@@ -1260,7 +1469,8 @@ TestManifestDrivenKeymasterPolicy(void)
    * and cannot enter the rewrite size-mismatch path. */
   SfbDisarmManagedAblHooks();
   Map = MakeSingleTzMap(0x204u, 0, SFB_TZ_SEMANTIC_MILESTONE);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   mNextHandle = 73;
   mUnknownCommandWarningCount = 0;
@@ -1286,8 +1496,8 @@ TestManifestDrivenKeymasterPolicy(void)
     MakeValidStoredInfo(TRUE, TRUE);
     Map = MakeTzMapWithFlags(0);
     assert(SfbPrepareManagedAblHooks(
-             Mode, Mode == SfbBootModeKmProfile ? &Profile : NULL, &Map) ==
-           EFI_SUCCESS);
+             Mode, Mode == SfbBootModeKmProfile ? &Profile : NULL, &Map,
+             SfbConfigLockAsNeeded) == EFI_SUCCESS);
     mNextHandle = 72 + (UINT32)Mode;
     assert(mQseecom.QseecomStartApp(&mQseecom, "keymaster", &Handle) ==
            EFI_SUCCESS);
@@ -1297,16 +1507,24 @@ TestManifestDrivenKeymasterPolicy(void)
     Before = mSendCount;
     assert(mQseecom.QseecomSendCmd(&mQseecom, Handle, Buffer, 4,
                                    Response, 8) == EFI_SUCCESS);
-    assert(mSendCount == Before);
-    for (Offset = 0; Offset < 8; ++Offset) {
-      assert(Response[Offset] == 0);
+    if (Mode == SfbBootModeHonestUnlocked) {
+      assert(mSendCount == Before + 1);
+      for (Offset = 0; Offset < 8; ++Offset) {
+        assert(Response[Offset] == 0xCC);
+      }
+    } else {
+      assert(mSendCount == Before);
+      for (Offset = 0; Offset < 8; ++Offset) {
+        assert(Response[Offset] == 0);
+      }
     }
   }
 
   SfbDisarmManagedAblHooks();
   MakeValidStoredInfo(TRUE, TRUE);
   Map = MakeTzMapWithFlags(0);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, &Map) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, &Map,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   mNextHandle = 80;
   assert(mQseecom.QseecomStartApp(&mQseecom, "keymaster", &Handle) ==
@@ -1328,7 +1546,8 @@ TestManifestDrivenKeymasterPolicy(void)
   mPopulateDeviceState = FALSE;
 
   SfbDisarmManagedAblHooks();
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, &Map) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, &Map,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   mNextHandle = 81;
   assert(mQseecom.QseecomStartApp(&mQseecom, "keymaster", &Handle) ==
@@ -1348,13 +1567,15 @@ TestManifestDrivenKeymasterPolicy(void)
   mExposeSpss = FALSE;
   Map = MakeTzMapWithFlags(0);
   PriorRequired0 = mSpssRequired0MarkerCount;
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   assert(mSpssRequired0MarkerCount == PriorRequired0 + 1);
   SfbDisarmManagedAblHooks();
   Map = MakeTzMapWithFlags(SFB_TZMAP_FLAG_ALL);
   PriorRequired1 = mSpssRequired1MarkerCount;
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &Profile, &Map,
+                                   SfbConfigLockAsNeeded) ==
          EFI_SUCCESS);
   assert(mSpssRequired1MarkerCount == PriorRequired1 + 1);
   SfbDisarmManagedAblHooks();
@@ -1489,7 +1710,8 @@ TestInvalidRepair(void)
   SfbDisarmManagedAblHooks();
   PriorReads = mReadCount;
   InvalidProfile.Magic[0] = 'X';
-  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &InvalidProfile, NULL) ==
+  assert(SfbPrepareManagedAblHooks(SfbBootModeKmProfile, &InvalidProfile, NULL,
+                                   SfbConfigLockAsNeeded) ==
          EFI_INVALID_PARAMETER);
   assert(mReadCount == PriorReads);
   assert(!SfbHooksActive());
@@ -1497,13 +1719,17 @@ TestInvalidRepair(void)
   assert(mQseecom.QseecomSendCmd == FakeSendCmd);
 
   memset(&mStoredInfo, 0, sizeof(mStoredInfo));
-  assert(SfbPrepareManagedAblHooks(SfbBootModeHonestUnlocked, NULL, NULL) ==
-         EFI_COMPROMISED_DATA);
+  PriorReads = mReadCount;
+  assert(SfbPrepareManagedAblHooks(SfbBootModeHonestUnlocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) ==
+         EFI_SUCCESS);
+  assert(mReadCount == PriorReads);
   assert(!SfbHooksActive());
   assert(mVerifiedBoot.VBRwDeviceState == FakeRwDeviceState);
   assert(mQseecom.QseecomSendCmd == FakeSendCmd);
-}
+  SfbDisarmManagedAblHooks();
 
+}
 /* The fuse and anti-rollback SIPs advance secure state irreversibly, so they
  * must be dropped in EVERY managed mode and on BOTH dispatch slots: the two
  * anti-rollback ids carry different owner fields (0x02 SIP, 0x32 QSEE_OS). */
@@ -1522,11 +1748,15 @@ TestUniversalScmDrops(void)
     SfbDisarmManagedAblHooks();
     MakeValidStoredInfo(TRUE, TRUE);
     assert(SfbPrepareManagedAblHooks(
-             Mode, Mode == SfbBootModeKmProfile ? &Profile : NULL, NULL) ==
-           EFI_SUCCESS);
-    /* Installation must have taken both slots. */
-    assert(mScm.ScmSipSysCall != FakeScmSipSysCall);
-    assert(mScm.ScmQseeSysCall != FakeScmQseeSysCall);
+             Mode, Mode == SfbBootModeKmProfile ? &Profile : NULL, NULL,
+             SfbConfigLockAsNeeded) == EFI_SUCCESS);
+    if (Mode == SfbBootModeHonestUnlocked) {
+      assert(mScm.ScmSipSysCall == FakeScmSipSysCall);
+      assert(mScm.ScmQseeSysCall == FakeScmQseeSysCall);
+    } else {
+      assert(mScm.ScmSipSysCall != FakeScmSipSysCall);
+      assert(mScm.ScmQseeSysCall != FakeScmQseeSysCall);
+    }
 
     for (Slot = 0; Slot < 2; ++Slot) {
       for (Index = 0; Index < 3; ++Index) {
@@ -1541,12 +1771,17 @@ TestUniversalScmDrops(void)
           assert(mScm.ScmQseeSysCall(&mScm, Dropped[Index], 0, Parameters,
                                      Results) == EFI_SUCCESS);
         }
-        /* Never forwarded to firmware, and Results report success rather than
-         * the caller's uninitialised stack. */
-        assert(mScmSipForwardCount == 0);
-        assert(mScmQseeForwardCount == 0);
-        assert(Results[0] == 0);
-        assert(Results[SCM_MAX_NUM_RESULTS - 1] == 0);
+        if (Mode == SfbBootModeHonestUnlocked) {
+          assert((Slot == 0 ? mScmSipForwardCount : mScmQseeForwardCount) == 1);
+          assert(Results[0] == 0xDEADBEEFu);
+        } else {
+          /* Never forwarded to firmware, and Results report success rather
+           * than the caller's uninitialised stack. */
+          assert(mScmSipForwardCount == 0);
+          assert(mScmQseeForwardCount == 0);
+          assert(Results[0] == 0);
+          assert(Results[SCM_MAX_NUM_RESULTS - 1] == 0);
+        }
       }
     }
 
@@ -1569,8 +1804,8 @@ TestUniversalScmDrops(void)
   SfbDisarmManagedAblHooks();
   MakeValidStoredInfo(TRUE, TRUE);
   mScmDropMarkerCount = 0;
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
-         EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   for (Index = 0; Index < 3; ++Index) {
     memset(Results, 0, sizeof(Results));
     assert(mScm.ScmSipSysCall(&mScm, Dropped[Index], 0, Parameters, Results) ==
@@ -1589,8 +1824,8 @@ TestUniversalScmDrops(void)
    * preflight marker and hooks-armed scm=0 rather than blocking the launch. */
   mExposeScm = FALSE;
   MakeValidStoredInfo(TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
-         EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   assert(SfbHooksActive());
   SfbDisarmManagedAblHooks();
   mExposeScm = TRUE;
@@ -1614,8 +1849,8 @@ TestUniversalReserveWriteSwallow(void)
   InitializePartitions();
   MakeValidStoredInfo(TRUE, TRUE);
   ResetMarkerCounters();
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
-         EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
 
   /* Only the reserve slot is wrapped. */
   assert(mPartBlockIo[0].WriteBlocks != FakePartWriteBlocks);
@@ -1661,8 +1896,8 @@ TestUniversalReserveWriteSwallow(void)
 
   /* Re-arming over our own slot keeps the retained original. */
   MakeValidStoredInfo(TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
-         EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   SfbDisarmManagedAblHooks();
   assert(mPartBlockIo[0].WriteBlocks == FakePartWriteBlocks);
 
@@ -1672,8 +1907,8 @@ TestUniversalReserveWriteSwallow(void)
   InitializePartitions();
   MakeValidStoredInfo(TRUE, TRUE);
   ResetMarkerCounters();
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
-         EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   assert(SfbHooksActive());
   assert(mReserveAbsentMarkerCount == 1);
   assert(mPartBlockIo[0].WriteBlocks == FakePartWriteBlocks);
@@ -1682,8 +1917,8 @@ TestUniversalReserveWriteSwallow(void)
   mReserveName = L"opporeserve1";
   InitializePartitions();
   MakeValidStoredInfo(TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
-         EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   assert(mPartBlockIo[0].WriteBlocks != FakePartWriteBlocks);
   SfbDisarmManagedAblHooks();
 
@@ -1710,8 +1945,8 @@ TestReserveTokenNotice(void)
   InitializePartitions();
   MakeValidStoredInfo(TRUE, TRUE);
   ResetMarkerCounters();
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
-         EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
 
   /* Zeroing the token block is the destructive event: swallowed, announced, and
    * the notice is held on screen. */
@@ -1752,8 +1987,8 @@ TestReserveTokenNotice(void)
   /* A fresh launch may announce again. */
   SfbDisarmManagedAblHooks();
   MakeValidStoredInfo(TRUE, TRUE);
-  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL) ==
-         EFI_SUCCESS);
+  assert(SfbPrepareManagedAblHooks(SfbBootModeAblFakeLocked, NULL, NULL,
+                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
   assert(mPartBlockIo[0].WriteBlocks(&mPartBlockIo[0], 0, TokenLba,
                                      sizeof(Zero), Zero) == EFI_SUCCESS);
   assert(mTokenNoticeCount == 2);
@@ -1765,6 +2000,8 @@ main(void)
 {
   InitializeProtocols();
   TestPreflightAndVerifiedBoot();
+  TestLockstatePolicy();
+  TestEfispHide();
   TestQseecomAndSpss();
   TestManifestDrivenKeymasterPolicy();
   TestRewriteLayouts();

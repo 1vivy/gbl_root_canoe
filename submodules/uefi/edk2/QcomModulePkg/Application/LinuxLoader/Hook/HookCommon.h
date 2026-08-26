@@ -32,11 +32,25 @@ SfbHookLeave (IN OUT SFB_HOOK_GUARD *Guard)
   if (Guard != NULL && Guard->Depth != 0) Guard->Depth--;
 }
 
+/*
+ * Arm the managed-ABL policy for one launch.
+ *
+ * Mode 0 is a hook-free passthrough: no protocol wrapper is installed and the
+ * backing DeviceInfo is neither read nor written. The one thing armed in every
+ * mode is the efisp Block I/O clause, because the chainloaded ABL carries the
+ * same efisp load path this BDS was started through and would otherwise
+ * re-enter it.
+ *
+ * LockPolicy decides whether a Mode 1 / Mode 2 launch may repair the backing
+ * DeviceInfo when the observed state is not what the mode needs. The observed
+ * state is recorded either way.
+ */
 EFI_STATUS
 SfbPrepareManagedAblHooks (
   IN SFB_BOOT_MODE EffectiveMode,
   IN CONST SFB_MODE2_PROFILE *Profile,
-  IN CONST SFB_TZ_MAP *TzMap
+  IN CONST SFB_TZ_MAP *TzMap,
+  IN SFB_CONFIG_LOCK_POLICY LockPolicy
   );
 
 VOID
@@ -56,7 +70,15 @@ EFI_STATUS SfbPreflightVerifiedBoot (OUT QCOM_VERIFIEDBOOT_PROTOCOL **Protocol);
 EFI_STATUS SfbInstallVerifiedBoot (IN QCOM_VERIFIEDBOOT_PROTOCOL *Protocol);
 VOID SfbRestoreVerifiedBoot (VOID);
 VOID SfbResetQseecomState (VOID);
-EFI_STATUS SfbRepairDeviceInfo (VOID);
+/*
+ * Read the backing DeviceInfo, record what it says, and repair it only when
+ * Required disagrees with it and Policy allows the write. Returns
+ * EFI_ACCESS_DENIED when a repair was needed but refused, so the caller can
+ * fall back to an honest launch rather than projecting over a state that was
+ * never made consistent.
+ */
+EFI_STATUS SfbRepairDeviceInfo (IN BOOLEAN Required,
+                                IN SFB_CONFIG_LOCK_POLICY Policy);
 EFI_STATUS SfbInstallQseecom (IN QCOM_QSEECOM_PROTOCOL *Protocol);
 VOID SfbRestoreQseecom (VOID);
 EFI_STATUS SfbInstallSpss (IN SpssProtocol *Protocol);
@@ -74,5 +96,17 @@ VOID SfbRestoreScm (VOID);
  * one-way. Fail-soft -- a platform with no such partition arms nothing. */
 EFI_STATUS SfbInstallReserveBlockIo (VOID);
 VOID SfbRestoreReserveBlockIo (VOID);
+
+/*
+ * Hide the efisp partition from the image about to be launched.
+ *
+ * The vulnerable ABL in the `abl` partition reaches this BDS by loading the
+ * raw efisp partition as an EFI image. The patched loader we chainload carries
+ * that same path, so left visible it would load efisp again and recurse until
+ * the stack gave out. Reporting no media on that one handle is the whole
+ * guard, and it costs nothing now that no record lives there.
+ */
+EFI_STATUS SfbInstallEfispBlockIo (VOID);
+VOID SfbRestoreEfispBlockIo (VOID);
 
 #endif

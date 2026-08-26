@@ -37,6 +37,12 @@ SfbBypassSecurity (VOID);
 
 VOID
 SfbRestoreSecurity (VOID);
+/*
+ * Set the lock-state policy for the next managed launch. The menu supplies
+ * this from canoe.cfg; callers outside a parsed config use as-needed.
+ */
+VOID
+SfbSetLaunchLockPolicy (IN SFB_CONFIG_LOCK_POLICY Policy);
 
 /* Run the real managed-image lifecycle. The caller has already preloaded
  * drivers; this function performs prepare, LoadImage, StartImage, and the

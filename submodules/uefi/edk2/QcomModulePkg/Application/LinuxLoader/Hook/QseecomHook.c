@@ -313,6 +313,8 @@ HookedQseecomStartApp (
     return EFI_NOT_READY;
   }
   Status = gOrigStartApp (This, AppName, Handle);
+  /* A wrapper can remain live while policy is false during arming/rollback;
+   * this is an arm/disarm interlock, not a mode test. */
   if (!SfbHooksActive () || !First || EFI_ERROR (Status) || Handle == NULL ||
       AppName == NULL) {
     SfbHookLeave (&gQseeStartGuard);
@@ -380,6 +382,8 @@ HookedQseecomSendCmd (
   CONST SFB_TZ_COMMAND *TzCommand = NULL;
 
   if (gOrigSendCmd == NULL) return EFI_NOT_READY;
+  /* A wrapper can remain live while policy is false during arming/rollback;
+   * this is an arm/disarm interlock, not a mode test. */
   if (!SfbHooksActive ()) {
     return gOrigSendCmd (This, Handle, SendBuffer, SendBytes,
                          ResponseBuffer, ResponseBytes);

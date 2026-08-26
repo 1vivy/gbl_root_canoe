@@ -217,6 +217,8 @@ HookedScmSipSysCall (
    * re-enters this slot while an outer SCM call is in flight would otherwise
    * forward the fuse or rollback bump straight to TZ. `First` only rate-limits
    * the marker, inside SfbScmDrop. */
+  /* A wrapper can remain live while policy is false during arming/rollback;
+   * this is an arm/disarm interlock, not a mode test. */
   if (SfbHooksActive () && SfbScmDropBit (SmcId) != 0) {
     Status = SfbScmDrop (SmcId, Results);
     SfbHookLeave (&gScmGuard);

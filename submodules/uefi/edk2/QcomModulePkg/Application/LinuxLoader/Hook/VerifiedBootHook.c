@@ -106,10 +106,15 @@ SfbPreflightVerifiedBoot (OUT QCOM_VERIFIEDBOOT_PROTOCOL **Protocol)
 }
 
 EFI_STATUS
-SfbRepairDeviceInfo (VOID)
+SfbRepairDeviceInfo (IN BOOLEAN Required, IN SFB_CONFIG_LOCK_POLICY Policy)
 {
   EFI_STATUS Status;
   DeviceInfo Info;
+  BOOLEAN ObservedUnlocked;
+  BOOLEAN ObservedCritical;
+  BOOLEAN Satisfies;
+  BOOLEAN Repair;
+  CONST CHAR8 *Action;
 
   if (gVerifiedBoot == NULL || gOrigRwDeviceState == NULL) {
     return EFI_NOT_READY;
@@ -124,14 +129,35 @@ SfbRepairDeviceInfo (VOID)
   if (!SfbValidDeviceInfo ((CONST UINT8 *)&Info, sizeof (Info))) {
     return EFI_COMPROMISED_DATA;
   }
-  if (Info.is_unlocked == TRUE && Info.is_unlock_critical == TRUE) {
-    return EFI_SUCCESS;
-  }
 
-  Info.is_unlocked = TRUE;
-  Info.is_unlock_critical = TRUE;
-  return gOrigRwDeviceState (gVerifiedBoot, WRITE_CONFIG,
-                             (UINT8 *)&Info, sizeof (Info));
+  ObservedUnlocked = (BOOLEAN)(Info.is_unlocked != FALSE);
+  ObservedCritical = (BOOLEAN)(Info.is_unlock_critical != FALSE);
+  Satisfies = (BOOLEAN)(!Required ||
+                        (ObservedUnlocked && ObservedCritical));
+  Repair = FALSE;
+  if (Satisfies) {
+    Action = "none";
+    Status = EFI_SUCCESS;
+  } else if (Policy == SfbConfigLockNever) {
+    Action = "refused";
+    Status = EFI_ACCESS_DENIED;
+  } else {
+    Action = "repair";
+    Repair = TRUE;
+    Status = EFI_SUCCESS;
+  }
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK lockstate observed-unlocked=%u observed-critical=%u "
+          "required=%u action=%a\n",
+          (UINT32)ObservedUnlocked, (UINT32)ObservedCritical,
+          (UINT32)Required, Action));
+  if (Repair) {
+    Info.is_unlocked = TRUE;
+    Info.is_unlock_critical = TRUE;
+    Status = gOrigRwDeviceState (gVerifiedBoot, WRITE_CONFIG,
+                                 (UINT8 *)&Info, sizeof (Info));
+  }
+  return Status;
 }
 
 EFI_STATUS
@@ -205,6 +231,8 @@ HookedVBRwDeviceState (
     SfbHookLeave (&gVbRwGuard);
     return EFI_NOT_READY;
   }
+  /* A wrapper can remain live while policy is false during arming/rollback;
+   * this is an arm/disarm interlock, not a mode test. */
   if (!Active) {
     Status = gOrigRwDeviceState (This, Op, Buffer, BufferBytes);
     SfbHookLeave (&gVbRwGuard);

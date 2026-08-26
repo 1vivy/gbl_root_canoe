@@ -42,7 +42,8 @@ EFI_STATUS
 SfbPrepareManagedAblHooks (
   IN SFB_BOOT_MODE EffectiveMode,
   IN CONST SFB_MODE2_PROFILE *Profile,
-  IN CONST SFB_TZ_MAP *TzMap
+  IN CONST SFB_TZ_MAP *TzMap,
+  IN SFB_CONFIG_LOCK_POLICY LockPolicy
   )
 {
   EFI_STATUS Status;
@@ -57,7 +58,9 @@ SfbPrepareManagedAblHooks (
   BOOLEAN ScmInstalled = FALSE;
   BOOLEAN SpssInstalled = FALSE;
   BOOLEAN ReserveInstalled = FALSE;
+  BOOLEAN EfispInstalled = FALSE;
   EFI_STATUS ReserveStatus;
+  EFI_STATUS EfispStatus;
 
   /* A failed reconfiguration must leave installed wrappers strict pass-through
    * rather than retaining a prior launch's active policy. */
@@ -103,6 +106,35 @@ SfbPrepareManagedAblHooks (
           "SFB: MARK hook-stage stage=validate component=policy status=%r\n",
           EFI_SUCCESS));
 
+  /*
+   * Mode 0 is deliberately not a managed protocol launch. Restore any slots
+   * left by a prior managed attempt before arming only the efisp recursion
+   * guard; this also makes a direct mode switch safe for the menu and
+   * superfastboot.
+   */
+  if (EffectiveMode == SfbBootModeHonestUnlocked) {
+    SfbRestoreReserveBlockIo ();
+    SfbRestoreScm ();
+    SfbRestoreSpss ();
+    SfbRestoreQseecom ();
+    SfbRestoreVerifiedBoot ();
+    SfbRestoreEfispBlockIo ();
+
+    EfispStatus = SfbInstallEfispBlockIo ();
+    EfispInstalled = (BOOLEAN)!EFI_ERROR (EfispStatus);
+    gManagedMode = EffectiveMode;
+    gManagedProfileValid = FALSE;
+    ZeroMem (&gManagedProfile, sizeof (gManagedProfile));
+    CopyMem (&gManagedTzMap, &ValidatedTzMap, sizeof (gManagedTzMap));
+    gManagedTzMapInitialized = TRUE;
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK hooks-armed mode=%u profile=0 spss=0 scm=0 reserve=0 "
+            "efisp=%u tzmap-commands=%u\n",
+            (UINT32)gManagedMode, (UINT32)EfispInstalled,
+            (UINT32)gManagedTzMap.CommandCount));
+    return EFI_SUCCESS;
+  }
+
   /* Both required families are fully located and slot-checked first. These
    * calls capture originals but do not write a vtable slot. */
   Status = SfbPreflightVerifiedBoot (&VerifiedBoot);
@@ -132,7 +164,7 @@ SfbPrepareManagedAblHooks (
 
   /* The backing invariant is repaired using the first real VB original, while
    * policy is still disabled and no wrapper is visible to firmware. */
-  Status = SfbRepairDeviceInfo ();
+  Status = SfbRepairDeviceInfo (TRUE, LockPolicy);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR,
             "SFB: MARK hook-stage stage=repair "
@@ -196,10 +228,8 @@ SfbPrepareManagedAblHooks (
   }
 
   /* Universal and mode independent, same reasoning as SCM: zeroing the vendor
-   * fastboot unlock token is irreversible, so it is suppressed in every managed
-   * mode. Fail-soft on absence rather than refusing to launch -- most platforms
-   * running this have no vendor reserve partition at all, and a launch refusal
-   * there would be a pure regression. */
+   * fastboot unlock token is irreversible, so it is suppressed in every
+   * managed mode. Fail-soft on absence rather than refusing to launch. */
   ReserveStatus = SfbInstallReserveBlockIo ();
   if (EFI_ERROR (ReserveStatus)) {
     DEBUG ((EFI_D_WARN,
@@ -212,6 +242,22 @@ SfbPrepareManagedAblHooks (
             "SFB: MARK hook-stage stage=install component=reserve "
             "universal=1 present=1 status=%r\n",
             ReserveStatus));
+  }
+
+  /* Hide efisp for this launch, but leave failure soft: platforms without the
+   * partition are still valid superfastboot targets. */
+  EfispStatus = SfbInstallEfispBlockIo ();
+  if (EFI_ERROR (EfispStatus)) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK hook-stage stage=install component=efisp "
+            "universal=1 present=0 status=%r\n",
+            EfispStatus));
+  } else {
+    EfispInstalled = TRUE;
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK hook-stage stage=install component=efisp "
+            "universal=1 present=1 status=%r\n",
+            EfispStatus));
   }
 
   if ((UINT32)EffectiveMode == 2u) {
@@ -275,13 +321,15 @@ SfbPrepareManagedAblHooks (
   gManagedPolicyActive = TRUE;
   DEBUG ((EFI_D_INFO,
           "SFB: MARK hooks-armed mode=%u profile=%u spss=%u scm=%u "
-          "reserve=%u tzmap-commands=%u\n",
+          "reserve=%u efisp=%u tzmap-commands=%u\n",
           (UINT32)gManagedMode, (UINT32)gManagedProfileValid,
           (UINT32)SpssInstalled, (UINT32)ScmInstalled,
-          (UINT32)ReserveInstalled, (UINT32)gManagedTzMap.CommandCount));
+          (UINT32)ReserveInstalled, (UINT32)EfispInstalled,
+          (UINT32)gManagedTzMap.CommandCount));
   return EFI_SUCCESS;
 
 Rollback:
+  SfbRestoreEfispBlockIo ();
   SfbRestoreReserveBlockIo ();
   SfbRestoreScm ();
   SfbRestoreSpss ();
@@ -306,4 +354,5 @@ SfbDisarmManagedAblHooks (VOID)
   SfbRestoreSpss ();
   SfbRestoreQseecom ();
   SfbRestoreVerifiedBoot ();
+  SfbRestoreEfispBlockIo ();
 }

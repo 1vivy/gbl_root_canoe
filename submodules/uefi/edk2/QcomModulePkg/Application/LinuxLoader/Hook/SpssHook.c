@@ -88,6 +88,8 @@ HookedShareKeyMintInfo (IN KeymintSharedInfoStruct *Info)
     return EFI_NOT_READY;
   }
   Profile = SfbHooksProfile ();
+  /* A wrapper can remain live while policy is false during arming/rollback;
+   * this is an arm/disarm interlock, not a mode test. */
   if (First && SfbHooksActive () &&
       (UINT32)SfbHooksMode () == 2u && Profile != NULL && Info != NULL) {
     Rewritten = SfbRewriteSpss (

@@ -1,9 +1,8 @@
 /*
- * Boot entry list, persistence and launching for the super-fastboot boot menu.
+ * Boot entry list and launching for the super-fastboot boot menu.
  *
- * Two records in the ESP tail store back the menu (see SuperFbStore.c):
- *   slot SFB_STORE_DEFAULT - the entry the 5 second timeout launches
- *   slot SFB_STORE_CUSTOM  - the single user-added entry, from the file browser
+ * The menu is a reader: all state comes from canoe.cfg on the boot root, and
+ * this module never writes a file or block device.
  *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -26,20 +25,143 @@
 
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbEntriesModuleTag = "SuperFbEntries";
+STATIC
+EFI_STATUS
+SfbJoinRoot (IN CONST CHAR16 *RootPrefix,
+             IN CONST CHAR16 *Suffix,
+             OUT CHAR16      *Out,
+             IN UINTN         OutChars);
 
-/*
- * A stored entry is one line of ASCII:
- *
- *   SFB1|<volume label>|<path on volume>|<description>
- *
- * The volume is named by its FAT label rather than by a serialised device path
- * because handle order and device paths are not stable across a reboot, a
- * firmware update or a change of storage controller, whereas the label written
- * into the file system is. The label is a hint: if no volume carries it, any
- * volume holding the same path will do.
- */
-#define SFB_RECORD_TAG    "SFB1"
-#define SFB_RECORD_FIELD  '|'
+STATIC
+VOID
+SfbAsciiToUnicode (IN CONST CHAR8 *Ascii, OUT CHAR16 *Unicode, IN UINTN Chars)
+{
+  UINTN Index;
+
+  if (Unicode == NULL || Chars == 0) {
+    return;
+  }
+  for (Index = 0; Index + 1 < Chars && Ascii != NULL && Ascii[Index] != '\0';
+       Index++) {
+    Unicode[Index] = (CHAR16)(UINT8)Ascii[Index];
+  }
+  Unicode[Index] = L'\0';
+}
+
+EFI_STATUS
+SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume)
+{
+  EFI_STATUS Status;
+  EFI_HANDLE *Volumes = NULL;
+  UINTN VolumeCount = 0;
+  UINTN Index;
+
+  if (Config == NULL || Volume == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  ZeroMem (Config, sizeof (*Config));
+  *Volume = NULL;
+
+  Status = SfbLocateVolumes (&Volumes, &VolumeCount);
+  if (EFI_ERROR (Status) || Volumes == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  for (Index = 0; Index < VolumeCount; Index++) {
+    EFI_FILE_PROTOCOL *Root = NULL;
+    CHAR16 ConfigPath[SFB_PATH_CHARS];
+    CHAR8 *Buffer;
+    UINTN BytesRead = 0;
+
+    Status = SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
+                          SFB_CONFIG_FILE_PATH, ConfigPath,
+                          ARRAY_SIZE (ConfigPath));
+    if (EFI_ERROR (Status) ||
+        EFI_ERROR (SfbOpenVolumeRoot (Volumes[Index], &Root)) ||
+        Root == NULL) {
+      continue;
+    }
+    if (!SfbFileExists (Root, ConfigPath)) {
+      Root->Close (Root);
+      continue;
+    }
+
+    Buffer = AllocateZeroPool (SFB_LIST_MAX_BYTES + 1);
+    if (Buffer == NULL) {
+      Root->Close (Root);
+      *Volume = Volumes[Index];
+      FreePool (Volumes);
+      return EFI_OUT_OF_RESOURCES;
+    }
+    Status = SfbReadFileBytes (Root, ConfigPath, Buffer, SFB_LIST_MAX_BYTES,
+                               &BytesRead);
+    Root->Close (Root);
+    if (EFI_ERROR (Status)) {
+      FreePool (Buffer);
+      *Volume = Volumes[Index];
+      FreePool (Volumes);
+      return Status;
+    }
+    *Volume = Volumes[Index];
+    Status = SfbConfigParse (Buffer, BytesRead, Config)
+             ? EFI_SUCCESS : EFI_COMPROMISED_DATA;
+    DEBUG ((EFI_D_INFO, "SFB: canoe.cfg volume=%u status=%r\n",
+            (UINT32)Index, Status));
+    FreePool (Buffer);
+    FreePool (Volumes);
+    return Status;
+  }
+
+  FreePool (Volumes);
+  return EFI_NOT_FOUND;
+}
+
+BOOLEAN
+SfbBootRootIsEmpty (VOID)
+{
+  EFI_STATUS Status;
+  EFI_HANDLE *Volumes = NULL;
+  UINTN VolumeCount = 0;
+  UINTN Index;
+  BOOLEAN FoundRoot = FALSE;
+
+  Status = SfbLocateVolumes (&Volumes, &VolumeCount);
+  if (EFI_ERROR (Status) || Volumes == NULL) {
+    return FALSE;
+  }
+
+  for (Index = 0; Index < VolumeCount; Index++) {
+    EFI_FILE_PROTOCOL *Root = NULL;
+    CHAR16 ConfigPath[SFB_PATH_CHARS];
+    CHAR16 ManagedPath[SFB_PATH_CHARS];
+
+    if (EFI_ERROR (SfbOpenVolumeRoot (Volumes[Index], &Root)) ||
+        Root == NULL) {
+      continue;
+    }
+    FoundRoot = TRUE;
+    if (!EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
+                                 SFB_CONFIG_FILE_PATH, ConfigPath,
+                                 ARRAY_SIZE (ConfigPath))) &&
+        SfbFileExists (Root, ConfigPath)) {
+      Root->Close (Root);
+      FreePool (Volumes);
+      return FALSE;
+    }
+    if (!EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
+                                 SFB_MANAGED_BOOT_NAME, ManagedPath,
+                                 ARRAY_SIZE (ManagedPath))) &&
+        SfbFileExists (Root, ManagedPath)) {
+      Root->Close (Root);
+      FreePool (Volumes);
+      return FALSE;
+    }
+    Root->Close (Root);
+  }
+
+  FreePool (Volumes);
+  return FoundRoot;
+}
 
 VOID
 SfbFreeEntry (IN OUT SFB_BOOT_ENTRY *Entry)
@@ -102,8 +224,7 @@ SfbMakeFileEntry (IN EFI_HANDLE      Volume,
   StrnCpyS (Entry->Path, SFB_PATH_CHARS, PathOnVolume, SFB_PATH_CHARS - 1);
   StrnCpyS (Entry->Desc, SFB_DESC_CHARS, Desc, SFB_DESC_CHARS - 1);
 
-  /* Recorded now, while the volume is in hand, so saving the entry later does
-   * not have to reopen it. */
+  /* Capture the volume label while the volume root is already available. */
   if (!EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) && Root != NULL) {
     SfbGetVolumeLabel (Root, Entry->VolLabel, SFB_DESC_CHARS);
     Root->Close (Root);
@@ -115,240 +236,6 @@ SfbMakeFileEntry (IN EFI_HANDLE      Volume,
   }
 
   return EFI_SUCCESS;
-}
-
-/* ---- record encoding ---------------------------------------------------- */
-
-/*
- * Stored records are a printable 7-bit format. Reject an entry before
- * serialization rather than silently dropping Unicode or field separators and
- * persisting a path that names a different file after reboot.
- */
-STATIC
-BOOLEAN
-SfbCanEncodeRecordField (IN CONST CHAR16 *Text)
-{
-  UINTN Index;
-
-  if (Text == NULL) {
-    return FALSE;
-  }
-  for (Index = 0; Text[Index] != L'\0'; ++Index) {
-    if (Text[Index] < 0x20 || Text[Index] > 0x7e ||
-        Text[Index] == SFB_RECORD_FIELD) {
-      return FALSE;
-    }
-  }
-  return TRUE;
-}
-
-STATIC
-VOID
-SfbAppendAscii (IN OUT CHAR8    *Buffer,
-                IN UINTN        BufferBytes,
-                IN CONST CHAR16 *Text)
-{
-  UINTN  Out = AsciiStrLen (Buffer);
-  UINTN  Index;
-
-  for (Index = 0; Text[Index] != L'\0' && Out + 1 < BufferBytes; Index++) {
-    CHAR16  Ch = Text[Index];
-
-    if (Ch < 0x20 || Ch > 0x7e || Ch == SFB_RECORD_FIELD) {
-      continue;
-    }
-    Buffer[Out++] = (CHAR8)Ch;
-  }
-
-  Buffer[Out] = '\0';
-}
-
-STATIC
-VOID
-SfbAppendSeparator (IN OUT CHAR8 *Buffer, IN UINTN BufferBytes)
-{
-  UINTN  Out = AsciiStrLen (Buffer);
-
-  if (Out + 1 < BufferBytes) {
-    Buffer[Out] = SFB_RECORD_FIELD;
-    Buffer[Out + 1] = '\0';
-  }
-}
-
-/* Copy one field out of Record into a Unicode buffer, and return where the
- * next field starts. */
-STATIC
-CONST CHAR8 *
-SfbTakeField (IN CONST CHAR8 *Record, OUT CHAR16 *Out, IN UINTN OutChars)
-{
-  UINTN  Index = 0;
-
-  while (Record[Index] != '\0' && Record[Index] != SFB_RECORD_FIELD) {
-    if (Index + 1 < OutChars) {
-      Out[Index] = (CHAR16)Record[Index];
-    }
-    Index++;
-  }
-
-  Out[(Index < OutChars - 1) ? Index : OutChars - 1] = L'\0';
-
-  return (Record[Index] == SFB_RECORD_FIELD) ? &Record[Index + 1]
-                                             : &Record[Index];
-}
-
-/* ---- persistence -------------------------------------------------------- */
-
-STATIC
-EFI_STATUS
-SfbSaveEntryRecord (IN UINTN Slot, IN CONST SFB_BOOT_ENTRY *Entry)
-{
-  CHAR8  Record[SFB_STORE_SLOT_BYTES];
-
-  if (Entry->Kind != SfbEntryEfiFile || Entry->Path[0] == L'\0' ||
-      !SfbCanEncodeRecordField (Entry->VolLabel) ||
-      !SfbCanEncodeRecordField (Entry->Path) ||
-      !SfbCanEncodeRecordField (Entry->Desc)) {
-    return EFI_UNSUPPORTED;
-  }
-
-  AsciiStrCpyS (Record, sizeof (Record), SFB_RECORD_TAG);
-  SfbAppendSeparator (Record, sizeof (Record));
-  SfbAppendAscii (Record, sizeof (Record), Entry->VolLabel);
-  SfbAppendSeparator (Record, sizeof (Record));
-  SfbAppendAscii (Record, sizeof (Record), Entry->Path);
-  SfbAppendSeparator (Record, sizeof (Record));
-  SfbAppendAscii (Record, sizeof (Record), Entry->Desc);
-
-  DEBUG ((EFI_D_INFO, "SFB: store slot %u <- '%a'\n", (UINT32)Slot, Record));
-
-  return SfbStoreWrite (Slot, Record);
-}
-
-/*
- * Turn a stored record back into a usable entry by finding a live volume for
- * it. The label decides between candidates; the path decides whether a volume
- * is a candidate at all, so an entry whose image has been deleted stays gone
- * rather than resolving onto the wrong disk.
- */
-STATIC
-EFI_STATUS
-SfbResolveRecord (IN CONST CHAR16    *WantLabel,
-                  IN CONST CHAR16    *Path,
-                  IN CONST CHAR16    *Desc,
-                  OUT SFB_BOOT_ENTRY *Entry)
-{
-  EFI_STATUS  Status;
-  EFI_HANDLE  *Volumes = NULL;
-  UINTN       VolumeCount = 0;
-  UINTN       Index;
-  EFI_HANDLE  Fallback = NULL;
-  EFI_HANDLE  Chosen = NULL;
-
-  ZeroMem (Entry, sizeof (*Entry));
-
-  Status = SfbLocateVolumes (&Volumes, &VolumeCount);
-  if (EFI_ERROR (Status) || Volumes == NULL) {
-    return EFI_NOT_FOUND;
-  }
-
-  for (Index = 0; Index < VolumeCount && Chosen == NULL; Index++) {
-    EFI_FILE_PROTOCOL  *Root = NULL;
-    CHAR16             Label[SFB_DESC_CHARS];
-
-    if (EFI_ERROR (SfbOpenVolumeRoot (Volumes[Index], &Root)) || Root == NULL) {
-      continue;
-    }
-
-    if (SfbFileExists (Root, Path)) {
-      SfbGetVolumeLabel (Root, Label, SFB_DESC_CHARS);
-
-      if (WantLabel[0] != L'\0' && StrCmp (Label, WantLabel) == 0) {
-        Chosen = Volumes[Index];
-      } else if (Fallback == NULL) {
-        Fallback = Volumes[Index];
-      }
-    }
-
-    Root->Close (Root);
-  }
-
-  if (Chosen == NULL) {
-    Chosen = Fallback;
-  }
-
-  FreePool (Volumes);
-
-  if (Chosen == NULL) {
-    return EFI_NOT_FOUND;
-  }
-
-  Status = SfbMakeFileEntry (Chosen, Path, Desc, Entry);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  /* Keep the label that was stored: it is what the record will be rewritten
-   * with, and an unlabelled fallback volume should not overwrite it. */
-  if (WantLabel[0] != L'\0') {
-    StrnCpyS (Entry->VolLabel, SFB_DESC_CHARS, WantLabel, SFB_DESC_CHARS - 1);
-  }
-
-  return EFI_SUCCESS;
-}
-
-STATIC
-EFI_STATUS
-SfbLoadEntryRecord (IN UINTN Slot, OUT SFB_BOOT_ENTRY *Entry)
-{
-  EFI_STATUS   Status;
-  CHAR8        Record[SFB_STORE_SLOT_BYTES];
-  CONST CHAR8  *Cursor;
-  CHAR16       Tag[8];
-  CHAR16       Label[SFB_DESC_CHARS];
-  CHAR16       Path[SFB_PATH_CHARS];
-  CHAR16       Desc[SFB_DESC_CHARS];
-
-  ZeroMem (Entry, sizeof (*Entry));
-
-  Status = SfbStoreRead (Slot, Record, sizeof (Record));
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-
-  if (Record[0] == '\0') {
-    return EFI_NOT_FOUND;
-  }
-
-  Cursor = SfbTakeField (Record, Tag, ARRAY_SIZE (Tag));
-  if (StrCmp (Tag, L"SFB1") != 0) {
-    DEBUG ((EFI_D_ERROR, "SFB: store slot %u is not a record\n", (UINT32)Slot));
-    return EFI_VOLUME_CORRUPTED;
-  }
-
-  Cursor = SfbTakeField (Cursor, Label, SFB_DESC_CHARS);
-  Cursor = SfbTakeField (Cursor, Path, SFB_PATH_CHARS);
-  SfbTakeField (Cursor, Desc, SFB_DESC_CHARS);
-
-  /* A path has to be absolute; anything else would be interpreted relative to
-   * the volume root by Open () and is more likely corruption than intent. */
-  if (Path[0] != L'\\') {
-    DEBUG ((EFI_D_ERROR, "SFB: store slot %u has a bad path\n", (UINT32)Slot));
-    return EFI_VOLUME_CORRUPTED;
-  }
-
-  return SfbResolveRecord (Label, Path, Desc, Entry);
-}
-
-EFI_STATUS
-SfbSaveDefaultEntry (IN CONST SFB_BOOT_ENTRY *Entry)
-{
-  return SfbSaveEntryRecord (SFB_STORE_DEFAULT, Entry);
-}
-
-EFI_STATUS
-SfbSaveCustomEntry (IN CONST SFB_BOOT_ENTRY *Entry)
-{
-  return SfbSaveEntryRecord (SFB_STORE_CUSTOM, Entry);
 }
 
 /* ---- menu construction -------------------------------------------------- */
@@ -526,7 +413,7 @@ SfbAsciiRelPathToUnicode (IN CONST CHAR8 *Rel, OUT CHAR16 *Out, IN UINTN OutChar
  *
  * A leading '$' on the name marks a "no default" entry: *NoDefault is set TRUE
  * and the marker is stripped from the returned name, so "$Tools:tools.efi" is
- * displayed as "Tools" but, when launched, never replaces the saved default.
+ * displayed as "Tools". The flag remains presentation metadata for callers.
  *
  * A leading '%' instead of a name marks a submenu: *IsSubmenu is set TRUE and
  * the path names another ENTRIES file (same format, paths still relative to the
@@ -874,110 +761,147 @@ SfbScanVolumes (IN OUT SFB_MENU_STATE *Menu)
 
 STATIC
 VOID
-SfbAppendCustomEntry (IN OUT SFB_MENU_STATE *Menu)
+SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
+                        IN CONST SFB_CONFIG         *Config,
+                        IN EFI_HANDLE                Volume)
 {
-  SFB_BOOT_ENTRY  Custom;
-  UINTN           Index;
+  EFI_FILE_PROTOCOL *Root = NULL;
+  UINTN ConfigIndex;
 
-  if (EFI_ERROR (SfbLoadEntryRecord (SFB_STORE_CUSTOM, &Custom))) {
+  if (Config == NULL || Volume == NULL ||
+      EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) || Root == NULL) {
     return;
   }
 
-  /* Do not list it twice if scanning already turned up the same image. */
-  for (Index = 0; Index < Menu->Count; Index++) {
-    if (SfbSameDevicePath (Menu->Entry[Index].DevicePath, Custom.DevicePath)) {
-      SfbFreeEntry (&Custom);
-      return;
+  for (ConfigIndex = 0;
+       ConfigIndex < Config->Count && Menu->Count < SFB_MAX_ENTRIES;
+       ConfigIndex++) {
+    CHAR16 RelPath[SFB_PATH_CHARS];
+    CHAR16 Path[SFB_PATH_CHARS];
+    CHAR16 Title[SFB_DESC_CHARS];
+    SFB_BOOT_ENTRY *Slot;
+    Path[0] = L'\0';
+
+    SfbAsciiToUnicode (Config->Entry[ConfigIndex].Image, RelPath,
+                       ARRAY_SIZE (RelPath));
+    if (EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volume), RelPath, Path,
+                                ARRAY_SIZE (Path))) ||
+        !SfbFileExists (Root, Path)) {
+      DEBUG ((EFI_D_INFO, "SFB: config entry '%a' image '%s' not present\n",
+              Config->Entry[ConfigIndex].Id, Path));
+      continue;
     }
-  }
 
-  if (Menu->Count >= SFB_MAX_ENTRIES) {
-    SfbFreeEntry (&Custom);
-    return;
-  }
+    SfbAsciiToUnicode (Config->Entry[ConfigIndex].Title, Title,
+                       ARRAY_SIZE (Title));
+    Slot = &Menu->Entry[Menu->Count];
+    if (EFI_ERROR (SfbMakeFileEntry (Volume, Path, Title, Slot))) {
+      continue;
+    }
+    Slot->Mode = (SFB_BOOT_MODE)SfbConfigEntryMode (
+                                  Config, &Config->Entry[ConfigIndex]);
+    Slot->ModeFromConfig = TRUE;
+    Slot->Role = Config->Entry[ConfigIndex].Role;
+    if (Config->DefaultIndex == ConfigIndex) {
+      Menu->DefaultIndex = Menu->Count;
+    }
+    Menu->Count++;
 
-  Custom.IsCustom = TRUE;
-  if (Custom.Desc[0] == L'\0') {
-    StrnCpyS (Custom.Desc, SFB_DESC_CHARS, L"Custom entry", SFB_DESC_CHARS - 1);
   }
-
-  CopyMem (&Menu->Entry[Menu->Count], &Custom, sizeof (Custom));
-  Menu->Count++;
+  Root->Close (Root);
 }
 
 STATIC
 VOID
-SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu)
+SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu,
+                   IN CONST SFB_CONFIG   *Config)
 {
-  SFB_BOOT_ENTRY  Saved;
-  UINTN           Index;
+  UINTN Index;
+
+  Menu->DefaultFromConfig = FALSE;
+
+  if (Config != NULL && Config->Valid &&
+      Config->DefaultIndex != SFB_CONFIG_NO_DEFAULT &&
+      Config->DefaultIndex < Config->Count &&
+      Menu->DefaultIndex != SFB_NO_INDEX &&
+      Menu->DefaultIndex < Menu->Count) {
+    Menu->DefaultFromConfig = TRUE;
+    return;
+  }
 
   Menu->DefaultIndex = SFB_NO_INDEX;
-  Menu->DefaultIsPersisted = FALSE;
-
-  if (!EFI_ERROR (SfbLoadEntryRecord (SFB_STORE_DEFAULT, &Saved))) {
-    for (Index = 0; Index < Menu->Count; Index++) {
-      if (SfbSameDevicePath (Menu->Entry[Index].DevicePath, Saved.DevicePath)) {
-        Menu->DefaultIndex = Index;
-        Menu->DefaultIsPersisted = TRUE;
-        break;
-      }
+  for (Index = 0; Index < Menu->Count; Index++) {
+    if (Menu->Entry[Index].Kind == SfbEntryEfiFile) {
+      Menu->DefaultIndex = Index;
+      break;
     }
-    SfbFreeEntry (&Saved);
-  }
-  if (Menu->DefaultIndex == SFB_NO_INDEX) {
-    for (Index = 0; Index < Menu->Count; Index++) {
-      if (Menu->Entry[Index].Kind == SfbEntryEfiFile) {
-        Menu->DefaultIndex = Index;
-        break;
-      }
-    }
-  }
-}
-
-STATIC CONST CHAR16 *
-SfbModeLabel (IN SFB_BOOT_MODE Mode)
-{
-  switch (Mode) {
-    case SfbBootModeHonestUnlocked:
-      return L"Boot Mode: Mode 0 - Honest unlocked";
-    case SfbBootModeAblFakeLocked:
-      return L"Boot Mode: Mode 1 - ABL fake locked";
-    case SfbBootModeKmProfile:
-      return L"Boot Mode: Mode 2 - KM/SPSS profile spoof";
-    default:
-      return L"Boot Mode: Mode 1 - ABL fake locked";
   }
 }
 
 VOID
 SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
 {
+  EFI_STATUS Status;
+  EFI_HANDLE ConfigVolume = NULL;
+  SFB_CONFIG Config;
+  UINTN MandatoryRows = 6;
+  UINTN ReservedRows;
+  UINTN Index;
+
   ZeroMem (Menu, sizeof (*Menu));
   Menu->Mode = Mode;
   Menu->DefaultIndex = SFB_NO_INDEX;
+  Menu->TimeoutSeconds = SFB_CONFIG_DEFAULT_TIMEOUT;
+  Menu->LockPolicy = SfbConfigLockAsNeeded;
+  Menu->FirstRun = SfbBootRootIsEmpty ();
 
-  /* Keep the policy selector as the first row, before discovered entries. */
-  SfbAppendBuiltIn (Menu, SfbEntryMode, SfbModeLabel (Mode));
-  SfbScanVolumes (Menu);
-  /*
-   * Preserve one slot for a saved custom entry and four for the mandatory
-   * recovery actions below. Discovery is best-effort; fastboot, selector,
-   * power-off, and restart must never disappear when BOOTENTRIES is full.
-   */
-  while (Menu->Count >= SFB_MAX_ENTRIES - 4) {
+  /* The mode row is a session-only override, never a persisted setting. */
+  SfbAppendBuiltIn (Menu, SfbEntryMode, L"Session boot mode");
+
+  Status = SfbLoadBootConfig (&Config, &ConfigVolume);
+  if (!EFI_ERROR (Status)) {
+    Menu->ConfigValid = TRUE;
+    Menu->ConfigGeneration = Config.Generation;
+    Menu->TimeoutSeconds = Config.TimeoutSeconds;
+    Menu->LockPolicy = Config.LockPolicy;
+    Menu->RejectedLines = Config.RejectedLines;
+    SfbAppendConfigEntries (Menu, &Config, ConfigVolume);
+  } else {
+    SfbScanVolumes (Menu);
+    for (Index = 0; Index < Menu->Count; Index++) {
+      if (Menu->Entry[Index].Kind == SfbEntryEfiFile) {
+        Menu->Entry[Index].Mode = Mode;
+        Menu->Entry[Index].ModeFromConfig = FALSE;
+      }
+    }
+  }
+
+  ReservedRows = MandatoryRows +
+                 ((Menu->ConfigValid && Menu->RejectedLines != 0) ? 1 : 0);
+  while (Menu->Count > SFB_MAX_ENTRIES - ReservedRows) {
     Menu->Count--;
     SfbFreeEntry (&Menu->Entry[Menu->Count]);
   }
-  SfbAppendCustomEntry (Menu);
+
+  if (Menu->ConfigValid && Menu->RejectedLines != 0) {
+    CHAR16 Rejected[SFB_DESC_CHARS];
+
+    UnicodeSPrint (Rejected, sizeof (Rejected),
+                   L"Config rejected lines: %u",
+                   (UINT32)Menu->RejectedLines);
+    SfbAppendBuiltIn (Menu, SfbEntryBack, Rejected);
+  }
 
   SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Fastboot");
   SfbAppendBuiltIn (Menu, SfbEntrySelector, L"Enter EFI Program Selector");
+  SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");
+  SfbAppendBuiltIn (Menu, SfbEntryRecovery, L"Reboot to Recovery");
   SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power Off");
   SfbAppendBuiltIn (Menu, SfbEntryRestart, L"Restart");
 
-  SfbResolveDefault (Menu);
+  SfbResolveDefault (Menu, &Config);
 }
+
 
 VOID
 SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu)
@@ -1269,13 +1193,12 @@ SfbPreloadDrivers (IN EFI_HANDLE Volume, IN CONST CHAR16 *EntryPath)
 
 EFI_STATUS
 SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
-                IN BOOLEAN              Temporary,
                 IN BOOLEAN              ClearScreen,
-                IN SFB_BOOT_MODE        Mode)
+                IN SFB_BOOT_MODE        SessionMode)
 {
   EFI_STATUS Status;
   BOOLEAN Managed;
-  SFB_BOOT_MODE EffectiveMode = Mode;
+  SFB_BOOT_MODE EffectiveMode;
   SFB_MODE2_PROFILE Profile;
   SFB_TZ_MAP TzMap;
   CONST SFB_TZ_MAP *TzMapPtr = NULL;
@@ -1287,6 +1210,7 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
       Entry->DevicePath == NULL) {
     return EFI_INVALID_PARAMETER;
   }
+  EffectiveMode = Entry->ModeFromConfig ? Entry->Mode : SessionMode;
   Managed = SfbIsManagedAblEntry (Entry);
 
   if (Managed) {
@@ -1305,14 +1229,11 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
   }
 
   SfbShowBootingScreen (Entry->Desc, Entry->Path, ClearScreen);
-  if (!Temporary && !Entry->NoDefault) {
-    SfbSaveDefaultEntry (Entry);
-  }
 
-  if (Managed && Mode == SfbBootModeKmProfile) {
+  if (Managed && EffectiveMode == SfbBootModeKmProfile) {
     EFI_STATUS ProfileStatus;
 
-    Status = SfbResolveManagedAblMode (Entry, Mode, &EffectiveMode,
+    Status = SfbResolveManagedAblMode (Entry, EffectiveMode, &EffectiveMode,
                                        &Profile, &ProfileStatus);
     if (EFI_ERROR (Status)) {
       return Status;
@@ -1324,9 +1245,8 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
   }
   DEBUG ((EFI_D_INFO,
           "SFB: MARK launch managed=%u requested-mode=%u "
-          "effective-mode=%u temporary=%u\n",
-          (UINT32)Managed, (UINT32)Mode, (UINT32)EffectiveMode,
-          (UINT32)Temporary));
+          "effective-mode=%u\n",
+          (UINT32)Managed, (UINT32)SessionMode, (UINT32)EffectiveMode));
 
   SfbPreloadDrivers (Entry->Volume, Entry->Path);
   SfbBypassSecurity ();
@@ -1351,12 +1271,14 @@ SfbLaunchDefaultEntry (IN SFB_BOOT_MODE Mode)
   BOOLEAN HasDefault;
 
   SfbBuildMenu (&Menu, Mode);
-  HasDefault = (BOOLEAN)(Menu.DefaultIsPersisted &&
+  HasDefault = (BOOLEAN)(Menu.DefaultFromConfig &&
                          Menu.DefaultIndex != SFB_NO_INDEX);
   if (HasDefault) {
     DEBUG ((EFI_D_INFO, "SFB: launching default entry '%s'\n",
             Menu.Entry[Menu.DefaultIndex].Desc));
-    SfbLaunchEntry (&Menu.Entry[Menu.DefaultIndex], FALSE, FALSE, Mode);
+    SfbSetLaunchLockPolicy (Menu.ConfigValid ? Menu.LockPolicy
+                                             : SfbConfigLockAsNeeded);
+    SfbLaunchEntry (&Menu.Entry[Menu.DefaultIndex], FALSE, Mode);
   }
   SfbFreeMenu (&Menu);
   return HasDefault;

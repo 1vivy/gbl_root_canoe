@@ -94,11 +94,15 @@
 
  **/
 /*
- * 开机时扫描音量上键（WaitForVolumeDownKey 的镜像）。
+ * 开机时扫描音量上键。
  *
- * 先清空输入缓冲区，再用 WaitForEvent 在超时窗口内等待一次真正的音量上键。
- * 关键在于：非目标按键（尤其是开机时按住、随后松开的电源键）会被跳过并继续
- * 等待，而不是结束扫描——所以电源键既不会被误当成输入，也不会遮挡音量键。
+ * 先清空输入缓冲区，再在超时窗口内等待一次真正的音量上键。关键在于：非目标
+ * 按键（尤其是开机时按住、随后松开的电源键）会被跳过并继续等待，而不是结束
+ * 扫描——所以电源键既不会被误当成输入，也不会遮挡音量键。
+ *
+ * 这两条策略如今由 SfbWaitForKeyEx 的两个参数表达。此处原本另有一份几乎完全
+ * 相同的定时器等待循环；同一个按键处理缺陷需要修两遍，而这个循环正是进入本
+ * 加载器菜单的唯一入口。
  *
  * @param TimeoutMs   扫描窗口（毫秒）
  * @return TRUE(1)     检测到音量上键
@@ -107,79 +111,8 @@
 STATIC UINT8
 WaitForVolumeUpKey (IN UINT32 TimeoutMs)
 {
-  EFI_STATUS    Status;
-  EFI_EVENT     TimerEvent;
-  EFI_EVENT     WaitList[2];
-  UINTN         EventIndex;
-  EFI_INPUT_KEY Key;
-  UINT8         KeyDetected = 0;
-
-  /* 先清空输入缓冲区 */
-  gST->ConIn->Reset (gST->ConIn, FALSE);
-
-  /* 创建定时器事件 */
-  Status = gBS->CreateEvent (
-                  EVT_TIMER,
-                  TPL_CALLBACK,
-                  NULL,
-                  NULL,
-                  &TimerEvent
-                  );
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "CreateEvent Timer failed: %r\n", Status));
-    return FALSE;
-  }
-
-  /* 设置定时器：一次性触发，单位为 100ns */
-  Status = gBS->SetTimer (
-                  TimerEvent,
-                  TimerRelative,
-                  (UINT64)TimeoutMs * 10000   /* ms -> 100ns */
-                  );
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SetTimer failed: %r\n", Status));
-    gBS->CloseEvent (TimerEvent);
-    return FALSE;
-  }
-
-  /* 等待事件列表：按键事件 或 定时器超时 */
-  WaitList[0] = gST->ConIn->WaitForKey;
-  WaitList[1] = TimerEvent;
-
-  while (TRUE) {
-    Status = gBS->WaitForEvent (2, WaitList, &EventIndex);
-    if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "WaitForEvent failed: %r\n", Status));
-      break;
-    }
-
-    if (EventIndex == 0) {
-      /* 按键事件触发 */
-      Status = gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
-      if (!EFI_ERROR (Status)) {
-        DEBUG ((EFI_D_INFO, "Key detected: ScanCode=0x%x, UnicodeChar=0x%x\n",
-                Key.ScanCode, Key.UnicodeChar));
-
-        if (Key.ScanCode == SCAN_UP) { /* recovery / boot menu key */
-          /* 检测到音量上键 */
-          KeyDetected = 1;
-          break;
-        }
-        /* 不是目标按键（电源键/音量下键等），忽略并继续等待 */
-        DEBUG ((EFI_D_INFO, "Not volume up key, continue waiting...\n"));
-      }
-    } else {
-      /* 定时器超时 */
-      DEBUG ((EFI_D_INFO, "Timeout: %d ms expired, no volume up key\n",
-              TimeoutMs));
-      break;
-    }
-  }
-
-  /* 清理定时器事件 */
-  gBS->CloseEvent (TimerEvent);
-
-  return KeyDetected;
+  return (UINT8)(SfbWaitForKeyEx (TimeoutMs, TRUE, SfbKeyPolicyUpOnly) ==
+                 SfbKeyUp);
 }
 
 EFI_STATUS EFIAPI  __attribute__ ( (no_sanitize ("safe-stack")))
@@ -228,70 +161,68 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 
   {
     UINT8         MenuRequested;
+    BOOLEAN       EnterFastboot = FALSE;
     SFB_BOOT_MODE  Mode = SfbBootModeAblFakeLocked;
-    BOOLEAN        ModeDefaulted = TRUE;
+    SFB_CONFIG     Config;
+    EFI_HANDLE     ConfigVolume = NULL;
 
     /*
-     * Scan for Volume Up held at power-on FIRST, before any other init disturbs
-     * the console input. WaitForVolumeUpKey flushes stale input and then waits
-     * for a genuine Volume Up press, skipping every other key (notably the
-     * power key used to switch the device on) rather than being fooled by it.
-     * Volume Up (the official recovery key slot) opens the boot menu; no Volume
-     * Up within the window launches the saved default entry.
+     * Volume Up is sampled before filesystem setup, preserving the one-second
+     * power-on window and preventing initialization from consuming the key.
      */
     MenuRequested = WaitForVolumeUpKey (1000);
     DEBUG ((EFI_D_INFO, "SFB: power-on volume-up detected=%u\n", MenuRequested));
 
-    /*
-     * Now bring up the embedded FAT/USB stack so both the default entry and the
-     * menu can see every FAT32 volume, including one on a USB drive.
-     */
     Status = SfbStartFatStack ();
     if (EFI_ERROR (Status)) {
-      /* Not fatal: the menu still offers fastboot and the program selector. */
       DEBUG ((EFI_D_ERROR, "Unable to start the FAT stack: %r\n", Status));
     }
-
-    /*
-     * With the filesystem drivers up, mount logfs so the earlier boot-chain
-     * BDS log flush has somewhere to land; the chainloaded ABL inherits the
-     * mounted volume.
-     */
     SfbMountLogfs ();
 
-    Status = SfbStoreReadMode (&Mode, &ModeDefaulted);
-    if (EFI_ERROR (Status)) {
+    Status = SfbLoadBootConfig (&Config, &ConfigVolume);
+    (VOID)ConfigVolume;
+    if (!EFI_ERROR (Status)) {
+      Mode = (SFB_BOOT_MODE)Config.Mode;
+    } else {
       Mode = SfbBootModeAblFakeLocked;
-      ModeDefaulted = TRUE;
-      DEBUG ((EFI_D_ERROR, "SFB: preferred mode unavailable: %r\n", Status));
-    } else if (ModeDefaulted) {
-      DEBUG ((EFI_D_INFO, "SFB: preferred mode defaulted to Mode 1\n"));
+      DEBUG ((EFI_D_INFO, "SFB: canoe.cfg unavailable: %r\n", Status));
     }
-    DEBUG ((EFI_D_INFO,
-            "SFB: MARK mode-current mode=%u defaulted=%u\n",
-            (UINT32)Mode, (UINT32)ModeDefaulted));
-
-    if (!MenuRequested) {
-      /* No menu key: boot the saved default. This does not return on success;
-       * it only comes back if there is no saved default or the launch failed,
-       * in which case the menu is shown so the user is never stranded. */
-      SfbLaunchDefaultEntry (Mode);
-    }
+    DEBUG ((EFI_D_INFO, "SFB: MARK mode-current mode=%u config-valid=%u\n",
+            (UINT32)Mode, (UINT32)!EFI_ERROR (Status)));
 
     /*
-     * Reached here because the menu was requested, or there was no default to
-     * boot. Announce it and hold briefly so a still-held volume key is released
-     * before the menu takes input, then run the menu. It only returns TRUE when
-     * the user picked fastboot.
+     * First-run is checked before key intent: an empty boot root has no image
+     * or menu to show, so fastboot is the only useful destination.
      */
-    SfbShowEnteringMenu ();
-    if (!SfbRunBootMenu (Mode)) {
-      Status = EFI_SUCCESS;
-      goto stack_guard_update_default;
+    if (SfbBootRootIsEmpty ()) {
+      DEBUG ((EFI_D_INFO, "SFB: MARK bootflow first-run=1\n"));
+      SfbShowFirstRunScreen ();
+      EnterFastboot = TRUE;
+    } else {
+      /*
+       * Without Volume Up, attempt the configured default. A returning launch
+       * (including a failed launch or no configured default) falls through to
+       * the interactive menu.
+       */
+      if (!MenuRequested) {
+        (VOID)SfbLaunchDefaultEntry (Mode);
+        MenuRequested = TRUE;
+      }
+
+      if (MenuRequested) {
+        SfbShowEnteringMenu ();
+        if (!SfbRunBootMenu (Mode)) {
+          Status = EFI_SUCCESS;
+          goto stack_guard_update_default;
+        }
+        EnterFastboot = TRUE;
+      }
     }
 
-    SfbShowFastbootMode ();
-    DEBUG ((EFI_D_INFO, "Boot menu requested fastboot\n"));
+    if (EnterFastboot) {
+      SfbShowFastbootMode ();
+      DEBUG ((EFI_D_INFO, "SFB: bootflow fastboot=1\n"));
+    }
   }
 
 #ifdef AUTO_VIRT_ABL
