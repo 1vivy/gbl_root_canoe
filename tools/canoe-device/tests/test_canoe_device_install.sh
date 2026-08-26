@@ -24,6 +24,9 @@
 #   9  foreign file is set aside and reported
 #  10  foreign file is preserved when the destination name collides
 #  11  foreign disclosure rolls back with the transaction
+#  12  the requested mode reaches canoe.cfg, and a bad mode is refused
+#  13  a hand-added entry survives an install
+#  14  a config naming a missing backup loader loses that entry
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -244,5 +247,56 @@ if run_install "$ST" "$D" "$DEV" "$BK"; then fail '11: accepted a failed verific
   fail '11: foreign file was not restored on rollback'
 [ ! -e "$D/.canoe.foreign" ] || fail '11: rollback left a new foreign directory'
 pass 'foreign-file disclosure rolls back with the transaction'
+# ----------------------------------------------------------------- case 12 --
+# The mode the caller asked for has to reach the file. It used to not: the host
+# generated a canoe.cfg that this script then regenerated from scratch, so
+# `canoe install --mode 0` landed `mode 1`.
+setup c12 no 120 256
+OUT="$TMP/c12/out"; ERR="$TMP/c12/err"; SHADOW=""
+CANOE_MODE=0 CANOE_ACTIVE_SLOT=_b run_install "$ST" "$D" ||
+  fail "12: install failed: $(cat "$ERR")"
+cfg_value() { awk -v key="$1" '$1 == key { print $2; exit }' "$D/canoe.cfg"; }
+cfg_entry() {
+  awk -v wanted="$1" -v key="$2" '
+    $1 == "entry" { here = ($2 == wanted); next }
+    here && $1 == key { print $2; exit }
+  ' "$D/canoe.cfg"
+}
+[ "$(cfg_entry android-b mode)" = 0 ] || fail '12: requested mode did not reach the entry'
+[ "$(cfg_value mode)" = 0 ] || fail '12: first install did not adopt the requested fallback'
+[ "$(cfg_value default)" = android-b ] || fail '12: active slot is not the default'
+[ "$(cfg_entry android-b role)" = active ] || fail '12: active role missing'
+grep -q 'CANOE-MARK: entry-set id=android-b role=active mode=0' "$OUT" ||
+  fail '12: no entry receipt from the shared writer'
+if CANOE_MODE=7 run_install "$ST" "$D"; then fail '12: accepted an invalid mode'; fi
+pass 'the requested mode reaches canoe.cfg, and a bad mode is refused'
+
+# ----------------------------------------------------------------- case 13 --
+# An install upserts its own entries; anything the operator added stays.
+setup c13 yes 120 256
+printf '\nentry lineage\n  title LineageOS\n  image roms/lineage.efi\n  mode 2\n  role other\n' >> "$D/canoe.cfg"
+printf 'OTHER-SLOT-LOADER' > "$D/boot_b.efi"
+OUT="$TMP/c13/out"; ERR="$TMP/c13/err"; SHADOW=""
+run_install "$ST" "$D" || fail "13: install failed: $(cat "$ERR")"
+grep -q '^entry lineage$' "$D/canoe.cfg" || fail '13: custom entry was erased'
+grep -q '^  image roms/lineage.efi$' "$D/canoe.cfg" || fail '13: custom image was rewritten'
+grep -q '^entry android-b$' "$D/canoe.cfg" || fail '13: derived other-slot entry missing'
+grep -q '^entry android-backup$' "$D/canoe.cfg" || fail '13: backup entry missing'
+pass 'an install preserves a hand-added entry and declares the other slot'
+
+# ----------------------------------------------------------------- case 14 --
+# A config that names a backup loader the boot root no longer holds must lose
+# that entry, or the menu offers a row the BDS cannot launch. A live loader is
+# always demoted into boot_backup.efi, so the stale case is a boot root with a
+# config but no loaders: what an interrupted first install leaves behind.
+setup c14 no 120 256
+printf 'version 1\ngeneration 3\ntimeout 5\ndefault android-backup\nmode 1\ndevinfo-repair asneeded\n\nentry android-backup\n  title Android (previous)\n  image boot_backup.efi\n  mode 1\n  role backup\n' > "$D/canoe.cfg"
+OUT="$TMP/c14/out"; ERR="$TMP/c14/err"; SHADOW=""
+run_install "$ST" "$D" || fail "14: install failed: $(cat "$ERR")"
+grep -q 'CANOE-MARK: entry-removed id=android-backup' "$OUT" ||
+  fail '14: stale backup entry was not removed'
+grep -q '^entry android-backup$' "$D/canoe.cfg" && fail '14: unlaunchable row survived'
+grep -q '^entry android-a$' "$D/canoe.cfg" || fail '14: active entry missing'
+pass 'a config naming a missing backup loader loses that entry'
 
 echo 'all canoe device-install fixtures passed'

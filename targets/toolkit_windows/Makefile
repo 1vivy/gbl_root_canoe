@@ -68,6 +68,8 @@ canoe_device_script: copy_resources
 	# rather than duplicated per target.
 	cp ../../tools/canoe-device/canoe_device_install.sh ./build/toolkit/canoe_device_install.sh
 	chmod +x ./build/toolkit/canoe_device_install.sh
+	cp ../../tools/canoe-device/canoe_boot_entry.sh ./build/toolkit/canoe_boot_entry.sh
+	chmod +x ./build/toolkit/canoe_boot_entry.sh
 	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
 canoe_host: copy_resources
 	# Keep one user-facing launcher; the package is an internal implementation detail.
@@ -104,11 +106,11 @@ $(PYTHON_EMBED_ARCHIVE):
 ext4_tools: copy_resources
 	@printf '%s\n' \
 		'' \
-		'Windows ext4 channel:' \
+		'Windows ext4 tools:' \
 		'  Pinned WinFsp SHA-256: $(WINFSP_SHA256)' \
 		'  Pinned LKL lklfuse SHA-256: $(LKL_FUSE_SHA256)' \
-		'  After persist is exported over USB Mass Storage, mount the device block with lklfuse and choose the resulting drive letter.' \
-		'  Then edit <drive>:\\efisp\\canoe.cfg and the boot-root files, safely eject, and reboot.' \
+		'  BDS exports persist over USB Mass Storage; mount it with WinFsp+lklfuse.' \
+		'  Then run canoe install --boot-root <drive>:\ to run the shared transaction against it.' \
 		'  A checksum failure stops before mounting; delete the Canoe ext4 cache and retry.' \
 		>> build/toolkit/README.canoe.md
 build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host python_embed ext4_tools

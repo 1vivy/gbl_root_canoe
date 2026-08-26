@@ -80,6 +80,7 @@ test:
 	$(MAKE) -C submodules/uefi test
 	sh targets/magisk_module/tests/test_flows.sh
 	sh targets/magisk_module/tests/test_webui.sh
+	sh tools/canoe-device/tests/test_canoe_boot_entry.sh
 	sh tools/canoe-device/tests/test_canoe_device_install.sh
 	sh targets/toolkit_android/tests/test_build_script.sh
 	python3 -m pytest tools/canoe-host

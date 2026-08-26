@@ -64,6 +64,8 @@ canoe_device_script: copy_resources
 	# rather than duplicated per target.
 	cp ../../tools/canoe-device/canoe_device_install.sh ./build/toolkit/canoe_device_install.sh
 	chmod +x ./build/toolkit/canoe_device_install.sh
+	cp ../../tools/canoe-device/canoe_boot_entry.sh ./build/toolkit/canoe_boot_entry.sh
+	chmod +x ./build/toolkit/canoe_boot_entry.sh
 	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
 canoe_host: copy_resources
 	cp -r ../../tools/canoe-host/canoelib ./build/toolkit/canoelib
