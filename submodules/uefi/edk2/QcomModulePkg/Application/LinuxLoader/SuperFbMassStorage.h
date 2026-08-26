@@ -12,10 +12,14 @@
 #include <Protocol/BlockIo.h>
 
 /*
- * Export one disk to the connected PC as USB mass-storage LUN 0. Returns
- * EFI_ABORTED when the operator stopped the session with Volume Down,
- * EFI_SUCCESS when the host side ended it (unplug or link loss), or the
- * platform error if the session could not be started at all.
+ * Export one disk to the connected PC as USB mass-storage LUN 0.
+ *
+ * Returns EFI_ABORTED when the operator stopped the session with Volume Down,
+ * which is the ordinary ending: an unplug or link loss no longer ends it, so
+ * replugging resumes the same session rather than needing a new one.
+ * EFI_SUCCESS means the vendor stack answered nothing for a sustained run and
+ * the session gave up on its own. Anything else is the platform error from a
+ * session that could not be started at all.
  */
 EFI_STATUS
 SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
