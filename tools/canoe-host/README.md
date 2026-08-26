@@ -6,12 +6,9 @@ lives here once, and `targets/toolkit_{linux,windows}/Makefile` copy it in.
 
 | Path | Role |
 |---|---|
-| `canoe_build` | derive `boot.efi` + sidecars from `images/abl.img` + `images/vbmeta.img` |
-| `canoe_prep` | pathway B: graft a custom recovery, substitute into a firmware package |
-| `canoe_prep_device` | pathway A: derive from the device's own `abl`/`vbmeta` |
-| `canoe_stage` | validate, stage into the boot root, invoke the device-side transaction |
-| `canoe_*.cmd` | Windows wrappers; they run the bundled interpreter on the launcher beside them |
-| `canoe/` | the shared implementation |
+| `canoe` | Linux launcher and interactive wizard |
+| `canoe.cmd` | Windows wrapper; uses bundled Python when available |
+| `canoelib/` | Shared implementation package |
 | `tests/` | pytest suite; never packaged |
 
 ## Why Python

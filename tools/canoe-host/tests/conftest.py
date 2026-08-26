@@ -23,7 +23,7 @@ import pytest
 HOST_ROOT: Final = Path(__file__).resolve().parent.parent
 REPO_ROOT: Final = HOST_ROOT.parent.parent
 STUB_DIR: Final = Path(__file__).resolve().parent / "stubs"
-LAUNCHERS: Final = ("canoe_build", "canoe_prep", "canoe_prep_device", "canoe_stage")
+LAUNCHERS: Final = ("canoe",)
 HOST_BINARIES: Final = (
     "extractfv",
     "patch_abl",
@@ -31,7 +31,6 @@ HOST_BINARIES: Final = (
     "abl_tzmap",
     "vbmetabackup",
     "vbmetaport",
-    "mode2_profile-arm64",
 )
 GM2P_BYTES: Final = 120
 TZMAP_BYTES: Final = 256
@@ -125,7 +124,7 @@ class FakeToolkit:
         return self.trace_path.read_text(encoding="utf-8").splitlines()
 
     def plant_triplet(self) -> None:
-        """Write a valid derived triplet, as a successful canoe_build leaves it."""
+        """Write a valid derived triplet, as a successful `canoe build` leaves it."""
         efisp = self.root / "efisp"
         efisp.mkdir(parents=True, exist_ok=True)
         (efisp / "boot.efi").write_bytes(b"NEW-LOADER" * 64)
@@ -153,7 +152,7 @@ def _build_device(root: Path, *, efisp_bytes: int) -> FakeDevice:
 
 def _build_toolkit(root: Path, device: FakeDevice, trace: Path) -> FakeToolkit:
     root.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(HOST_ROOT / "canoe", root / "canoe")
+    shutil.copytree(HOST_ROOT / "canoelib", root / "canoelib")
     for launcher in LAUNCHERS:
         target = root / launcher
         shutil.copyfile(HOST_ROOT / launcher, target)

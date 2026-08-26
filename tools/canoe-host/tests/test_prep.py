@@ -34,7 +34,8 @@ def test_prep_grafts_substitutes_and_preserves_stock_backups_on_rerun(toolkit: F
     stock_abl = (package / "abl.img").read_bytes()
 
     first = toolkit.run(
-        "canoe_prep",
+        "canoe",
+        "prep",
         "--pkg",
         str(package),
         "--recovery",
@@ -53,7 +54,8 @@ def test_prep_grafts_substitutes_and_preserves_stock_backups_on_rerun(toolkit: F
     assert b"STOCK-PACKAGE-ABL" in toolkit.read("efisp/boot.efi")
 
     second = toolkit.run(
-        "canoe_prep",
+        "canoe",
+        "prep",
         "--pkg",
         str(package),
         "--recovery",
@@ -73,7 +75,8 @@ def test_prep_rejects_size_changing_graft(toolkit: FakeToolkit) -> None:
     package = _package(toolkit)
     recovery, _ = _custom_images(toolkit)
     result = toolkit.run(
-        "canoe_prep",
+        "canoe",
+        "prep",
         "--pkg",
         str(package),
         "--recovery",
@@ -87,7 +90,7 @@ def test_prep_rejects_size_changing_graft(toolkit: FakeToolkit) -> None:
 
 def test_prep_rejects_missing_package(toolkit: FakeToolkit) -> None:
     """Given a nonexistent package path, the launcher names the missing directory."""
-    result = toolkit.run("canoe_prep", "--pkg", str(toolkit.root / "missing"))
+    result = toolkit.run("canoe", "prep", "--pkg", str(toolkit.root / "missing"))
     assert result.returncode == 1
     assert "package directory not found" in result.stderr
 
@@ -96,7 +99,7 @@ def test_prep_rejects_missing_package_abl(toolkit: FakeToolkit) -> None:
     """Given a package without abl.img, preparation stops before host tools run."""
     package = _package(toolkit)
     (package / "abl.img").unlink()
-    result = toolkit.run("canoe_prep", "--pkg", str(package))
+    result = toolkit.run("canoe", "prep", "--pkg", str(package))
     assert result.returncode == 1
     assert "package is missing abl.img" in result.stderr
 
@@ -105,7 +108,7 @@ def test_prep_rejects_missing_package_vbmeta(toolkit: FakeToolkit) -> None:
     """Given a package without vbmeta.img, preparation stops before host tools run."""
     package = _package(toolkit)
     (package / "vbmeta.img").unlink()
-    result = toolkit.run("canoe_prep", "--pkg", str(package))
+    result = toolkit.run("canoe", "prep", "--pkg", str(package))
     assert result.returncode == 1
     assert "package is missing vbmeta.img" in result.stderr
 
@@ -116,7 +119,8 @@ def test_prep_rejects_recovery_without_package_recovery(toolkit: FakeToolkit) ->
     (package / "recovery.img").unlink()
     recovery, _ = _custom_images(toolkit)
     result = toolkit.run(
-        "canoe_prep",
+        "canoe",
+        "prep",
         "--pkg",
         str(package),
         "--recovery",
