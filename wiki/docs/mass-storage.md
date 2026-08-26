@@ -23,9 +23,7 @@ Connect the device to the PC before or after selecting the target, then wait for
 
 Before exporting `persist`, BDS shows a warning because it is a live filesystem. Treat the exported disk as the device's active storage: only make deliberate repairs, and finish writes before ending the session.
 
-## Session limits and ending it
-
-Each session exports exactly one partition as one USB LUN. The feature does not expose `persist` and `logfs` simultaneously. Press **Volume Down** on the device to stop the export; unplugging or losing the USB link also ends the host session. After the session ends, the BDS returns to its menu.
+Each session exports exactly one partition as one USB LUN. The feature does not expose `persist` and `logfs` simultaneously. Press **Volume Down** on the device to stop the export; unplugging or losing the USB link does **not** end the session, and replugging resumes it. After the host has flushed all writes and unmounted `persist`, the operator must press **Volume Down** to return to the BDS menu.
 
 ## Windows mount and repair
 

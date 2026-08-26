@@ -49,7 +49,7 @@ def prep_device_report(summary: PrepDeviceSummary) -> str:
                 "a vulnerable ABL for the chain to load:",
                 "",
                 "  ./canoe install",
-                "  fastboot flash abl <vulnerable>.img",
+                "  fastboot flash abl <vulnerable>.img  (only when the installed ABL lacks the GBL vulnerability)",
             ),
         )
     lines.append("========================================")

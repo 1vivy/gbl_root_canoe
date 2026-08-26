@@ -1,21 +1,24 @@
-"""Install a prepared canoe boot chain through one cross-platform ADB driver."""
+"""Install the prepared canoe boot root over ADB or USB Mass Storage."""
 
 from __future__ import annotations
 
 import argparse
+import shutil
+import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
+from . import massstorage
 from .adb import Adb
-from .config import Config, ConfigEntry, ConfigError, read_config, write_config
-from .device import find_persist, resolve_part
+from .config import Config, ConfigError, verify_config
+from .device import find_persist
 from .errors import CanoeError
 from .layout import GM2P_BYTES, TZMAP_BYTES, Toolkit, require_exact, require_nonempty
 from .proc import Completed, run
 from .stage_report import stage_report
-from .stage_transaction import Context, check, pull_backup, quote, run_transaction
+from .stage_transaction import Context, check, quote, run_transaction
 from .ui import emit, note, run_entry, step
 
 PROG: Final = "canoe install"
@@ -23,13 +26,14 @@ PROG: Final = "canoe install"
 
 @dataclass(frozen=True, slots=True)
 class Options:
-    """Parsed non-interactive staging options."""
+    """Parsed non-interactive install options."""
 
     serial: str | None
     persist: str | None
-    install_bds: bool
+    via: Literal["adb", "mass-storage"]
+    boot_root: Path | None
+    slot: str | None
     mode: int
-    work: Path | None
 
 
 class _ParsedArgs(argparse.Namespace):
@@ -37,9 +41,10 @@ class _ParsedArgs(argparse.Namespace):
 
     serial: str | None = None
     persist: str | None = None
-    skip_bds: bool = False
+    via: Literal["adb", "mass-storage"] = "adb"
+    boot_root: str | None = None
+    slot: str | None = None
     mode: int = 1
-    work: str | None = None
 
 
 def entry(argv: Sequence[str]) -> int:
@@ -54,35 +59,77 @@ def _parse_mode(raw: str) -> int:
     return int(raw)
 
 
+def _parse_slot(raw: str) -> str:
+    """Parse a slot letter into the suffix the device scripts use."""
+    if raw not in ("a", "b"):
+        raise argparse.ArgumentTypeError("must be a or b")
+    return f"_{raw}"
+
+
 def _options(argv: Sequence[str]) -> Options:
-    """Parse stage options without consulting the device."""
+    """Parse install options without consulting the device."""
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="Install the prepared canoe boot chain over ADB.",
-        epilog=(
-            "Needs a custom recovery with ADB enabled and expects efisp/boot.efi, its sidecars, "
-            "canoe.cfg, BDS.efi and canoe_device_install.sh in the toolkit."
-        ),
+        description="Install the prepared canoe boot root over ADB or USB Mass Storage.",
+        epilog="ADB needs recovery ADB; Mass Storage needs fastboot BDS and --boot-root or export.",
         exit_on_error=False,
     )
     parser.add_argument("-s", "--serial", help="adb device serial")
-    parser.add_argument("--persist", metavar="PATH", help="persist mount point")
-    parser.add_argument("--skip-bds", action="store_true", help="install the persist tree only")
+    parser.add_argument("--persist", metavar="PATH", help="persist mount point (ADB only)")
     parser.add_argument(
-        "--mode",
-        type=_parse_mode,
-        default=1,
-        metavar="0|1|2",
-        help="mode written into the installed canoe.cfg entry",
+        "--via", choices=("adb", "mass-storage"), default="adb", help="install channel"
     )
-    parser.add_argument("--work", metavar="DIR", help="local backup directory (default: ./work)")
+    parser.add_argument("--boot-root", metavar="PATH", help="already-mounted persist path")
+    parser.add_argument("--slot", type=_parse_slot, metavar="a|b", help="active host-run slot")
+    parser.add_argument("--mode", type=_parse_mode, default=1, metavar="0|1|2", help="entry mode")
     parsed = _ParsedArgs()
     try:
         parser.parse_args(argv, namespace=parsed)
     except argparse.ArgumentError as exc:
         raise CanoeError(str(exc)) from exc
-    work = Path(parsed.work) if parsed.work else None
-    return Options(parsed.serial, parsed.persist, not parsed.skip_bds, parsed.mode, work)
+    via: Literal["adb", "mass-storage"] = parsed.via
+    if parsed.via == "mass-storage" and parsed.persist is not None:
+        raise CanoeError("--persist is only available through the adb channel")
+    if parsed.boot_root is not None:
+        if parsed.via == "adb":
+            via = "mass-storage"
+        if parsed.persist is not None:
+            raise CanoeError("--persist cannot be combined with --boot-root")
+    return Options(
+        parsed.serial,
+        parsed.persist,
+        via,
+        Path(parsed.boot_root) if parsed.boot_root is not None else None,
+        parsed.slot,
+        parsed.mode,
+    )
+
+
+def _stage_files(toolkit: Toolkit) -> list[tuple[Path, str]]:
+    """Everything a transaction needs, as (local file, staged name) pairs.
+
+    Both shared scripts travel with the payload: the transaction invokes
+    canoe_boot_entry.sh, so staging one without the other installs a tree whose
+    canoe.cfg can never be written.
+    """
+    files: list[tuple[Path, str]] = [
+        (toolkit.boot_efi, "boot.efi"),
+        (toolkit.gm2p, "boot.efi.gm2p"),
+        (toolkit.tzmap, "boot.efi.tzmap"),
+    ]
+    if toolkit.efisp_tools.is_dir():
+        files.extend(
+            (item, f"tools/{item.name}")
+            for item in sorted(toolkit.efisp_tools.iterdir(), key=lambda p: p.name)
+            if item.is_file()
+        )
+    files.extend(
+        (
+            (toolkit.device_install, "canoe_device_install.sh"),
+            (toolkit.boot_entry, "canoe_boot_entry.sh"),
+        )
+    )
+    return files
 
 
 def _stage_inputs(context: Context) -> None:
@@ -91,42 +138,42 @@ def _stage_inputs(context: Context) -> None:
         f"rm -rf {quote(context.stage)} && mkdir -p {quote(context.stage + '/tools')}"
     ).ok:
         raise CanoeError(f"could not create {context.stage}")
-    files: list[tuple[Path, str]] = [
-        (context.toolkit.boot_efi, "boot.efi"),
-        (context.toolkit.gm2p, "boot.efi.gm2p"),
-        (context.toolkit.tzmap, "boot.efi.tzmap"),
-        (context.toolkit.canoe_cfg, "canoe.cfg"),
-    ]
-    if context.toolkit.efisp_tools.is_dir():
-        files.extend(
-            (item, f"tools/{item.name}")
-            for item in sorted(context.toolkit.efisp_tools.iterdir(), key=lambda p: p.name)
-            if item.is_file()
-        )
-    if context.install_bds:
-        files.append((context.toolkit.bds, "BDS.efi"))
-    files.append((context.toolkit.device_install, "canoe_device_install.sh"))
-    for local, name in files:
+    for local, name in _stage_files(context.toolkit):
         context.adb.push(local, f"{context.stage}/{name}")
         note(name)
 
 
 def _validate_stage(context: Context) -> None:
     """Validate every staged size before invoking the transaction script."""
-    checks: list[tuple[str, int, str]] = [
+    checks = [
         ("boot.efi", context.toolkit.boot_efi.stat().st_size, "boot.efi"),
         ("boot.efi.gm2p", GM2P_BYTES, "gm2p"),
         ("boot.efi.tzmap", TZMAP_BYTES, "tzmap"),
-        ("canoe.cfg", context.toolkit.canoe_cfg.stat().st_size, "canoe.cfg"),
+        (
+            "canoe_device_install.sh",
+            context.toolkit.device_install.stat().st_size,
+            "install script",
+        ),
+        ("canoe_boot_entry.sh", context.toolkit.boot_entry.stat().st_size, "entry script"),
     ]
-    if context.install_bds:
-        checks.append(("BDS.efi", context.toolkit.bds.stat().st_size, "BDS.efi"))
     for remote, expected, label in checks:
         actual = context.adb.size(f"{context.stage}/{remote}")
         if actual != expected:
             got = "none" if actual is None else str(actual)
             raise CanoeError(f"{label} did not land as {expected} bytes (got {got})")
     note("staged set validated on device")
+
+
+def _stage_local(toolkit: Toolkit, staging: Path) -> None:
+    """Copy the same staged set into a host directory for a local transaction."""
+    for source, name in _stage_files(toolkit):
+        destination = staging / name
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+        except OSError as exc:
+            raise CanoeError(f"could not stage {name}: {exc}") from exc
+        note(name)
 
 
 def _check_verify(result: Completed, message: str) -> None:
@@ -158,44 +205,42 @@ def _verify_tzmap(toolkit: Toolkit) -> None:
     )
 
 
-def _config(toolkit: Toolkit, mode: int) -> None:
-    """Generate the complete menu declaration that accompanies this install."""
+def _verify_installed_config(path: Path) -> Config:
+    """Confirm the installed canoe.cfg is exactly what the shared writer emits."""
     try:
-        existing = read_config(toolkit.canoe_cfg) if toolkit.canoe_cfg.is_file() else None
-    except ConfigError:
-        existing = None
-    if existing is None:
-        config = Config((ConfigEntry("android-a", "Android (slot A)", "boot.efi", mode, "active"),), mode=mode, default="android-a")
-    else:
-        entries = tuple(
-            replace(entry, mode=mode) if entry.image == "boot.efi" else entry for entry in existing.entries
-        )
-        if not any(entry.image == "boot.efi" for entry in entries):
-            entries += (ConfigEntry("android-a", "Android (slot A)", "boot.efi", mode, "active"),)
-        config = Config(entries, existing.generation, existing.timeout, existing.default, mode, existing.devinfo_repair)
-    try:
-        generation = write_config(toolkit.canoe_cfg, config)
+        config = verify_config(path)
     except ConfigError as exc:
-        raise CanoeError(str(exc)) from exc
-    note(f"canoe.cfg generation: {generation}")
+        raise CanoeError(f"installed canoe.cfg verification failed: {exc}") from exc
+    note(f"canoe.cfg verified (generation {config.generation})")
+    return config
 
 
-def _run(argv: Sequence[str]) -> None:
-    """Run the complete host-side staging and install sequence."""
-    options = _options(argv)
-    toolkit = Toolkit.shipped()
-    for path in (toolkit.boot_efi, toolkit.gm2p, toolkit.tzmap):
-        require_nonempty(path, f"missing or empty: {path.relative_to(toolkit.root)}")
-    require_nonempty(toolkit.device_install, "missing canoe_device_install.sh")
-    require_exact(toolkit.gm2p, GM2P_BYTES, "boot.efi.gm2p")
-    require_exact(toolkit.tzmap, TZMAP_BYTES, "boot.efi.tzmap")
-    _config(toolkit, options.mode)
-    require_nonempty(toolkit.canoe_cfg, "missing or empty: efisp/canoe.cfg")
-    _verify_tzmap(toolkit)
-    if options.install_bds:
-        require_nonempty(toolkit.bds, "missing or empty: BDS.efi (use --skip-bds to install the tree only)")
-    work = options.work or toolkit.root / "work"
-    work.mkdir(parents=True, exist_ok=True)
+def _active_slot(options: Options, toolkit: Toolkit) -> str:
+    """The slot a host-run transaction must declare, since getprop is unavailable.
+
+    On the device the script reads ro.boot.slot_suffix itself. Here nothing can
+    be asked - the BDS publishes no slot over fastboot - so it is either given
+    or taken from what prep-device recorded, never guessed.
+    """
+    if options.slot is not None:
+        return options.slot
+    try:
+        raw = toolkit.slot_receipt.read_text(encoding="ascii").strip()
+    except FileNotFoundError as exc:
+        raise CanoeError(
+            "cannot determine the active slot for a host-run install; pass --slot a or b"
+        ) from exc
+    except OSError as exc:
+        raise CanoeError(f"could not read {toolkit.slot_receipt}: {exc}") from exc
+    if raw not in {"_a", "_b"}:
+        raise CanoeError(
+            f"invalid source slot receipt {toolkit.slot_receipt}; pass --slot a or b"
+        )
+    return raw
+
+
+def _run_adb(toolkit: Toolkit, options: Options) -> tuple[str, bool]:
+    """Install over adb, running the transaction on the device."""
     adb = Adb.connect(toolkit, options.serial)
     step("Locating the persist mount")
     persist = find_persist(adb, options.persist)
@@ -204,30 +249,79 @@ def _run(argv: Sequence[str]) -> None:
         raise CanoeError(f"{persist} is not writable")
     note(f"persist: {persist} (writable)")
     boot_root = f"{persist}/efisp"
-    efisp_device = resolve_part(adb, "efisp", None) if options.install_bds else None
-    context = Context(adb, toolkit, f"{boot_root}/.canoe.stage", boot_root, options.install_bds)
+    context = Context(adb, toolkit, f"{boot_root}/.canoe.stage", boot_root)
     step(f"Staging into {context.stage}")
-    receipt = None
     try:
         _stage_inputs(context)
         _validate_stage(context)
-        install_step = "Running the device-side install"
-        if not context.install_bds:
-            install_step += " (tree only)"
-        step(install_step)
-        receipt = run_transaction(context, efisp_device)
-        if context.install_bds:
-            pull_backup(context, work)
+        receipt = run_transaction(
+            context,
+            options.mode,
+            f"{context.stage}/canoe_boot_entry.sh",
+        )
     finally:
         adb.shell(f"rm -rf {quote(context.stage)}")
-    if receipt is None:
-        raise CanoeError("device-side transaction did not run")
     check(receipt)
+    with tempfile.TemporaryDirectory(prefix="canoe-verify-") as directory:
+        config_path = Path(directory) / "canoe.cfg"
+        adb.pull(f"{boot_root}/canoe.cfg", config_path)
+        _verify_installed_config(config_path)
+    return boot_root, receipt.first_install
+
+
+def _run_mass_storage(toolkit: Toolkit, options: Options) -> tuple[str, bool]:
+    """Install through a mounted persist export, running the transaction here."""
+    active_slot = _active_slot(options, toolkit)
+    handle: massstorage.Export | None = None
+    try:
+        if options.boot_root is None:
+            step("Exporting persist over USB Mass Storage")
+            handle = massstorage.export(Path("fastboot"))
+        else:
+            handle = massstorage.local_boot_root(options.boot_root)
+        boot_root = handle.boot_root
+        first_install = not (boot_root / "boot.efi").is_file()
+        with tempfile.TemporaryDirectory(prefix="canoe-stage-") as directory:
+            staging = Path(directory)
+            _stage_local(toolkit, staging)
+            step("Running the shared host-side install")
+            massstorage.transaction(
+                handle,
+                staging,
+                staging / "canoe_device_install.sh",
+                mode=options.mode,
+                active_slot=active_slot,
+                boot_entry=staging / "canoe_boot_entry.sh",
+            )
+        _verify_installed_config(boot_root / "canoe.cfg")
+        return str(boot_root), first_install
+    finally:
+        if handle is not None:
+            massstorage.release(handle)
+
+
+def _run(argv: Sequence[str]) -> None:
+    """Run the complete host-side install for whichever channel was chosen."""
+    options = _options(argv)
+    toolkit = Toolkit.shipped()
+    for path in (toolkit.boot_efi, toolkit.gm2p, toolkit.tzmap):
+        require_nonempty(path, f"missing or empty: {path.relative_to(toolkit.root)}")
+    require_nonempty(toolkit.device_install, "missing canoe_device_install.sh")
+    require_nonempty(toolkit.boot_entry, "missing canoe_boot_entry.sh")
+    require_exact(toolkit.gm2p, GM2P_BYTES, "boot.efi.gm2p")
+    require_exact(toolkit.tzmap, TZMAP_BYTES, "boot.efi.tzmap")
+    _verify_tzmap(toolkit)
+    if options.via == "adb":
+        destination, first_install = _run_adb(toolkit, options)
+    else:
+        destination, first_install = _run_mass_storage(toolkit, options)
     emit(
         stage_report(
-            destination=boot_root,
-            install_bds=context.install_bds,
+            destination=destination,
+            via=options.via,
             mode=options.mode,
-            first_install=receipt.first_install,
+            first_install=first_install,
         )
     )
+
+

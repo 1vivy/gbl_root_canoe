@@ -25,7 +25,7 @@ for scripts and CI; each takes the flags its own --help lists.
   canoe build                        patch the ABL and derive both sidecars
   canoe prep         [flags]         prepare alongside a firmware package
   canoe prep-device  [flags]         derive from the device's own abl/vbmeta
-  canoe install      [flags]         install the boot root, then the BDS
+  canoe install      [flags]         install the boot root over ADB or Mass Storage
   canoe oneshot --abl IMG --mode 0|1 temp-root a locked device; writes nothing
 
   canoe <command> --help             flags for one command
@@ -106,7 +106,8 @@ def _interactive() -> None:
     emit(
         "Result:\n"
         f"  Installed boot.efi, sidecars, canoe.cfg, and tools/ under {toolkit.efisp}.\n"
-        f"  BDS mode {mode} is selected for the {phase} entry; next boot launches the configured menu.\n"
+        f"  Mode {mode} is selected for the {phase} entry; next boot launches the configured menu.\n"
+        "  Flash the host bootloader bundle separately with fastboot (ABL only when needed).\n"
         f"  GBL vulnerability patched: {'yes' if derived.gbl_patched else 'no'}"
     )
 

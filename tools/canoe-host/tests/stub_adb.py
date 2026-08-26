@@ -8,7 +8,6 @@ Models a fake device rooted at $STUB_DEV:
     /tmp                      -> $STUB_DEV/tmp
     /proc/mounts              -> $STUB_DEV/proc_mounts
     /proc/cmdline             -> $STUB_DEV/cmdline
-    /dev/block/by-name/efisp  -> $STUB_DEV/efisp.bin
     /dev/block/by-name/abl_a  -> $STUB_DEV/abl_a.bin
     ... likewise abl_b, vbmeta_a, vbmeta_b
 
@@ -18,8 +17,6 @@ is exercised as written rather than simulated.
 Fault injection:
     $STUB_STATE    transport reported by get-state (default: recovery)
     $STUB_FAIL     substring; any shell/push/pull command containing it fails
-    $STUB_CORRUPT  '1' shadows `dd` so the BDS write lands wrong bytes, which
-                   the device script's byte-for-byte readback has to catch
 """
 
 from __future__ import annotations
@@ -32,20 +29,16 @@ from pathlib import Path
 
 DEV = Path(os.environ["STUB_DEV"])
 FAIL = os.environ.get("STUB_FAIL", "")
-CORRUPT = os.environ.get("STUB_CORRUPT") == "1"
+LOSE_EXIT = os.environ.get("STUB_LOSE_EXIT") == "1"
+LOG = DEV / "adb.log"
 # Models an adbd without shell protocol v2: `adb shell` exits 0 whatever the
 # remote command did. Real recoveries in the wild still do this, and it is why
 # the driver cannot treat a zero exit as proof that the transaction committed.
-LOSE_EXIT = os.environ.get("STUB_LOSE_EXIT") == "1"
-LOG = DEV / "adb.log"
-
-EFISP = DEV / "efisp.bin"
 
 # /tmp/ MUST be rewritten first: every later rule injects $STUB_DEV paths, and
 # re-scanning those for "/tmp/" would rewrite them a second time.
 REMAPS = (
     ("/tmp/", f"{DEV / 'tmp'}/"),
-    ("/dev/block/by-name/efisp", str(EFISP)),
     ("/dev/block/by-name/abl_a", str(DEV / "abl_a.bin")),
     ("/dev/block/by-name/abl_b", str(DEV / "abl_b.bin")),
     ("/dev/block/by-name/vbmeta_a", str(DEV / "vbmeta_a.bin")),
@@ -102,45 +95,6 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-# The corruption has to happen INSIDE the device script. `canoe install` hands
-# the whole transaction over, so the outer adb command is just
-# `sh canoe_device_install.sh`; rewriting that would prove nothing about the
-# `dd` on PATH is the same technique the device-side suite uses.
-CORRUPT_SHIM = r"""#!/bin/sh
-# Corrupting dd, installed by stub_adb.py under $STUB_CORRUPT.
-#
-# ONLY the BDS write is corrupted. The backup read (if=efisp) and the rollback
-# write (if=backup) must both work, or the test would be proving that dd is
-# broken rather than that the transaction rolls back.
-source= target=
-for arg in "$@"; do
-  case "$arg" in
-    if=*) source=${arg#if=} ;;
-    of=*) target=${arg#of=} ;;
-  esac
-done
-if [ "$target" = "@EFISP@" ]; then
-  case "$source" in
-    *BDS.efi) exec @REAL_DD@ if=/dev/zero of="$target" bs=4096 count=8 conv=notrunc ;;
-  esac
-fi
-exec @REAL_DD@ "$@"
-"""
-
-
-def corrupt_path() -> str:
-    """A PATH prefix whose `dd` makes the BDS write land wrong bytes."""
-    shim = DEV / "corrupt-bin"
-    shim.mkdir(exist_ok=True)
-    real = shutil.which("dd", path=os.defpath) or "/usr/bin/dd"
-    tool = shim / "dd"
-    tool.write_text(
-        CORRUPT_SHIM.replace("@EFISP@", str(EFISP)).replace("@REAL_DD@", real),
-        encoding="utf-8",
-    )
-    tool.chmod(0o755)
-    return f"{shim}{os.pathsep}{os.environ['PATH']}"
-
 
 def shell(command: str) -> int:
     log("shell", command)
@@ -152,8 +106,7 @@ def shell(command: str) -> int:
     line = line.replace("blockdev --getsize64", "wc -c <")
     line = line.replace("blockdev --setrw", "true ")
     line = line.replace("getprop ro.boot.slot_suffix", f"cat {DEV / 'slot_suffix'}")
-    env = {**os.environ, "PATH": corrupt_path()} if CORRUPT else None
-    done = subprocess.run(["sh", "-c", line], capture_output=True, text=True, check=False, env=env)
+    done = subprocess.run(["sh", "-c", line], capture_output=True, text=True, check=False)
     sys.stdout.write(done.stdout)
     sys.stderr.write(done.stderr)
     return 0 if LOSE_EXIT else done.returncode

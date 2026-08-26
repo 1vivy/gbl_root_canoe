@@ -120,6 +120,10 @@ class FakeToolkit:
         if not self.trace_path.is_file():
             return []
         return self.trace_path.read_text(encoding="utf-8").splitlines()
+    @property
+    def slot_receipt(self) -> Path:
+        """The source slot receipt produced by prep-device."""
+        return self.root / ".canoe-source-slot"
 
     def plant_triplet(self) -> None:
         """Write a valid derived triplet, as a successful `canoe build` leaves it."""
@@ -173,6 +177,9 @@ def _build_toolkit(root: Path, device: FakeDevice, trace: Path) -> FakeToolkit:
     install = root / "canoe_device_install.sh"
     shutil.copyfile(REPO_ROOT / "tools" / "canoe-device" / "canoe_device_install.sh", install)
     install.chmod(0o755)
+    boot_entry = root / "canoe_boot_entry.sh"
+    shutil.copyfile(REPO_ROOT / "tools" / "canoe-device" / "canoe_boot_entry.sh", boot_entry)
+    boot_entry.chmod(0o755)
     return FakeToolkit(root, device, trace)
 
 

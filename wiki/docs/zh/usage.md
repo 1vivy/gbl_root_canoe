@@ -30,7 +30,7 @@ fastboot oem mass-storage:persist     # persist
 fastboot oem mass-storage:logfs       # logfs
 ```
 
-完整流程与 Windows 挂载步骤见 [USB Mass Storage 指南](../mass-storage.md)。
+完整流程与 Windows 挂载步骤见 [USB Mass Storage 指南](./mass-storage.md)。
 
 ## 模式选择与 DeviceInfo 修复
 

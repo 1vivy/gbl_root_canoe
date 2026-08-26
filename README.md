@@ -35,7 +35,9 @@ Two sidecars sit beside `boot.efi`, both derived per-image and both matched to i
 
 **The BDS no longer writes to storage.** 6.x kept three 1 KiB records in the tail of the raw `efisp` partition — preferred mode, default entry, custom entry — and the boot menu wrote them. Two things were wrong with that. A `dd` of a new `BDS.efi` writes only the image length, so a stale record outlived the loader that wrote it and a mode chosen under one build silently applied under the next. And it made the bootloader a writer, on a device that is one failed boot away from EDL.
 
-7.x replaces all three with one declarative file, [`canoe.cfg`](wiki/docs/canoe-cfg.md), on the boot root. The BDS reads it and renders it. Everything that authors state is one of exactly two processes — the host tool over ADB, or the on-device module as root — both of which have real read-write access to `persist`, which the BDS's read-only ext4 driver never did.
+7.x replaces all three with one declarative file, [`canoe.cfg`](wiki/docs/canoe-cfg.md), on the boot root. The BDS reads it and renders it. There is exactly one writer: `tools/canoe-device/canoe_boot_entry.sh`, the same script called by the host toolkit, the KernelSU module, and the OTA watcher. Its `set` operation is an UPSERT: it replaces only the named entry and preserves every other entry, including hand-added custom-ROM entries.
+
+The shared installer keeps the boot-root transaction in `canoe_device_install.sh`; the entry writer is a separate shared script so all three callers use identical config logic. Both scripts have real read-write access to `persist`, which the BDS's read-only ext4 driver never did.
 
 Consequences worth knowing:
 
@@ -88,12 +90,12 @@ canoe                              interactive wizard (default, no arguments)
 canoe build                        derive the ABL/profile/map artifacts
 canoe prep [--pkg ...]             prepare a firmware package
 canoe prep-device [--slot ...]     pull a device pair and derive artifacts
-canoe install [--skip-bds ...]     install the boot root over ADB
+canoe install [--via adb|mass-storage] [--boot-root PATH]
+                                   install the boot root and upsert its boot entry
 canoe oneshot --abl <img> --mode 0|1
                                    temporary, non-interactive boot
-```
+The host implementation is shared; the archive's `README.canoe.md` contains its platform-specific packaging notes.
 
-The old options remain available under their new verb: translate an old invocation by prefixing its verb. The host implementation is shared; the archive's `README.canoe.md` contains its platform-specific packaging notes.
 
 The one-shot command is the non-interactive path for a locked bootloader when the stock image is already known:
 
@@ -132,8 +134,7 @@ The module is designed to run directly on your rooted Android device.
 
 **Requirements:**
 - Device must be Snapdragon 8 Gen 5 / 8 Elite (Gen 5).
-- Bootloader must be unlocked.
-- Kernel must permit writes to `abl` and `efisp`. Baseband Guard blocks them; a kernel that allows them (WildKernel reportedly does now) works. If writes are refused, switch to LKM or stock boot images.
+- KernelSU module path only: the kernel must permit writes to `abl` and `efisp`. Baseband Guard blocks them; a kernel that allows them (WildKernel reportedly does now) works. If writes are refused, switch to LKM or stock boot images. The host toolkit route does not need kernel write permission: its bootloader bundle flashes both partitions with fastboot.
 - The ABL on the `abl` partition must contain the GBL vulnerability. If it does not, flash an older ABL with the vulnerability first; the generated `boot.efi` and its sidecars must still be a matching stock firmware set.
 
 **Installation & Usage:**
@@ -144,15 +145,21 @@ The module's OTA watcher runs in the background. When an OTA changes the ABL on 
 ### 2. Using the PC Toolkits (Linux / Windows)
 
 The wizard is the recommended human path. Unpack `target_toolkit_linux` or `target_toolkit_windows`, then run `./canoe` on Linux or `canoe.cmd` on Windows and follow its prompts. Put the matching **stock** `abl.img` and `vbmeta.img` in `images/`; the wizard says what is missing and waits there until the pair is populated.
+For repeatable scripts, the same archive provides the subcommands below. Installation is split into two bundles:
 
-For repeatable scripts, the same archive provides the subcommands below. The two install pathways remain independent:
+- **Bundle 1 — bootloader (host only):** if the installed ABL lacks the GBL vulnerability, flash the older vulnerable ABL, then flash BDS:
 
-- **Standalone custom recovery + ADB:** run `canoe prep-device` (pass `--slot inactive` when the other slot is the one just written by `adb sideload`), then boot custom recovery with ADB and run `canoe install`. If the `abl` partition does not already contain a GBL-vulnerable ABL, flash an older vulnerable one with `fastboot flash abl <vulnerable>.img`. The derived `boot.efi` and sidecars must come from one matching stock ABL/vbmeta pair.
-- **With a firmware package** (Super Flasher / RegionalHybrid): run `canoe prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place`, run the package's own flasher unchanged, then boot custom recovery and run `canoe install`. The preparation grafts the package's official recovery vbmeta onto the custom recovery and keeps `.canoe-orig` backups.
+  ```bash
+  fastboot flash abl <vulnerable>.img
+  fastboot flash efisp BDS.efi
+  ```
 
-`canoe install` validates and stages the complete set, then hands the transaction to `canoe_device_install.sh` on the device. The transaction snapshots the live set and prior backup, keeps the previous generation as the selectable backup entry, syncs the persist tree before writing the BDS, verifies the BDS write byte-for-byte, and rolls the set back if a commit fails. It never writes the `abl` partition. It writes the declared boot policy to `canoe.cfg`; see the normative [canoe.cfg format](wiki/docs/canoe-cfg.md) instead of editing a second copy of that specification.
+  Omit the first command when the installed ABL already has the vulnerability. This bundle uses fastboot only; it does not involve Android or kernel writes.
+- **Bundle 2 — boot root and boot entry:** install or refresh the boot root at `<persist mount>/efisp`, then derive the slot triplet and upsert its `canoe.cfg` entry. The default ADB route stages over ADB from custom recovery or a rooted system and runs the shared transaction on the device: `canoe install --via adb`. For the BDS export, `canoe install --via mass-storage` asks the running BDS to perform `fastboot oem mass-storage:persist`, waits for the USB disk, and mounts it; with an already-mounted persist filesystem, use `canoe install --boot-root <mount>`. The same bundle is also the OTA update path.
 
-**Manual flow** (either platform): run `canoe build` with matching stock images, then copy the generated `efisp/` tree plus a `canoe.cfg` into the boot root (`/mnt/vendor/persist/efisp/` from a booted system, `/persist/efisp/` from recovery), `sync`, and flash `BDS.efi` to `efisp` (`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`). Use the [canoe.cfg format](wiki/docs/canoe-cfg.md) for the config's entries and roles.
+The boot root cannot come from fastboot. `persist` is a live ext4 filesystem holding vendor calibration, so `fastboot flash persist` would replace the filesystem. The raw BDS is the only part of this chain that is a whole-partition image.
+
+`canoe install` validates and stages the complete set, then invokes the shared transaction and entry writer. The installer snapshots the live set and prior backup, keeps the previous generation as the selectable backup entry, syncs the persist tree before committing it, and rolls the set back if a commit fails. The entry writer's UPSERT preserves other entries, including hand-added custom-ROM entries; see the normative [canoe.cfg format](wiki/docs/canoe-cfg.md).
 
 ### Windows ext4 access
 

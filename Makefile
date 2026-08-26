@@ -5,7 +5,7 @@
 	target_toolkit_windows target_toolkit_linux target_magisk_module \
 	target_toolkit_android dev_target_extract_and_patch \
 	tools_vbmetafixer_linux tools_vbmetafixer_windows \
-	tools_vbmetafixer_android test uefi_discard
+	tools_vbmetafixer_android test uefi_discard fetch-verified
 
 # UEFI_REBUILD=1 forces a from-scratch BDS, ONCE for the whole invocation.
 #
@@ -80,6 +80,35 @@ test:
 	$(MAKE) -C submodules/uefi test
 	sh targets/magisk_module/tests/test_flows.sh
 	sh targets/magisk_module/tests/test_webui.sh
+	sh tools/canoe-device/tests/test_canoe_boot_entry.sh
 	sh tools/canoe-device/tests/test_canoe_device_install.sh
 	sh targets/toolkit_android/tests/test_build_script.sh
 	python3 -m pytest tools/canoe-host
+
+# Download a pinned package asset without ever exposing a partial archive to
+# subsequent builds. Package Makefiles invoke this target with absolute
+# FETCH_DEST paths so the mechanism is independent of their working directory.
+fetch-verified:
+	@set -eu; \
+	test -n "$(FETCH_URL)" || { echo "FETCH_URL is required" >&2; exit 2; }; \
+	test -n "$(FETCH_SHA256)" || { echo "FETCH_SHA256 is required" >&2; exit 2; }; \
+	test -n "$(FETCH_DEST)" || { echo "FETCH_DEST is required" >&2; exit 2; }; \
+	dest="$(FETCH_DEST)"; \
+	mkdir -p "$$(dirname "$$dest")"; \
+	tmp="$$dest.tmp"; \
+	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
+	if [ -f "$$dest" ] && \
+	   [ "$$(sha256sum "$$dest" | cut -d" " -f1)" = "$(FETCH_SHA256)" ]; then \
+		echo "Verified $$(basename "$$dest") sha256: $(FETCH_SHA256)"; \
+		exit 0; \
+	fi; \
+	rm -f "$$dest" "$$tmp"; \
+	wget --no-verbose --tries=3 --output-document="$$tmp" "$(FETCH_URL)"; \
+	actual="$$(sha256sum "$$tmp" | cut -d" " -f1)"; \
+	if [ "$$actual" != "$(FETCH_SHA256)" ]; then \
+		echo "sha256 mismatch for $$(basename "$$dest"): expected $(FETCH_SHA256), got $$actual" >&2; \
+		exit 1; \
+	fi; \
+	mv "$$tmp" "$$dest"; \
+	trap - EXIT HUP INT TERM; \
+	echo "Downloaded and verified $$(basename "$$dest") sha256: $$actual"

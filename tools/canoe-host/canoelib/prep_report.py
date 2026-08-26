@@ -33,7 +33,7 @@ def prep_report(summary: PrepSummary) -> str:
             "  efisp/boot.efi          patched ABL loader",
             f"  efisp/boot.efi.gm2p     KeyMint profile for {summary.package_vbmeta}",
             "  efisp/boot.efi.tzmap    ABL-derived TrustZone map",
-            "  BDS.efi                 superfastboot BDS (written raw to efisp)",
+            "  BDS.efi                 superfastboot BDS (flash with fastboot to the efisp partition)",
             "",
             "Next:",
         ),

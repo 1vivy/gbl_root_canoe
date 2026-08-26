@@ -39,13 +39,12 @@ canoe                              interactive wizard (default)
 canoe build                        derive the ABL/profile/map artifacts
 canoe prep [--pkg ...]             prepare a firmware package
 canoe prep-device [--slot ...]     pull a device pair and derive artifacts
-canoe install [--skip-bds ...]     install the boot root over ADB
+canoe install [--via adb|mass-storage] [--boot-root PATH]
+                                   install the boot root and upsert its boot entry
 canoe oneshot --abl <img> --mode 0|1
                                    temporary, non-interactive boot
+
 ```
-
-Use `canoe.cmd` in place of `canoe` on Windows. Existing options carry over unchanged under their new verb. The candidate images must be stock and must match the firmware version being booted.
-
 ## Build an ABL/profile/map pair
 
 Extract the toolkit for the host platform, then place the matching stock images
@@ -62,14 +61,40 @@ The build scripts pass `--allow-incomplete` to `abl_tzmap`, so an ABL with no re
 
 ## Host-side install commands
 
-The two installation pathways remain independent:
+Installation has two bundles. Bundle 1 is host-only:
 
-- **Standalone custom recovery + ADB:** `canoe prep-device [--slot ...]` pulls the ABL/vbmeta pair and derives the artifacts; after booting custom recovery, `canoe install` stages the boot root. Use `--slot inactive` when the other slot is the one just written by `adb sideload`.
-- **Firmware package:** `canoe prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place` grafts the package's official recovery vbmeta onto the custom recovery and substitutes the prepared images. Run the package's own flasher unchanged, then use `canoe install` from custom recovery.
+```bash
+# Only when the installed ABL lacks the GBL vulnerability:
+fastboot flash abl <vulnerable>.img
+fastboot flash efisp BDS.efi
+```
 
-The Windows forms prefix the same subcommands with `canoe.cmd`. `canoe install --skip-bds` installs the persist tree without writing the BDS. The host driver hands the transaction to `canoe_device_install.sh`, which remains a shell script because Python is not guaranteed in recovery/Android.
+Omit the first command if the installed ABL already has the vulnerability. Bundle 1 uses fastboot only; the host route needs no Android or kernel write permission.
 
-The host tools do not touch the `abl` partition: making that partition carry the GBL vulnerability is a separate `fastboot flash abl` step.
+Bundle 2 installs or refreshes the boot root under `persist/efisp` and upserts the slot's `canoe.cfg` entry. The default ADB route stages over ADB from custom recovery or a rooted system and runs the shared `canoe_device_install.sh` transaction on the device:
+
+```bash
+./canoe install --via adb
+```
+
+For the BDS `oem mass-storage:persist` export, `./canoe install
+--via mass-storage` asks the running BDS to perform `fastboot
+oem mass-storage:persist`, waits for the USB disk, mounts `persist` read-write,
+and runs the same transaction locally:
+
+```bash
+./canoe install --via mass-storage
+```
+
+For an already-mounted persist filesystem, use `--boot-root PATH`; PATH may be the persist mount or its `efisp` directory. This is also the supported Windows WinFsp + LKL `lklfuse` route:
+
+```bash
+./canoe install --boot-root <persist-mount>
+```
+
+The boot root cannot come from fastboot: `persist` is a live ext4 filesystem holding vendor calibration, so `fastboot flash persist` would replace the filesystem. The raw BDS is the only whole-partition image in the chain. The same Bundle 2 entry generation is used by the KernelSU module and OTA watcher.
+
+The Windows forms prefix the same subcommands with `canoe.cmd`. The shared `tools/canoe-device/canoe_boot_entry.sh` is the only `canoe.cfg` writer; its UPSERT preserves other entries, including hand-added custom-ROM entries.
 
 ## One-shot
 

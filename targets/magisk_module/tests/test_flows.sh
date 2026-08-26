@@ -19,6 +19,9 @@ assert_eq() { [ "$1" = "$2" ] || fail "$3 (got '$1', want '$2')"; }
 assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3" ;; esac; }
 
 mkdir -p "$MOD/bin" "$MOD/efisp/tools" "$BIN" "$BY_NAME" "$EFISP"
+cp "$ROOT/tools/canoe-device/canoe_device_install.sh" "$MOD/canoe_device_install.sh"
+cp "$ROOT/tools/canoe-device/canoe_boot_entry.sh" "$MOD/canoe_boot_entry.sh"
+chmod +x "$MOD/canoe_device_install.sh" "$MOD/canoe_boot_entry.sh"
 printf 'BDS fixture\n' > "$MOD/BDS.efi"
 printf 'tool\n' > "$MOD/efisp/tools/BLTools.efi"
 printf 'abl-a-v1\n' > "$BY_NAME/abl_a"
@@ -29,9 +32,9 @@ printf 'old-live\n' > "$EFISP/boot.efi"
 printf 'old-profile\n' > "$EFISP/boot.efi.gm2p"
 printf 'old-tzmap\n' > "$EFISP/boot.efi.tzmap"
 printf 'old-backup\n' > "$EFISP/boot_backup.efi"
+truncate -s 2097152 "$BY_NAME/efisp"
 printf 'old-backup-profile\n' > "$EFISP/boot_backup.efi.gm2p"
 printf 'old-backup-tzmap\n' > "$EFISP/boot_backup.efi.tzmap"
-: > "$BY_NAME/efisp"
 
 cat > "$BIN/getprop" <<'EOF'
 #!/bin/sh
@@ -99,8 +102,7 @@ case "$cmd" in
     while [ "$#" -gt 0 ]; do
       case "$1" in --vbmeta) vbmeta=$2; shift 2 ;; --out) out=$2; shift 2 ;; *) shift ;; esac
 done
-    printf 'profile-from=' > "$out"
-    cat "$vbmeta" >> "$out"
+    awk -v value="profile-from=$(cat "$vbmeta")" 'BEGIN { printf "%-120s", value }' > "$out"
     ;;
   validate)
     input=
@@ -121,8 +123,7 @@ case "$cmd" in
     while [ "$#" -gt 0 ]; do
       case "$1" in -o) out=$2; shift 2 ;; *) shift ;; esac
 done
-    printf 'tzmap-from=' > "$out"
-    cat "$abl" >> "$out"
+    awk -v value="tzmap-from=$(cat "$abl")" 'BEGIN { printf "%-256s", value }' > "$out"
     ;;
   validate)
     [ -s "$1" ]
@@ -146,13 +147,19 @@ cp "$BIN/extractfv" "$BIN/patch_abl" "$BIN/mode2_profile" "$BIN/abl_tzmap" "$BIN
 
 run() {
   MODDIR="$MOD" BY_NAME_DIR="$BY_NAME" PERSIST_MNT="$PERSIST" EFISP_DIR="$EFISP" \
+    RUNTIME_DIR="$MOD/tmp" LOG_FILE="$LOG" \
     FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
     sh "$MOD/bin/bl_flasher.sh" "$@"
 }
 cp "$ROOT/targets/magisk_module/module/bin/bl_flasher.sh" "$MOD/bin/bl_flasher.sh"
 chmod +x "$MOD/bin/bl_flasher.sh"
+printf 'inactive-efi\n' > "$EFISP/boot_b.efi"
+printf 'inactive-profile\n' > "$EFISP/boot_b.efi.gm2p"
+printf 'inactive-tzmap\n' > "$EFISP/boot_b.efi.tzmap"
 
 run flash update-efisp
+normalized=$(sh "$MOD/canoe_boot_entry.sh" show "$EFISP")
+assert_contains "$normalized" 'version 1' 'shared writer did not emit grammar-valid config'
 assert_file "$EFISP/canoe.cfg"
 assert_contains "$(cat "$EFISP/canoe.cfg")" 'version 1' 'config version missing'
 assert_contains "$(cat "$EFISP/canoe.cfg")" 'entry android-a' 'active entry missing'
@@ -162,9 +169,6 @@ assert_contains "$(cat "$EFISP/canoe.cfg")" 'role backup' 'backup role missing'
 assert_contains "$(cat "$EFISP/canoe.cfg")" 'image boot_backup.efi' 'backup image missing'
 pass 'module pair install writes a valid active and backup canoe.cfg'
 
-printf 'inactive-efi\n' > "$EFISP/boot_b.efi"
-printf 'inactive-profile\n' > "$EFISP/boot_b.efi.gm2p"
-printf 'inactive-tzmap\n' > "$EFISP/boot_b.efi.tzmap"
 run start-mode 2 >/dev/null
 sleep 1
 assert_contains "$(cat "$EFISP/canoe.cfg")" 'entry android-a' 'mode rewrite removed active entry'
@@ -172,6 +176,7 @@ active_block=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}'
 assert_contains "$active_block" 'mode 2' 'mode selector did not set the active entry mode'
 assert_contains "$(cat "$EFISP/canoe.cfg")" 'entry android-b' 'inactive entry missing'
 assert_contains "$(cat "$EFISP/canoe.cfg")" 'role inactive' 'inactive role missing'
+active_before=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
 pass 'mode selector rewrites the current boot entry, not a partition record'
 
 old_digest=$(sha256sum "$BY_NAME/abl_b" | cut -d ' ' -f1)
@@ -187,6 +192,9 @@ chmod +x "$MOD/service.sh"
 run_service
 new_digest=$(sha256sum "$BY_NAME/abl_b" | cut -d ' ' -f1)
 assert_eq "$(cat "$EFISP/.canoe.abl_b.sha256")" "$new_digest" 'watcher did not stamp the changed ABL digest'
+active_after=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
+assert_eq "$active_after" "$active_before" \
+  'OTA slot update removed or changed the booting entry'
 assert_file "$EFISP/boot_b.efi"
 count_before=$(grep -c 'slot _b changed; derived new boot entry' "$LOG" || true)
 run_service
@@ -194,6 +202,10 @@ count_after=$(grep -c 'slot _b changed; derived new boot entry' "$LOG" || true)
 assert_eq "$count_after" "$count_before" 'unchanged OTA event derived more than once'
 assert_contains "$(cat "$EFISP/canoe.cfg")" 'role inactive' 'watcher omitted inactive role'
 pass 'OTA watcher derives once and keeps the previous boot entry'
+run flash update-bds-tools
+assert_contains "$(sh "$MOD/canoe_boot_entry.sh" show "$EFISP")" \
+  'entry android-a' 'BDS/tools update did not use shared boot-entry writer'
+pass 'BDS and tools refresh uses the shared install transaction'
 
 
 echo 'all module flow fixtures passed'

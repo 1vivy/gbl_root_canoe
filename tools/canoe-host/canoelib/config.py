@@ -1,8 +1,7 @@
-"""Read and atomically rewrite the declarative canoe boot menu."""
+"""Parse and verify the declarative canoe boot menu."""
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,7 +51,7 @@ class ConfigEntry:
 
 @dataclass(frozen=True, slots=True)
 class Config:
-    """The complete host-authored canoe.cfg document."""
+    """The complete canoe.cfg document installed by the shared device writer."""
 
     entries: tuple[ConfigEntry, ...]
     generation: int = 0
@@ -228,17 +227,19 @@ def serialize_config(config: Config, *, generation: int | None = None) -> str:
         raise ConfigError("canoe.cfg exceeds 8192 bytes")
     return encoded.decode("ascii")
 
-
-def write_config(path: Path, config: Config) -> int:
-    """Atomically replace path with the generated config and return its generation."""
-    generation = config.generation + 1
-    text = serialize_config(config, generation=generation)
-    temporary = path.with_name(f".{path.name}.tmp")
+def verify_config(path: Path) -> Config:
+    """Parse an installed config and require the canonical bytes exactly."""
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary.write_text(text, encoding="ascii", newline="\n")
-        os.replace(temporary, path)
+        raw = path.read_bytes()
     except OSError as exc:
-        temporary.unlink(missing_ok=True)
-        raise ConfigError(f"could not write {path}: {exc}") from exc
-    return generation
+        raise ConfigError(f"could not read {path}: {exc}") from exc
+    config = read_config(path)
+    expected = serialize_config(config, generation=config.generation).encode("ascii")
+    if raw != expected:
+        raise ConfigError(
+            f"canoe.cfg is not byte-identical to the canonical serialization "
+            f"(installed {len(raw)} bytes, expected {len(expected)})"
+        )
+    return config
+
+

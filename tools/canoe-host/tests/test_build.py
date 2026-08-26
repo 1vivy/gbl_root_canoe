@@ -47,8 +47,8 @@ def test_build_success_derives_and_validates_the_matching_triplet(toolkit: FakeT
         "tzmap-validate boot.efi.tzmap",
         "tzmap-verify boot.efi.tzmap ABL_original.efi",
     ]
-    assert "\n3. Flash BDS.efi" in result.stdout
-    assert "\n4." not in result.stdout
+    assert "fastboot flash efisp BDS.efi" in result.stdout
+    assert "fastboot flash abl <vulnerable>.img" in result.stdout
 
 
 def test_build_tzmap_digest_mismatch_names_both_digests(toolkit: FakeToolkit) -> None:
@@ -155,10 +155,10 @@ def test_build_report_describes_gbl_downgrade_flow(
     if env:
         assert "WARNING: No GBL exploit found" in result.stdout
         assert "警告：" in result.stdout
-        assert "\n4. Flash BDS.efi" in result.stdout
-        assert "\n4. 将 BDS.efi" in result.stdout
+        assert "\n4. Flash the bootloader bundle from the host:" in result.stdout
+        assert "\n4. 在主机上刷入引导加载程序套件：" in result.stdout
     else:
         assert "WARNING: No GBL exploit found" not in result.stdout
         assert "\n4." not in result.stdout
-        assert "\n3. Flash BDS.efi" in result.stdout
-        assert "\n3. 将 BDS.efi" in result.stdout
+        assert "\n3. Flash the bootloader bundle from the host:" in result.stdout
+        assert "\n3. 在主机上刷入引导加载程序套件：" in result.stdout

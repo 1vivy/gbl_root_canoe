@@ -26,7 +26,7 @@ If the bootloader has been **hardware re-locked** (a real `fastboot flashing loc
    fastboot -w
    ```
 
-Removing `canoe.cfg` clears the 7.x boot-root configuration; no separate loader policy remains to clear. If the boot root is not reachable before the raw partition is erased, the configuration becomes unused once `efisp` is gone, but remove it through Recovery or USB Mass Storage when possible.
+Removing `canoe.cfg` clears the 7.x boot-root configuration; no separate loader policy remains to clear. `fastboot erase efisp` removes the raw BDS from Bundle 1; it does not format or replace `persist`. If the boot root is not reachable before the raw partition is erased, the configuration becomes unused once `efisp` is gone, but remove it through Recovery or USB Mass Storage when possible.
 
 ## 4. If stock fastboot is unavailable
 

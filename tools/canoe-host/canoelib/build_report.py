@@ -15,13 +15,13 @@ Patched. Outputs:
   efisp/boot.efi.gm2p  - locked/green KeyMint profile for images/vbmeta.img
   efisp/boot.efi.tzmap - ABL-derived TrustZone interface map
   efisp/tools/         - EFI tools (Reboot / BL / ARB tools), available from the built-in EFI Tools menu row
-  BDS.efi              - superfastboot BDS (flash raw to the efisp partition)
+  BDS.efi              - superfastboot BDS (flash to efisp with fastboot)
   ABL_original.efi     - original unpatched loader (for analysis; do NOT flash)
 
----- Install over ADB from a custom recovery (recommended) ----
+---- Install the boot root over ADB or USB Mass Storage ----
 Standalone, no firmware package:
      ./canoe prep-device    # derive from the device's own abl/vbmeta
-     ./canoe install        # install the persist tree, then the BDS
+     ./canoe install        # install the shared persist tree and canoe.cfg
 Alongside a Super Flasher / RegionalHybrid package:
      ./canoe prep --pkg <dir> --recovery <custom>.img \\
                   --abl <vulnerable>.img --in-place
@@ -39,11 +39,13 @@ downgraded to an older ABL with the GBL vulnerability before booting.
 efisp/boot.efi 仍已生成且有效，但开机前必须将 abl 分区降级为带 GBL 漏洞的旧版 ABL。
 """
 
-_FLASH_BDS_EN: Final = """Flash BDS.efi to the efisp partition:
-     dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M"""
+_FLASH_BDS_EN: Final = """Flash the bootloader bundle from the host:
+     fastboot flash abl <vulnerable>.img   (only when the installed ABL lacks the GBL vulnerability)
+     fastboot flash efisp BDS.efi"""
 
-_FLASH_BDS_ZH: Final = """将 BDS.efi 刷入 efisp 分区：
-     dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M"""
+_FLASH_BDS_ZH: Final = """在主机上刷入引导加载程序套件：
+     fastboot flash abl <vulnerable>.img   （仅当已安装的 ABL 不包含 GBL 漏洞时）
+     fastboot flash efisp BDS.efi"""
 
 _DOWNGRADE_EN: Final = """Downgrade the abl partition to an older ABL with the GBL vulnerability
    (efisp/boot.efi and the abl partition do not need to match versions)"""

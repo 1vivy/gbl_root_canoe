@@ -90,18 +90,13 @@ class Toolkit:
         return (self.boot_efi, self.gm2p, self.tzmap)
 
     @property
-    def canoe_cfg(self) -> Path:
-        """Declarative menu state installed beside the boot entry files."""
-        return self.efisp / "canoe.cfg"
-
-    @property
     def efisp_tools(self) -> Path:
         """EFI tools shipped under the boot root."""
         return self.efisp / "tools"
 
     @property
     def bds(self) -> Path:
-        """The superfastboot BDS, written raw to the efisp partition."""
+        """The superfastboot BDS flashed to the efisp partition with fastboot."""
         return self.root / "BDS.efi"
 
     @property
@@ -133,6 +128,16 @@ class Toolkit:
     def device_install(self) -> Path:
         """The device-side transaction script staged and invoked by `canoe install`."""
         return self.root / "canoe_device_install.sh"
+
+    @property
+    def boot_entry(self) -> Path:
+        """The shared canoe.cfg upsert script staged beside the install script."""
+        return self.root / "canoe_boot_entry.sh"
+
+    @property
+    def slot_receipt(self) -> Path:
+        """The source slot recorded by `prep-device` for host-run installs."""
+        return self.root / ".canoe-source-slot"
 
     def tool(self, name: str) -> Path:
         """The bin/ binary called `name`, with whatever extension this host uses."""
