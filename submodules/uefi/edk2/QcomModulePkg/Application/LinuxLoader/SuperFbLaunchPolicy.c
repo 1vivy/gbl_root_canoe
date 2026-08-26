@@ -253,6 +253,7 @@ SfbLaunchImage (
   EFI_HANDLE ImageHandle = NULL;
   CHAR16    *ExitData = NULL;
   UINTN      ExitDataSize = 0;
+  SFB_BOOT_MODE LaunchMode = EffectiveMode;
 
   if (DevicePath == NULL || gBS == NULL || gBS->LoadImage == NULL ||
       gBS->StartImage == NULL) {
@@ -268,8 +269,26 @@ SfbLaunchImage (
   }
 
   if (Managed) {
-    Status = SfbPrepareManagedAblHooks (EffectiveMode, Profile, TzMap,
+    Status = SfbPrepareManagedAblHooks (LaunchMode, Profile, TzMap,
                                         mSfbLockPolicy);
+    if (Status == EFI_ACCESS_DENIED) {
+      /*
+       * The config withheld permission for the DeviceInfo repair this mode
+       * depends on. Refusing the launch outright would be the worst reading of
+       * that: the user declined a write, not a boot. Fall back to the honest
+       * launch the refusal already documents - and say so, because a demoted
+       * boot must never be mistaken for the one that was asked for.
+       *
+       * Only this one status demotes. Every other preflight failure is a fault
+       * rather than a policy, and still aborts.
+       */
+      DEBUG ((EFI_D_WARN,
+              "SFB: MARK mode-demoted from=%u to=0 reason=lockstate-refused\n",
+              (UINT32)LaunchMode));
+      LaunchMode = SfbBootModeHonestUnlocked;
+      Status = SfbPrepareManagedAblHooks (LaunchMode, NULL, TzMap,
+                                          mSfbLockPolicy);
+    }
     if (EFI_ERROR (Status)) {
       Print (L"SFB: managed ABL hook preflight failed (%r)\n", Status);
       SfbRestoreSecurity ();

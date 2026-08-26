@@ -169,6 +169,9 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
   if (strstr(Format, "SFB: MARK image-load ") != NULL) {
     ++mImageLoadMarkerCount;
   }
+  if (strstr(Format, "SFB: MARK mode-demoted") != NULL) {
+    ++mDemotedMarkerCount;
+  }
 }
 
 VOID *EFIAPI
@@ -415,7 +418,15 @@ SfbPrepareManagedAblHooks(IN SFB_BOOT_MODE Mode,
   (void)TzMap;
   mLastPrepareMode = Mode;
   mLastPreparePolicy = Policy;
+  mLastPrepareProfile = Profile;
   ++mPrepareCount;
+  if (mPrepareDenyFirst) {
+    /* Stands in for the repair the config refused: EFI_ACCESS_DENIED is what
+     * SfbRepairDeviceInfo returns under `never` when the pair reads locked,
+     * and SfbPrepareManagedAblHooks propagates it unchanged. */
+    mPrepareDenyFirst = FALSE;
+    return EFI_ACCESS_DENIED;
+  }
   if (Mode == SfbBootModeKmProfile) {
     assert(Profile != NULL);
   }
@@ -631,6 +642,9 @@ ResetLaunchBackend(void)
   mImageStartMarkerCount = 0;
   mImageReturnMarkerCount = 0;
   mImageLoadMarkerCount = 0;
+  mDemotedMarkerCount = 0;
+  mPrepareDenyFirst = FALSE;
+  mLastPrepareProfile = NULL;
 }
 
 static void
