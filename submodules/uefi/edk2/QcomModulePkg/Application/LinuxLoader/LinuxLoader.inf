@@ -71,11 +71,15 @@
 [Sources]
 	LinuxLoader.c
 	SuperFbMenu.h
+	SuperFbGptName.h
+	SuperFbConfig.h
+	SuperFbConfig.c
 	SuperFbFat.c
-	SuperFbStore.c
 	SuperFbEntries.c
 	SuperFbMenu.c
 	SuperFbBrowser.c
+	SuperFbMassStorage.h
+	SuperFbMassStorage.c
 	SuperFbLaunchPolicy.h
 	SuperFbLaunchPolicy.c
 	Hook/SuperFbManagedPath.h

@@ -11,6 +11,7 @@
  */
 
 #include "SuperFbFatClassify.h"
+#include "SuperFbGptName.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -192,29 +193,61 @@ SfbStartFatStack (VOID)
   return EFI_SUCCESS;
 }
 
-/* ---- logfs -------------------------------------------------------------- */
+/* ---- GPT partitions by name --------------------------------------------- */
 
 extern EFI_GUID gEfiPartitionRecordGuid;
-
-/* GPT name fields are CHAR16[36], not required to be NUL-terminated and
- * space-padded by some writers. Case-insensitive, like the reserve table's
- * matcher in Hook/BlockIoHook.c. */
-STATIC BOOLEAN
-SfbGptNameIsLogfs (IN CONST CHAR16 *Stored)
+EFI_STATUS
+SfbFindPartitionByName (IN CONST CHAR16            *Name,
+                        OUT EFI_BLOCK_IO_PROTOCOL **BlockIo)
 {
-  STATIC CONST CHAR16  Want[] = L"logfs";
-  UINTN                Index;
+  EFI_STATUS  Status;
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       Count = 0;
+  UINTN       Index;
 
-  if (Stored == NULL) return FALSE;
-  for (Index = 0; Index < 36 && Want[Index] != L'\0'; Index++) {
-    CHAR16 A = Stored[Index];
-    CHAR16 B = Want[Index];
-
-    if (A >= L'A' && A <= L'Z') A = (CHAR16)(A | 0x20);
-    if (A != B) return FALSE;
+  if (Name == NULL || BlockIo == NULL) {
+    return EFI_INVALID_PARAMETER;
   }
-  return Stored[Index] == L'\0' || Stored[Index] == L' ';
+  *BlockIo = NULL;
+
+  /* Walked over Block I/O rather than Partition Info because this platform
+   * publishes the GPT record on the handle but not always the newer protocol,
+   * which is the same reason SfbMountLogfs walks it this way. */
+  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid,
+                                    NULL, &Count, &Handles);
+  if (EFI_ERROR (Status) || Handles == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = EFI_NOT_FOUND;
+  for (Index = 0; Index < Count; Index++) {
+    EFI_PARTITION_ENTRY    *PartEntry = NULL;
+    EFI_BLOCK_IO_PROTOCOL  *Candidate = NULL;
+
+    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
+                                        &gEfiPartitionRecordGuid,
+                                        (VOID **)&PartEntry)) ||
+        PartEntry == NULL ||
+        !SfbGptNameMatchesInline (PartEntry->PartitionName, Name)) {
+      continue;
+    }
+    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
+                                        &gEfiBlockIoProtocolGuid,
+                                        (VOID **)&Candidate)) ||
+        Candidate == NULL || Candidate->Media == NULL ||
+        !Candidate->Media->MediaPresent) {
+      continue;
+    }
+    *BlockIo = Candidate;
+    Status = EFI_SUCCESS;
+    break;
+  }
+
+  FreePool (Handles);
+  return Status;
 }
+
+/* ---- logfs -------------------------------------------------------------- */
 
 STATIC UINTN
 SfbFileSystemCount (VOID)
@@ -269,7 +302,7 @@ SfbMountLogfs (VOID)
     Status = gBS->HandleProtocol (Handles[Index], &gEfiPartitionRecordGuid,
                                   (VOID **)&PartEntry);
     if (EFI_ERROR (Status) || PartEntry == NULL) continue;
-    if (!SfbGptNameIsLogfs (PartEntry->PartitionName)) continue;
+    if (!SfbGptNameMatchesInline (PartEntry->PartitionName, L"logfs")) continue;
 
     Found++;
     Before = SfbFileSystemCount ();
