@@ -2,11 +2,9 @@
 
 mod avb;
 mod profile;
-mod store;
 
 pub use avb::{DeriveError, derive, derive_profile};
 pub use profile::{PROFILE_SIZE, Profile, ProfileError};
-pub use store::{MIN_MEDIA_BYTES, Mode, ModeRead, StoreError, mode_read, mode_write};
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};

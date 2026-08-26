@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "GM2P profile derivation and preferred boot-mode store utility"
+description = "GM2P profile derivation and validation utility"
 
 [lib]
 name = "mode2_profile"
