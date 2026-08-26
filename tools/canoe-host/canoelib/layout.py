@@ -90,17 +90,13 @@ class Toolkit:
         return (self.boot_efi, self.gm2p, self.tzmap)
 
     @property
-    def bootentries(self) -> Path:
-        """The BDS boot entry list."""
-        return self.efisp / "BOOTENTRIES"
-    @property
     def canoe_cfg(self) -> Path:
         """Declarative menu state installed beside the boot entry files."""
         return self.efisp / "canoe.cfg"
 
     @property
     def efisp_tools(self) -> Path:
-        """The tools submenu shipped under the boot root."""
+        """EFI tools shipped under the boot root."""
         return self.efisp / "tools"
 
     @property

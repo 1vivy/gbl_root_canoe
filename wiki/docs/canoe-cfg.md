@@ -49,7 +49,7 @@ image. 7.x reacts by not writing.
 | The BDS, on the ext4 `persist` volume | `\efisp\canoe.cfg` |
 
 `\efisp` is the boot root: every `image` path in the file is resolved relative
-to it, exactly as `BOOTENTRIES` paths already were.
+to it.
 
 ## Encoding and limits
 
@@ -59,8 +59,8 @@ to it, exactly as `BOOTENTRIES` paths already were.
 - At most 8192 bytes are read; the rest is ignored.
 - At most 24 entries; later ones are dropped with a log marker.
 
-Lexing is the `BOOTENTRIES` lexer: leading whitespace stripped, `#` starts a
-comment, blank lines ignored, an over-long line skipped rather than truncated.
+The lexer strips leading whitespace, treats `#` as a comment marker, ignores
+blank lines, and skips an over-long line rather than truncating it.
 
 A line is `key` then one run of spaces or tabs then `value`. The value runs to
 end of line with trailing whitespace trimmed.
@@ -89,7 +89,7 @@ mode, and a key that exists only at file scope — `timeout`, `default`,
 | --- | --- | --- | --- |
 | `entry` | id: 1–31 chars of `[A-Za-z0-9._-]` | — | Opens the block. A duplicate id rejects the later block. |
 | `title` | up to 47 ASCII chars | the id | The menu row text. |
-| `image` | boot-root-relative path | — | **Required.** Same path rules as `BOOTENTRIES`: no `.` or `..` component, no double separator, no trailing separator, `/` folded to `\`. |
+| `image` | boot-root-relative path | — | **Required.** No `.` or `..` component, no double separator, no trailing separator, and `/` is folded to `\`. |
 | `mode` | `0`, `1`, `2` | the global `mode` | The boot policy this image is launched under. |
 | `role` | `active`, `inactive`, `backup`, `other` | `other` | Presentation only. The menu suffixes the row. |
 
@@ -123,7 +123,7 @@ Android (previous)        (backup)
 The BDS derives no slot state of its own. Which image is active is a fact the
 authoring process already knows, and it writes it down.
 
-## Lock state
+## DeviceInfo repair policy
 
 A managed launch under Mode 1 or Mode 2 needs the backing `DeviceInfo` to read
 unlocked, because the projection is what makes ABL see a locked device while
@@ -176,9 +176,10 @@ entry android-backup
 ## Absent or unparseable
 
 No `canoe.cfg`, a bad `version`, or a file with no usable entry is not an error.
-The BDS falls back to what 6.x did without a mode record: `BOOTENTRIES` plus
-well-known-path discovery, at the built-in default mode, with the menu shown
-rather than an unattended launch.
+The BDS probes the boot root for the known managed names `boot.efi` and then
+`boot_backup.efi`, offering them as `Android` and `Android (previous)`, then
+adds anything discovered on removable/ESP media. All such entries use the
+built-in default mode, and the menu is shown rather than launching unattended.
 
 An **empty boot root** — no `canoe.cfg` and no `boot.efi` — is the first-run
 signal. The BDS says so and hands straight to Super Fastboot, which is the

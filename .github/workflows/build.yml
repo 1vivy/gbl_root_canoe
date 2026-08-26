@@ -110,13 +110,11 @@ jobs:
         test -f artifacts/magisk_module/module.prop
         for package in toolkit_linux toolkit_windows toolkit_android magisk_module; do
           test -s "artifacts/$package/BDS.efi"
-          test -s "artifacts/$package/efisp/BOOTENTRIES"
-          test -s "artifacts/$package/efisp/tools/ENTRIES"
           test -s "artifacts/$package/efisp/tools/RebootTools.efi"
           test -s "artifacts/$package/efisp/tools/BLTools.efi"
           test -s "artifacts/$package/efisp/tools/ArbTools.efi"
         done
-        for file in BDS.efi efisp/BOOTENTRIES efisp/tools/ENTRIES efisp/tools/RebootTools.efi efisp/tools/BLTools.efi efisp/tools/ArbTools.efi; do
+        for file in BDS.efi efisp/tools/RebootTools.efi efisp/tools/BLTools.efi efisp/tools/ArbTools.efi; do
           cmp "artifacts/toolkit_linux/$file" "artifacts/toolkit_windows/$file"
           cmp "artifacts/toolkit_linux/$file" "artifacts/toolkit_android/$file"
           cmp "artifacts/toolkit_linux/$file" "artifacts/magisk_module/$file"

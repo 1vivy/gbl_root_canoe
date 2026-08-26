@@ -20,8 +20,7 @@ assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3" ;; esac; }
 
 mkdir -p "$MOD/bin" "$MOD/efisp/tools" "$BIN" "$BY_NAME" "$EFISP"
 printf 'BDS fixture\n' > "$MOD/BDS.efi"
-printf 'BOOTENTRIES fixture\n' > "$MOD/efisp/BOOTENTRIES"
-printf 'tool\n' > "$MOD/efisp/tools/ENTRIES"
+printf 'tool\n' > "$MOD/efisp/tools/BLTools.efi"
 printf 'abl-a-v1\n' > "$BY_NAME/abl_a"
 printf 'abl-b-v1\n' > "$BY_NAME/abl_b"
 printf 'vbmeta-a\n' > "$BY_NAME/vbmeta_a"

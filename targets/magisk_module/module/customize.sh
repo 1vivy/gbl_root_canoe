@@ -910,12 +910,6 @@ install_pair() {
     pair_install_failure "$target"
     return 1
   }
-  if [ -f "$MODPATH/efisp/BOOTENTRIES" ]; then
-    cp "$MODPATH/efisp/BOOTENTRIES" "$target/" || {
-      pair_install_failure "$target"
-      return 1
-    }
-  fi
   if [ -d "$MODPATH/efisp/tools" ]; then
     if ! mkdir -p "$target/tools" ||
        ! cp -r "$MODPATH/efisp/tools/." "$target/tools/"; then

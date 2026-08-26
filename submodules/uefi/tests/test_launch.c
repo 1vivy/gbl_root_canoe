@@ -42,7 +42,7 @@ static SFB_CONFIG_LOCK_POLICY mLastPreparePolicy;
 static BOOLEAN mVolumesAvailable;
 static BOOLEAN mBootRootConfigPresent;
 static BOOLEAN mBootRootManagedPresent;
-static EFI_HANDLE mVolumeList[1];
+static EFI_HANDLE mVolumeList[2];
 static UINTN mPrepareCount;
 static UINTN mDisarmCount;
 static BOOLEAN mPolicyActive;
@@ -71,12 +71,6 @@ SfbCopyDirectoryName(OUT CHAR16 *Destination, IN CONST CHAR16 *Source);
 static BOOLEAN
 SfbAsciiRelPathToUnicode(IN CONST CHAR8 *Rel, OUT CHAR16 *Out,
                          IN UINTN OutChars);
-
-static BOOLEAN
-SfbParseBootEntryLine(IN CONST CHAR8 *Line, OUT CHAR16 *Name,
-                      IN UINTN NameChars, OUT CHAR16 *Path,
-                      IN UINTN PathChars, OUT BOOLEAN *NoDefault,
-                      OUT BOOLEAN *IsSubmenu);
 
 static BOOLEAN
 SfbNextLine(IN OUT CONST CHAR8 **Cursor, OUT CHAR8 *Line, IN UINTN LineBytes,
@@ -214,9 +208,26 @@ FreePool(IN VOID *Buffer)
 EFI_DEVICE_PATH_PROTOCOL *
 FileDevicePath(IN EFI_HANDLE Device, IN CONST CHAR16 *FileName)
 {
-  (void)Device;
-  (void)FileName;
-  return mFileDevicePathAvailable ? &mDevicePath : NULL;
+  UINTN Index;
+
+  if (!mFileDevicePathAvailable) {
+    return NULL;
+  }
+  for (Index = 0; Index < mDevicePathCount; ++Index) {
+    if (mDevicePathVolume[Index] == Device &&
+        StrCmp (mDevicePathName[Index], FileName) == 0) {
+      return &mDevicePaths[Index];
+    }
+  }
+  assert(mDevicePathCount < ARRAY_SIZE (mDevicePaths));
+  Index = mDevicePathCount++;
+  mDevicePathVolume[Index] = Device;
+  FakeCopyChars (mDevicePathName[Index], FileName, SFB_PATH_CHARS);
+  mDevicePaths[Index].Type = (UINT8)(Index + 1);
+  mDevicePaths[Index].SubType = 0;
+  mDevicePaths[Index].Length[0] = (UINT8)sizeof (EFI_DEVICE_PATH_PROTOCOL);
+  mDevicePaths[Index].Length[1] = 0;
+  return &mDevicePaths[Index];
 }
 
 int
@@ -338,7 +349,7 @@ __StrCatS(IN OUT CHAR16 *Destination, IN UINTN DestinationMax,
 static EFI_STATUS EFIAPI
 FakeRootClose(IN EFI_FILE_PROTOCOL *This)
 {
-  assert(This == &mRoot);
+  assert(This == &mRoot || This == &mFatRoot);
   ++mCloseCount;
   return EFI_SUCCESS;
 }
@@ -346,15 +357,23 @@ FakeRootClose(IN EFI_FILE_PROTOCOL *This)
 EFI_STATUS
 SfbOpenVolumeRoot(IN EFI_HANDLE Volume, OUT EFI_FILE_PROTOCOL **Root)
 {
-  if (Volume != mVolume || Root == NULL) {
+  if (Root == NULL) {
     return EFI_NOT_FOUND;
   }
   if (EFI_ERROR (mOpenStatus)) {
     return mOpenStatus;
   }
-  mRoot.Close = FakeRootClose;
-  *Root = &mRoot;
-  return EFI_SUCCESS;
+  if (Volume == mVolume) {
+    mRoot.Close = FakeRootClose;
+    *Root = &mRoot;
+    return EFI_SUCCESS;
+  }
+  if (Volume == mFatVolume && mFatVolumePresent) {
+    mFatRoot.Close = FakeRootClose;
+    *Root = &mFatRoot;
+    return EFI_SUCCESS;
+  }
+  return EFI_NOT_FOUND;
 }
 
 EFI_STATUS
@@ -366,7 +385,7 @@ SfbReadFileBytes(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path,
   CONST UINT8 *Data;
   UINTN DataBytes;
 
-  assert(Root == &mRoot);
+  assert(Root == &mRoot || Root == &mFatRoot);
   assert(Path != NULL && Buffer != NULL && BytesRead != NULL);
   for (Index = 0; Index + 1 < ARRAY_SIZE (mReadPath) &&
                     Path[Index] != L'\0'; ++Index) {
@@ -811,27 +830,10 @@ TestEntriesSafety(void)
   UINTN Index;
 
   {
-    CHAR8         ControlLine[] = "X:foo\x01.efi";
-    CHAR8         LongPathLine[260];
     CHAR8         LongList[320];
     CHAR8         Line[16];
-    CHAR16        Name[SFB_DESC_CHARS];
-    CHAR16        Path[SFB_PATH_CHARS];
     CONST CHAR8  *Cursor;
-    BOOLEAN       NoDefault;
-    BOOLEAN       IsSubmenu;
     BOOLEAN       TooLong;
-
-    memcpy (LongPathLine, "X:", 2);
-    for (Index = 2; Index < 257; Index++) {
-      LongPathLine[Index] = 'a';
-    }
-    LongPathLine[257] = '\0';
-
-    assert(!SfbParseBootEntryLine (ControlLine, Name, SFB_DESC_CHARS, Path,
-                                   SFB_PATH_CHARS, &NoDefault, &IsSubmenu));
-    assert(!SfbParseBootEntryLine (LongPathLine, Name, SFB_DESC_CHARS, Path,
-                                   SFB_PATH_CHARS, &NoDefault, &IsSubmenu));
 
     for (Index = 0; Index < 308; Index++) {
       LongList[Index] = 'a';
@@ -861,24 +863,6 @@ TestEntriesSafety(void)
   assert(SfbMakeFileEntry (mVolume, L"\\boot.efi", L"boot", &Entry) ==
          EFI_SUCCESS);
   SfbFreeEntry (&Entry);
-  {
-    static const CHAR8 Line[] = "%submenu:child\n";
-    SFB_MENU_STATE Menu;
-
-    mEntriesFixtureBytes = 0;
-    for (Index = 0; Index < SFB_MAX_ENTRIES; Index++) {
-      memcpy (mEntriesFixture + mEntriesFixtureBytes, Line, sizeof (Line) - 1);
-      mEntriesFixtureBytes += sizeof (Line) - 1;
-    }
-    mEntriesFixtureEnabled = TRUE;
-    assert(SfbBuildSubMenu (&Menu, mVolume, L"\\entries",
-                            SfbBootModeAblFakeLocked) == EFI_SUCCESS);
-    assert(Menu.Count == SFB_MAX_ENTRIES);
-    assert(Menu.Entry[SFB_MAX_ENTRIES - 1].Kind == SfbEntryBack);
-    SfbFreeMenu (&Menu);
-    mEntriesFixtureEnabled = FALSE;
-  }
-
   ResetLaunchBackend ();
 
   for (Index = 0; Index < ARRAY_SIZE (InvalidPaths); Index++) {
@@ -976,6 +960,8 @@ AllocateZeroPool(IN UINTN AllocationSize)
 EFI_STATUS
 SfbLocateVolumes(OUT EFI_HANDLE **Handles, OUT UINTN *Count)
 {
+  UINTN Found = 0;
+
   if (Handles != NULL) {
     *Handles = NULL;
   }
@@ -985,12 +971,15 @@ SfbLocateVolumes(OUT EFI_HANDLE **Handles, OUT UINTN *Count)
   if (!mVolumesAvailable) {
     return EFI_NOT_FOUND;
   }
-  mVolumeList[0] = mVolume;
+  mVolumeList[Found++] = mVolume;
+  if (mFatVolumePresent) {
+    mVolumeList[Found++] = mFatVolume;
+  }
   if (Handles != NULL) {
     *Handles = mVolumeList;
   }
   if (Count != NULL) {
-    *Count = 1;
+    *Count = Found;
   }
   return EFI_SUCCESS;
 }
@@ -998,12 +987,29 @@ SfbLocateVolumes(OUT EFI_HANDLE **Handles, OUT UINTN *Count)
 BOOLEAN
 SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
 {
-  (void)Root;
-  if (Path != NULL && StrCmp (Path, L"\\canoe.cfg") == 0) {
+  if (Path == NULL) {
+    return FALSE;
+  }
+  /* The removable volume carries one well-known loader and nothing else. */
+  if (Root == &mFatRoot) {
+    return (BOOLEAN)(StrCmp (Path, SFB_BOOT_FILE_PATH) == 0 &&
+                     mFatBootFilePresent);
+  }
+  if (StrCmp (Path, L"\\canoe.cfg") == 0) {
     return mBootRootConfigPresent;
   }
-  if (Path != NULL && StrCmp (Path, L"\\boot.efi") == 0) {
+  if (StrCmp (Path, SFB_MANAGED_BOOT_NAME) == 0) {
     return mBootRootManagedPresent;
+  }
+  if (StrCmp (Path, SFB_MANAGED_BACKUP_NAME) == 0) {
+    return mBootRootBackupPresent;
+  }
+  /* No code reads this any more; the tests keep it present to prove so. */
+  if (StrCmp (Path, L"\\BOOTENTRIES") == 0) {
+    return mBootRootBootentriesPresent;
+  }
+  if (StrCmp (Path, SFB_BOOT_FILE_PATH) == 0) {
+    return mBootRootBootaaPresent;
   }
   return mEntriesFixtureEnabled;
 }
@@ -1037,10 +1043,13 @@ SfbReadAnsiDescription(IN EFI_FILE_PROTOCOL *Root,
                        OUT CHAR16 *Out,
                        IN UINTN OutChars)
 {
-  (void)Root;
-  (void)Path;
-  if (Out != NULL && OutChars != 0) {
-    Out[0] = L'\0';
+  if (Out == NULL || OutChars == 0) {
+    return;
+  }
+  Out[0] = L'\0';
+  if (Root == &mFatRoot && Path != NULL &&
+      StrCmp (Path, SFB_DESC_FILE_PATH) == 0) {
+    FakeCopyChars (Out, L"Ventoy", OutChars);
   }
 }
 

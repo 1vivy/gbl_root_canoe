@@ -10,7 +10,6 @@ if TYPE_CHECKING:
 
 def _prepare(toolkit: FakeToolkit) -> None:
     toolkit.plant_triplet()
-    (toolkit.root / "efisp" / "BOOTENTRIES").write_text("Android:boot.efi\n", encoding="utf-8")
 
 
 def test_install_writes_config_and_bds_without_tail_records(toolkit: FakeToolkit) -> None:

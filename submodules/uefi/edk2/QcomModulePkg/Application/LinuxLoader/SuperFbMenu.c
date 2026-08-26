@@ -484,100 +484,6 @@ SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode)
   }
 }
 
-
-/*
- * Run a submenu defined by the ENTRIES file at EntriesPath on Volume. The file
- * is parsed exactly like the root BOOTENTRIES, and may itself contain further
- * '%' submenu rows; Depth bounds the nesting so a chain of files that points at
- * one another cannot recurse without limit. The submenu state is heap-allocated
- * (a single SFB_MENU_STATE is ~17 KB) so deep nesting stays off the call stack.
- *
- * Returns when the user picks the trailing "Back" row, or when the file could
- * not be built at all; the caller then redraws its own menu.
- */
-STATIC
-VOID
-SfbRunSubMenu (IN EFI_HANDLE    Volume,
-               IN CONST CHAR16  *EntriesPath,
-               IN CONST CHAR16  *Title,
-               IN UINTN         Depth,
-               IN SFB_BOOT_MODE Mode)
-{
-  SFB_MENU_STATE  *Menu = NULL;
-  UINTN           Cursor = 0;
-  BOOLEAN         Rebuild = TRUE;
-  SFB_KEY         Key;
-  EFI_STATUS      Status;
-
-  Menu = AllocateZeroPool (sizeof (*Menu));
-  if (Menu == NULL) {
-    return;
-  }
-  Menu->DefaultIndex = SFB_NO_INDEX;
-
-  while (TRUE) {
-    UINTN  Chosen;
-
-    if (Rebuild) {
-      SfbFreeMenu (Menu);
-      Status = SfbBuildSubMenu (Menu, Volume, EntriesPath, Mode);
-      if (EFI_ERROR (Status)) {
-        SfbReportStatus (Title, Status);
-        break;
-      }
-      Cursor = 0;
-      Rebuild = FALSE;
-    }
-
-    SfbDrawMenu (Menu, Cursor, Title);
-
-    /* Same input model as the root menu: volume keys move, power confirms. */
-    Key = SfbWaitForKey (0);
-
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, Menu->Count, Key);
-      continue;
-    }
-
-    if (Menu->Count == 0) {
-      continue;
-    }
-
-    Chosen = Cursor;
-    switch (Menu->Entry[Chosen].Kind) {
-    case SfbEntryBack:
-      goto done;
-
-    case SfbEntrySubmenu:
-      if (Depth >= SFB_MAX_SUBMENU_DEPTH) {
-        SfbReportStatus (L"Submenu too deep", EFI_BUFFER_TOO_SMALL);
-      } else {
-        SfbRunSubMenu (Menu->Entry[Chosen].Volume,
-                       Menu->Entry[Chosen].Path,
-                       Menu->Entry[Chosen].Desc,
-                       Depth + 1,
-                       Mode);
-      }
-      /* Media may have changed while the child menu was open. */
-      Rebuild = TRUE;
-      break;
-
-    case SfbEntryEfiFile:
-    default:
-      Status = SfbLaunchEntry (&Menu->Entry[Chosen], TRUE, Mode);
-      if (EFI_ERROR (Status)) {
-        SfbReportStatus (L"Boot failed", Status);
-      }
-      Rebuild = TRUE;
-      break;
-    }
-  }
-
-done:
-  SfbFreeMenu (Menu);
-  FreePool (Menu);
-}
-
 BOOLEAN
 SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
 {
@@ -644,6 +550,11 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
       Rebuild = TRUE;
       break;
 
+    case SfbEntryTools:
+      SfbRunToolsBrowser (CurrentMode);
+      Rebuild = TRUE;
+      break;
+
     case SfbEntryMassStorage:
       SfbRunMassStorageMenu ();
       Rebuild = TRUE;
@@ -652,15 +563,6 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
     case SfbEntryRecovery:
       SfbShowActionScreen (L"Rebooting to recovery...");
       RebootDevice (RECOVERY_MODE);
-      break;
-
-    case SfbEntrySubmenu:
-      SfbRunSubMenu (Menu.Entry[Chosen].Volume,
-                     Menu.Entry[Chosen].Path,
-                     Menu.Entry[Chosen].Desc,
-                     1,
-                     CurrentMode);
-      Rebuild = TRUE;
       break;
 
     case SfbEntryBack:

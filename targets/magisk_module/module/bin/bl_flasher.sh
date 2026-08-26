@@ -293,9 +293,6 @@ persist_mounted() { grep -q " $PERSIST_MNT " /proc/mounts; }
 
 place_efisp_tree_to() {
   target="$1"
-  if [ -f "$MODDIR/efisp/BOOTENTRIES" ]; then
-    cp "$MODDIR/efisp/BOOTENTRIES" "$target/" >> "$LOG_FILE" 2>&1 || return 1
-  fi
   if [ -d "$MODDIR/efisp/tools" ]; then
     mkdir -p "$target/tools" >> "$LOG_FILE" 2>&1 || return 1
     cp -r "$MODDIR/efisp/tools/." "$target/tools/" >> "$LOG_FILE" 2>&1 || return 1

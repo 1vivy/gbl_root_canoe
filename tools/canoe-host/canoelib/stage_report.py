@@ -16,7 +16,7 @@ def stage_report(
         "canoe install: done.",
         "",
         f"Installed under {destination}:",
-        "  boot.efi, boot.efi.gm2p, boot.efi.tzmap, canoe.cfg, BOOTENTRIES, tools/",
+        "  boot.efi, boot.efi.gm2p, boot.efi.tzmap, canoe.cfg, tools/",
     ]
     if first_install:
         lines.append("  No previous generation was present (first install).")
