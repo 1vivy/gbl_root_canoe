@@ -1,4 +1,4 @@
-"""The operator-facing completion report for canoe_stage."""
+"""The operator-facing completion report for canoe install."""
 
 from __future__ import annotations
 
@@ -7,16 +7,16 @@ def stage_report(
     *,
     destination: str,
     install_bds: bool,
-    mode: int | None,
+    mode: int,
     first_install: bool,
 ) -> str:
-    """Describe the installed tree, BDS action, and preferred-mode result."""
+    """Describe the installed tree, BDS action, and declarative menu policy."""
     lines = [
         "========================================",
-        "canoe_stage: done.",
+        "canoe install: done.",
         "",
         f"Installed under {destination}:",
-        "  boot.efi, boot.efi.gm2p, boot.efi.tzmap, BOOTENTRIES, tools/",
+        "  boot.efi, boot.efi.gm2p, boot.efi.tzmap, canoe.cfg, BOOTENTRIES, tools/",
     ]
     if first_install:
         lines.append("  No previous generation was present (first install).")
@@ -26,10 +26,12 @@ def stage_report(
         lines.append("  BDS.efi (written to efisp and byte-for-byte verified)")
     else:
         lines.append("  BDS.efi was not changed (--skip-bds); efisp was left untouched")
-    lines.append("")
-    if mode is None:
-        lines.append("The preferred-mode record was left untouched.")
-    else:
-        lines.append(f"Preferred boot mode set to {mode}.")
-    lines.extend(("Reboot to use the new boot chain.", "========================================"))
+    lines.extend(
+        (
+            "",
+            f"canoe.cfg selects Mode {mode} for the installed entry.",
+            "Reboot to use the new boot chain.",
+            "========================================",
+        )
+    )
     return "\n".join(lines)

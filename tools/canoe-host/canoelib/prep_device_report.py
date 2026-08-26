@@ -18,7 +18,7 @@ def prep_device_report(summary: PrepDeviceSummary) -> str:
     lines = [
         "",
         "========================================",
-        "canoe_prep_device: done.",
+        "canoe prep-device: done.",
         "",
         f"Derived from {summary.source}:",
         "  efisp/boot.efi          patched ABL loader",
@@ -34,7 +34,7 @@ def prep_device_report(summary: PrepDeviceSummary) -> str:
                 "If it was pulled from the device, the abl partition is already vulnerable and no",
                 "ABL flash is needed:",
                 "",
-                "  ./canoe_stage",
+                "  ./canoe install",
                 "",
                 "If this ABL is an older downgrade image while the device runs newer firmware,",
                 "check that --vbmeta came from the SAME build; a mismatched boot.efi/.gm2p pair",
@@ -48,7 +48,7 @@ def prep_device_report(summary: PrepDeviceSummary) -> str:
                 "still correct - they describe the stock pair - but the abl partition has to hold",
                 "a vulnerable ABL for the chain to load:",
                 "",
-                "  ./canoe_stage",
+                "  ./canoe install",
                 "  fastboot flash abl <vulnerable>.img",
             ),
         )

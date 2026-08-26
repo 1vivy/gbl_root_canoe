@@ -1,4 +1,4 @@
-"""canoe_build: derive the boot chain from an abl/vbmeta pair.
+"""`canoe build`: derive the boot chain from an abl/vbmeta pair.
 
 The loader and both sidecars only ever ship together. `boot.efi` comes from
 `abl.img` and `boot.efi.gm2p` from `vbmeta.img`, and the BDS trusts that they
@@ -19,7 +19,7 @@ from .layout import GM2P_BYTES, TZMAP_BYTES, Toolkit, require_exact, require_non
 from .proc import Completed, run
 from .ui import emit, run_entry, step
 
-PROG: Final = "canoe_build"
+PROG: Final = "canoe build"
 LOADER_NAME: Final = "LinuxLoader.efi"
 
 # patch_abl prints this when the source ABL carries no GBL vulnerability. The
@@ -46,7 +46,7 @@ def derive(toolkit: Toolkit) -> Derived:
 
 
 def entry(argv: Sequence[str]) -> int:
-    """Run canoe_build."""
+    """Run canoe build."""
     return run_entry(PROG, _run, argv)
 
 

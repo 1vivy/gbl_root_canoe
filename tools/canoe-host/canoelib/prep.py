@@ -16,7 +16,7 @@ from .prep_report import PrepSummary, prep_report
 from .proc import Completed, run
 from .ui import emit, note, run_entry, step
 
-PROG: Final = "canoe_prep"
+PROG: Final = "canoe prep"
 
 
 class _ParsedNamespace(argparse.Namespace):
@@ -62,7 +62,7 @@ class _Inputs:
 
 
 def entry(argv: Sequence[str]) -> int:
-    """Run canoe_prep."""
+    """Run canoe prep."""
     return run_entry(PROG, _run, argv)
 
 
@@ -75,7 +75,7 @@ def _parser() -> argparse.ArgumentParser:
             "inputs. The sidecars always describe the package's STOCK abl/vbmeta pair, "
             "because that is the pair boot.efi and boot.efi.gm2p must agree with; --abl only "
             "changes which ABL image the flasher writes. Afterwards run the package's own "
-            "flasher, then canoe_stage."
+            "flasher, then canoe install."
         ),
         exit_on_error=False,
     )

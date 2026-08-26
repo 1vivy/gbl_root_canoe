@@ -17,9 +17,6 @@ from .errors import CanoeError
 GM2P_BYTES: Final = 120
 TZMAP_BYTES: Final = 256
 
-# The BDS mode/default/custom records live in the last MiB of efisp, so a
-# partition smaller than this has nowhere to keep a preferred-mode record.
-MODE_RECORD_SLACK: Final = 1024 * 1024
 
 
 def platform_names(name: str) -> tuple[str, ...]:
@@ -96,6 +93,10 @@ class Toolkit:
     def bootentries(self) -> Path:
         """The BDS boot entry list."""
         return self.efisp / "BOOTENTRIES"
+    @property
+    def canoe_cfg(self) -> Path:
+        """Declarative menu state installed beside the boot entry files."""
+        return self.efisp / "canoe.cfg"
 
     @property
     def efisp_tools(self) -> Path:
@@ -134,7 +135,7 @@ class Toolkit:
 
     @property
     def device_install(self) -> Path:
-        """The device-side transaction script staged and invoked by canoe_stage."""
+        """The device-side transaction script staged and invoked by `canoe install`."""
         return self.root / "canoe_device_install.sh"
 
     def tool(self, name: str) -> Path:

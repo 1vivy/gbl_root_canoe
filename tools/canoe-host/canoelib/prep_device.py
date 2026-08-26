@@ -25,7 +25,7 @@ from .layout import GM2P_BYTES, TZMAP_BYTES, Toolkit, require_exact, require_non
 from .prep_device_report import PrepDeviceSummary, prep_device_report
 from .ui import emit, note, run_entry, step
 
-PROG: Final = "canoe_prep_device"
+PROG: Final = "canoe prep-device"
 
 
 class _ParsedNamespace(argparse.Namespace):
@@ -50,7 +50,7 @@ class _Options:
 
 
 def entry(argv: Sequence[str]) -> int:
-    """Run canoe_prep_device."""
+    """Run canoe prep-device."""
     return run_entry(PROG, _run, argv)
 
 
@@ -59,7 +59,7 @@ def _parser() -> argparse.ArgumentParser:
         prog=PROG,
         description="Derive the canoe boot chain from the device's own partitions.",
         epilog=(
-            "Run from a custom recovery with ADB enabled, then canoe_stage. This never "
+            "Run from a custom recovery with ADB enabled, then canoe install. This never "
             "touches the abl partition: making it carry the GBL vulnerability is your own "
             "'fastboot flash abl <vulnerable>.img' step, and boot.efi does not have to match "
             "the abl partition's version. Order matters: boot.efi comes from abl and "

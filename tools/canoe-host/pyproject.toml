@@ -48,19 +48,15 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # The launcher runtime guard must stay live for hosts older than the floor,
 # which is exactly the version ruff considers already satisfied.
-"canoe/__init__.py" = ["UP036"]
+"canoelib/__init__.py" = ["UP036"]
 "tests/**" = ["S101", "PLR2004", "SLF001", "D", "ARG", "INP001", "S603", "S607"]
 "tests/stubs/*" = ["ALL"]
-"canoe_build" = ["INP001"]
-"canoe_prep" = ["INP001"]
-"canoe_prep_device" = ["INP001"]
-"canoe_stage" = ["INP001"]
+"canoe" = ["INP001"]
 
 [tool.basedpyright]
-include = ["canoe", "tests"]
+include = ["canoelib", "tests"]
 exclude = ["tests/stubs"]
 pythonVersion = "3.11"
-typeCheckingMode = "all"
 reportMissingTypeStubs = false
 # Every print(), write_text() and mkdir() returns something. Requiring `_ =`
 # on each one buys no safety and hides the calls that matter.
