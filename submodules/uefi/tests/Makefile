@@ -3,8 +3,9 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
 .PHONY: test clean
 
-test: test_profile test_tzmap test_fat test_hooks test_launch test_config
+test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config
 	./test_profile
+	./test_deviceinfo
 	./test_tzmap
 	./test_fat
 	./test_hooks
@@ -14,6 +15,10 @@ test: test_profile test_tzmap test_fat test_hooks test_launch test_config
 test_profile: test_profile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbProfile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbManagedPath.c
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $^
+
+test_deviceinfo: test_deviceinfo.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDeviceInfo.c
 	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $^
 
 # Pure canoe.cfg parser: no EDK2 types at all, so it builds against stdint.
@@ -37,6 +42,7 @@ test_hooks: test_hooks.c \
 	$(HOOK_DIR)/ScmHook.c \
 	$(HOOK_DIR)/BlockIoHook.c \
 	$(HOOK_DIR)/SuperFbProfile.c \
+	$(HOOK_DIR)/SuperFbDeviceInfo.c \
 	$(HOOK_DIR)/SuperFbTzMap.c \
 	$(HOOK_DIR)/SuperFbProfileRewrite.c
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $^
@@ -58,4 +64,4 @@ test_launch: test_launch.c \
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
 clean:
-	rm -f test_profile test_tzmap test_fat test_hooks test_launch test_config
+	rm -f test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config

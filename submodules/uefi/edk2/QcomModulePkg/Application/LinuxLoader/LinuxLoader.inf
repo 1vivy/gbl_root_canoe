@@ -84,6 +84,7 @@
 	SuperFbLaunchPolicy.c
 	Hook/SuperFbManagedPath.h
 	Hook/SuperFbManagedPath.c
+	Hook/SuperFbDeviceInfo.c
 	Hook/SuperFbProfile.h
 	Hook/SuperFbProfile.c
 	Hook/SuperFbTzMap.c

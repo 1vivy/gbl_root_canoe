@@ -20,6 +20,7 @@
 
 [Sources]
   BLTools.c
+  ../../../QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDeviceInfo.c
 
 [Packages]
   MdePkg/MdePkg.dec
