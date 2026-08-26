@@ -96,6 +96,7 @@ found at
 #include "FastbootCmds.h"
 #include "FastbootMain.h"
 #include "LinuxLoaderLib.h"
+#include "../../Application/LinuxLoader/SuperFbMenu.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -2294,6 +2295,64 @@ CmdReboot (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
   FastbootFail ("Failed to reboot");
 }
 
+/*
+ * Fastboot's command transport and the mass-storage gadget share the USB
+ * controller. StartDevice takes the link away from fastboot and StopDevice
+ * restores it, so the host must receive its response before export starts.
+ * Failures that can be found without taking the link (syntax and partition
+ * lookup) are reported here; a post-handoff start failure is recorded by the
+ * MSD client because no fastboot channel remains to carry FAIL.
+ */
+STATIC VOID
+CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
+{
+  CONST CHAR16          *Target;
+  EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
+  EFI_STATUS             Status;
+
+  if (Arg == NULL) {
+    FastbootFail ("unknown oem command");
+    return;
+  }
+
+  if (AsciiStrCmp (Arg, "mass-storage") == 0 ||
+      AsciiStrCmp (Arg, "mass-storage:persist") == 0) {
+    Target = L"persist";
+  } else if (AsciiStrCmp (Arg, "mass-storage:logfs") == 0) {
+    Target = L"logfs";
+  } else {
+    FastbootFail ("unknown oem command");
+    return;
+  }
+
+  /*
+   * Resolve before acknowledging. This is the last point at which fastboot
+   * can still answer FAIL; SfbExportPartitionByName resolves again because it
+   * is also the non-interactive public entry point used by other callers.
+   */
+  Status = SfbFindPartitionByName (Target, &BlockIo);
+  if (EFI_ERROR (Status) || BlockIo == NULL) {
+    FastbootFail ("mass-storage partition not found");
+    return;
+  }
+
+  /*
+   * Once OKAY is sent the host switches from fastboot to USB mass storage.
+   * There is intentionally no response after SfbExportPartitionByName:
+   * waiting for the session to end would deadlock the host, and the USB link
+   * is no longer a fastboot transport. The client always stops and unassigns
+   * on every started-session exit, then this handler returns to fastboot.
+   */
+  FastbootOkay ("");
+  Status = SfbExportPartitionByName (Target);
+  if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK msc-run target=%a status=%r reason=post-handoff\n",
+            (StrCmp (Target, L"logfs") == 0) ? "logfs" : "persist", Status));
+  }
+}
+
+
 STATIC VOID UpdateGetVarVariable (VOID)
 {
 }
@@ -2722,6 +2781,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
       {"boot", CmdBoot},
 #endif
       {"reboot", CmdReboot},
+      {"oem ", CmdOem},
       {"getvar:", CmdGetVar},
       {"download:", CmdDownload},
   };
