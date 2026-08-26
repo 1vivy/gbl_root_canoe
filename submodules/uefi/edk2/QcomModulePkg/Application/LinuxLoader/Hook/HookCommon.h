@@ -35,11 +35,11 @@ SfbHookLeave (IN OUT SFB_HOOK_GUARD *Guard)
 /*
  * Arm the managed-ABL policy for one launch.
  *
- * Mode 0 is a hook-free passthrough: no protocol wrapper is installed and the
- * backing DeviceInfo is neither read nor written. The one thing armed in every
- * mode is the efisp Block I/O clause, because the chainloaded ABL carries the
- * same efisp load path this BDS was started through and would otherwise
- * re-enter it.
+ * Mode 0 installs no managed wrapper and neither reads nor writes the backing
+ * DeviceInfo. It is not wrapper-free, though: the efisp Block I/O clause is
+ * armed for every managed launch whatever the mode, because the chainloaded
+ * ABL carries the same efisp load path this BDS was started through and would
+ * otherwise re-enter it.
  *
  * LockPolicy decides whether a Mode 1 / Mode 2 launch may repair the backing
  * DeviceInfo when the observed state is not what the mode needs. The observed

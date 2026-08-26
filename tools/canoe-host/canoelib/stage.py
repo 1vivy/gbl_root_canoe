@@ -61,7 +61,7 @@ def _options(argv: Sequence[str]) -> Options:
         description="Install the prepared canoe boot chain over ADB.",
         epilog=(
             "Needs a custom recovery with ADB enabled and expects efisp/boot.efi, its sidecars, "
-            "BOOTENTRIES, canoe.cfg, BDS.efi and canoe_device_install.sh in the toolkit."
+            "canoe.cfg, BDS.efi and canoe_device_install.sh in the toolkit."
         ),
         exit_on_error=False,
     )
@@ -96,7 +96,6 @@ def _stage_inputs(context: Context) -> None:
         (context.toolkit.gm2p, "boot.efi.gm2p"),
         (context.toolkit.tzmap, "boot.efi.tzmap"),
         (context.toolkit.canoe_cfg, "canoe.cfg"),
-        (context.toolkit.bootentries, "BOOTENTRIES"),
     ]
     if context.toolkit.efisp_tools.is_dir():
         files.extend(
@@ -173,7 +172,7 @@ def _config(toolkit: Toolkit, mode: int) -> None:
         )
         if not any(entry.image == "boot.efi" for entry in entries):
             entries += (ConfigEntry("android-a", "Android (slot A)", "boot.efi", mode, "active"),)
-        config = Config(entries, existing.generation, existing.timeout, existing.default, mode, existing.lockstate)
+        config = Config(entries, existing.generation, existing.timeout, existing.default, mode, existing.devinfo_repair)
     try:
         generation = write_config(toolkit.canoe_cfg, config)
     except ConfigError as exc:
@@ -185,7 +184,7 @@ def _run(argv: Sequence[str]) -> None:
     """Run the complete host-side staging and install sequence."""
     options = _options(argv)
     toolkit = Toolkit.shipped()
-    for path in (toolkit.boot_efi, toolkit.gm2p, toolkit.tzmap, toolkit.bootentries):
+    for path in (toolkit.boot_efi, toolkit.gm2p, toolkit.tzmap):
         require_nonempty(path, f"missing or empty: {path.relative_to(toolkit.root)}")
     require_nonempty(toolkit.device_install, "missing canoe_device_install.sh")
     require_exact(toolkit.gm2p, GM2P_BYTES, "boot.efi.gm2p")

@@ -184,7 +184,11 @@ fastboot oem mass-storage:logfs       # logfs
 
 The menu's mode row is a **session override**. It applies to the next launch and is never written anywhere. An entry with its own configured mode ignores that row because its `.gm2p`/`.tzmap` sidecars are bound to that exact policy. The persisted fallback policy is the file-global `mode` in [`canoe.cfg`](wiki/docs/canoe-cfg.md).
 
-For lock state, a Mode 1 or Mode 2 launch repairs the backing `DeviceInfo` only when the observed state does not already satisfy the requested mode. `lockstate never` in `canoe.cfg` refuses that repair; the launch then continues honestly in Mode 0. Mode 0 is hook-free passthrough and neither reads nor writes `DeviceInfo`. The observed state is always recorded in the boot log.
+For DeviceInfo repair, a Mode 1 or Mode 2 launch repairs the backing
+`DeviceInfo` only when the observed state does not already satisfy the requested
+mode. `devinfo-repair never` in `canoe.cfg` refuses that repair; the launch then
+continues honestly in Mode 0. Mode 0 is hook-free passthrough and neither reads
+nor writes `DeviceInfo`. The observed state is always recorded in the boot log.
 
 See the [USB Mass Storage guide](wiki/docs/mass-storage.md) for the complete export and Windows mount procedure.
 
@@ -212,4 +216,3 @@ Common commands include:
 2. `canoe.cfg`: The declarative boot-root configuration, including the file-global fallback mode and the per-entry modes and roles. Its format is specified in [`wiki/docs/canoe-cfg.md`](wiki/docs/canoe-cfg.md).
 3. `boot.efi` / `boot.efi.gm2p` / `boot.efi.tzmap`: The patched ABL, its matching 120-byte locked/green KeyMint profile from stock vbmeta, and the 256-byte TrustZone map from the unpatched ABL, placed on `persist` under `efisp/`; the map is generated locally and is not shipped in the archive.
 4. `ABL_original.efi`: The original unpatched ABL extracted for analysis; do not flash it to `efisp`.
-5. `BOOTENTRIES`: Boot entry list used by the tools submenu.

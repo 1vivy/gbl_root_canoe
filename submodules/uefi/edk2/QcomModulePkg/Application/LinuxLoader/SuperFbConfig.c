@@ -548,7 +548,7 @@ SfbConfigParse (
       }
       continue;
     }
-    if (SfbCfgKeyIs (Begin, KeyEnd, "lockstate")) {
+    if (SfbCfgKeyIs (Begin, KeyEnd, "devinfo-repair")) {
       if (SfbCfgKeyIs (Value, End, "never")) {
         Config->LockPolicy = SfbConfigLockNever;
       } else if (SfbCfgKeyIs (Value, End, "asneeded")) {

@@ -14,8 +14,7 @@ Patched. Outputs:
   efisp/boot.efi       - patched ABL loader (use with the matching GM2P profile)
   efisp/boot.efi.gm2p  - locked/green KeyMint profile for images/vbmeta.img
   efisp/boot.efi.tzmap - ABL-derived TrustZone interface map
-  efisp/BOOTENTRIES    - boot entry list (includes the tools submenu)
-  efisp/tools/         - tools submenu (Reboot / BL / ARB tools)
+  efisp/tools/         - EFI tools (Reboot / BL / ARB tools), available from the built-in EFI Tools menu row
   BDS.efi              - superfastboot BDS (flash raw to the efisp partition)
   ABL_original.efi     - original unpatched loader (for analysis; do NOT flash)
 

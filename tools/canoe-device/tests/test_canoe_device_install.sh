@@ -48,7 +48,6 @@ setup() {
   printf 'NEW-BOOT-EFI-PAYLOAD' > "$ST/boot.efi"
   dd if=/dev/zero bs=1 count="$gm2p" 2>/dev/null | tr '\0' 'G' > "$ST/boot.efi.gm2p"
   dd if=/dev/zero bs=1 count="$tzmap" 2>/dev/null | tr '\0' 'T' > "$ST/boot.efi.tzmap"
-  printf 'Android:boot.efi\nNEW-MENU\n' > "$ST/BOOTENTRIES"
   printf 'NEW-BLTOOLS' > "$ST/tools/BLTools.efi"
   { printf 'MZ'; dd if=/dev/zero bs=1024 count=12 2>/dev/null; } > "$ST/BDS.efi"
   if [ "$existing" = yes ]; then
@@ -58,8 +57,7 @@ setup() {
     printf 'OLD-BACKUP-EFI' > "$D/boot_backup.efi"
     dd if=/dev/zero bs=1 count=120 2>/dev/null | tr '\0' 'B' > "$D/boot_backup.efi.gm2p"
     dd if=/dev/zero bs=1 count=256 2>/dev/null | tr '\0' 'B' > "$D/boot_backup.efi.tzmap"
-    printf 'Android:boot.efi\nOLD-MENU\n' > "$D/BOOTENTRIES"
-    printf 'version 1\ngeneration 9\ndefault android-a\nmode 1\nlockstate asneeded\n\nentry android-a\n  title Old A\n  image boot.efi\n  mode 1\n  role active\n\nentry android-backup\n  title Old backup\n  image boot_backup.efi\n  mode 1\n  role backup\n' > "$D/canoe.cfg"
+    printf 'version 1\ngeneration 9\ndefault android-a\nmode 1\ndevinfo-repair asneeded\n\nentry android-a\n  title Old A\n  image boot.efi\n  mode 1\n  role active\n\nentry android-backup\n  title Old backup\n  image boot_backup.efi\n  mode 1\n  role backup\n' > "$D/canoe.cfg"
     printf 'OLD-BLTOOLS' > "$D/tools/BLTools.efi"
   fi
   { printf 'MZOLDBDS'; dd if=/dev/zero bs=1024 count=2048 2>/dev/null; } > "$DEV"
@@ -86,12 +84,11 @@ run_install() {
 # ------------------------------------------------------------------ case 1 --
 setup c1 yes 120 256
 OUT="$TMP/c1/out"; ERR="$TMP/c1/err"; SHADOW=""
-live=$(sha "$D/boot.efi"); menu=$(sha "$D/BOOTENTRIES"); tool=$(sha "$D/tools/BLTools.efi")
+live=$(sha "$D/boot.efi"); tool=$(sha "$D/tools/BLTools.efi")
 new=$(sha "$ST/boot.efi")
 run_install "$ST" "$D" "$DEV" "$BK" || fail "1: transaction failed: $(cat "$ERR")"
 [ "$(sha "$D/boot.efi")" = "$new" ] || fail '1: boot.efi is not the new image'
 [ "$(sha "$D/boot_backup.efi")" = "$live" ] || fail '1: previous live was not demoted'
-[ "$(sha "$D/BOOTENTRIES")" != "$menu" ] || fail '1: BOOTENTRIES was not installed'
 [ "$(sha "$D/tools/BLTools.efi")" != "$tool" ] || fail '1: tools/ was not installed'
 [ "$(temps "$D")" = 0 ] || fail '1: snapshot files were left behind'
 [ -s "$BK" ] || fail '1: no efisp backup was taken'
@@ -103,16 +100,16 @@ grep -q '^  role active$' "$D/canoe.cfg" || fail '1: active role missing'
 grep -q '^entry android-backup$' "$D/canoe.cfg" || fail '1: backup entry missing'
 grep -q '^  role backup$' "$D/canoe.cfg" || fail '1: backup role missing'
 grep -q 'CANOE-MARK: efisp-verified' "$OUT" || fail '1: BDS was not verified'
-pass 'success rotates the generation, installs the menu tree and verifies the BDS'
+pass 'success rotates the generation, installs the tools tree and verifies the BDS'
 
 # ------------------------------------------------------------------ case 2 --
 setup c2 yes 119 256
 OUT="$TMP/c2/out"; ERR="$TMP/c2/err"; SHADOW=""
-live=$(sha "$D/boot.efi"); menu=$(sha "$D/BOOTENTRIES"); dev=$(sha "$DEV")
+live=$(sha "$D/boot.efi"); tool=$(sha "$D/tools/BLTools.efi"); dev=$(sha "$DEV")
 if run_install "$ST" "$D" "$DEV" "$BK"; then fail '2: accepted a 119-byte gm2p'; fi
 grep -q '120 bytes' "$ERR" || fail '2: wrong rejection message'
 [ "$(sha "$D/boot.efi")" = "$live" ] || fail '2: live changed'
-[ "$(sha "$D/BOOTENTRIES")" = "$menu" ] || fail '2: menu changed'
+[ "$(sha "$D/tools/BLTools.efi")" = "$tool" ] || fail '2: tools changed'
 [ "$(sha "$DEV")" = "$dev" ] || fail '2: device changed'
 pass 'an invalid staged set aborts before touching anything'
 
@@ -122,7 +119,7 @@ printf 'CANOEG1|old-generation\n' > "$D/.canoe.gen"
 OUT="$TMP/c3/out"; ERR="$TMP/c3/err"
 live=$(sha "$D/boot.efi"); back=$(sha "$D/boot_backup.efi")
 cfg=$(sha "$D/canoe.cfg")
-menu=$(sha "$D/BOOTENTRIES"); tool=$(sha "$D/tools/BLTools.efi"); dev=$(sha "$DEV")
+tool=$(sha "$D/tools/BLTools.efi"); dev=$(sha "$DEV")
 shadow c3 cmp '#!/bin/sh
 exit 1'
 if run_install "$ST" "$D" "$DEV" "$BK"; then fail '3: accepted a failed verification'; fi
@@ -131,11 +128,10 @@ grep -q 'verification' "$ERR" || fail '3: wrong failure message'
 [ "$(sha "$D/boot_backup.efi")" = "$back" ] || fail '3: backup not restored'
 [ "$(sha "$D/canoe.cfg")" = "$cfg" ] || fail '3: canoe.cfg not restored'
 [ "$(cat "$D/.canoe.gen")" = 'CANOEG1|old-generation' ] || fail '3: generation stamp not restored'
-[ "$(sha "$D/BOOTENTRIES")" = "$menu" ] || fail '3: BOOTENTRIES not restored'
 [ "$(sha "$D/tools/BLTools.efi")" = "$tool" ] || fail '3: tools/ not restored'
 [ "$(sha "$DEV")" = "$dev" ] || fail '3: efisp not restored'
 [ "$(temps "$D")" = 0 ] || fail '3: snapshot files were left behind'
-pass 'a BDS verification failure rolls back the triplet and the menu tree'
+pass 'a BDS verification failure rolls back the triplet and the tools tree'
 
 # ------------------------------------------------------------------ case 4 --
 setup c4 no 120 256
@@ -160,7 +156,7 @@ if run_install "$ST" "$D" "$DEV" "$BK"; then fail '5: accepted a failed verifica
 [ "$(sha "$D/canoe.cfg")" = ABSENT ] || fail '5: partial canoe.cfg left behind'
 [ "$(sha "$D/boot.efi")" = ABSENT ] || fail '5: partial boot.efi left behind'
 [ "$(sha "$D/boot_backup.efi")" = ABSENT ] || fail '5: invented a backup'
-[ "$(sha "$D/BOOTENTRIES")" = ABSENT ] || fail '5: left a menu with no loader'
+[ "$(sha "$D/tools/BLTools.efi")" = ABSENT ] || fail '5: left tools content behind'
 [ "$(sha "$DEV")" = "$dev" ] || fail '5: efisp not restored'
 pass 'a failed first install leaves nothing behind'
 
@@ -169,14 +165,14 @@ setup c6 yes 120 256
 OUT="$TMP/c6/out"; ERR="$TMP/c6/err"
 live=$(sha "$D/boot.efi"); back=$(sha "$D/boot_backup.efi")
 cfg=$(sha "$D/canoe.cfg")
-menu=$(sha "$D/BOOTENTRIES"); dev=$(sha "$DEV")
+tool=$(sha "$D/tools/BLTools.efi"); dev=$(sha "$DEV")
 shadow c6 mv '#!/bin/sh
 exit 1'
 if run_install "$ST" "$D" "$DEV" "$BK"; then fail '6: accepted a failed commit'; fi
 [ "$(sha "$D/boot.efi")" = "$live" ] || fail '6: live not restored'
 [ "$(sha "$D/boot_backup.efi")" = "$back" ] || fail '6: backup not restored'
 [ "$(sha "$D/canoe.cfg")" = "$cfg" ] || fail '6: canoe.cfg not restored'
-[ "$(sha "$D/BOOTENTRIES")" = "$menu" ] || fail '6: menu not restored'
+[ "$(sha "$D/tools/BLTools.efi")" = "$tool" ] || fail '6: tools not restored'
 [ "$(sha "$DEV")" = "$dev" ] || fail '6: device changed'
 [ "$(temps "$D")" = 0 ] || fail '6: snapshot files were left behind'
 pass 'a commit failure restores everything'
@@ -184,7 +180,7 @@ pass 'a commit failure restores everything'
 # ------------------------------------------------------------------ case 7 --
 setup c7 yes 120 256
 OUT="$TMP/c7/out"; ERR="$TMP/c7/err"
-live=$(sha "$D/boot.efi"); menu=$(sha "$D/BOOTENTRIES"); dev=$(sha "$DEV")
+live=$(sha "$D/boot.efi"); tool=$(sha "$D/tools/BLTools.efi"); dev=$(sha "$DEV")
 # Succeed for the backup read, fail only for the write to the stand-in device.
 shadow c7 dd "#!/bin/sh
 out=
@@ -197,7 +193,7 @@ esac
 exec $(command -v dd) \"\$@\""
 if run_install "$ST" "$D" "$DEV" "$BK"; then fail '7: accepted a failed write'; fi
 [ "$(sha "$D/boot.efi")" = "$live" ] || fail '7: live not restored'
-[ "$(sha "$D/BOOTENTRIES")" = "$menu" ] || fail '7: menu not restored'
+[ "$(sha "$D/tools/BLTools.efi")" = "$tool" ] || fail '7: tools not restored'
 [ "$(sha "$DEV")" = "$dev" ] || fail '7: efisp changed despite a failed write'
 pass 'a BDS write failure restores efisp and the pair'
 

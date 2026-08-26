@@ -1,5 +1,5 @@
 #include "HookCommon.h"
-
+#include "SuperFbDeviceInfo.h"
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -114,6 +114,7 @@ SfbRepairDeviceInfo (IN BOOLEAN Required, IN SFB_CONFIG_LOCK_POLICY Policy)
   BOOLEAN ObservedCritical;
   BOOLEAN Satisfies;
   BOOLEAN Repair;
+  SFB_LOCK_ACTION LockAction;
   CONST CHAR8 *Action;
 
   if (gVerifiedBoot == NULL || gOrigRwDeviceState == NULL) {
@@ -126,12 +127,14 @@ SfbRepairDeviceInfo (IN BOOLEAN Required, IN SFB_CONFIG_LOCK_POLICY Policy)
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  if (!SfbValidDeviceInfo ((CONST UINT8 *)&Info, sizeof (Info))) {
+  if (!SfbDeviceInfoValid ((CONST SFB_UINT8 *)&Info, sizeof (Info))) {
+    return EFI_COMPROMISED_DATA;
+  }
+  if (!SfbDeviceInfoReadLock ((CONST SFB_UINT8 *)&Info, sizeof (Info),
+                              &ObservedUnlocked, &ObservedCritical)) {
     return EFI_COMPROMISED_DATA;
   }
 
-  ObservedUnlocked = (BOOLEAN)(Info.is_unlocked != FALSE);
-  ObservedCritical = (BOOLEAN)(Info.is_unlock_critical != FALSE);
   Satisfies = (BOOLEAN)(!Required ||
                         (ObservedUnlocked && ObservedCritical));
   Repair = FALSE;
@@ -147,13 +150,15 @@ SfbRepairDeviceInfo (IN BOOLEAN Required, IN SFB_CONFIG_LOCK_POLICY Policy)
     Status = EFI_SUCCESS;
   }
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK lockstate observed-unlocked=%u observed-critical=%u "
+          "SFB: MARK devinfo-repair observed-unlocked=%u observed-critical=%u "
           "required=%u action=%a\n",
           (UINT32)ObservedUnlocked, (UINT32)ObservedCritical,
           (UINT32)Required, Action));
   if (Repair) {
-    Info.is_unlocked = TRUE;
-    Info.is_unlock_critical = TRUE;
+    if (!SfbDeviceInfoSetLock ((SFB_UINT8 *)&Info, sizeof (Info),
+                               TRUE, TRUE, &LockAction)) {
+      return EFI_COMPROMISED_DATA;
+    }
     Status = gOrigRwDeviceState (gVerifiedBoot, WRITE_CONFIG,
                                  (UINT8 *)&Info, sizeof (Info));
   }

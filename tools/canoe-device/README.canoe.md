@@ -22,9 +22,9 @@ without the questions, for scripts and CI:
 
 `canoe build` on its own only *derives* artifacts. Nothing below changes what
 the BDS or the sidecars are: the BDS is written raw to `efisp`, and `boot.efi`
-plus `boot.efi.gm2p` / `boot.efi.tzmap`, `BOOTENTRIES` and `canoe.cfg` live
-under the persist partition's `efisp/` directory. `canoe.cfg` is the declarative
-menu state the BDS reads and never writes; its format is specified in
+plus `boot.efi.gm2p` / `boot.efi.tzmap`, `canoe.cfg` live under the persist
+partition's `efisp/` directory. `canoe.cfg` is the declarative menu state the
+BDS reads and never writes; its format is specified in
 `wiki/docs/canoe-cfg.md`.
 
 ## Pathway A — standalone
@@ -148,11 +148,11 @@ Guarantees:
 - The staged set is pushed and validated before anything live is touched, so a
   failed transfer changes nothing.
 - Everything the commit overwrites is snapshotted first: the live triplet, the
-  existing backup generation, `BOOTENTRIES` and `tools/`. A rollback therefore
+  existing backup generation, `canoe.cfg` and `tools/`. A rollback therefore
   never leaves one generation's loader beside another's menu tree.
 - The previous generation is demoted to `boot_backup.efi` plus matching sidecars,
-  which is a managed path the BDS recognises and an entry the shipped
-  `BOOTENTRIES` already lists, so it is selectable from the boot menu.
+  which is a managed path the BDS recognises and an entry generated in
+  `canoe.cfg`, so it is selectable from the boot menu.
 - The persist tree is complete and synced *before* the BDS is written, so an
   interrupted run never leaves a live BDS pointing at half-installed sidecars.
 - A failed first install leaves no partial `boot.efi` behind.
@@ -167,8 +167,8 @@ Guarantees:
   rolled back with the rest of the tree, and nothing refuses to install or boot
   because of its contents.
 - Before replacing managed files, the transaction enumerates the boot root.
-  Entries outside the managed triplet and backup generation, `BOOTENTRIES`,
-  `tools/`, transaction markers/temporaries and `.canoe.gen` are moved into
+  Entries outside the managed triplet and backup generation, `tools/`,
+  transaction markers/temporaries and `.canoe.gen` are moved into
   `.canoe.foreign/` and reported one per line. Existing entries there are never
   overwritten; a suffixed name is used instead. This move is transactional:
   a failed install puts the entries back.

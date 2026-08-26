@@ -3,6 +3,7 @@
 # and one built on a newer x86-64 baseline than the CI runner aborted with
 # "CPU ISA level is lower than required" before executing a single assertion.
 test_config
+test_deviceinfo
 test_fat
 test_hooks
 test_launch

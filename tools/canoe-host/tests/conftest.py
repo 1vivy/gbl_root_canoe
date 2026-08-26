@@ -87,8 +87,6 @@ class FakeDevice:
         (self.boot_root / "boot.efi.gm2p").write_bytes(b"L" * GM2P_BYTES)
         (self.boot_root / "boot.efi.tzmap").write_bytes(b"L" * TZMAP_BYTES)
         (self.boot_root / "boot_backup.efi").write_bytes(b"OLD-BACKUP")
-        menu = self.boot_root / "BOOTENTRIES"
-        menu.write_text("Android:boot.efi\nOLD-MENU\n", encoding="utf-8")
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,9 +167,8 @@ def _build_toolkit(root: Path, device: FakeDevice, trace: Path) -> FakeToolkit:
     (root / "images").mkdir()
     tools = root / "efisp" / "tools"
     tools.mkdir(parents=True)
-    for name in ("ArbTools.efi", "BLTools.efi", "RebootTools.efi", "ENTRIES"):
+    for name in ("ArbTools.efi", "BLTools.efi", "RebootTools.efi"):
         (tools / name).write_text(f"TOOL:{name}\n", encoding="utf-8")
-    (root / "efisp" / "BOOTENTRIES").write_text("Android:boot.efi\nNEW-MENU\n", encoding="utf-8")
     (root / "BDS.efi").write_bytes(b"MZ-NEW-BDS-IMAGE" * 32)
     install = root / "canoe_device_install.sh"
     shutil.copyfile(REPO_ROOT / "tools" / "canoe-device" / "canoe_device_install.sh", install)

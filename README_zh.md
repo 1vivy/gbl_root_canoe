@@ -182,7 +182,7 @@ fastboot oem mass-storage:logfs       # logfs
 
 菜单中的模式行是**本次会话的临时覆盖**：它只作用于下一次启动，绝不会写入任何位置。带有自身配置模式的启动项会忽略该行，因为它的 `.gm2p`/`.tzmap` 附属文件已经与该策略绑定。持久化的回退策略是 [`canoe.cfg`](wiki/docs/canoe-cfg.md) 文件全局的 `mode`。
 
-对于锁定状态，Mode 1 或 Mode 2 启动只有在观测到的状态不满足请求模式时才会修复底层 `DeviceInfo`。`canoe.cfg` 中的 `lockstate never` 会直接拒绝修复；这次启动随后会如实以 Mode 0 继续。Mode 0 是无 hook 的直通模式，既不读取也不写入 `DeviceInfo`。观测到的状态始终会记录在启动日志中。
+对于 DeviceInfo 修复，Mode 1 或 Mode 2 启动只有在观测到的状态不满足请求模式时才会修复底层 `DeviceInfo`。`canoe.cfg` 中的 `devinfo-repair never` 会直接拒绝修复；这次启动随后会如实以 Mode 0 继续。Mode 0 是无 hook 的直通模式，既不读取也不写入 `DeviceInfo`。观测到的状态始终会记录在启动日志中。
 
 完整的导出与 Windows 挂载流程见 [USB Mass Storage 指南](wiki/docs/zh/mass-storage.md)。
 
@@ -210,4 +210,3 @@ fastboot oem mass-storage:logfs       # logfs
 2. `canoe.cfg`：启动根目录声明式配置，包含文件全局回退模式以及各启动项的模式和 role。格式规范见 [`wiki/docs/canoe-cfg.md`](wiki/docs/canoe-cfg.md)。
 3. `boot.efi` / `boot.efi.gm2p` / `boot.efi.tzmap`：修补后的 ABL、从匹配原厂 vbmeta 派生的 120 字节锁定/绿色 KeyMint profile，以及从未修补 ABL 派生的 256 字节 TrustZone 映射，存放在 `persist` 的 `efisp/` 下；映射在本地生成，不包含在发布压缩包内。
 4. `ABL_original.efi`：从原始 ABL 提取的未修补版本，仅供分析，**不要刷入 `efisp`**。
-5. `BOOTENTRIES`：工具子菜单使用的启动项列表。

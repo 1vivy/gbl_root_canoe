@@ -29,7 +29,8 @@
 #define SFB_DESC_FILE_PATH  L"\\EFI\\DESC"
 
 /* Declarative menu state on the boot root. Read once per boot, never written.
- * Absent or unparseable, the loader falls back to BOOTENTRIES discovery. */
+ * Absent or unparseable, the loader probes the boot root for the managed
+ * loader names instead. */
 #define SFB_CONFIG_FILE_PATH  L"\\canoe.cfg"
 
 /* The canonical managed loader. Its presence is what distinguishes an
@@ -37,35 +38,25 @@
  * spelled out at each use. */
 #define SFB_MANAGED_BOOT_NAME  L"\\boot.efi"
 
-/*
- * Optional file in a volume's root directory listing extra boot entries, one
- * per line:
- *
- *   <name>:<path relative to the boot root>
- *   %<name>:<path to another ENTRIES file relative to the boot root>
- *
- * e.g. "MEMTEST:EFI/MEMTEST.EFI". Either '/' or '\' separates path components,
- * a leading separator is optional, blank lines and lines starting with '#' are
- * ignored. A '$' prefix on the name marks a "no default" entry. Entries here
- * are listed alongside the auto-discovered boot loader.
- *
- * A line beginning with '%' names a submenu: the path points at another file in
- * the same BOOTENTRIES format whose entries are shown when the row is selected.
- * Paths inside that file are still relative to the boot root (the volume root
- * for FAT32, \efisp for ext4), not to the submenu file's own directory, and the
- * file may itself contain further '%' submenu rows, up to SFB_MAX_SUBMENU_DEPTH
- * levels deep.
- */
-#define SFB_BOOTENTRIES_PATH  L"\\BOOTENTRIES"
+/* The demoted previous generation, looked for beside the live loader by the
+ * boot-root probe when no canoe.cfg is present. */
+#define SFB_MANAGED_BACKUP_NAME  L"\\boot_backup.efi"
+
+/* Directory under the boot root that the installers fill with the shipped EFI
+ * tools. The menu's tools row lists it rather than a hand-maintained index, so
+ * the row cannot claim a tool that is not there. */
+#define SFB_TOOLS_DIR_NAME  L"tools"
 
 /*
  * Optional file, looked for in a boot entry's own directory, naming UEFI driver
  * images to load and start before that entry is launched. One path per line,
- * each relative to the volume root, same line syntax as BOOTENTRIES.
+ * each relative to the volume root: leading whitespace is stripped, '#' starts
+ * a comment, blank lines are ignored, and an over-long line is skipped rather
+ * than truncated.
  */
 #define SFB_DRIVER_LIST_NAME  L"DRIVER.LIST"
 
-/* Upper bound on the BOOTENTRIES / DRIVER.LIST / canoe.cfg text files we read. */
+/* Upper bound on the DRIVER.LIST / canoe.cfg text files we read. */
 #define SFB_LIST_MAX_BYTES    8192
 
 #define SFB_DESC_CHARS       48
@@ -73,28 +64,24 @@
 #define SFB_MAX_ENTRIES      32
 #define SFB_MAX_DIR_ENTRIES  128
 
-/* Deepest submenu nesting allowed. Bounds the recursion when a chain of
- * ENTRIES files points at one another; beyond this the menu shows "too deep"
- * rather than descending further. */
-#define SFB_MAX_SUBMENU_DEPTH  8
-
 #define SFB_NO_INDEX  ((UINTN)-1)
 
 typedef enum {
   /* An EFI application living on a FAT32/ext4 volume. */
   SfbEntryEfiFile = 0,
-  /* A pointer to another ENTRIES file: selecting it opens that file as a
-   * submenu. Volume/Path name the ENTRIES file; Desc is the submenu title. */
-  SfbEntrySubmenu,
   /* Built-in entries; no backing file, handled in code. */
   SfbEntryFastboot,
   SfbEntrySelector,
+  /* Browse the EFI tools shipped into the boot root, discovered by listing
+   * that directory so the row cannot drift from what is installed. */
+  SfbEntryTools,
   /* Session-only boot policy override. Applies to the next launch and is never
    * written anywhere: the persisted policy is `mode` in canoe.cfg. */
   SfbEntryMode,
   /* Export one partition to a host as USB mass storage. */
   SfbEntryMassStorage,
-  /* "Back" row at the foot of a submenu: returns to the parent menu. */
+  /* Inert row: redraws the menu when selected. Carries the notices the menu
+   * must show but cannot act on. */
   SfbEntryBack,
   /* Power management actions offered at the end of the menu and on the
    * fastboot mode screen. */
@@ -118,9 +105,6 @@ typedef enum {
 
 typedef struct {
   SFB_ENTRY_KIND            Kind;
-  /* TRUE for entries whose BOOTENTRIES name began with '$': they are listed and
-   * bootable, but selecting one is always a temporary launch. */
-  BOOLEAN                   NoDefault;
   CHAR16                    Desc[SFB_DESC_CHARS];
   CHAR16                    Path[SFB_PATH_CHARS];
   /* FAT volume label the entry lives on; how an entry names the volume it was
@@ -142,6 +126,13 @@ typedef struct {
   BOOLEAN                   ModeFromConfig;
   /* Presentation only; how the backup row is told apart from the two slots. */
   SFB_CONFIG_ROLE           Role;
+  /*
+   * TRUE when the image is not one of the managed ABL names, so no wrapper is
+   * ever installed for it and Mode above decides nothing. Set from the path
+   * rather than from the config, because a discovered loader is in exactly the
+   * same position as a config entry naming an unmanaged image.
+   */
+  BOOLEAN                   Passthrough;
 } SFB_BOOT_ENTRY;
 
 typedef struct {
@@ -174,6 +165,13 @@ typedef struct {
   /* Non-zero means canoe.cfg was partly refused. Surfaced in the menu: a
    * half-applied config must be visible, never silent. */
   UINTN                  RejectedLines;
+  /*
+   * TRUE when a config entry labelled `active` claims a different slot than
+   * the GPT marks active. Surfaced as a row, and it withholds the unattended
+   * launch: a stale label means the config no longer describes what it points
+   * at, which is not a thing to boot without looking.
+   */
+  BOOLEAN                SlotMismatch;
   /* TRUE when the boot root holds neither a canoe.cfg nor a boot.efi: nothing
    * is installed yet, so the only useful destination is fastboot. */
   BOOLEAN         FirstRun;
@@ -205,15 +203,6 @@ typedef enum {
  */
 EFI_STATUS
 SfbStartFatStack (VOID);
-
-/*
- * Case-insensitive compare of a GPT PartitionName field against a wanted name.
- * The field is a CHAR16[36] that is not required to be NUL terminated and is
- * space padded by some writers, so this is the only correct way to compare one
- * and every caller uses it.
- */
-BOOLEAN
-SfbGptNameMatches (IN CONST CHAR16 *Stored, IN CONST CHAR16 *Want);
 
 /*
  * Find the Block I/O instance for the GPT partition named Name. Returns
@@ -345,20 +334,6 @@ SfbBootRootIsEmpty (VOID);
 VOID
 SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode);
 
-/*
- * Build a submenu from an ENTRIES file at EntriesPath (an absolute volume path
- * on Volume) and append a trailing "Back" row. The ENTRIES file has the same
- * format as BOOTENTRIES, and every path inside it is resolved relative to the
- * same boot root (volume root for FAT32, \efisp for ext4). Returns
- * EFI_INVALID_PARAMETER for a null Volume/path; EFI_SUCCESS otherwise (an empty
- * or unreadable file simply yields a menu holding only "Back").
- */
-EFI_STATUS
-SfbBuildSubMenu (OUT SFB_MENU_STATE *Menu,
-                 IN EFI_HANDLE      Volume,
-                 IN CONST CHAR16    *EntriesPath,
-                 IN SFB_BOOT_MODE    Mode);
-
 VOID
 SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu);
 
@@ -425,6 +400,15 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode);
 /* Simple FAT32 browser: pick a volume, walk directories, act on a .efi. */
 VOID
 SfbRunFileBrowser (IN SFB_BOOT_MODE Mode);
+
+/*
+ * Browse the EFI tools installed in the boot root's tools directory. Seeds the
+ * same directory-browse loop at <boot root>\tools, so the row lists exactly
+ * what is installed rather than a hand-maintained index that can drift from
+ * it. Reports and returns when no tools directory is present.
+ */
+VOID
+SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode);
 
 /*
  * TRUE when Path is exactly the volume root "\". Defined in SuperFbBrowser.c

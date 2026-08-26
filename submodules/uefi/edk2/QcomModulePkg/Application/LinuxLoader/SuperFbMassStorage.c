@@ -23,6 +23,13 @@
 #include <Library/UefiLib.h>
 #include <Protocol/SimpleTextIn.h>
 
+/*
+ * Consecutive EventHandler errors that end a session. Only reached when the
+ * vendor stack is answering nothing at all; it exists so a device whose
+ * console is unavailable still has a way out, since cancelling needs a key.
+ * Any single non-error poll resets the run, so a blip cannot trip it.
+ */
+#define SFB_MSC_MAX_CONSECUTIVE_ERRORS  100000u
 
 /* EFI_USB_MSD_PROTOCOL, mirrored from the public Mu-Silicium EFIUsbMsd.h. */
 typedef struct _SFB_USB_MSD_PROTOCOL SFB_USB_MSD_PROTOCOL;
@@ -196,6 +203,10 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
   UINT8                 MaxLun = 0;
   BOOLEAN               Cancelled = FALSE;
   BOOLEAN               HandlerErrorLogged = FALSE;
+  UINT32                Polls = 0;
+  UINT32                NotReady = 0;
+  UINT32                Errors = 0;
+  UINT32                Consecutive = 0;
 
   if (BlockIo == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -229,6 +240,15 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
    * this screen is still in the queue at this point. */
   SfbMassStorageDrainKeys ();
 
+  /*
+   * An export can legitimately sit idle for as long as the operator leaves it
+   * up, and the UEFI default watchdog is five minutes. Both the Mu-Silicium
+   * reference client and this tree's own fastboot path disable it before
+   * taking the link (FastbootCmds.c), and neither restores it: a bootloader
+   * menu that waits at a prompt has no business being reset by a watchdog.
+   */
+  gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
+
   Status = Msd->StartDevice (Msd);
   if (EFI_ERROR (Status)) {
     SfbUsbCensus ();
@@ -247,29 +267,50 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
           (Tag != NULL) ? Tag : "?"));
 
   /*
-   * EventHandler is poll-driven, and its vendor protocol header documents no
-   * return semantics. The Mu-Silicium reference client ignores the return
-   * value and ends only on a key press. We therefore treat EFI_NOT_READY as
-   * explicitly transient; treating every other error as terminal is an
-   * inference, logged once rather than retried indefinitely.
+   * Pump the handler first and test for cancel second, which is the order the
+   * Mu-Silicium reference client uses
+   * (QcomPkg/Applications/MassStorage/MassStorage.c). The first poll then lands
+   * before any console access, which is where it is needed: the host begins
+   * enumerating the moment StartDevice returns and Linux scans one second
+   * later.
+   *
+   * The return value is counted but a single error no longer ends the session.
+   * The vendor header documents EventHandler's own error returns as literally
+   * "?" (QcomPkg/Include/Protocol/EFIUsbMsd.h) and the reference client
+   * discards the value entirely. Treating one transient error as terminal used
+   * to break this loop and tear the gadget down while the host was still
+   * scanning, which presents exactly as a device that enumerates but never
+   * offers a disk.
+   *
+   * Only an unbroken run of errors ends it. That keeps a way out when the
+   * console is unavailable and SfbMassStorageCancelled can never return TRUE,
+   * while being far beyond anything a blip during enumeration produces; any
+   * single good poll resets the count.
    */
   while (TRUE) {
-    if (SfbMassStorageCancelled ()) {
-      Cancelled = TRUE;
-      Status = EFI_ABORTED;
-      break;
-    }
     Status = Msd->EventHandler (Msd);
+    Polls++;
     if (Status == EFI_NOT_READY) {
-      continue;
-    }
-    if (EFI_ERROR (Status)) {
+      NotReady++;
+      Consecutive = 0;
+    } else if (EFI_ERROR (Status)) {
+      Errors++;
+      Consecutive++;
       if (!HandlerErrorLogged) {
         DEBUG ((EFI_D_ERROR,
                 "SFB: MARK msc-handler target=%a status=%r\n",
                 (Tag != NULL) ? Tag : "?", Status));
         HandlerErrorLogged = TRUE;
       }
+      if (Consecutive >= SFB_MSC_MAX_CONSECUTIVE_ERRORS) {
+        break;
+      }
+    } else {
+      Consecutive = 0;
+    }
+
+    if (SfbMassStorageCancelled ()) {
+      Cancelled = TRUE;
       break;
     }
   }
@@ -277,7 +318,13 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
   Msd->StopDevice (Msd);
   Msd->AssignBlkIoHandle (Msd, NULL, 0);
 
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run target=%a status=%r reason=%a\n",
+  /* Poll counts make a starved loop visible in the log: a session that lasted
+   * seconds but polled only a few hundred times is not servicing the link. */
+  DEBUG ((EFI_D_ERROR,
+          "SFB: MARK msc-poll target=%a polls=%u notready=%u errors=%u\n",
+          (Tag != NULL) ? Tag : "?", Polls, NotReady, Errors));
+  DEBUG ((EFI_D_ERROR,
+          "SFB: MARK msc-run target=%a status=%r reason=%a\n",
           (Tag != NULL) ? Tag : "?", Status,
           Cancelled ? "cancelled" : "handler-error"));
   return Cancelled ? EFI_ABORTED : EFI_SUCCESS;

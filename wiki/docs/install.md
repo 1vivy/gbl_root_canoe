@@ -13,7 +13,7 @@ On this device the boot root is the `persist` partition (ext4), under its `efisp
 | `boot.efi.gm2p` | Matching 120-byte KeyMint profile derived from matching stock vbmeta |
 | `boot.efi.tzmap` | Optional 256-byte `GTZM` ABL-derived TrustZone interface map from the unpatched ABL |
 | `boot_backup.efi` / `.gm2p` / `.tzmap` | Previous complete ABL/profile/map set, retained as the backup entry |
-| `BOOTENTRIES` and `tools/` | Boot entry list and tools submenu |
+| `tools/` | EFI tools reached from the menu's built-in `EFI Tools` row |
 
 The format of `canoe.cfg` is normative; see [`canoe-cfg.md`](./canoe-cfg.md) rather than copying its specification into another page. `BDS.efi` is written raw to the `efisp` partition (not into a filesystem).
 

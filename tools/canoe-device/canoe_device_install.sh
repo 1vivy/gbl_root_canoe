@@ -10,7 +10,7 @@
 #
 #   sh canoe_device_install.sh <staging_dir> <efisp_dir> [<efisp_dev> <backup>]
 #
-#   staging_dir  holds boot.efi, boot.efi.gm2p, boot.efi.tzmap, BOOTENTRIES,
+#   staging_dir  holds boot.efi, boot.efi.gm2p and boot.efi.tzmap,
 #                optionally tools/, and optionally BDS.efi. It should live on the
 #                same filesystem as efisp_dir so the commit is a rename.
 #   efisp_dir    the boot root, e.g. /persist/efisp or /mnt/vendor/persist/efisp
@@ -24,11 +24,11 @@
 # Transaction:
 #   1. validate the staged set (sizes are exact contract values)
 #   2. snapshot everything the commit will overwrite: the live triplet,
-#      existing backup generation, canoe.cfg, BOOTENTRIES, tools/ and .canoe.gen
+#      existing backup generation, canoe.cfg, tools/ and .canoe.gen
 #   3. set aside foreign boot-root entries, then commit live -> boot_backup.*,
 #      staged -> live
-#   4. install canoe.cfg, BOOTENTRIES and tools, write the informational
-#      .canoe.gen stamp, sync
+#   4. write canoe.cfg and install tools, write the informational .canoe.gen
+#      stamp, sync
 #   5. optionally back up efisp, write the BDS, verify it byte-for-byte
 #
 # The efisp partition contains only BDS.efi. Menu state lives in the
@@ -116,7 +116,7 @@ write_canoe_config() {
     printf 'timeout 5\n'
     printf 'default %s\n' "$config_active"
     printf 'mode %s\n' "$config_fallback"
-    printf 'lockstate asneeded\n\n'
+    printf 'devinfo-repair asneeded\n\n'
     write_config_entry "$config_active" "$config_active_title" boot.efi \
       "$config_active_mode" active
     config_inactive=android-b
@@ -146,7 +146,6 @@ write_canoe_config() {
 [ -s "$STAGING/boot.efi" ]       || die "staged boot.efi is missing or empty"
 [ -s "$STAGING/boot.efi.gm2p" ]  || die "staged boot.efi.gm2p is missing or empty"
 [ -s "$STAGING/boot.efi.tzmap" ] || die "staged boot.efi.tzmap is missing or empty"
-[ -f "$STAGING/BOOTENTRIES" ]    || die "staged BOOTENTRIES is missing"
 gm2p=$(size_of "$STAGING/boot.efi.gm2p")
 tzmap=$(size_of "$STAGING/boot.efi.tzmap")
 [ "$gm2p" = 120 ]  || die "boot.efi.gm2p must be exactly 120 bytes, got $gm2p"
@@ -160,8 +159,8 @@ mark "staged-set-validated gm2p=$gm2p tzmap=$tzmap"
 mkdir -p "$D" "$D/tools" || die "could not create $D"
 
 # ------------------------------------------- 2. snapshot what commit touches --
-# The menu tree is part of the transaction: a rollback that restored only the
-# triplet would leave the old loader beside the new BOOTENTRIES and tools.
+# The boot-root menu state is part of the transaction: a rollback that restored
+# only the triplet would leave the old loader beside the new canoe.cfg and tools.
 rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* "$D/.canoe.oldmenu" \
   "$D/.canoe.oldgen" "$D/.canoe.oldcfg" "$D/.canoe.oldcfg.absent" \
   "$D/.canoe.foreign.moves" "$D/.canoe.gen.tmp" "$D/.canoe.cfg.tmp."* || :
@@ -173,7 +172,6 @@ mkdir -p "$D/.canoe.oldmenu" || die "could not create the snapshot directory"
 [ -s "$D/boot_backup.efi" ]       && cp -f "$D/boot_backup.efi" "$D/.canoe.oldbak.efi"
 [ -s "$D/boot_backup.efi.gm2p" ]  && cp -f "$D/boot_backup.efi.gm2p" "$D/.canoe.oldbak.gm2p"
 [ -s "$D/boot_backup.efi.tzmap" ] && cp -f "$D/boot_backup.efi.tzmap" "$D/.canoe.oldbak.tzmap"
-[ -f "$D/BOOTENTRIES" ]           && cp -f "$D/BOOTENTRIES" "$D/.canoe.oldmenu/BOOTENTRIES"
 if [ -e "$D/canoe.cfg" ]; then
   cp -f "$D/canoe.cfg" "$D/.canoe.oldcfg" || die "could not snapshot canoe.cfg"
 else
@@ -208,7 +206,7 @@ set_aside_foreign() {
     [ -e "$foreign_entry" ] || [ -L "$foreign_entry" ] || continue
     foreign_name=${foreign_entry##*/}
     case "$foreign_name" in
-      boot.efi|boot.efi.gm2p|boot.efi.tzmap|boot_backup.efi|boot_backup.efi.gm2p|boot_backup.efi.tzmap|BOOTENTRIES|canoe.cfg|tools|.canoe.gen|.canoe.foreign|.canoe.live.*|.canoe.oldbak.*|.canoe.oldmenu|.canoe.oldgen|.canoe.oldcfg|.canoe.oldcfg.absent|.canoe.foreign.moves|.canoe.gen.tmp|.canoe.cfg.tmp.*|"$STAGING_NAME")
+      boot.efi|boot.efi.gm2p|boot.efi.tzmap|boot_backup.efi|boot_backup.efi.gm2p|boot_backup.efi.tzmap|canoe.cfg|tools|.canoe.gen|.canoe.foreign|.canoe.live.*|.canoe.oldbak.*|.canoe.oldmenu|.canoe.oldgen|.canoe.oldcfg|.canoe.oldcfg.absent|.canoe.foreign.moves|.canoe.gen.tmp|.canoe.cfg.tmp.*|"$STAGING_NAME")
         continue
         ;;
     esac
@@ -281,12 +279,6 @@ restore_pair() {
     rm -f "$D/boot_backup.efi.tzmap"
   fi
 
-  # Menu tree, snapshotted in step 2. Absent snapshot means it did not exist.
-  if [ -f "$D/.canoe.oldmenu/BOOTENTRIES" ]; then
-    cp -f "$D/.canoe.oldmenu/BOOTENTRIES" "$D/BOOTENTRIES" || :
-  else
-    rm -f "$D/BOOTENTRIES"
-  fi
   rm -rf "$D/tools" || :
   mkdir -p "$D/tools" || :
   if [ -d "$D/.canoe.oldmenu/tools" ]; then
@@ -362,7 +354,6 @@ mv -f "$STAGING/boot.efi.tzmap" "$D/boot.efi.tzmap" || fail "could not install b
 mark "committed"
 
 # ----------------------------------------------- 4. boot menu tree + sync ----
-cp -f "$STAGING/BOOTENTRIES" "$D/BOOTENTRIES" || fail "could not install BOOTENTRIES"
 if [ -d "$STAGING/tools" ]; then
   for t in "$STAGING"/tools/*; do
     [ -e "$t" ] || continue

@@ -717,3 +717,67 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
   FreePool (Volumes);
 }
 
+
+VOID
+SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
+{
+  EFI_STATUS  Status;
+  EFI_HANDLE  *Volumes = NULL;
+  UINTN       VolumeCount = 0;
+  UINTN       Index;
+
+  /* Media may have been inserted since the loader started. */
+  SfbStartFatStack ();
+
+  Status = SfbLocateVolumes (&Volumes, &VolumeCount);
+  if (EFI_ERROR (Status) || Volumes == NULL) {
+    SfbReportStatus (L"No EFI tools installed",
+                     EFI_ERROR (Status) ? Status : EFI_NOT_FOUND);
+    return;
+  }
+
+  for (Index = 0; Index < VolumeCount; Index++) {
+    CONST CHAR16       *Prefix = SfbVolumeRootPrefix (Volumes[Index]);
+    CHAR16             ToolsPath[SFB_PATH_CHARS];
+    EFI_FILE_PROTOCOL  *Root = NULL;
+    EFI_FILE_PROTOCOL  *Dir = NULL;
+
+    /*
+     * The shipped tools live under the persist boot root, which is the only
+     * volume with a non-empty root prefix. Tools on removable media are the
+     * ordinary browser's job, not this row's.
+     */
+    if (Prefix[0] == L'\0') {
+      continue;
+    }
+
+    if (RETURN_ERROR (StrCpyS (ToolsPath, SFB_PATH_CHARS, Prefix)) ||
+        EFI_ERROR (SfbJoinPath (ToolsPath, SFB_PATH_CHARS,
+                                SFB_TOOLS_DIR_NAME))) {
+      continue;
+    }
+
+    /* Probe before browsing: an absent directory must read as "nothing is
+     * installed", not as the browse loop's "cannot read directory". */
+    Status = SfbOpenDirectory (Volumes[Index], ToolsPath, &Root, &Dir);
+    if (EFI_ERROR (Status)) {
+      continue;
+    }
+    if (Dir != Root) {
+      Dir->Close (Dir);
+    }
+    Root->Close (Root);
+
+    /*
+     * Hand the directory to the same browse loop the program selector uses, so
+     * the tools get the identical .efi action menus. ToolsPath is its floor:
+     * ".." there leaves the row rather than climbing into the boot root.
+     */
+    (VOID)SfbBrowseVolume (Volumes[Index], L"EFI Tools", ToolsPath, Mode);
+    FreePool (Volumes);
+    return;
+  }
+
+  FreePool (Volumes);
+  SfbReportStatus (L"No EFI tools installed", EFI_NOT_FOUND);
+}

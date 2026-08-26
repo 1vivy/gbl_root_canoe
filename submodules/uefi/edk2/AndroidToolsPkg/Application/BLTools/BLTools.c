@@ -35,16 +35,15 @@
 #include "AtDevInfo.h"
 #include "AtVerifiedBoot.h"
 #include "AndroidToolsUi.h"
-
+#include "../../../QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDeviceInfo.h"
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(a)  (sizeof (a) / sizeof ((a)[0]))
 #endif
 
-/* ---- ported r32 DeviceInfo helpers (same as ArbTools) ------------------- */
+/* ---- shared DeviceInfo lock helper -------------------------------------- */
 /*
- * Self-contained per the package convention: each app ports the r32 read/write
- * wrapper it needs rather than sharing a library. These are byte-identical to
- * ArbTools' so the on-disk access semantics match exactly.
+ * The common helper owns the lock-pair invariant and only mutates the copy
+ * that this application is preparing to persist.
  */
 
 EFI_STATUS
@@ -134,8 +133,8 @@ BlConfirm (
 /**
   Persist a new (Unlock, Critical) state after enforcing the invariant and
   requiring confirmation. Only the two flags change; every other DeviceInfo
-  field is preserved by the read-modify-write. On write failure the in-memory
-  copy is rolled back so the menu keeps reflecting the on-disk state.
+  field is preserved by the read-modify-write. The live copy is updated only
+  after the backing write succeeds.
 **/
 STATIC
 VOID
@@ -146,20 +145,22 @@ BlApply (
   IN CONST CHAR16   *Action
   )
 {
-  BOOLEAN     OldUnlock;
-  BOOLEAN     OldCritical;
-  EFI_STATUS  Status;
-  CHAR16      Warning[96];
+  DeviceInfo Updated;
+  EFI_STATUS Status;
+  SFB_LOCK_ACTION LockAction;
+  CHAR16 Warning[96];
 
-  /* Second guard: never persist unlock_critical=true with unlock=false. The
-   * toggles already enforce this, but clamp once more so a future caller or a
-   * tampered blob cannot sneak the illegal combination through. */
-  if (NewCritical && !NewUnlock) {
-    NewUnlock = TRUE;
+  /* Apply to a copy first so cancellation and write failures leave the live
+   * menu state untouched. */
+  Updated = *Info;
+  if (!SfbDeviceInfoSetLock ((SFB_UINT8 *)&Updated, sizeof (Updated),
+                             (SFB_BOOLEAN)NewUnlock,
+                             (SFB_BOOLEAN)NewCritical, &LockAction)) {
+    AtUiShowMessage (L"DeviceInfo not initialized");
+    AtUiWaitForKey (0);
+    return;
   }
-
-  if (NewUnlock == Info->is_unlocked &&
-      NewCritical == Info->is_unlock_critical) {
+  if (LockAction == SfbLockActionNone) {
     AtUiShowMessage (L"State unchanged");
     AtUiWaitForKey (0);
     return;
@@ -174,20 +175,14 @@ BlApply (
 
   AtUiShowMessage (L"Applying...");
 
-  OldUnlock   = Info->is_unlocked;
-  OldCritical = Info->is_unlock_critical;
-  Info->is_unlocked        = NewUnlock;
-  Info->is_unlock_critical = NewCritical;
-
-  Status = AtDevInfoWrite (Info);
+  Status = AtDevInfoWrite (&Updated);
   if (EFI_ERROR (Status)) {
-    /* Roll back the in-memory copy; the on-disk blob was not changed. */
-    Info->is_unlocked        = OldUnlock;
-    Info->is_unlock_critical = OldCritical;
+    /* The live copy was not changed, so it already reflects the on-disk state. */
     AtUiReportStatus (L"Write DeviceInfo", Status);
     return;
   }
 
+  *Info = Updated;
   AtUiShowMessage (L"Done. Reboot for the change to take effect.");
   AtUiWaitForKey (0);
 }

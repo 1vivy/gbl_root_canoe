@@ -49,7 +49,7 @@ image. 7.x reacts by not writing.
 | The BDS, on the ext4 `persist` volume | `\efisp\canoe.cfg` |
 
 `\efisp` is the boot root: every `image` path in the file is resolved relative
-to it, exactly as `BOOTENTRIES` paths already were.
+to it.
 
 ## Encoding and limits
 
@@ -59,8 +59,8 @@ to it, exactly as `BOOTENTRIES` paths already were.
 - At most 8192 bytes are read; the rest is ignored.
 - At most 24 entries; later ones are dropped with a log marker.
 
-Lexing is the `BOOTENTRIES` lexer: leading whitespace stripped, `#` starts a
-comment, blank lines ignored, an over-long line skipped rather than truncated.
+The lexer strips leading whitespace, treats `#` as a comment marker, ignores
+blank lines, and skips an over-long line rather than truncating it.
 
 A line is `key` then one run of spaces or tabs then `value`. The value runs to
 end of line with trailing whitespace trimmed.
@@ -70,7 +70,7 @@ end of line with trailing whitespace trimmed.
 They appear before the first `entry`. Indentation is cosmetic, so after an
 `entry` line every key belongs to that entry: `mode` there sets the entry's own
 mode, and a key that exists only at file scope — `timeout`, `default`,
-`generation`, `lockstate` — is counted as rejected rather than retro-applied.
+`generation`, `devinfo-repair` — is counted as rejected rather than retro-applied.
 
 | Key | Values | Default | Meaning |
 | --- | --- | --- | --- |
@@ -79,7 +79,7 @@ mode, and a key that exists only at file scope — `timeout`, `default`,
 | `timeout` | `0..60` | `5` | Seconds the menu waits before launching `default`. `0` launches at once. |
 | `default` | an entry id | none | The entry an unattended boot launches. |
 | `mode` | `0`, `1`, `2` | `1` | Fallback for entries that declare no `mode`. |
-| `lockstate` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo`. See below. |
+| `devinfo-repair` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo`. See below. |
 
 ## Entry blocks
 
@@ -89,7 +89,7 @@ mode, and a key that exists only at file scope — `timeout`, `default`,
 | --- | --- | --- | --- |
 | `entry` | id: 1–31 chars of `[A-Za-z0-9._-]` | — | Opens the block. A duplicate id rejects the later block. |
 | `title` | up to 47 ASCII chars | the id | The menu row text. |
-| `image` | boot-root-relative path | — | **Required.** Same path rules as `BOOTENTRIES`: no `.` or `..` component, no double separator, no trailing separator, `/` folded to `\`. |
+| `image` | boot-root-relative path | — | **Required.** No `.` or `..` component, no double separator, no trailing separator, and `/` is folded to `\`. |
 | `mode` | `0`, `1`, `2` | the global `mode` | The boot policy this image is launched under. |
 | `role` | `active`, `inactive`, `backup`, `other` | `other` | Presentation only. The menu suffixes the row. |
 
@@ -123,7 +123,7 @@ Android (previous)        (backup)
 The BDS derives no slot state of its own. Which image is active is a fact the
 authoring process already knows, and it writes it down.
 
-## Lock state
+## DeviceInfo repair policy
 
 A managed launch under Mode 1 or Mode 2 needs the backing `DeviceInfo` to read
 unlocked, because the projection is what makes ABL see a locked device while
@@ -133,13 +133,13 @@ every managed launch, in every mode.
 7.x gates it:
 
 - Mode 0 is a hook-free passthrough. Nothing is read, nothing is written.
-- `lockstate never` refuses the repair outright; a launch that needed it is
+- `devinfo-repair never` refuses the repair outright; a launch that needed it is
   reported and continues honestly in Mode 0.
-- `lockstate asneeded` repairs only when the observed state actually differs
+- `devinfo-repair asneeded` repairs only when the observed state actually differs
   from what the requested mode requires.
 
 Either way the **observed** state is recorded before any decision, as
-`SFB: MARK lockstate observed-unlocked=<0|1> observed-critical=<0|1>
+`SFB: MARK devinfo-repair observed-unlocked=<0|1> observed-critical=<0|1>
 required=<0|1> action=<none|repair|refused>`.
 
 ## Example
@@ -152,7 +152,7 @@ generation 4
 timeout 5
 default android-a
 mode 1
-lockstate asneeded
+devinfo-repair asneeded
 
 entry android-a
   title Android (slot A)
@@ -176,9 +176,10 @@ entry android-backup
 ## Absent or unparseable
 
 No `canoe.cfg`, a bad `version`, or a file with no usable entry is not an error.
-The BDS falls back to what 6.x did without a mode record: `BOOTENTRIES` plus
-well-known-path discovery, at the built-in default mode, with the menu shown
-rather than an unattended launch.
+The BDS probes the boot root for the known managed names `boot.efi` and then
+`boot_backup.efi`, offering them as `Android` and `Android (previous)`, then
+adds anything discovered on removable/ESP media. All such entries use the
+built-in default mode, and the menu is shown rather than launching unattended.
 
 An **empty boot root** — no `canoe.cfg` and no `boot.efi` — is the first-run
 signal. The BDS says so and hands straight to Super Fastboot, which is the

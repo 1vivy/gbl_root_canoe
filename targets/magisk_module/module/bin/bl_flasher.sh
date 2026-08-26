@@ -293,9 +293,6 @@ persist_mounted() { grep -q " $PERSIST_MNT " /proc/mounts; }
 
 place_efisp_tree_to() {
   target="$1"
-  if [ -f "$MODDIR/efisp/BOOTENTRIES" ]; then
-    cp "$MODDIR/efisp/BOOTENTRIES" "$target/" >> "$LOG_FILE" 2>&1 || return 1
-  fi
   if [ -d "$MODDIR/efisp/tools" ]; then
     mkdir -p "$target/tools" >> "$LOG_FILE" 2>&1 || return 1
     cp -r "$MODDIR/efisp/tools/." "$target/tools/" >> "$LOG_FILE" 2>&1 || return 1
@@ -456,7 +453,7 @@ write_canoe_config() {
     printf 'timeout 5\n'
     printf 'default %s\n' "$config_active"
     printf 'mode %s\n' "$config_fallback"
-    printf 'lockstate asneeded\n\n'
+    printf 'devinfo-repair asneeded\n\n'
     if [ "$config_active" = android-a ]; then
       config_write_entry "$config_temp" android-a 'Android (slot A)' boot.efi \
         "$config_active_mode" active

@@ -115,7 +115,7 @@ write_config_for_slots() {
     printf 'timeout 5\n'
     printf 'default %s\n' "$active_id"
     printf 'mode %s\n' "$fallback"
-    printf 'lockstate asneeded\n\n'
+    printf 'devinfo-repair asneeded\n\n'
     write_entry "$active_id" "$active_title" boot.efi "$active_mode" active "$temp"
     for slot in _a _b; do
       [ "$slot" = "$active_slot" ] && continue

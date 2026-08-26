@@ -16,7 +16,7 @@ def test_writer_round_trips_a_config_and_bumps_generation(tmp_path: Path) -> Non
         timeout=5,
         default="android-a",
         mode=1,
-        lockstate="asneeded",
+        devinfo_repair="asneeded",
     )
 
     generation = write_config(path, original)

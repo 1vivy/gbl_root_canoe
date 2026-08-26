@@ -78,12 +78,15 @@
 	SuperFbEntries.c
 	SuperFbMenu.c
 	SuperFbBrowser.c
+	SuperFbSlots.h
+	SuperFbSlots.c
 	SuperFbMassStorage.h
 	SuperFbMassStorage.c
 	SuperFbLaunchPolicy.h
 	SuperFbLaunchPolicy.c
 	Hook/SuperFbManagedPath.h
 	Hook/SuperFbManagedPath.c
+	Hook/SuperFbDeviceInfo.c
 	Hook/SuperFbProfile.h
 	Hook/SuperFbProfile.c
 	Hook/SuperFbTzMap.c

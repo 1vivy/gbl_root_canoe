@@ -13,7 +13,7 @@
 | `boot.efi.gm2p` | 从匹配原厂 vbmeta 派生的 120 字节 KeyMint profile |
 | `boot.efi.tzmap` | 从未修补 ABL 派生的可选 256 字节 `GTZM` TrustZone 接口映射 |
 | `boot_backup.efi` / `.gm2p` / `.tzmap` | 上一套完整的 ABL/profile/map，作为备份启动项保留 |
-| `BOOTENTRIES` 与 `tools/` | 启动项列表与工具子菜单 |
+| `tools/` | 可从菜单内置的 `EFI Tools` 行进入的 EFI 工具 |
 
 `canoe.cfg` 的格式是规范内容，请参阅 [`canoe-cfg.md`](../canoe-cfg.md)，不要在其他页面复制一份规范。`BDS.efi` 以原始方式刷入 `efisp` 分区（不放入文件系统）。
 

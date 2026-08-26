@@ -16,7 +16,7 @@ MAX_TITLE_CHARS: Final = 47
 MAX_PATH_CHARS: Final = 198
 _ID_RE: Final = re.compile(r"^[A-Za-z0-9._-]{1,31}$")
 Role = Literal["active", "inactive", "backup", "other"]
-LockState = Literal["asneeded", "never"]
+DeviceInfoRepair = Literal["asneeded", "never"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,7 +59,7 @@ class Config:
     timeout: int = 5
     default: str | None = None
     mode: int = 1
-    lockstate: LockState = "asneeded"
+    devinfo_repair: DeviceInfoRepair = "asneeded"
 
     def __post_init__(self) -> None:
         if not self.entries or len(self.entries) > MAX_ENTRIES:
@@ -70,8 +70,8 @@ class Config:
             raise ConfigError(f"timeout must be in 0..{MAX_TIMEOUT}")
         if not 0 <= self.mode <= 2:
             raise ConfigError("mode must be 0, 1 or 2")
-        if self.lockstate not in ("asneeded", "never"):
-            raise ConfigError(f"invalid lockstate: {self.lockstate!r}")
+        if self.devinfo_repair not in ("asneeded", "never"):
+            raise ConfigError(f"invalid devinfo-repair: {self.devinfo_repair!r}")
         ids = tuple(entry.id for entry in self.entries)
         if len(set(ids)) != len(ids):
             raise ConfigError("entry ids must be unique")
@@ -140,7 +140,7 @@ def read_config(path: Path) -> Config:
 
     version_seen = False
     generation, timeout, mode = 0, 5, 1
-    lockstate: LockState = "asneeded"
+    devinfo_repair: DeviceInfoRepair = "asneeded"
     default: str | None = None
     blocks: list[dict[str, str]] = []
     current: dict[str, str] | None = None
@@ -171,12 +171,12 @@ def read_config(path: Path) -> Config:
             timeout = _number(value, "timeout", MAX_TIMEOUT)
         elif key == "mode":
             mode = _number(value, "mode", 2)
-        elif key == "lockstate":
+        elif key == "devinfo-repair":
             match value:
                 case "asneeded" | "never":
-                    lockstate = value
+                    devinfo_repair = value
                 case _:
-                    raise ConfigError(f"invalid lockstate: {value!r}")
+                    raise ConfigError(f"invalid devinfo-repair: {value!r}")
         elif key == "default":
             default = value
 
@@ -200,7 +200,7 @@ def read_config(path: Path) -> Config:
     if not entries:
         raise ConfigError("canoe.cfg has no usable entry")
     resolved_default = default if default in {entry.id for entry in entries} else None
-    return Config(tuple(entries), generation, timeout, resolved_default, mode, lockstate)
+    return Config(tuple(entries), generation, timeout, resolved_default, mode, devinfo_repair)
 
 
 def serialize_config(config: Config, *, generation: int | None = None) -> str:
@@ -211,7 +211,7 @@ def serialize_config(config: Config, *, generation: int | None = None) -> str:
     lines = ["version 1", f"generation {next_generation}", f"timeout {config.timeout}"]
     if config.default is not None:
         lines.append(f"default {config.default}")
-    lines.extend((f"mode {config.mode}", f"lockstate {config.lockstate}", ""))
+    lines.extend((f"mode {config.mode}", f"devinfo-repair {config.devinfo_repair}", ""))
     for entry in config.entries:
         lines.extend(
             (

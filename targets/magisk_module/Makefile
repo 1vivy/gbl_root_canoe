@@ -28,6 +28,7 @@ submodule_uefi: copy_resources
 		if [ ! -f build/ArbTools.efi ] || \
 		   [ ! -f build/BLTools.efi ] || [ ! -f build/RebootTools.efi ]; then make tools; fi
 	cp ../../submodules/uefi/build/BDS.efi ./build/module/BDS.efi
+	mkdir -p build/module/efisp/tools
 	cp ../../submodules/uefi/build/ArbTools.efi ./build/module/efisp/tools/ArbTools.efi
 	cp ../../submodules/uefi/build/BLTools.efi ./build/module/efisp/tools/BLTools.efi
 	cp ../../submodules/uefi/build/RebootTools.efi ./build/module/efisp/tools/RebootTools.efi
