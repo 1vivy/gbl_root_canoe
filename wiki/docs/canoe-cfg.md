@@ -70,7 +70,7 @@ end of line with trailing whitespace trimmed.
 They appear before the first `entry`. Indentation is cosmetic, so after an
 `entry` line every key belongs to that entry: `mode` there sets the entry's own
 mode, and a key that exists only at file scope — `timeout`, `default`,
-`generation`, `lockstate` — is counted as rejected rather than retro-applied.
+`generation`, `devinfo-repair` — is counted as rejected rather than retro-applied.
 
 | Key | Values | Default | Meaning |
 | --- | --- | --- | --- |
@@ -79,7 +79,7 @@ mode, and a key that exists only at file scope — `timeout`, `default`,
 | `timeout` | `0..60` | `5` | Seconds the menu waits before launching `default`. `0` launches at once. |
 | `default` | an entry id | none | The entry an unattended boot launches. |
 | `mode` | `0`, `1`, `2` | `1` | Fallback for entries that declare no `mode`. |
-| `lockstate` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo`. See below. |
+| `devinfo-repair` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo`. See below. |
 
 ## Entry blocks
 
@@ -133,13 +133,13 @@ every managed launch, in every mode.
 7.x gates it:
 
 - Mode 0 is a hook-free passthrough. Nothing is read, nothing is written.
-- `lockstate never` refuses the repair outright; a launch that needed it is
+- `devinfo-repair never` refuses the repair outright; a launch that needed it is
   reported and continues honestly in Mode 0.
-- `lockstate asneeded` repairs only when the observed state actually differs
+- `devinfo-repair asneeded` repairs only when the observed state actually differs
   from what the requested mode requires.
 
 Either way the **observed** state is recorded before any decision, as
-`SFB: MARK lockstate observed-unlocked=<0|1> observed-critical=<0|1>
+`SFB: MARK devinfo-repair observed-unlocked=<0|1> observed-critical=<0|1>
 required=<0|1> action=<none|repair|refused>`.
 
 ## Example
@@ -152,7 +152,7 @@ generation 4
 timeout 5
 default android-a
 mode 1
-lockstate asneeded
+devinfo-repair asneeded
 
 entry android-a
   title Android (slot A)

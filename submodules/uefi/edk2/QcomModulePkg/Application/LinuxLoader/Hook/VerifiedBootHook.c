@@ -147,7 +147,7 @@ SfbRepairDeviceInfo (IN BOOLEAN Required, IN SFB_CONFIG_LOCK_POLICY Policy)
     Status = EFI_SUCCESS;
   }
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK lockstate observed-unlocked=%u observed-critical=%u "
+          "SFB: MARK devinfo-repair observed-unlocked=%u observed-critical=%u "
           "required=%u action=%a\n",
           (UINT32)ObservedUnlocked, (UINT32)ObservedCritical,
           (UINT32)Required, Action));

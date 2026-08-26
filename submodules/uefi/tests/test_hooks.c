@@ -332,7 +332,7 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
   if (strstr(Format, "SFB: MARK efisp-hide status=") != NULL) {
     ++mEfispHideMarkerCount;
   }
-  if (strstr(Format, "SFB: MARK lockstate") != NULL) {
+  if (strstr(Format, "SFB: MARK devinfo-repair") != NULL) {
     va_list Args;
     UINT32 ObservedUnlocked;
     UINT32 ObservedCritical;

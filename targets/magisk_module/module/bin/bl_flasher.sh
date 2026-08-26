@@ -453,7 +453,7 @@ write_canoe_config() {
     printf 'timeout 5\n'
     printf 'default %s\n' "$config_active"
     printf 'mode %s\n' "$config_fallback"
-    printf 'lockstate asneeded\n\n'
+    printf 'devinfo-repair asneeded\n\n'
     if [ "$config_active" = android-a ]; then
       config_write_entry "$config_temp" android-a 'Android (slot A)' boot.efi \
         "$config_active_mode" active

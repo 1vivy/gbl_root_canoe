@@ -32,9 +32,9 @@ fastboot oem mass-storage:logfs       # logfs
 
 完整流程与 Windows 挂载步骤见 [USB Mass Storage 指南](../mass-storage.md)。
 
-## 模式选择与锁定状态
+## 模式选择与 DeviceInfo 修复
 
-Mode 1 或 Mode 2 启动只有在观测到的状态不满足请求模式时才会修复底层 `DeviceInfo`。`canoe.cfg` 中的 `lockstate never` 会拒绝修复；这次启动随后会如实以 Mode 0 继续。Mode 0 是无 hook 的直通模式，既不读取也不写入 `DeviceInfo`。观测到的状态始终会记录在启动日志中。
+Mode 1 或 Mode 2 启动只有在观测到的状态不满足请求模式时才会修复底层 `DeviceInfo`。`canoe.cfg` 中的 `devinfo-repair never` 会拒绝修复；这次启动随后会如实以 Mode 0 继续。Mode 0 是无 hook 的直通模式，既不读取也不写入 `DeviceInfo`。观测到的状态始终会记录在启动日志中。
 
 
 ## BL 相关

@@ -32,11 +32,11 @@ fastboot oem mass-storage:logfs       # logfs
 
 See the [USB Mass Storage guide](./mass-storage.md) for the full procedure and Windows mount step.
 
-## Mode selection and lock state
+## Mode selection and DeviceInfo repair
 
 The menu's mode row is a **session override**. It applies to the next launch and is never written anywhere. An entry with its own configured mode ignores the row because its `.gm2p`/`.tzmap` sidecars are bound to that exact policy. The persisted fallback is the file-global `mode` in [`canoe.cfg`](./canoe-cfg.md).
 
-A Mode 1 or Mode 2 launch repairs the backing `DeviceInfo` only when the observed state does not already satisfy the requested mode. `lockstate never` in `canoe.cfg` refuses that repair; the launch then continues honestly in Mode 0. Mode 0 is a hook-free passthrough that neither reads nor writes `DeviceInfo`. The observed state is always recorded in the boot log.
+A Mode 1 or Mode 2 launch repairs the backing `DeviceInfo` only when the observed state does not already satisfy the requested mode. `devinfo-repair never` in `canoe.cfg` refuses that repair; the launch then continues honestly in Mode 0. Mode 0 is a hook-free passthrough that neither reads nor writes `DeviceInfo`. The observed state is always recorded in the boot log.
 
 ## Bootloader (BL) Related
 

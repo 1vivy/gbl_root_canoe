@@ -57,8 +57,7 @@ setup() {
     printf 'OLD-BACKUP-EFI' > "$D/boot_backup.efi"
     dd if=/dev/zero bs=1 count=120 2>/dev/null | tr '\0' 'B' > "$D/boot_backup.efi.gm2p"
     dd if=/dev/zero bs=1 count=256 2>/dev/null | tr '\0' 'B' > "$D/boot_backup.efi.tzmap"
-    printf 'Android:boot.efi\nOLD-MENU\n' > "$D/BOOTENTRIES"
-    printf 'version 1\ngeneration 9\ndefault android-a\nmode 1\nlockstate asneeded\n\nentry android-a\n  title Old A\n  image boot.efi\n  mode 1\n  role active\n\nentry android-backup\n  title Old backup\n  image boot_backup.efi\n  mode 1\n  role backup\n' > "$D/canoe.cfg"
+    printf 'version 1\ngeneration 9\ndefault android-a\nmode 1\ndevinfo-repair asneeded\n\nentry android-a\n  title Old A\n  image boot.efi\n  mode 1\n  role active\n\nentry android-backup\n  title Old backup\n  image boot_backup.efi\n  mode 1\n  role backup\n' > "$D/canoe.cfg"
     printf 'OLD-BLTOOLS' > "$D/tools/BLTools.efi"
   fi
   { printf 'MZOLDBDS'; dd if=/dev/zero bs=1024 count=2048 2>/dev/null; } > "$DEV"

@@ -123,7 +123,7 @@ TestKeyScopingAfterTheFirstEntry (void)
   assert (Parse ("version 1\nentry a\n  image boot.efi\ndefault a\n"));
   assert (gConfig.DefaultIndex == SFB_CONFIG_NO_DEFAULT);
   assert (gConfig.RejectedLines == 1);
-  assert (Parse ("version 1\nentry a\n  image boot.efi\nlockstate never\n"));
+  assert (Parse ("version 1\nentry a\n  image boot.efi\ndevinfo-repair never\n"));
   assert (gConfig.LockPolicy == SfbConfigLockAsNeeded);
   assert (gConfig.RejectedLines == 1);
 }
@@ -293,9 +293,9 @@ TestScalarBoundsAndGarbage (void)
   assert (Parse ("version 1\ngeneration 0x10\nentry a\n  image boot.efi\n"));
   assert (gConfig.RejectedLines == 1);
 
-  assert (Parse ("version 1\nlockstate never\nentry a\n  image boot.efi\n"));
+  assert (Parse ("version 1\ndevinfo-repair never\nentry a\n  image boot.efi\n"));
   assert (gConfig.LockPolicy == SfbConfigLockNever);
-  assert (Parse ("version 1\nlockstate maybe\nentry a\n  image boot.efi\n"));
+  assert (Parse ("version 1\ndevinfo-repair maybe\nentry a\n  image boot.efi\n"));
   assert (gConfig.LockPolicy == SfbConfigLockAsNeeded);
   assert (gConfig.RejectedLines == 1);
 }

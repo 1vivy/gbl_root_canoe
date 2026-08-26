@@ -49,7 +49,8 @@ typedef enum {
 typedef enum {
   /* Repair the backing DeviceInfo only when the requested mode needs it. */
   SfbConfigLockAsNeeded = 0,
-  /* Never touch it; a launch that needed the repair falls back to Mode 0. */
+  /* Never authorize a DeviceInfo repair; a launch that needed it falls back
+   * to Mode 0. */
   SfbConfigLockNever
 } SFB_CONFIG_LOCK_POLICY;
 

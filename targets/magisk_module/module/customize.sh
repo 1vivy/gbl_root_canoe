@@ -564,7 +564,7 @@ write_canoe_config() {
     printf 'timeout 5\n'
     printf 'default %s\n' "$active_id"
     printf 'mode %s\n' "$fallback"
-    printf 'lockstate asneeded\n\n'
+    printf 'devinfo-repair asneeded\n\n'
     write_config_entry "$active_id" "$active_title" boot.efi "$active_mode" active "$temp"
     if [ -f "$config_output_dir/boot_backup.efi" ]; then
       backup_mode=$(config_entry_mode "$config_output" android-backup "$fallback")
