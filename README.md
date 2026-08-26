@@ -2,12 +2,45 @@
 
 [中文版](README_zh.md)
 
-> ⚠️ **This project has been archived.** This is the final version — the patching engine is stable across multiple vendors and ABL versions, the core logic no longer changes, and active maintenance has ended. The code still works; forks are welcome. See [ARCHIVE.md](ARCHIVE.md) for details.
+`gbl_root_canoe` is an EDK2-based workspace for patching the EFI applications inside Qualcomm ABL (Android Bootloader) images. Its purpose is a **Fake Locked Bootloader** state on Snapdragon 8 Gen 5 / 8 Elite (Gen 5) devices: the bootloader is really unlocked, but everything that asks reports locked, so bootloader-unlock detection passes.
 
-`gbl_root_canoe` is an EDK2-based workspace for patching the EFI applications within Qualcomm ABL (Android Bootloader) images. It leverages a GBL (Generic Bootloader Loader) vulnerability so the real ABL loads an embedded **superfastboot BDS** off the raw `efisp` partition. The BDS then scans a compatible partition (ext4/fat32) for boot entries and chains to the selected one - primarily to achieve a **Fake Locked Bootloader** state on Snapdragon 8 Gen 5 / 8 Elite (Gen 5) devices to bypass bootloader unlock detection.
+> **Status:** active again. This tree was archived at 6.x; [ARCHIVE.md](ARCHIVE.md) is kept for that history. The current milestone is **7.0.0-b1**, which is a redesign rather than a bug-fix release — see [What changed in 7.x](#what-changed-in-7x).
 
-`BDS.efi` is written raw to the `efisp` partition; the patched ABL/profile/map set (`boot.efi`, `boot.efi.gm2p`, and `boot.efi.tzmap`) and the boot entry list (`BOOTENTRIES`) live on the `persist` partition under its `efisp/` directory.
-`boot.efi.gm2p` is the 120-byte KeyMint profile derived from the matching stock vbmeta; `boot.efi.tzmap` is the 256-byte `GTZM` ABL-derived TrustZone interface map derived from the **unpatched ABL**. The `.tzmap` is generated locally by the build scripts or installer, not shipped inside the archive, and is stored beside the launched image at `/mnt/vendor/persist/efisp/boot.efi.tzmap`.
+### How the boot chain works
+
+Three partitions matter, and the names are not arbitrary — each one is a step in the chain:
+
+```mermaid
+graph LR
+  A["<b>abl</b><br/>vulnerable ABL<br/><i>signed, stock, older</i>"]
+  B["<b>efisp</b><br/>BDS.efi<br/><i>raw, unsigned</i>"]
+  C["<b>persist</b> /efisp/<br/>boot.efi<br/><i>patched ABL</i>"]
+  D["Android"]
+  A -->|"GBL flaw: loads<br/>efisp as an EFI image"| B
+  B -->|"reads canoe.cfg,<br/>chainloads the entry"| C
+  C -->|"AVB forced to pass,<br/>lock state projected"| D
+```
+
+1. **`abl`** holds a *signed, stock, deliberately older* ABL. It is genuine vendor code, so the boot ROM accepts it. Its one interesting property is a GBL (Generic Bootloader Loader) flaw that makes it load the raw `efisp` partition as an EFI image without verifying it. That flaw is the only foothold in the whole design; nothing here defeats a signature.
+2. **`efisp`** is the EFI System Partition. It is not formatted — `BDS.efi` is written to it raw, and the vulnerable ABL executes it. This is our code, and the only thing on that partition.
+3. **`persist`** is an ordinary ext4 partition that survives a factory reset. Its `efisp/` subdirectory is the **boot root**: `canoe.cfg`, the patched ABL `boot.efi`, and that ABL's two sidecars. `BDS.efi` reads the config, renders a menu, and chainloads the chosen `boot.efi`, which then boots Android with AVB forced to pass and the lock state projected.
+
+The reason the patched ABL lives on `persist` rather than in `abl` is that `abl` must keep its real vendor signature to be loaded at all. So the signed-but-old ABL stays where the boot ROM looks, and the patched-but-current one is chainloaded from a data partition where nothing checks it.
+
+Two sidecars sit beside `boot.efi`, both derived per-image and both matched to it: `boot.efi.gm2p` is a 120-byte KeyMint profile derived from the matching stock `vbmeta`, and `boot.efi.tzmap` is a 256-byte `GTZM` TrustZone interface map derived from the **unpatched** ABL. Both are generated locally at install time and are not shipped in the archives.
+
+### What changed in 7.x
+
+**The BDS no longer writes to storage.** 6.x kept three 1 KiB records in the tail of the raw `efisp` partition — preferred mode, default entry, custom entry — and the boot menu wrote them. Two things were wrong with that. A `dd` of a new `BDS.efi` writes only the image length, so a stale record outlived the loader that wrote it and a mode chosen under one build silently applied under the next. And it made the bootloader a writer, on a device that is one failed boot away from EDL.
+
+7.x replaces all three with one declarative file, [`canoe.cfg`](wiki/docs/canoe-cfg.md), on the boot root. The BDS reads it and renders it. Everything that authors state is one of exactly two processes — the host tool over ADB, or the on-device module as root — both of which have real read-write access to `persist`, which the BDS's read-only ext4 driver never did.
+
+Consequences worth knowing:
+
+- **Boot policy is per boot entry**, not one global switch. The `.gm2p` and `.tzmap` sidecars were always per-image; a global mode made a mismatch representable, and per-entry does not.
+- **The backup entry is an ordinary third row**, alongside the two A/B slots, distinguished by `role backup`. The BDS derives no slot state of its own — whoever wrote the config already knew which slot was live.
+- **The `efisp` partition is untouched by the loader** and holds nothing but `BDS.efi`.
+- **First run is detected**, not guessed: an empty boot root sends the device straight to Super Fastboot, which is the only channel that can install anything.
 
 ---
 
@@ -16,30 +49,65 @@
 This section is for developers who want to compile the toolkits from source.
 
 ### Prerequisites
+
 You must be on a **Linux** host to build the project:
 - `gcc` / `clang`, `lld`, `make`, `zip`, `python3`
 - `pytest` — development dependency for the host-tool test suite (`make test`)
 - Rust toolchain (`cargo`/`rustup`) for the native and cross-compilation targets
 - `liblzma-dev` (for compiling `extractfv`)
-- **Android NDK** (Required for `make target_magisk_module` to cross-compile tools for Android)
+- **Android NDK** (required for `make target_magisk_module` to cross-compile tools for Android)
 - **MinGW-w64**
 
 ### Host tools
 
-The PC-side tools are one Python implementation shared by both toolkits, kept in
-`tools/canoe-host/` and shipped inside each archive as `canoe/`. They previously existed twice,
-once in bash and once in `cmd.exe` batch, and the Windows copy kept breaking on batch *parsing*
-rather than on installation logic.
+The PC-side implementation is the `canoelib/` Python package. The same package is copied into both toolkit archives. Linux needs Python 3.11+; Windows needs no separate Python installation because its archive includes an embeddable CPython under `python/`.
 
-Running them needs Python 3.11+ on a Linux host. Windows users install nothing: the Windows
-archive bundles an embeddable CPython under `python/`.
+The intended human workflow is the interactive wizard:
+
+```text
+Linux:   ./canoe
+Windows: canoe.cmd
+```
+
+The wizard asks, in order:
+
+1. whether this is the first install or an update;
+2. which boot mode to use;
+3. in Mode 1, whether to proceed after warning that a custom recovery must be grafted with the vbmeta tool, flashed, and then returned to;
+4. in Mode 1, whether to patch `vendor_boot`;
+5. for the matching stock `abl.img` and `vbmeta.img`, which must match the firmware being booted and must be stock, while watching `images/` until both are present if it starts empty;
+6. whether to generate a boot entry; and
+7. a readable result.
+
+For scriptable and CI use, the same entry point exposes these subcommands. On Windows, use `canoe.cmd` in place of `canoe`:
+
+```text
+canoe                              interactive wizard (default, no arguments)
+canoe build                        derive the ABL/profile/map artifacts
+canoe prep [--pkg ...]             prepare a firmware package
+canoe prep-device [--slot ...]     pull a device pair and derive artifacts
+canoe install [--skip-bds ...]     install the boot root over ADB
+canoe oneshot --abl <img> --mode 0|1
+                                   temporary, non-interactive boot
+```
+
+The old options remain available under their new verb: translate an old invocation by prefixing its verb. The host implementation is shared; the archive's `README.canoe.md` contains its platform-specific packaging notes.
+
+The one-shot command is the non-interactive path for a locked bootloader when the stock image is already known:
+
+```bash
+canoe oneshot --abl <img> --mode 0
+# or --mode 1
+```
+
+The supplied image is expected to be stock and already known to match the device. One-shot obtains root for that launch only and writes nothing permanent.
 
 ### Build Targets
 
 **Note:** You **do not** need to provide an `abl.img` to build the distributable toolkits or module.
 
 - **`make target_toolkit_linux`**
-  Builds the superfastboot BDS (`BDS.efi`) from the `uefi` submodule and compiles the toolkit utilities (`extractfv`, `patch_abl`, `mode2_profile`, `abl_tzmap`) for Linux. `abl_tzmap` derives and validates the local 256-byte `boot.efi.tzmap` from the unpatched ABL.
+  Builds the superfastboot BDS (`BDS.efi`) from the `uefi` submodule and compiles the toolkit utilities (`extractfv`, `patch_abl`, `mode2_profile`, `abl_tzmap`) for Linux. `mode2_profile` exposes only `derive` and `validate` for the matching profile; `abl_tzmap` derives and validates the local 256-byte `boot.efi.tzmap` from the unpatched ABL.
 
 - **`make target_toolkit_windows`**
   Same as above, but cross-compiles the utilities (`extractfv.exe`, `patch_abl.exe`, `mode2_profile.exe`, `abl_tzmap.exe`) into Windows `.exe` programs using MinGW-w64.
@@ -64,55 +132,82 @@ The module is designed to run directly on your rooted Android device.
 - Device must be Snapdragon 8 Gen 5 / 8 Elite (Gen 5).
 - Bootloader must be unlocked.
 - Kernel must permit writes to `abl` and `efisp`. Baseband Guard blocks them; a kernel that allows them (WildKernel reportedly does now) works. If writes are refused, switch to LKM or stock boot images.
-- The ABL on the `abl` partition must contain the GBL vulnerability. If it does not, flash an older ABL with the vulnerability first; `boot.efi` and its matching `boot.efi.gm2p` profile still describe the current stock ABL/vbmeta pair, while the optional `boot.efi.tzmap` describes the unpatched ABL used to produce `boot.efi`; neither needs to match the downgraded `abl` partition.
+- The ABL on the `abl` partition must contain the GBL vulnerability. If it does not, flash an older ABL with the vulnerability first; the generated `boot.efi` and its sidecars must still be a matching stock firmware set.
 
 **Installation & Usage:**
-When flashing the module via a root manager (KernelSU, Magisk, or APatch), the script interacts with you using the volume keys:
-- **Volume Up (First-time installation):** The script extracts and patches the current-slot ABL, derives `boot.efi.gm2p` from the matching current-slot vbmeta, generates the local `boot.efi.tzmap` from the unpatched ABL, installs the validated pair plus map, `BOOTENTRIES` and tools under `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`. The `.tzmap` is generated locally and is not shipped inside the module archive. After this, reboot into Recovery and **format Data**. Once booted, install this module again (Volume Down the second time) to complete the installation.
-- **Volume Down (post-format or module-only install):** Skips boot-chain writes and completes module/WebUI installation. After each OTA, open the WebUI and flash again to retain the BL version; the WebUI writes the retained BL to the **inactive** slot and is also where the preferred mode (0/1/2) is selected. The host toolkits set the same record at install time with `canoe_stage --mode`.
+The device-side module's first-install flow asks, in order: whether this is the first installation, which mode to use, whether to proceed after the Mode 1 custom-recovery graft warning, and (in Mode 1) whether to patch `vendor_boot`. It then shows a readable result and automatically reboots to Recovery after a countdown so you can format data. A later install is a plain install with no questions.
+
+The module's OTA watcher runs in the background. When an OTA changes the ABL on the inactive slot, it detects the real change, re-derives that slot's pair, and adds a new entry to `canoe.cfg` with the correct role. It leaves the entry that currently boots in place; the previously working entry is never removed. You do not need to reopen the WebUI and flash again after every OTA. The WebUI mode selector remains available: it rewrites the named `canoe.cfg` entry rather than a partition record.
 
 ### 2. Using the PC Toolkits (Linux / Windows)
 
-If you downloaded the `target_toolkit_linux` or `target_toolkit_windows` zip files:
-1. Extract the toolkit zip on your PC.
-2. Place the matching stock `abl.img` and `vbmeta.img` inside the toolkit's `images/` directory.
-3. **Linux:** Run `./canoe_build`. **Windows:** Run `canoe_build.cmd`.
-4. The script extracts and patches the ABL, outputting `efisp/boot.efi`, its matching 120-byte `efisp/boot.efi.gm2p` profile derived from the matching stock vbmeta, and the local 256-byte `efisp/boot.efi.tzmap` map derived from the **unpatched ABL**, plus `ABL_original.efi` (original). The `.tzmap` is not shipped inside the toolkit archive. `BDS.efi` is bundled. Check `patch_log.txt` - if it says "Warning: Failed to patch ABL GBL", the ABL lacks the vulnerability and the `abl` partition must be downgraded to an older ABL with it.
+The wizard is the recommended human path. Unpack `target_toolkit_linux` or `target_toolkit_windows`, then run `./canoe` on Linux or `canoe.cmd` on Windows and follow its prompts. Put the matching **stock** `abl.img` and `vbmeta.img` in `images/`; the wizard says what is missing and waits there until the pair is populated.
 
-Both toolkits then install over ADB from a custom recovery, where `persist` is writable and no root on the running system is needed. Linux uses extensionless Python launchers (`canoe_build`, `canoe_prep`, `canoe_prep_device`, `canoe_stage`); Windows uses the matching `.cmd` wrappers (`canoe_build.cmd`, `canoe_prep.cmd`, `canoe_prep_device.cmd`, `canoe_stage.cmd`) around the bundled interpreter. Options and behaviour are identical. Two independent pathways, documented in `README.canoe.md` inside the archive and in the [Wiki](https://github.com/1vivy/gbl_root_canoe/wiki):
+For repeatable scripts, the same archive provides the subcommands below. The two install pathways remain independent:
 
-- **Standalone** - needs only a custom recovery with ADB. `canoe_prep_device` pulls the `abl`/`vbmeta` pair off the device and derives the triplet; `canoe_stage` installs the persist tree and writes the BDS. No firmware package and no vbmeta graft are involved. If the `abl` partition is not already a GBL-vulnerable version, flash one yourself with `fastboot flash abl <vulnerable>.img`. The pair is pulled from the active slot by default; pass `--slot inactive` to source from the slot that is not currently booted, e.g. the one an `adb sideload` has just written during a custom-ROM install.
-- **With a firmware package** (Super Flasher / RegionalHybrid, which may ship its own shell or batch flasher) - `canoe_prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place` grafts the package's official recovery vbmeta onto your custom recovery and substitutes the prepared images into the package, keeping `.canoe-orig` backups. The package's own flasher then runs unmodified, after which `canoe_stage` completes the install.
+- **Standalone custom recovery + ADB:** run `canoe prep-device` (pass `--slot inactive` when the other slot is the one just written by `adb sideload`), then boot custom recovery with ADB and run `canoe install`. If the `abl` partition does not already contain a GBL-vulnerable ABL, flash an older vulnerable one with `fastboot flash abl <vulnerable>.img`. The derived `boot.efi` and sidecars must come from one matching stock ABL/vbmeta pair.
+- **With a firmware package** (Super Flasher / RegionalHybrid): run `canoe prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place`, run the package's own flasher unchanged, then boot custom recovery and run `canoe install`. The preparation grafts the package's official recovery vbmeta onto the custom recovery and keeps `.canoe-orig` backups.
 
-`canoe_stage` is a thin driver: it validates and stages, then hands the transaction to `canoe_device_install.sh` running on the device. That script remains shell because it executes in recovery/on Android, where Python is not guaranteed; both host platforms therefore share one implementation of the rollback. Everything the commit overwrites is snapshotted first - the live triplet, the previous backup, `BOOTENTRIES` and `tools/` - the previous generation is demoted to `boot_backup.efi` (selectable from the BDS menu), the persist tree is synced before the BDS is written, the BDS write is backed up and verified byte-for-byte, and any failure rolls the whole set back. It never touches the `abl` partition, and writes the preferred-mode record only when `--mode 0|1|2` is passed (an on-device, reread-verified `mode2_profile mode-write` via the shipped `bin/mode2_profile-arm64`…
+`canoe install` validates and stages the complete set, then hands the transaction to `canoe_device_install.sh` on the device. The transaction snapshots the live set and prior backup, keeps the previous generation as the selectable backup entry, syncs the persist tree before writing the BDS, verifies the BDS write byte-for-byte, and rolls the set back if a commit fails. It never writes the `abl` partition. It writes the declared boot policy to `canoe.cfg`; see the normative [canoe.cfg format](wiki/docs/canoe-cfg.md) instead of editing a second copy of that specification.
 
-**Manual flow** (either platform, see the [Wiki](https://github.com/1vivy/gbl_root_canoe/wiki) for full steps): copy the `efisp/` tree, including `boot.efi`, `boot.efi.gm2p`, `boot.efi.tzmap`, and `BOOTENTRIES`, into the persist boot root (`/mnt/vendor/persist/efisp/` from a booted system, `/persist/efisp/` from recovery), `sync`, and flash `BDS.efi` to `efisp` (`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`).
+**Manual flow** (either platform): run `canoe build` with matching stock images, then copy the generated `efisp/` tree plus a `canoe.cfg` into the boot root (`/mnt/vendor/persist/efisp/` from a booted system, `/persist/efisp/` from recovery), `sync`, and flash `BDS.efi` to `efisp` (`dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M`). Use the [canoe.cfg format](wiki/docs/canoe-cfg.md) for the config's entries and roles.
+
+### Windows ext4 access
+
+The Windows archive bundles `platform-tools`. Its ext4 read/write path uses **WinFsp plus LKL `lklfuse`**. Those components are fetched and SHA-256-verified on first use; they are not vendored in this repository. This is the path for mounting `persist` after the BDS exports it over USB Mass Storage and editing the boot root directly when ADB is unavailable.
 
 ### 3. OTA Upgrade
-Before rebooting for an OTA update, use the module WebUI to flash and retain the old ABL version. "Update efisp" is enabled by default; for a major version upgrade keep it on, otherwise the device may get stuck on the first boot screen.
+
+After an OTA, the module's background watcher notices a changed ABL on the inactive slot, verifies the change against the digest recorded at install, re-derives the pair for that slot, and adds it to `canoe.cfg` with the right role. It leaves the currently booting entry in place and never removes the previously working entry. There is no manual WebUI reflash step to remember after each OTA. If you want to change the mode of an entry, use the WebUI mode selector; it names the entry it rewrites.
 
 ### 4. Superfastboot Usage Instructions
+
 When OEM Unlocking is enabled and the white warning text appears on boot, press **Volume Up** to enter Superfastboot mode (the BDS).
+
+On first run, if the boot root has neither `canoe.cfg` nor `boot.efi`, the BDS shows a first-run screen and goes straight to Super Fastboot. There is nothing to boot; fastboot is the only channel that can install anything.
+
+The boot menu includes **Reboot to Recovery** and **USB Mass Storage**. USB Mass Storage exports one partition at a time as a normal USB disk:
+
+- `persist` contains the boot root at `/efisp`; it is the repair channel when a device has no working ADB. The BDS warns before exporting it because it is a live filesystem.
+- `logfs` is offered only when that partition exists and is useful for pulling boot logs from a device that will not boot.
+- Only one partition (one USB LUN) can be exported per session. **Volume Down** ends the session.
+
+The same feature is reachable from fastboot:
+
+```bash
+fastboot oem mass-storage             # persist (the default)
+fastboot oem mass-storage:persist     # persist
+fastboot oem mass-storage:logfs       # logfs
+```
+
+The menu's mode row is a **session override**. It applies to the next launch and is never written anywhere. An entry with its own configured mode ignores that row because its `.gm2p`/`.tzmap` sidecars are bound to that exact policy. The persisted fallback policy is the file-global `mode` in [`canoe.cfg`](wiki/docs/canoe-cfg.md).
+
+For lock state, a Mode 1 or Mode 2 launch repairs the backing `DeviceInfo` only when the observed state does not already satisfy the requested mode. `lockstate never` in `canoe.cfg` refuses that repair; the launch then continues honestly in Mode 0. Mode 0 is hook-free passthrough and neither reads nor writes `DeviceInfo`. The observed state is always recorded in the boot log.
+
+See the [USB Mass Storage guide](wiki/docs/mass-storage.md) for the complete export and Windows mount procedure.
+
 Common commands include:
 - **Temp-boot BDS in RAM (nothing is written to flash):**
   ```bash
   fastboot stage <BDS.efi>
   fastboot oem boot-efi
   ```
-- **Lock and Unlock (BL related)**:
+- **Lock and Unlock (BL related):**
   - Lock BL, triggers a data wipe: `fastboot flashing lock`
   - Unlock BL, no data wipe: `fastboot flashing unlock` or `fastboot flashing unlock_critical`
   - *Note: If the TEE status is inconsistent, the device will refuse to provide the data key, rendering data inaccessible.*
-- **Flashing and Erasing**:
+- **Flashing and Erasing:**
   - `fastboot flash <partition> <file.img>`
   - `fastboot erase <partition>`
-- **Rebooting**:
-  - `fastboot reboot bootloader` (Next normal boot enters Official Fastboot)
+- **Rebooting:**
+  - `fastboot reboot bootloader` (next normal boot enters Official Fastboot)
   - `fastboot reboot recovery`
   - `fastboot reboot`
 
 ### 5. File Reference
+
 1. `BDS.efi`: The superfastboot BDS, flashed raw to the `efisp` partition.
-2. `boot.efi` / `boot.efi.gm2p` / `boot.efi.tzmap`: The patched ABL, its matching 120-byte locked/green KeyMint profile from stock vbmeta, and the 256-byte TrustZone map from the unpatched ABL, placed on `persist` under `efisp/`; the map is generated locally and is not shipped in the archive.
-3. `LinuxLoader.efi` / `ABL_original.efi`: The original unpatched ABL. For analysis; do not flash to `efisp`.
-4. `BOOTENTRIES`: Boot entry list, format `<name>:<path relative to efisp/>`.
+2. `canoe.cfg`: The declarative boot-root configuration, including the file-global fallback mode and the per-entry modes and roles. Its format is specified in [`wiki/docs/canoe-cfg.md`](wiki/docs/canoe-cfg.md).
+3. `boot.efi` / `boot.efi.gm2p` / `boot.efi.tzmap`: The patched ABL, its matching 120-byte locked/green KeyMint profile from stock vbmeta, and the 256-byte TrustZone map from the unpatched ABL, placed on `persist` under `efisp/`; the map is generated locally and is not shipped in the archive.
+4. `ABL_original.efi`: The original unpatched ABL extracted for analysis; do not flash it to `efisp`.
+5. `BOOTENTRIES`: Boot entry list used by the tools submenu.
