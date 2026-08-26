@@ -407,15 +407,12 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
                      L"Session mode: %s (configured entry modes unaffected)",
                      SfbBootModeLabel (Menu->Mode));
       SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
-    } else if (Entry->Kind == SfbEntrySubmenu) {
-      CHAR16 Text[SFB_DESC_CHARS + 4];
-
-      UnicodeSPrint (Text, sizeof (Text), L"%s >", Entry->Desc);
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
-    } else if (Entry->Role != SfbConfigRoleOther) {
+    } else if (Entry->Role != SfbConfigRoleOther || Entry->Passthrough) {
       CONST CHAR8 *AsciiSuffix = SfbConfigRoleSuffix (Entry->Role);
       CHAR16 Suffix[16];
-      CHAR16 Text[SFB_DESC_CHARS + ARRAY_SIZE (Suffix)];
+      CHAR16 Passthrough[16];
+      CHAR16 Text[SFB_DESC_CHARS + ARRAY_SIZE (Suffix) +
+                  ARRAY_SIZE (Passthrough)];
       UINTN SuffixIndex;
 
       for (SuffixIndex = 0;
@@ -424,7 +421,13 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
         Suffix[SuffixIndex] = (CHAR16)(UINT8)AsciiSuffix[SuffixIndex];
       }
       Suffix[SuffixIndex] = L'\0';
-      UnicodeSPrint (Text, sizeof (Text), L"%s%s", Entry->Desc, Suffix);
+      /* An unmanaged image is launched with nothing wrapped around it, so a
+       * `mode` written against it changes nothing. Say that on the row rather
+       * than letting the user infer a policy that was never applied. */
+      StrCpyS (Passthrough, ARRAY_SIZE (Passthrough),
+               Entry->Passthrough ? L" (passthrough)" : L"");
+      UnicodeSPrint (Text, sizeof (Text), L"%s%s%s", Entry->Desc, Suffix,
+                     Passthrough);
       SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
     } else {
       SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Entry->Desc);

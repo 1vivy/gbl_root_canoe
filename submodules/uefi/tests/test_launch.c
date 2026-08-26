@@ -761,6 +761,124 @@ TestLaunchModePrecedence(void)
   assert(mLastPreparePolicy == SfbConfigLockAsNeeded);
 }
 
+/*
+ * `devinfo-repair never` withholds permission for the DeviceInfo repair that
+ * Mode 1 and Mode 2 depend on. Before this behaviour existed every managed
+ * entry then failed to launch at all, which turned a refusal to write two
+ * bytes into a device that would not boot. The refusal must demote to the
+ * honest launch it already documents, and must say so.
+ */
+static void
+TestLockRefusalDemotes(void)
+{
+  SFB_BOOT_ENTRY Entry;
+
+  memset (&Entry, 0, sizeof (Entry));
+  Entry.Kind = SfbEntryEfiFile;
+  Entry.Volume = mVolume;
+  Entry.DevicePath = &mDevicePath;
+  StrnCpyS (Entry.Path, SFB_PATH_CHARS, L"\\boot.efi", SFB_PATH_CHARS - 1);
+  StrnCpyS (Entry.Desc, SFB_DESC_CHARS, L"configured", SFB_DESC_CHARS - 1);
+  Entry.ModeFromConfig = TRUE;
+  Entry.Mode = SfbBootModeAblFakeLocked;
+
+  ResetLaunchBackend ();
+  SfbSetLaunchLockPolicy (SfbConfigLockNever);
+  mPrepareDenyFirst = TRUE;
+
+  assert(SfbLaunchEntry (&Entry, FALSE, SfbBootModeHonestUnlocked) ==
+         EFI_SUCCESS);
+  assert(mPrepareCount == 2);
+  assert(mLastPrepareMode == SfbBootModeHonestUnlocked);
+  assert(mLastPrepareProfile == NULL);
+  assert(mLastPreparePolicy == SfbConfigLockNever);
+  assert(mDemotedMarkerCount == 1);
+  assert(mLoadCount == 1 && mStartCount == 1);
+  assert(mImageLoadedMarkerCount == 1);
+
+  /* Every other preflight failure is a fault rather than a policy, so it must
+   * still abort instead of quietly booting under a mode nobody asked for. */
+  ResetLaunchBackend ();
+  SfbSetLaunchLockPolicy (SfbConfigLockNever);
+  mPrepareStatus = EFI_DEVICE_ERROR;
+  assert(SfbLaunchEntry (&Entry, FALSE, SfbBootModeHonestUnlocked) ==
+         EFI_DEVICE_ERROR);
+  assert(mPrepareCount == 1);
+  assert(mDemotedMarkerCount == 0);
+  assert(mLoadCount == 0);
+}
+
+/*
+ * A `mode` written against an image the loader never wraps decides nothing.
+ * The entry must launch unmanaged whatever it declares, arm nothing at all,
+ * and be marked so the menu can say the declaration does not apply.
+ */
+static void
+TestUnmanagedPassthrough(void)
+{
+  static const CHAR8 ConfigText[] =
+    "version 1\n"
+    "default myown\n"
+    "mode 0\n"
+    "entry myown\n"
+    "title My own loader\n"
+    "image myown.efi\n"
+    "mode 2\n";
+  SFB_MENU_STATE Menu;
+  UINTN Index;
+  UINTN Found = SFB_NO_INDEX;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfigText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootConfigPresent = TRUE;
+
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
+      Found = Index;
+      break;
+    }
+  }
+  assert(Found != SFB_NO_INDEX);
+  assert(Menu.Entry[Found].Passthrough);
+  assert(Menu.Entry[Found].Mode == SfbBootModeKmProfile);
+  assert(Menu.Entry[Found].ModeFromConfig);
+  assert(!SfbIsManagedAblEntry (&Menu.Entry[Found]));
+
+  /*
+   * Disarm the config fixture before launching. The harness answers every file
+   * read from one buffer, so leaving it armed would hand the config back as a
+   * DRIVER.LIST sitting beside the entry and load each of its lines.
+   */
+  ResetLaunchBackend ();
+
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeHonestUnlocked) == EFI_SUCCESS);
+  assert(mPrepareCount == 0);
+  assert(!mPolicyActive);
+  assert(mLoadCount == 1 && mStartCount == 1);
+
+  /* The managed loader in the same position is not passthrough: the field has
+   * to track the path, not merely be true for everything. */
+  SfbFreeMenu (&Menu);
+  {
+    SFB_BOOT_ENTRY Managed;
+
+    assert(SfbMakeFileEntry (mVolume, SFB_MANAGED_BOOT_NAME, L"Android",
+                             &Managed) == EFI_SUCCESS);
+    assert(!Managed.Passthrough);
+    SfbFreeEntry (&Managed);
+  }
+
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
 static void
 TestBootRootEmpty(void)
 {

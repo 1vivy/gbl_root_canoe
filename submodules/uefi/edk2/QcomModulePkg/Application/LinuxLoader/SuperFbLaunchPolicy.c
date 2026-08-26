@@ -240,6 +240,25 @@ SfbResolveManagedAblMode (
   return EFI_SUCCESS;
 }
 
+/*
+ * How a launch names the policy it ran under. An unmanaged image is loaded
+ * with nothing wrapped around it, so it has no mode at all; printing a number
+ * there invites the reader of a log to believe a policy was applied when none
+ * was, which is exactly the confusion a `mode` written against an unmanaged
+ * image already causes in the config.
+ */
+STATIC
+CONST CHAR8 *
+SfbLaunchModeText (IN BOOLEAN Managed, IN SFB_BOOT_MODE Mode)
+{
+  STATIC CONST CHAR8 *CONST Modes[] = { "0", "1", "2" };
+
+  if (!Managed) {
+    return "passthrough";
+  }
+  return (Mode <= SfbBootModeKmProfile) ? Modes[Mode] : "?";
+}
+
 EFI_STATUS
 SfbLaunchImage (
   IN EFI_DEVICE_PATH_PROTOCOL *DevicePath,
@@ -302,22 +321,22 @@ SfbLaunchImage (
   SfbRestoreSecurity ();
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR,
-            "SFB: MARK image-load managed=%u mode=%u status=%r\n",
-            (UINT32)Managed, (UINT32)EffectiveMode, Status));
+            "SFB: MARK image-load managed=%u mode=%a status=%r\n",
+            (UINT32)Managed, SfbLaunchModeText (Managed, LaunchMode), Status));
     SfbDisarmManagedAblHooks ();
     return Status;
   }
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK image-loaded managed=%u mode=%u\n",
-          (UINT32)Managed, (UINT32)EffectiveMode));
+          "SFB: MARK image-loaded managed=%u mode=%a\n",
+          (UINT32)Managed, SfbLaunchModeText (Managed, LaunchMode)));
 
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK image-start managed=%u mode=%u\n",
-          (UINT32)Managed, (UINT32)EffectiveMode));
+          "SFB: MARK image-start managed=%u mode=%a\n",
+          (UINT32)Managed, SfbLaunchModeText (Managed, LaunchMode)));
   Status = gBS->StartImage (ImageHandle, &ExitDataSize, &ExitData);
   DEBUG ((EFI_D_WARN,
-          "SFB: MARK image-return managed=%u mode=%u status=%r\n",
-          (UINT32)Managed, (UINT32)EffectiveMode, Status));
+          "SFB: MARK image-return managed=%u mode=%a status=%r\n",
+          (UINT32)Managed, SfbLaunchModeText (Managed, LaunchMode), Status));
   SfbDisarmManagedAblHooks ();
   if (ExitData != NULL) {
     FreePool (ExitData);

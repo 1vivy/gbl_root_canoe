@@ -126,6 +126,13 @@ typedef struct {
   BOOLEAN                   ModeFromConfig;
   /* Presentation only; how the backup row is told apart from the two slots. */
   SFB_CONFIG_ROLE           Role;
+  /*
+   * TRUE when the image is not one of the managed ABL names, so no wrapper is
+   * ever installed for it and Mode above decides nothing. Set from the path
+   * rather than from the config, because a discovered loader is in exactly the
+   * same position as a config entry naming an unmanaged image.
+   */
+  BOOLEAN                   Passthrough;
 } SFB_BOOT_ENTRY;
 
 typedef struct {

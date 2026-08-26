@@ -224,6 +224,15 @@ SfbMakeFileEntry (IN EFI_HANDLE      Volume,
   StrnCpyS (Entry->Path, SFB_PATH_CHARS, PathOnVolume, SFB_PATH_CHARS - 1);
   StrnCpyS (Entry->Desc, SFB_DESC_CHARS, Desc, SFB_DESC_CHARS - 1);
 
+  /*
+   * Decided here rather than at each caller, because every entry in the tree
+   * is built through this one seam: a config row, a boot-root probe row, a
+   * discovered removable loader and a browsed file are all in the same
+   * position. Only a managed name ever gets a wrapper, so for anything else
+   * the entry's Mode decides nothing and the menu must say so.
+   */
+  Entry->Passthrough = (BOOLEAN)!SfbIsManagedAblPath (PathOnVolume);
+
   /* Capture the volume label while the volume root is already available. */
   if (!EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) && Root != NULL) {
     SfbGetVolumeLabel (Root, Entry->VolLabel, SFB_DESC_CHARS);
