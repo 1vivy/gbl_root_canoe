@@ -17,9 +17,34 @@ the module archive is written below `targets/magisk_module/build/`.
 
 ## Toolkit utilities
 
-The Linux and Android toolkits contain `extractfv`, `patch_abl`, `mode2_profile`, and `abl_tzmap`. The Windows toolkit contains `extractfv.exe`, `patch_abl.exe`, `mode2_profile.exe`, and `abl_tzmap.exe`. `abl_tzmap` derives and validates the local 256-byte `GTZM` `boot.efi.tzmap` TrustZone interface map from the **unpatched ABL**.
+The Linux and Android toolkits contain `extractfv`, `patch_abl`, `mode2_profile`, and `abl_tzmap`. The Windows toolkit contains `extractfv.exe`, `patch_abl.exe`, `mode2_profile.exe`, and `abl_tzmap.exe`. `mode2_profile` exposes only `derive` and `validate`; it does not write a persistent mode. `abl_tzmap` derives and validates the local 256-byte `GTZM` `boot.efi.tzmap` TrustZone interface map from the **unpatched ABL**.
 
-The Linux toolkit additionally ships `vbmetaport` and `vbmetabackup` from `tools/vbmetafixer`, and the Windows toolkit their `.exe` builds, which the host-side install scripts use to graft an official vbmeta onto a custom recovery image. `vbmetabackup -f <image>` performs that extraction from a local firmware image, with no device and no adb; without `-f` it keeps its original behaviour of pulling the live chain over adb.
+The Linux toolkit additionally ships `vbmetaport` and `vbmetabackup` from `tools/vbmetafixer`, and the Windows toolkit their `.exe` builds. The host-side package flow uses these to graft an official vbmeta onto a custom recovery image. `vbmetabackup -f <image>` performs that extraction from a local firmware image, with no device and no ADB; without `-f` it keeps its original behaviour of pulling the live chain over ADB.
+
+## Host entry point
+
+The host implementation is the `canoelib/` Python package, copied into both toolkit archives. Linux requires Python 3.11+; the Windows archive includes an embeddable CPython under `python/`. Each archive has one entry point:
+
+```text
+Linux:   ./canoe
+Windows: canoe.cmd
+```
+
+With no arguments it runs the interactive wizard. The wizard asks whether this is a first install or update, which mode to use, the Mode 1 recovery-graft and `vendor_boot` choices, waits for matching **stock** `images/abl.img` and `images/vbmeta.img` if necessary, asks whether to generate a boot entry, and prints a readable result.
+
+The scriptable surface is:
+
+```text
+canoe                              interactive wizard (default)
+canoe build                        derive the ABL/profile/map artifacts
+canoe prep [--pkg ...]             prepare a firmware package
+canoe prep-device [--slot ...]     pull a device pair and derive artifacts
+canoe install [--skip-bds ...]     install the boot root over ADB
+canoe oneshot --abl <img> --mode 0|1
+                                   temporary, non-interactive boot
+```
+
+Use `canoe.cmd` in place of `canoe` on Windows. Existing options carry over unchanged under their new verb. The candidate images must be stock and must match the firmware version being booted.
 
 ## Build an ABL/profile/map pair
 
@@ -31,65 +56,28 @@ images/abl.img
 images/vbmeta.img
 ```
 
-Run `./canoe_build` on the Linux toolkit or `canoe_build.cmd` on the Windows
-toolkit. The Android toolkit retains its `build.sh`: it runs on-device, where
-`python3` is not guaranteed. The host implementation patches the ABL, derives
-`efisp/boot.efi.gm2p` (the exact 120-byte KeyMint profile)
-from the matching root vbmeta image, and generates the local
-`efisp/boot.efi.tzmap` (the 256-byte `GTZM` ABL-derived TrustZone map) from the
-unpatched ABL. The `.tzmap` is stored beside the launched image as
-`/mnt/vendor/persist/efisp/boot.efi.tzmap` and is not shipped inside the
-toolkit archive. Both `efisp/boot.efi` and its exact 120-byte `.gm2p` sidecar
-must be installed together; the `.tzmap` is optional at runtime because BDS
-has a built-in fallback.
+Run `canoe build` on Linux or `canoe.cmd build` on Windows. The Android toolkit retains its `build.sh`: it runs on-device, where `python3` is not guaranteed. The host implementation patches the ABL, derives `efisp/boot.efi.gm2p` (the exact 120-byte KeyMint profile) from the matching root vbmeta image, and generates the local `efisp/boot.efi.tzmap` (the 256-byte `GTZM` ABL-derived TrustZone map) from the unpatched ABL. The `.tzmap` is stored beside the launched image as `/mnt/vendor/persist/efisp/boot.efi.tzmap` and is not shipped inside the toolkit archive. Both `efisp/boot.efi` and its exact 120-byte `.gm2p` sidecar must be installed together; the `.tzmap` is optional at runtime because BDS has a built-in fallback.
 
-The build scripts pass `--allow-incomplete` to `abl_tzmap`, so an ABL with no
-recorded reverse-engineering evidence still receives a valid 256-byte sidecar
-with its identifier flags and protocol command table. Installation does not
-fail for that reason.
+The build scripts pass `--allow-incomplete` to `abl_tzmap`, so an ABL with no recorded reverse-engineering evidence still receives a valid 256-byte sidecar with its identifier flags and protocol command table. Installation does not fail for that reason.
 
-## Host-side install tools
+## Host-side install commands
 
-The host drivers are now one Python implementation copied into both archives.
-This replaces two separately maintained drivers; the Windows one kept breaking
-on `cmd.exe` parsing details rather than on installation logic. Linux requires
-Python 3.11+ on the host; Windows needs no installation because its archive
-includes an embeddable CPython under `python/`.
-The source copy is `tools/canoe-host/` in the repository; each toolkit archive
-ships that same package under `canoe/`.
+The two installation pathways remain independent:
 
-Both toolkits ship these host launchers with identical options:
+- **Standalone custom recovery + ADB:** `canoe prep-device [--slot ...]` pulls the ABL/vbmeta pair and derives the artifacts; after booting custom recovery, `canoe install` stages the boot root. Use `--slot inactive` when the other slot is the one just written by `adb sideload`.
+- **Firmware package:** `canoe prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place` grafts the package's official recovery vbmeta onto the custom recovery and substitutes the prepared images. Run the package's own flasher unchanged, then use `canoe install` from custom recovery.
 
-| Linux | Windows | Role |
-|-------|---------|------|
-| `canoe_prep_device` | `canoe_prep_device.cmd` | Standalone preparation: pull `abl` + `vbmeta` and derive the triplet |
-| `canoe_prep` | `canoe_prep.cmd` | Firmware-package preparation: graft a custom recovery and substitute prepared images |
-| `canoe_stage` | `canoe_stage.cmd` | Host driver: validate, stage into the boot root, invoke the device-side transaction |
+The Windows forms prefix the same subcommands with `canoe.cmd`. `canoe install --skip-bds` installs the persist tree without writing the BDS. The host driver hands the transaction to `canoe_device_install.sh`, which remains a shell script because Python is not guaranteed in recovery/Android.
 
-They are documented in `README.canoe.md` inside each archive and in the
-Installation Guide. `canoe_device_install.sh` is deliberately still a shell
-script: it is the single install transaction executed on the device, where
-Python is not guaranteed.
+The host tools do not touch the `abl` partition: making that partition carry the GBL vulnerability is a separate `fastboot flash abl` step.
 
-`canoe_device_install.sh` lives in `tools/canoe-device/` and is copied into
-both toolkits by their `canoe_device_script` make target. The snapshot,
-commit and rollback logic therefore has exactly one implementation. Every
-absolute device path arrives as an argument, which also lets it be tested
-directly on a host.
+## One-shot
 
-None of the host tools touch the `abl` partition: making that partition carry
-the GBL vulnerability is a separate `fastboot flash abl` step.
+`canoe oneshot --abl <img> --mode 0|1` is non-interactive and intended for a locked-bootloader temporary-root launch. The input image must already be known to be stock and to match the device. It writes nothing permanent.
 
-Fixture coverage:
+## Windows ext4 access
 
-- `targets/toolkit_linux/tests/test_canoe_device_install.sh` drives the
-  transaction natively against ordinary directories and a file standing in
-  for the block device, injecting commit, write and verification failures by
-  shadowing `mv`, `dd` and `cmp`.
-- `targets/toolkit_linux/tests/test_canoe_scripts.sh` drives both preparation
-  pathways and the staging driver against `tests/stub_adb.py`.
-
-Both are registered in `make test`.
+The Windows archive bundles `platform-tools`. For ext4 read/write it uses **WinFsp plus LKL `lklfuse`**, fetched and SHA-256-verified on first use rather than vendored into the repository. This enables mounting `persist` after the BDS exports it over USB Mass Storage and editing the boot root directly when ADB is unavailable.
 
 ## What `patch_abl` rewrites
 
@@ -106,4 +94,3 @@ After editing UEFI sources, rebuild the BDS with `UEFI_REBUILD=1 make
 target_<name>`, or run `make clean` first.
 
 There is no separate generic build.
-

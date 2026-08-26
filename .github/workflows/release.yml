@@ -26,7 +26,7 @@ jobs:
     - name: Verify the executable bit survived
       run: |
         unzip -q -o toolkit_linux/toolkit_linux.zip -d modecheck
-        for exe in canoe_build canoe_prep canoe_prep_device canoe_stage \
+        for exe in canoe \
                    canoe_device_install.sh bin/patch_abl bin/mode2_profile \
                    bin/abl_tzmap bin/extractfv bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in release asset: $exe"; exit 1; }
@@ -37,7 +37,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         name: ${{ github.ref_name }}
-        # Beta/hotfix tags carry a hyphen (6.3.4-beta.1); they must not
+        # Beta/hotfix tags carry a hyphen (7.0.0-b1); they must not
         # replace the stable release as "Latest".
         prerelease: ${{ contains(github.ref_name, '-') }}
         generate_release_notes: false

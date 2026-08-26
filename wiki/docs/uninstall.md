@@ -1,40 +1,38 @@
 # Uninstall Guide
 
+## 1. Back up your data
 
-## 1. Backup Your Data
+Before performing any uninstall operation, fully back up important data to prevent data loss.
 
-Before performing any uninstall operation, make sure to **fully back up all important data** to prevent data loss.
+## 2. Hardware re-lock requirement
 
+If the bootloader has been **hardware re-locked** (a real `fastboot flashing lock`, not a BDS launch policy), it must be unlocked first. Use the unlock path supported by the device, such as the vendor's account-based flow or Superfastboot's `fastboot flashing unlock` while the chain is still installed. The reserve-token safeguard only helps when the chain was present when the re-lock happened.
 
-## 2. Hardware Re-lock Requirement
+## 3. Remove the boot root and BDS
 
-If the bootloader has been **hardware re-locked** (a real `fastboot flashing lock` — not a BDS boot mode), it **must be unlocked first** before proceeding. Use whichever unlock path your device supports: the vendor's own account-based unlock, or Superfastboot's `fastboot flashing unlock` while the chain is still installed. The reserve-token safeguard exists so that path survives a relock — but only if the chain was in place when the relock happened.
-
-
-## 3. Uninstall Steps
-
-1. Boot into **official fastboot** mode
-
-2. Erase the patch partition:
+1. Boot into **official fastboot** mode, or into a recovery that can access `persist`.
+2. Remove `canoe.cfg` from the boot root if it is still present:
+   - booted Android: `/mnt/vendor/persist/efisp/canoe.cfg`
+   - recovery or an exported `persist`: `/persist/efisp/canoe.cfg`
+3. Erase the raw BDS partition:
 
    ```bash
    fastboot erase efisp
    ```
 
-3. Format and wipe user data:
+4. Format and wipe user data if your device's uninstall procedure requires it:
 
    ```bash
    fastboot -w
    ```
- 
-## Stray reference: no stock fastboot
 
-> **Stray reference page:** this is not part of the main install flow.
+Removing `canoe.cfg` clears the 7.x boot-root configuration; no separate loader policy remains to clear. If the boot root is not reachable before the raw partition is erased, the configuration becomes unused once `efisp` is gone, but remove it through Recovery or USB Mass Storage when possible.
 
-If stock fastboot never appears and the only fastboot available is the
-superfastboot served by the BDS, relock and wipe the chain in one session:
+## 4. If stock fastboot is unavailable
 
-1. From the BDS, enter **superfastboot**.
+If the only fastboot available is the Superfastboot served by the BDS, complete the hardware re-lock and chain erase in one session:
+
+1. From the BDS, enter Superfastboot.
 2. Run:
 
    ```bash
@@ -42,23 +40,10 @@ superfastboot served by the BDS, relock and wipe the chain in one session:
    fastboot erase efisp
    ```
 
-Every lock-state hook in this project deliberately mutates the real
-RPMB/DeviceInfo state to **unlocked** instead of merely swallowing the write;
-that is what keeps red screens away. While the chainloaded ABL is running, the
-device is therefore genuinely unlocked, so the relock must be performed from
-inside superfastboot while it is still reachable.
+Keep this order. The lock operation must complete while the chain is still present; erasing `efisp` first can remove the only route to the supported re-lock flow. If you can enter Recovery or USB Mass Storage first, remove `canoe.cfg` from `persist/efisp` as described above.
 
-Keep this order. `fastboot flashing lock` must complete while the chain is
-still present; erasing `efisp` first stops the projection, and there may then
-be no stock fastboot from which to relock. On devices that expose stock
-fastboot, use the [ordinary uninstall path](./uninstall.md#3-uninstall-steps)
-above instead.
+## Important notes
 
-
-
-
-## ⚠️ Important Notes
-
-- 📌 Ensure the **bootloader is unlocked** according to your device's requirements before proceeding
-- 📌 `fastboot -w` will **wipe the data partition** — confirm all important files are backed up beforehand
-- 📌 After uninstallation, the device will be restored to its **unlocked, root state**
+- Confirm the device-specific BL requirements before proceeding.
+- `fastboot -w` wipes the data partition; verify that important files are backed up.
+- After uninstall, the BDS chain is removed and the device returns to its normal unlocked/root state according to the device's remaining software.

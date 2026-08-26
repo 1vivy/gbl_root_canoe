@@ -72,8 +72,6 @@ jobs:
       run: |
         test -x artifacts/toolkit_linux/bin/patch_abl
         test -x artifacts/toolkit_linux/bin/mode2_profile
-        test -x artifacts/toolkit_linux/bin/mode2_profile-arm64
-        test -x artifacts/toolkit_windows/bin/mode2_profile-arm64
         test -x artifacts/toolkit_linux/bin/abl_tzmap
         test -f artifacts/toolkit_windows/bin/patch_abl.exe
         test -f artifacts/toolkit_windows/bin/mode2_profile.exe
@@ -89,23 +87,23 @@ jobs:
         test -x artifacts/toolkit_android/bin/extractfv
         test -x artifacts/magisk_module/bin/extractfv
         test -x artifacts/magisk_module/bin/patch_tools
-        for launcher in canoe_build canoe_prep canoe_prep_device canoe_stage; do
-          test -x "artifacts/toolkit_linux/$launcher"
-        done
-        for launcher in canoe_build canoe_prep canoe_prep_device canoe_stage; do
-          # Both halves must ship: the .cmd only picks the interpreter, and the
-          # extensionless file beside it is the script that interpreter runs.
-          test -f "artifacts/toolkit_windows/$launcher"
-          test -f "artifacts/toolkit_windows/$launcher.cmd"
-        done
+        # One launcher, not four. `canoe` with no arguments is the interactive
+        # wizard; `canoe build|prep|prep-device|install|oneshot` are the
+        # non-interactive subcommands CI and scripts use.
+        test -x "artifacts/toolkit_linux/canoe"
+        # Both halves must ship: the .cmd only picks the interpreter, and the
+        # extensionless file beside it is the script that interpreter runs.
+        test -f "artifacts/toolkit_windows/canoe"
+        test -f "artifacts/toolkit_windows/canoe.cmd"
         test -f artifacts/toolkit_windows/python/python.exe
         test -f artifacts/toolkit_android/build.sh
         for package in toolkit_linux toolkit_windows; do
-          test -d "artifacts/$package/canoe"
+          test -d "artifacts/$package/canoelib"
           test -z "$(find "artifacts/$package" -type d -name __pycache__ -print -quit)"
         done
         test -f artifacts/magisk_module/customize.sh
         test -f artifacts/magisk_module/bin/bl_flasher.sh
+        test -f artifacts/magisk_module/service.sh
         test -f artifacts/magisk_module/webroot/app.js
         test -f artifacts/magisk_module/webroot/index.html
         test -f artifacts/magisk_module/webroot/style.css
@@ -149,16 +147,6 @@ jobs:
         case "$linux_profile_type" in
           *"ELF 64-bit"*"x86-64"*) ;;
           *) echo "unexpected Linux mode2_profile: $linux_profile_type"; exit 1 ;;
-        esac
-        linux_mode2_arm64_type="$(file -b artifacts/toolkit_linux/bin/mode2_profile-arm64)"
-        case "$linux_mode2_arm64_type" in
-          *"ELF 64-bit"*"ARM aarch64"*) ;;
-          *) echo "unexpected Linux mode2_profile-arm64: $linux_mode2_arm64_type"; exit 1 ;;
-        esac
-        windows_mode2_arm64_type="$(file -b artifacts/toolkit_windows/bin/mode2_profile-arm64)"
-        case "$windows_mode2_arm64_type" in
-          *"ELF 64-bit"*"ARM aarch64"*) ;;
-          *) echo "unexpected Windows mode2_profile-arm64: $windows_mode2_arm64_type"; exit 1 ;;
         esac
         linux_tzmap_type="$(file -b artifacts/toolkit_linux/bin/abl_tzmap)"
         case "$linux_tzmap_type" in
@@ -237,9 +225,9 @@ jobs:
       run: |
         # Zip here, in the job that produced the tree. Artifact upload/download
         # does not preserve the executable bit, so zipping after that round-trip
-        # publishes mode-644 scripts and binaries: `./canoe_build` and
-        # `./canoe_stage` fail with Permission denied and bin/* cannot be
-        # exec'd even via `bash canoe_build`. A zip stores the modes itself, and
+        # publishes mode-644 scripts and binaries: `./canoe` fails with
+        # Permission denied and bin/* cannot be exec'd even via `bash canoe`.
+        # A zip stores the modes itself, and
         # uploading the zip round-trips its bytes intact.
         mkdir -p release
         for package in toolkit_linux toolkit_windows toolkit_android magisk_module \
@@ -256,9 +244,9 @@ jobs:
         # The archive is the deliverable, so assert the modes inside the archive
         # rather than in the build tree they came from.
         rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
-        for exe in canoe_build canoe_prep canoe_prep_device canoe_stage \
+        for exe in canoe \
                    canoe_device_install.sh bin/patch_abl bin/mode2_profile \
-                   bin/mode2_profile-arm64 bin/abl_tzmap bin/extractfv \
+                   bin/abl_tzmap bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in archive: $exe"; exit 1; }
         done
