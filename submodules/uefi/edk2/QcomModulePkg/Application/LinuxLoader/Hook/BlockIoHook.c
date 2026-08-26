@@ -20,8 +20,10 @@
  * still reaches flash.
  */
 #include "HookCommon.h"
+#include "SuperFbGptName.h"
 
 #include <Library/BaseLib.h>
+#include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
@@ -29,7 +31,6 @@
 #include <Protocol/BlockIo.h>
 
 #define SFB_RESERVE_MAX_RECORDS  8u
-#define SFB_GPT_NAME_CHARS       36u
 
 /* Offsets back from the partition's last block, from static RE of the Oplus
  * LinuxLoader and confirmed against a PLR110 dump: LastBlock-0x3A5 is the
@@ -60,33 +61,13 @@ typedef struct {
 STATIC SFB_RESERVE_RECORD gSfbReserve[SFB_RESERVE_MAX_RECORDS];
 STATIC UINTN gSfbReserveCount = 0;
 
-/* Case-insensitive match against a GPT name field, which is a CHAR16[36] that
- * is not required to be NUL-terminated and is space-padded by some writers. */
-STATIC BOOLEAN
-SfbGptNameMatches (IN CONST CHAR16 *Stored, IN CONST CHAR16 *Want)
-{
-  UINTN Index;
-
-  if (Stored == NULL || Want == NULL) return FALSE;
-  for (Index = 0; Index < SFB_GPT_NAME_CHARS && Want[Index] != L'\0'; Index++) {
-    CHAR16 A = Stored[Index];
-    CHAR16 B = Want[Index];
-
-    if (A >= L'A' && A <= L'Z') A = (CHAR16)(A | 0x20);
-    if (B >= L'A' && B <= L'Z') B = (CHAR16)(B | 0x20);
-    if (A != B) return FALSE;
-  }
-  return Index >= SFB_GPT_NAME_CHARS ||
-         Stored[Index] == L'\0' || Stored[Index] == L' ';
-}
-
 STATIC BOOLEAN
 SfbIsReserveName (IN CONST CHAR16 *Stored)
 {
   UINTN Index;
 
   for (Index = 0; Index < ARRAY_SIZE (gSfbReserveNames); Index++) {
-    if (SfbGptNameMatches (Stored, gSfbReserveNames[Index])) return TRUE;
+    if (SfbGptNameMatchesInline (Stored, gSfbReserveNames[Index])) return TRUE;
   }
   return FALSE;
 }
@@ -174,6 +155,8 @@ HookedReserveWriteBlocks (
 
     if (Record->BlockIo != This) continue;
     if (Record->OrigWriteBlocks == NULL) return EFI_NOT_READY;
+    /* A wrapper can remain live while policy is false during arming/rollback;
+     * this is an arm/disarm interlock, not a mode test. */
     if (!SfbHooksActive ()) {
       return Record->OrigWriteBlocks (This, MediaId, Lba, BufferSize, Buffer);
     }
@@ -293,4 +276,199 @@ SfbRestoreReserveBlockIo (VOID)
     Record->NameAscii[0] = '\0';
   }
   gSfbReserveCount = 0;
+}
+/*
+ * The vulnerable ABL in the `abl` partition reaches this BDS by loading the
+ * raw `efisp` partition as an EFI image. The patched loader carries that same
+ * path, so leaving efisp visible would recurse into this BDS instead of
+ * reaching the intended image. Unlike the reserve write guard, this wrapper
+ * is also installed for Mode 0; its own lifetime flag keeps fastboot's
+ * efisp flash path visible whenever no chainloaded ABL is in flight.
+ */
+typedef struct {
+  EFI_BLOCK_IO_PROTOCOL *BlockIo;
+  EFI_BLOCK_READ OrigReadBlocks;
+  EFI_BLOCK_WRITE OrigWriteBlocks;
+  EFI_BLOCK_FLUSH OrigFlushBlocks;
+  EFI_BLOCK_IO_MEDIA *Media;
+  BOOLEAN OrigMediaPresent;
+} SFB_EFISP_RECORD;
+
+STATIC SFB_EFISP_RECORD gSfbEfisp;
+STATIC BOOLEAN gEfispHideArmed = FALSE;
+
+STATIC EFI_STATUS EFIAPI
+HookedEfispReadBlocks (
+  IN EFI_BLOCK_IO_PROTOCOL *This,
+  IN UINT32 MediaId,
+  IN EFI_LBA Lba,
+  IN UINTN BufferSize,
+  OUT VOID *Buffer
+  )
+{
+  (VOID)MediaId;
+  (VOID)Lba;
+  (VOID)BufferSize;
+  (VOID)Buffer;
+
+  if (gSfbEfisp.OrigReadBlocks == NULL) return EFI_NOT_READY;
+  if (!gEfispHideArmed) {
+    return gSfbEfisp.OrigReadBlocks (This, MediaId, Lba, BufferSize, Buffer);
+  }
+  return EFI_NO_MEDIA;
+}
+
+STATIC EFI_STATUS EFIAPI
+HookedEfispWriteBlocks (
+  IN EFI_BLOCK_IO_PROTOCOL *This,
+  IN UINT32 MediaId,
+  IN EFI_LBA Lba,
+  IN UINTN BufferSize,
+  IN VOID *Buffer
+  )
+{
+  (VOID)MediaId;
+  (VOID)Lba;
+  (VOID)BufferSize;
+  (VOID)Buffer;
+
+  if (gSfbEfisp.OrigWriteBlocks == NULL) return EFI_NOT_READY;
+  if (!gEfispHideArmed) {
+    return gSfbEfisp.OrigWriteBlocks (This, MediaId, Lba, BufferSize, Buffer);
+  }
+  return EFI_NO_MEDIA;
+}
+
+STATIC EFI_STATUS EFIAPI
+HookedEfispFlushBlocks (IN EFI_BLOCK_IO_PROTOCOL *This)
+{
+  if (gSfbEfisp.OrigFlushBlocks == NULL) return EFI_NOT_READY;
+  if (!gEfispHideArmed) {
+    return gSfbEfisp.OrigFlushBlocks (This);
+  }
+  return EFI_NO_MEDIA;
+}
+
+EFI_STATUS
+SfbInstallEfispBlockIo (VOID)
+{
+  EFI_STATUS Status;
+  EFI_HANDLE *Handles = NULL;
+  UINTN HandleCount = 0;
+  UINTN Index;
+  EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
+
+  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid, NULL,
+                                    &HandleCount, &Handles);
+  if (EFI_ERROR (Status) || Handles == NULL) {
+    Status = EFI_NOT_FOUND;
+    DEBUG ((EFI_D_WARN, "SFB: MARK efisp-hide status=%r\n", Status));
+    return Status;
+  }
+
+  Status = EFI_NOT_FOUND;
+  for (Index = 0; Index < HandleCount; Index++) {
+    EFI_PARTITION_ENTRY *PartEntry = NULL;
+
+    if (EFI_ERROR (gBS->HandleProtocol (
+                      Handles[Index], &gEfiPartitionRecordGuid,
+                      (VOID **)&PartEntry)) ||
+        PartEntry == NULL ||
+        !SfbGptNameMatchesInline (PartEntry->PartitionName, L"efisp")) {
+      continue;
+    }
+    if (EFI_ERROR (gBS->HandleProtocol (
+                      Handles[Index], &gEfiBlockIoProtocolGuid,
+                      (VOID **)&BlockIo)) ||
+        BlockIo == NULL || BlockIo->Media == NULL) {
+      continue;
+    }
+    Status = EFI_SUCCESS;
+    break;
+  }
+
+  gBS->FreePool (Handles);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_WARN, "SFB: MARK efisp-hide status=%r\n", Status));
+    return Status;
+  }
+
+  /* A previous arm retains the real originals and the media field. */
+  if (gSfbEfisp.BlockIo == BlockIo) {
+    if ((gSfbEfisp.OrigReadBlocks != NULL &&
+         BlockIo->ReadBlocks != HookedEfispReadBlocks &&
+         BlockIo->ReadBlocks != gSfbEfisp.OrigReadBlocks) ||
+        (gSfbEfisp.OrigWriteBlocks != NULL &&
+         BlockIo->WriteBlocks != HookedEfispWriteBlocks &&
+         BlockIo->WriteBlocks != gSfbEfisp.OrigWriteBlocks) ||
+        (gSfbEfisp.OrigFlushBlocks != NULL &&
+         BlockIo->FlushBlocks != HookedEfispFlushBlocks &&
+         BlockIo->FlushBlocks != gSfbEfisp.OrigFlushBlocks)) {
+      Status = EFI_NOT_READY;
+      DEBUG ((EFI_D_WARN, "SFB: MARK efisp-hide status=%r\n", Status));
+      return Status;
+    }
+    if (gSfbEfisp.Media != BlockIo->Media) {
+      gSfbEfisp.Media = BlockIo->Media;
+      gSfbEfisp.OrigMediaPresent = BlockIo->Media->MediaPresent;
+    }
+    gEfispHideArmed = TRUE;
+    BlockIo->Media->MediaPresent = FALSE;
+    DEBUG ((EFI_D_INFO, "SFB: MARK efisp-hide status=%r\n", EFI_SUCCESS));
+    return EFI_SUCCESS;
+  }
+  if (gSfbEfisp.BlockIo != NULL) {
+    Status = EFI_NOT_READY;
+    DEBUG ((EFI_D_WARN, "SFB: MARK efisp-hide status=%r\n", Status));
+    return Status;
+  }
+
+  gSfbEfisp.BlockIo = BlockIo;
+  gSfbEfisp.OrigReadBlocks = BlockIo->ReadBlocks;
+  gSfbEfisp.OrigWriteBlocks = BlockIo->WriteBlocks;
+  gSfbEfisp.OrigFlushBlocks = BlockIo->FlushBlocks;
+  gSfbEfisp.Media = BlockIo->Media;
+  gSfbEfisp.OrigMediaPresent = BlockIo->Media->MediaPresent;
+
+  /* A partially populated Block I/O protocol remains usable: only slots with
+   * real originals are replaced, and every retained slot is restored below. */
+  if (gSfbEfisp.OrigReadBlocks != NULL) {
+    BlockIo->ReadBlocks = HookedEfispReadBlocks;
+  }
+  if (gSfbEfisp.OrigWriteBlocks != NULL) {
+    BlockIo->WriteBlocks = HookedEfispWriteBlocks;
+  }
+  if (gSfbEfisp.OrigFlushBlocks != NULL) {
+    BlockIo->FlushBlocks = HookedEfispFlushBlocks;
+  }
+  gEfispHideArmed = TRUE;
+  BlockIo->Media->MediaPresent = FALSE;
+  DEBUG ((EFI_D_INFO, "SFB: MARK efisp-hide status=%r\n", EFI_SUCCESS));
+  return EFI_SUCCESS;
+}
+
+VOID
+SfbRestoreEfispBlockIo (VOID)
+{
+  EFI_BLOCK_IO_PROTOCOL *BlockIo = gSfbEfisp.BlockIo;
+
+  gEfispHideArmed = FALSE;
+  if (BlockIo != NULL) {
+    if (gSfbEfisp.OrigReadBlocks != NULL &&
+        BlockIo->ReadBlocks == HookedEfispReadBlocks) {
+      BlockIo->ReadBlocks = gSfbEfisp.OrigReadBlocks;
+    }
+    if (gSfbEfisp.OrigWriteBlocks != NULL &&
+        BlockIo->WriteBlocks == HookedEfispWriteBlocks) {
+      BlockIo->WriteBlocks = gSfbEfisp.OrigWriteBlocks;
+    }
+    if (gSfbEfisp.OrigFlushBlocks != NULL &&
+        BlockIo->FlushBlocks == HookedEfispFlushBlocks) {
+      BlockIo->FlushBlocks = gSfbEfisp.OrigFlushBlocks;
+    }
+    if (BlockIo->Media == gSfbEfisp.Media && gSfbEfisp.Media != NULL) {
+      BlockIo->Media->MediaPresent = gSfbEfisp.OrigMediaPresent;
+    }
+  }
+  ZeroMem (&gSfbEfisp, sizeof (gSfbEfisp));
 }

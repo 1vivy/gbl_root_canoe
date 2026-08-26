@@ -37,6 +37,12 @@ static EFI_STATUS mReadStatus;
 static UINTN mCloseCount;
 static CHAR16 mReadPath[SFB_PATH_CHARS];
 static EFI_STATUS mPrepareStatus;
+static SFB_BOOT_MODE mLastPrepareMode;
+static SFB_CONFIG_LOCK_POLICY mLastPreparePolicy;
+static BOOLEAN mVolumesAvailable;
+static BOOLEAN mBootRootConfigPresent;
+static BOOLEAN mBootRootManagedPresent;
+static EFI_HANDLE mVolumeList[1];
 static UINTN mPrepareCount;
 static UINTN mDisarmCount;
 static BOOLEAN mPolicyActive;
@@ -181,6 +187,16 @@ VOID *EFIAPI
 ZeroMem(OUT VOID *Buffer, IN UINTN Size)
 {
   return memset(Buffer, 0, Size);
+}
+UINTN EFIAPI
+UnicodeSPrint(OUT CHAR16 *Start, IN UINTN BufferSize,
+              IN CONST CHAR16 *Format, ...)
+{
+  (void)Format;
+  if (Start != NULL && BufferSize >= sizeof (CHAR16)) {
+    Start[0] = L'\0';
+  }
+  return 0;
 }
 UINTN EFIAPI
 Print(IN CONST CHAR16 *Format, ...)
@@ -374,9 +390,12 @@ SfbReadFileBytes(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path,
 EFI_STATUS
 SfbPrepareManagedAblHooks(IN SFB_BOOT_MODE Mode,
                           IN CONST SFB_MODE2_PROFILE *Profile,
-                          IN CONST SFB_TZ_MAP *TzMap)
+                          IN CONST SFB_TZ_MAP *TzMap,
+                          IN SFB_CONFIG_LOCK_POLICY Policy)
 {
   (void)TzMap;
+  mLastPrepareMode = Mode;
+  mLastPreparePolicy = Policy;
   ++mPrepareCount;
   if (Mode == SfbBootModeKmProfile) {
     assert(Profile != NULL);
@@ -568,6 +587,8 @@ ResetLaunchBackend(void)
   static EFI_BOOT_SERVICES BootServices;
   memset (&BootServices, 0, sizeof (BootServices));
   BootServices.LocateProtocol = FakeLocateProtocol;
+  mLastPrepareMode = SfbBootModeHonestUnlocked;
+  mLastPreparePolicy = SfbConfigLockAsNeeded;
   BootServices.LoadImage = FakeLoadImage;
   BootServices.StartImage = FakeStartImage;
   gBS = &BootServices;
@@ -678,6 +699,106 @@ TestLaunchLifecycle(void)
 }
 
 static void
+TestLaunchModePrecedence(void)
+{
+  SFB_BOOT_ENTRY Entry;
+
+  memset (&Entry, 0, sizeof (Entry));
+  Entry.Kind = SfbEntryEfiFile;
+  Entry.Volume = mVolume;
+  Entry.DevicePath = &mDevicePath;
+  StrnCpyS (Entry.Path, SFB_PATH_CHARS, L"\\boot.efi",
+            SFB_PATH_CHARS - 1);
+  StrnCpyS (Entry.Desc, SFB_DESC_CHARS, L"configured", SFB_DESC_CHARS - 1);
+
+  ResetLaunchBackend ();
+  SfbSetLaunchLockPolicy (SfbConfigLockNever);
+  Entry.ModeFromConfig = TRUE;
+  Entry.Mode = SfbBootModeAblFakeLocked;
+  assert(SfbLaunchEntry (&Entry, FALSE, SfbBootModeKmProfile) == EFI_SUCCESS);
+  assert(mLastPrepareMode == SfbBootModeAblFakeLocked);
+  assert(mLastPreparePolicy == SfbConfigLockNever);
+
+  ResetLaunchBackend ();
+  SfbSetLaunchLockPolicy (SfbConfigLockAsNeeded);
+  Entry.ModeFromConfig = FALSE;
+  assert(SfbLaunchEntry (&Entry, FALSE, SfbBootModeHonestUnlocked) ==
+         EFI_SUCCESS);
+  assert(mLastPrepareMode == SfbBootModeHonestUnlocked);
+  assert(mLastPreparePolicy == SfbConfigLockAsNeeded);
+}
+
+static void
+TestBootRootEmpty(void)
+{
+  mEntriesFixtureEnabled = FALSE;
+  mVolumesAvailable = TRUE;
+  mBootRootConfigPresent = FALSE;
+  mBootRootManagedPresent = FALSE;
+  assert(SfbBootRootIsEmpty ());
+
+  mBootRootConfigPresent = TRUE;
+  assert(!SfbBootRootIsEmpty ());
+  mBootRootConfigPresent = FALSE;
+  mBootRootManagedPresent = TRUE;
+  assert(!SfbBootRootIsEmpty ());
+
+  mVolumesAvailable = FALSE;
+  assert(!SfbBootRootIsEmpty ());
+  mBootRootManagedPresent = FALSE;
+}
+
+static void
+TestConfigEntries(void)
+{
+  static const CHAR8 ConfigText[] =
+    "version 1\n"
+    "default android-a\n"
+    "mode 0\n"
+    "entry android-a\n"
+    "title Configured A\n"
+    "image boot.efi\n"
+    "mode 2\n"
+    "role active\n";
+  SFB_MENU_STATE Menu;
+  SFB_CONFIG Config;
+  EFI_HANDLE Volume;
+  UINTN Index;
+  BOOLEAN Found = FALSE;
+
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfigText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootConfigPresent = TRUE;
+  mBootRootManagedPresent = TRUE;
+  mFileDevicePathAvailable = TRUE;
+  assert(SfbLoadBootConfig (&Config, &Volume) == EFI_SUCCESS);
+  assert(Volume == mVolume);
+  assert(Config.Valid && Config.Count == 1);
+
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked);
+  for (Index = 0; Index < Menu.Count; Index++) {
+    if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
+      assert(Menu.Entry[Index].Mode == SfbBootModeKmProfile);
+      assert(Menu.Entry[Index].ModeFromConfig);
+      assert(Menu.Entry[Index].Role == SfbConfigRoleActive);
+      Found = TRUE;
+      break;
+    }
+  }
+  assert(Found);
+  assert(Menu.DefaultFromConfig);
+  SfbFreeMenu (&Menu);
+
+  mEntriesFixtureEnabled = FALSE;
+  mVolumesAvailable = FALSE;
+  mBootRootConfigPresent = FALSE;
+  mBootRootManagedPresent = FALSE;
+}
+
+static void
 TestEntriesSafety(void)
 {
   static const CHAR16 *InvalidPaths[] = {
@@ -767,12 +888,6 @@ TestEntriesSafety(void)
     assert(Entry.DevicePath == NULL);
   }
 
-  memset (&Entry, 0, sizeof (Entry));
-  Entry.Kind = SfbEntryEfiFile;
-  StrnCpyS (Entry.Path, SFB_PATH_CHARS, L"\\EFI\\\x542f\x52a8.efi",
-            SFB_PATH_CHARS - 1);
-  StrnCpyS (Entry.Desc, SFB_DESC_CHARS, L"unicode", SFB_DESC_CHARS - 1);
-  assert(SfbSaveDefaultEntry (&Entry) == EFI_UNSUPPORTED);
 
   mFileDevicePathAvailable = FALSE;
   assert(SfbLoadDriver (mVolume, L"\\driver.efi") == EFI_OUT_OF_RESOURCES);
@@ -796,6 +911,9 @@ main(void)
 {
   TestProfileSelection ();
   TestLaunchLifecycle ();
+  TestLaunchModePrecedence ();
+  TestBootRootEmpty ();
+  TestConfigEntries ();
   TestEntriesSafety ();
   return 0;
 }
@@ -864,14 +982,29 @@ SfbLocateVolumes(OUT EFI_HANDLE **Handles, OUT UINTN *Count)
   if (Count != NULL) {
     *Count = 0;
   }
-  return EFI_NOT_FOUND;
+  if (!mVolumesAvailable) {
+    return EFI_NOT_FOUND;
+  }
+  mVolumeList[0] = mVolume;
+  if (Handles != NULL) {
+    *Handles = mVolumeList;
+  }
+  if (Count != NULL) {
+    *Count = 1;
+  }
+  return EFI_SUCCESS;
 }
 
 BOOLEAN
 SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
 {
   (void)Root;
-  (void)Path;
+  if (Path != NULL && StrCmp (Path, L"\\canoe.cfg") == 0) {
+    return mBootRootConfigPresent;
+  }
+  if (Path != NULL && StrCmp (Path, L"\\boot.efi") == 0) {
+    return mBootRootManagedPresent;
+  }
   return mEntriesFixtureEnabled;
 }
 
@@ -922,23 +1055,6 @@ SfbGetVolumeLabel(IN EFI_FILE_PROTOCOL *Root,
   }
 }
 
-EFI_STATUS
-SfbStoreWrite(IN UINTN Slot, IN CONST CHAR8 *Text)
-{
-  (void)Slot;
-  (void)Text;
-  return EFI_NOT_FOUND;
-}
-
-EFI_STATUS
-SfbStoreRead(IN UINTN Slot, OUT CHAR8 *Out, IN UINTN OutBytes)
-{
-  (void)Slot;
-  if (Out != NULL && OutBytes != 0) {
-    Out[0] = '\0';
-  }
-  return EFI_NOT_FOUND;
-}
 
 BOOLEAN
 SfbIsEfiDriverFile(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
@@ -1015,6 +1131,7 @@ SfbShowBootingScreen(IN CONST CHAR16 *Name,
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbProfile.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbTzMap.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbManagedPath.c"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBrowser.c"

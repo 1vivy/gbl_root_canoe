@@ -3,20 +3,22 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
 .PHONY: test clean
 
-test: test_store_mode test_profile test_tzmap test_fat test_hooks test_launch
-	./test_store_mode
+test: test_profile test_tzmap test_fat test_hooks test_launch test_config
 	./test_profile
 	./test_tzmap
 	./test_fat
 	./test_hooks
 	./test_launch
-
-test_store_mode: test_store_mode.c
-	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
+	./test_config
 
 test_profile: test_profile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbProfile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbManagedPath.c
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $^
+
+# Pure canoe.cfg parser: no EDK2 types at all, so it builds against stdint.
+test_config: test_config.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c
 	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $^
 
 HOOK_DIR := ../edk2/QcomModulePkg/Application/LinuxLoader/Hook
@@ -56,4 +58,4 @@ test_launch: test_launch.c \
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
 clean:
-	rm -f test_store_mode test_profile test_tzmap test_fat test_hooks test_launch
+	rm -f test_profile test_tzmap test_fat test_hooks test_launch test_config

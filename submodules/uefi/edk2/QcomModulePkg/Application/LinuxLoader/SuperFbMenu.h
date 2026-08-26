@@ -5,6 +5,10 @@
  * offer whatever removable/ESP boot loaders it finds there even on platforms
  * whose firmware exposes nothing but Block I/O.
  *
+ * The menu is a reader. Its state lives in `canoe.cfg` on the boot root, is
+ * authored by the host tool or the on-device module, and is never written from
+ * here - see wiki/docs/canoe-cfg.md and SuperFbConfig.h.
+ *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
  */
@@ -13,13 +17,25 @@
 #define __SUPER_FB_MENU_H__
 
 #include <Uefi.h>
+#include <Protocol/BlockIo.h>
 #include <Protocol/DevicePath.h>
 #include <Protocol/SimpleFileSystem.h>
+
+#include "SuperFbConfig.h"
 
 /* The boot loader we look for on every FAT32 volume, and the optional ANSI
  * one-liner describing it. */
 #define SFB_BOOT_FILE_PATH  L"\\EFI\\BOOT\\BOOTAA64.EFI"
 #define SFB_DESC_FILE_PATH  L"\\EFI\\DESC"
+
+/* Declarative menu state on the boot root. Read once per boot, never written.
+ * Absent or unparseable, the loader falls back to BOOTENTRIES discovery. */
+#define SFB_CONFIG_FILE_PATH  L"\\canoe.cfg"
+
+/* The canonical managed loader. Its presence is what distinguishes an
+ * installed boot root from a first-run one, so it is named here rather than
+ * spelled out at each use. */
+#define SFB_MANAGED_BOOT_NAME  L"\\boot.efi"
 
 /*
  * Optional file in a volume's root directory listing extra boot entries, one
@@ -49,12 +65,12 @@
  */
 #define SFB_DRIVER_LIST_NAME  L"DRIVER.LIST"
 
-/* Upper bound on the BOOTENTRIES / DRIVER.LIST text files we will read. */
+/* Upper bound on the BOOTENTRIES / DRIVER.LIST / canoe.cfg text files we read. */
 #define SFB_LIST_MAX_BYTES    8192
 
 #define SFB_DESC_CHARS       48
 #define SFB_PATH_CHARS       256
-#define SFB_MAX_ENTRIES      25
+#define SFB_MAX_ENTRIES      32
 #define SFB_MAX_DIR_ENTRIES  128
 
 /* Deepest submenu nesting allowed. Bounds the recursion when a chain of
@@ -73,59 +89,94 @@ typedef enum {
   /* Built-in entries; no backing file, handled in code. */
   SfbEntryFastboot,
   SfbEntrySelector,
-  /* Preferred boot policy selector. */
+  /* Session-only boot policy override. Applies to the next launch and is never
+   * written anywhere: the persisted policy is `mode` in canoe.cfg. */
   SfbEntryMode,
+  /* Export one partition to a host as USB mass storage. */
+  SfbEntryMassStorage,
   /* "Back" row at the foot of a submenu: returns to the parent menu. */
   SfbEntryBack,
   /* Power management actions offered at the end of the menu and on the
    * fastboot mode screen. */
   SfbEntryPowerOff,
-  SfbEntryRestart
+  SfbEntryRestart,
+  SfbEntryRecovery
 } SFB_ENTRY_KIND;
 
+/*
+ * The three boot policies. The values are the wire values in canoe.cfg and in
+ * the sidecars derived for them, so they are pinned to SFB_CONFIG_MODE_*.
+ */
 typedef enum {
   /* Let the backing DeviceInfo and ABL report the real unlocked state. */
-  SfbBootModeHonestUnlocked = 0,
+  SfbBootModeHonestUnlocked = SFB_CONFIG_MODE_HONEST,
   /* Project a locked state to ABL while keeping the backing state unlocked. */
-  SfbBootModeAblFakeLocked = 1,
+  SfbBootModeAblFakeLocked = SFB_CONFIG_MODE_FAKE_LOCKED,
   /* Keep ABL unlocked and project a locked/green KeyMint profile. */
-  SfbBootModeKmProfile = 2
+  SfbBootModeKmProfile = SFB_CONFIG_MODE_KM_PROFILE
 } SFB_BOOT_MODE;
-
 
 typedef struct {
   SFB_ENTRY_KIND            Kind;
-  /* TRUE when the entry was restored from the custom-entry store record
-   * rather than discovered by scanning. */
-  BOOLEAN                   IsCustom;
   /* TRUE for entries whose BOOTENTRIES name began with '$': they are listed and
-   * bootable, but selecting one never overwrites the saved default. */
+   * bootable, but selecting one is always a temporary launch. */
   BOOLEAN                   NoDefault;
   CHAR16                    Desc[SFB_DESC_CHARS];
   CHAR16                    Path[SFB_PATH_CHARS];
-  /* FAT volume label the entry lives on; how a stored entry finds its way
-   * back to a volume after a reboot has renumbered the handles. */
+  /* FAT volume label the entry lives on; how an entry names the volume it was
+   * discovered on after a reboot has renumbered the handles. */
   CHAR16                    VolLabel[SFB_DESC_CHARS];
   EFI_HANDLE                Volume;
   /* Owned by the entry; NULL for the built-in kinds. */
   EFI_DEVICE_PATH_PROTOCOL  *DevicePath;
+  /*
+   * The policy this entry launches under. For a canoe.cfg entry this is the
+   * entry's own `mode`, or the file-global fallback when it declared none; for
+   * a discovered entry it is the session mode. A session override in the menu
+   * replaces it for the next launch only.
+   */
+  SFB_BOOT_MODE             Mode;
+  /* TRUE when Mode came from canoe.cfg rather than from the session. Only
+   * these entries ignore a session override, because their sidecars are bound
+   * to that exact policy. */
+  BOOLEAN                   ModeFromConfig;
+  /* Presentation only; how the backup row is told apart from the two slots. */
+  SFB_CONFIG_ROLE           Role;
 } SFB_BOOT_ENTRY;
 
 typedef struct {
   SFB_BOOT_ENTRY  Entry[SFB_MAX_ENTRIES];
   UINTN           Count;
-  /* Entry the menu highlights first, or SFB_NO_INDEX. This may be the stored
-   * default or, absent one, the first on-device entry used as a starting
-   * point for the cursor and the "*" marker. */
+  /* Entry the menu highlights first, or SFB_NO_INDEX. This may be the
+   * configured default or, absent one, the first on-device entry used as a
+   * starting point for the cursor and the "*" marker. */
   UINTN           DefaultIndex;
-  /* TRUE only when DefaultIndex came from a stored default record, not from
-   * the first-entry fallback. A power-on with no key pressed boots the
-   * default straight away only when this is TRUE; otherwise the menu is
-   * shown. */
-  BOOLEAN         DefaultIsPersisted;
-  /* Snapshot used while this menu is being drawn. The run-loop's local mode
-   * remains authoritative across menu rebuilds. */
+  /* TRUE only when DefaultIndex came from canoe.cfg's `default`, not from the
+   * first-entry fallback. A power-on with no key pressed boots the default
+   * straight away only when this is TRUE; otherwise the menu is shown. */
+  BOOLEAN         DefaultFromConfig;
+  /* Session mode: the fallback for entries that carry no configured policy,
+   * and what a menu override changes. */
   SFB_BOOT_MODE   Mode;
+  /*
+   * What the menu still needs from canoe.cfg after the entries have been
+   * converted into Entry[] above.
+   *
+   * Deliberately a summary and not an embedded SFB_CONFIG: that struct carries
+   * its own copy of all 24 entry blocks, and SFB_MENU_STATE is stack allocated
+   * in SfbRunBootMenu and SfbLaunchDefaultEntry. Embedding it took one frame
+   * from ~18 KB to ~31 KB, and stored every entry twice for no reader.
+   */
+  BOOLEAN                ConfigValid;
+  UINT32                 ConfigGeneration;
+  UINT32                 TimeoutSeconds;
+  SFB_CONFIG_LOCK_POLICY LockPolicy;
+  /* Non-zero means canoe.cfg was partly refused. Surfaced in the menu: a
+   * half-applied config must be visible, never silent. */
+  UINTN                  RejectedLines;
+  /* TRUE when the boot root holds neither a canoe.cfg nor a boot.efi: nothing
+   * is installed yet, so the only useful destination is fastboot. */
+  BOOLEAN         FirstRun;
 } SFB_MENU_STATE;
 
 typedef enum {
@@ -134,6 +185,15 @@ typedef enum {
   SfbKeyDown,
   SfbKeySelect
 } SFB_KEY;
+
+/*
+ * What a key that is neither volume-up nor volume-down means to a given wait.
+ * The menu treats it as confirm; the power-on scan skips it and keeps waiting.
+ */
+typedef enum {
+  SfbKeyPolicyConfirm = 0,
+  SfbKeyPolicyUpOnly
+} SFB_KEY_POLICY;
 
 /* ---- SuperFbFat.c: embedded FAT/EXT4 stack and volume helpers ----------- */
 
@@ -145,6 +205,26 @@ typedef enum {
  */
 EFI_STATUS
 SfbStartFatStack (VOID);
+
+/*
+ * Case-insensitive compare of a GPT PartitionName field against a wanted name.
+ * The field is a CHAR16[36] that is not required to be NUL terminated and is
+ * space padded by some writers, so this is the only correct way to compare one
+ * and every caller uses it.
+ */
+BOOLEAN
+SfbGptNameMatches (IN CONST CHAR16 *Stored, IN CONST CHAR16 *Want);
+
+/*
+ * Find the Block I/O instance for the GPT partition named Name. Returns
+ * EFI_NOT_FOUND when no partition carries that name, which on this platform is
+ * an ordinary outcome rather than a fault: `logfs` in particular does not exist
+ * everywhere.
+ */
+EFI_STATUS
+SfbFindPartitionByName (IN CONST CHAR16            *Name,
+                        OUT EFI_BLOCK_IO_PROTOCOL **BlockIo);
+
 /*
  * Mount the logfs partition so the Qualcomm BDS earlier in the boot chain can
  * flush its buffered log to it. No-op unless the FAT stack is already up, and
@@ -243,57 +323,24 @@ SfbGetVolumeLabel (IN EFI_FILE_PROTOCOL *Root,
                    OUT CHAR16           *Out,
                    IN UINTN             OutChars);
 
-/* ---- SuperFbStore.c: settings kept in the tail of the ESP ---------------- */
+/* ---- SuperFbEntries.c: entry list and launching -------------------------- */
 
 /*
- * The firmware on this platform rejects variables it does not know, so the
- * settings the menu has to remember outlive a reboot in the EFI System
- * Partition. Each named record occupies a permanent 1 KiB slot measured from
- * the partition end; deployed default/custom records therefore never move.
+ * Read and parse <boot root>\canoe.cfg from the first volume that carries one.
+ * Returns EFI_NOT_FOUND when no volume has the file, EFI_COMPROMISED_DATA when
+ * one does but it cannot be believed. *Volume is set to the volume the file
+ * came from, so entry paths resolve against the same boot root.
  */
-#define SFB_STORE_SLOT_BYTES             1024
-#define SFB_STORE_SLOTS                  2
-#define SFB_STORE_CUSTOM_TAIL_DISTANCE  SFB_STORE_SLOT_BYTES
-#define SFB_STORE_DEFAULT_TAIL_DISTANCE (SFB_STORE_SLOT_BYTES * 2)
-#define SFB_STORE_MODE_TAIL_DISTANCE    (SFB_STORE_SLOT_BYTES * 3)
-#define SFB_STORE_SCRATCH_BYTES         SIZE_1MB
-
-#if SFB_STORE_MODE_TAIL_DISTANCE > SFB_STORE_SCRATCH_BYTES
-#error "SuperFb store record exceeds the reserved 1 MiB scratch area"
-#endif
-
-#define SFB_STORE_DEFAULT  0   /* the entry the menu timeout launches */
-#define SFB_STORE_CUSTOM   1   /* the single user-added menu entry */
+EFI_STATUS
+SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume);
 
 /*
- * Replace one legacy record. Text is NUL-terminated ASCII of at most
- * SFB_STORE_SLOT_BYTES - 1 bytes; passing an empty string clears the slot.
+ * TRUE when the boot root exists but holds neither a canoe.cfg nor a boot.efi.
+ * That is the first-run signal: nothing is installed, so the only destination
+ * that can change it is fastboot.
  */
-EFI_STATUS
-SfbStoreWrite (IN UINTN Slot, IN CONST CHAR8 *Text);
-
-/*
- * Read one legacy record. Out is always NUL-terminated, and empty when the
- * slot has never been written. Fails only when the store itself is unreachable.
- */
-EFI_STATUS
-SfbStoreRead (IN UINTN Slot, OUT CHAR8 *Out, IN UINTN OutBytes);
-
-/* Read/write the preferred boot mode record at the permanent third slot. */
-EFI_STATUS
-SfbStoreReadMode (OUT SFB_BOOT_MODE *Mode, OUT BOOLEAN *Defaulted);
-
-EFI_STATUS
-SfbStoreWriteMode (IN SFB_BOOT_MODE Mode);
-
-/* Persist one menu selection before changing the caller's session mode. */
-EFI_STATUS
-SfbCommitModeSelection (
-  IN OUT SFB_BOOT_MODE *CurrentMode,
-  IN SFB_BOOT_MODE      SelectedMode
-  );
-
-/* ---- SuperFbEntries.c: entry list, persistence and launching ------------ */
+BOOLEAN
+SfbBootRootIsEmpty (VOID);
 
 VOID
 SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode);
@@ -315,33 +362,25 @@ SfbBuildSubMenu (OUT SFB_MENU_STATE *Menu,
 VOID
 SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu);
 
-/* Persist Entry as the entry the menu timeout launches. */
-EFI_STATUS
-SfbSaveDefaultEntry (IN CONST SFB_BOOT_ENTRY *Entry);
-
-/* Persist Entry as the single user-added boot menu entry, replacing any
- * previous one. */
-EFI_STATUS
-SfbSaveCustomEntry (IN CONST SFB_BOOT_ENTRY *Entry);
-
 /* True only for the four canonical managed ABL paths. */
 BOOLEAN
 SfbIsManagedAblEntry (IN CONST SFB_BOOT_ENTRY *Entry);
 
 /*
- * Load and start the image the entry points at. Records the entry as the new
- * default first unless Temporary is TRUE. Only returns if the launch failed or
- * the started image returned.
+ * Load and start the image the entry points at. Only returns if the launch
+ * failed or the started image returned.
  *
  * ClearScreen controls the "Booting <name>" banner: TRUE clears the screen
  * first (menu-driven launch), FALSE leaves the current screen contents in place
  * (unattended default boot, which must not blank the boot splash).
+ *
+ * SessionMode is the policy to launch under for entries that carry none of
+ * their own; an entry whose ModeFromConfig is TRUE always uses its own.
  */
 EFI_STATUS
 SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
-                IN BOOLEAN              Temporary,
                 IN BOOLEAN              ClearScreen,
-                IN SFB_BOOT_MODE        Mode);
+                IN SFB_BOOT_MODE        SessionMode);
 
 /*
  * Load and start a single UEFI driver image named by a volume-relative path.
@@ -352,11 +391,11 @@ EFI_STATUS
 SfbLoadDriver (IN EFI_HANDLE Volume, IN CONST CHAR16 *Path);
 
 /*
- * Launch the stored default entry, if one is configured. Returns TRUE when a
- * persisted default existed and was attempted (on success the launched image
- * takes over and this never returns; on failure it returns TRUE and the caller
- * should fall back to the menu). Returns FALSE when no default is configured,
- * so the caller shows the menu instead.
+ * Launch the configured default entry, if there is one. Returns TRUE when
+ * canoe.cfg named a default that resolved and was attempted (on success the
+ * launched image takes over and this never returns; on failure it returns TRUE
+ * and the caller should fall back to the menu). Returns FALSE when no default
+ * is configured, so the caller shows the menu instead.
  */
 BOOLEAN
 SfbLaunchDefaultEntry (IN SFB_BOOT_MODE Mode);
@@ -413,6 +452,15 @@ VOID
 SfbShowEnteringMenu (VOID);
 
 /*
+ * Announce that the boot root holds nothing bootable and that fastboot is next.
+ * Holds the screen briefly so the message is readable, then returns; the caller
+ * enters fastboot. No keypress is required: on a first run there is nothing
+ * else the device can usefully do.
+ */
+VOID
+SfbShowFirstRunScreen (VOID);
+
+/*
  * Announce that an entry is being launched, so the menu the user picked from
  * does not stay on screen while the image loads. Title is "Booting <Name>".
  *
@@ -425,9 +473,45 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name,
                       IN CONST CHAR16 *FilePath,
                       IN BOOLEAN       ClearScreen);
 
-/* Wait for a key. TimeoutMs of 0 waits indefinitely. */
+/* Announce a power action and leave the message up while the reset lands. */
+VOID
+SfbShowActionScreen (IN CONST CHAR16 *Text);
+
+/*
+ * Wait for a key. TimeoutMs of 0 waits indefinitely.
+ *
+ * FlushFirst drains the input buffer before waiting, which a power-on scan
+ * needs and an interactive menu must not do. Policy decides what a key that is
+ * neither volume key means. This is the single implementation; the power-on
+ * volume-up scan in LinuxLoader.c used to carry its own copy of the same
+ * timer-event loop.
+ */
+SFB_KEY
+SfbWaitForKeyEx (IN UINT32          TimeoutMs,
+                 IN BOOLEAN         FlushFirst,
+                 IN SFB_KEY_POLICY  Policy);
+
+/* The interactive form: no flush, non-volume keys confirm. */
 SFB_KEY
 SfbWaitForKey (IN UINT32 TimeoutMs);
+
+/* ---- SuperFbMassStorage.c: USB mass-storage export ---------------------- */
+
+/*
+ * Offer the exportable partitions and run the chosen one as a USB mass-storage
+ * device until the host goes away or the operator cancels. Returns when the
+ * session is over; the caller redraws its own screen.
+ */
+VOID
+SfbRunMassStorageMenu (VOID);
+
+/*
+ * Export the partition named by Target ("persist" or "logfs") without asking.
+ * The entry point the fastboot `oem mass-storage` command uses, where the host
+ * has already said which one it wants.
+ */
+EFI_STATUS
+SfbExportPartitionByName (IN CONST CHAR16 *Target);
 
 /* ---- shared console helpers (SuperFbMenu.c) ----------------------------- */
 

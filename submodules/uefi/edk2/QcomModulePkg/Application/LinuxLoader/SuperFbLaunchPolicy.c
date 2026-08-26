@@ -16,6 +16,14 @@ STATIC EFI_SECURITY_ARCH_PROTOCOL            *mSfbSec;
 STATIC EFI_SECURITY2_ARCH_PROTOCOL           *mSfbSec2;
 STATIC EFI_SECURITY_FILE_AUTHENTICATION_STATE mSfbOrigSecState;
 STATIC EFI_SECURITY2_FILE_AUTHENTICATION      mSfbOrigSec2Auth;
+STATIC SFB_CONFIG_LOCK_POLICY mSfbLockPolicy = SfbConfigLockAsNeeded;
+
+VOID
+SfbSetLaunchLockPolicy (IN SFB_CONFIG_LOCK_POLICY Policy)
+{
+  mSfbLockPolicy = (Policy == SfbConfigLockNever)
+                   ? SfbConfigLockNever : SfbConfigLockAsNeeded;
+}
 
 STATIC
 EFI_STATUS
@@ -260,7 +268,8 @@ SfbLaunchImage (
   }
 
   if (Managed) {
-    Status = SfbPrepareManagedAblHooks (EffectiveMode, Profile, TzMap);
+    Status = SfbPrepareManagedAblHooks (EffectiveMode, Profile, TzMap,
+                                        mSfbLockPolicy);
     if (EFI_ERROR (Status)) {
       Print (L"SFB: managed ABL hook preflight failed (%r)\n", Status);
       SfbRestoreSecurity ();
