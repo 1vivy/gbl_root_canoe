@@ -16,6 +16,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .venv/
+.pytest_cache/
 venv/
 # Download cache for the pinned Windows embeddable CPython archive
 .cache/python-embed/
