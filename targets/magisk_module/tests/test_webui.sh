@@ -23,7 +23,7 @@ cat > "$WEBROOT/mock.js" <<'EOF'
 localStorage.setItem("blFlasherPendingTaskId", "stale-task");
 localStorage.setItem("blFlasherPendingTaskKind", "mode");
 window.__ksuMock = {
-  status: "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=other-task|PREFERRED_MODE=2|MODE_DEFAULTED=0|MODE_READ_ERROR=0|USER_LANG=en",
+  status: "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=other-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en",
   failStatus: false,
   toasts: [],
   lastStartModeCommand: "",
@@ -55,13 +55,13 @@ window.ksu = {
       window.__ksuMock.lastStartModeCommand = command;
       if (window.__ksuMock.startModeFailure) {
         window[callbackName](1,
-          "STARTED=0|ERROR_CODE=MODE2_PROFILE_MISSING|ERROR=preferred mode preflight failed", "");
+          "STARTED=0|ERROR_CODE=MODE2_PROFILE_MISSING|ERROR=entry mode preflight failed", "");
         return;
       }
       window.__ksuMock.modeTaskNumber += 1;
       const taskId = `mode-task-${window.__ksuMock.modeTaskNumber}`;
       window.__ksuMock.lastModeTaskId = taskId;
-      window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=1|PID=100|STATE=running|MESSAGE=saving preferred mode|UPDATED_AT=now|TASK_ID=${taskId}|PREFERRED_MODE=2|MODE_DEFAULTED=0|MODE_READ_ERROR=0|USER_LANG=en`;
+      window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=1|PID=100|STATE=running|MESSAGE=saving entry mode|UPDATED_AT=now|TASK_ID=${taskId}|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en`;
       window[callbackName](0, `STARTED=1|TASK_ID=${taskId}`, "");
       return;
     }
@@ -107,17 +107,17 @@ try {
   assert(localStorage.getItem("blFlasherPendingTaskId") === null,
     "stale pending task was not reconciled");
 
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=defaulted-task|PREFERRED_MODE=1|MODE_DEFAULTED=1|MODE_READ_ERROR=0|USER_LANG=en";
+  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=defaulted-task|ENTRY_ID=android-a|ENTRY_MODE=1|ENTRY_MODE_DEFAULTED=1|CONFIG_READ_ERROR=0|USER_LANG=en";
   document.querySelector("#refreshButton").click();
   await waitFor(
     () => document.querySelector("#modeStatusText").textContent ===
-      "No saved mode; currently using default Mode 1",
+      "This entry has no explicit mode; using the file fallback Mode 1",
     "defaulted Mode 1 status was not rendered"
   );
   assert(document.querySelector("#preferredModeSelect").value === "1",
     "defaulted raw Mode 1 was not selected");
 
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=1|PID=99|STATE=success|MESSAGE=busy|UPDATED_AT=now|TASK_ID=live-task|PREFERRED_MODE=2|MODE_DEFAULTED=0|MODE_READ_ERROR=0|USER_LANG=en";
+  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=1|PID=99|STATE=success|MESSAGE=busy|UPDATED_AT=now|TASK_ID=live-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
   document.querySelector("#refreshButton").click();
   await waitFor(() => disabled("#updateEfispCheckbox"), "busy controls were not disabled");
   assert(optionControls.every(disabled), "a busy option checkbox remained enabled");
@@ -126,7 +126,7 @@ try {
     "#preferredModeSelect", "#saveModeButton"
   ].every(disabled), "a busy task action remained enabled");
 
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=idle-task|PREFERRED_MODE=2|MODE_DEFAULTED=0|MODE_READ_ERROR=0|USER_LANG=en";
+  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=idle-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
   document.querySelector("#refreshButton").click();
   await waitFor(() => !disabled("#saveModeButton"), "mode controls did not re-enable");
   document.querySelector("#preferredModeSelect").value = "0";
@@ -144,10 +144,10 @@ try {
     "selected Mode 0 was not passed to the worker");
 
   const successTaskId = window.__ksuMock.lastModeTaskId;
-  window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=preferred mode saved|UPDATED_AT=now|TASK_ID=${successTaskId}|PREFERRED_MODE=0|MODE_DEFAULTED=0|MODE_READ_ERROR=0|USER_LANG=en`;
+  window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=entry mode saved|UPDATED_AT=now|TASK_ID=${successTaskId}|ENTRY_ID=android-a|ENTRY_MODE=0|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en`;
   document.querySelector("#refreshButton").click();
   await waitFor(
-    () => window.__ksuMock.toasts.includes("Preferred boot mode saved"),
+    () => window.__ksuMock.toasts.includes("Boot-entry mode saved"),
     "successful mode task did not complete through status polling"
   );
 
@@ -157,7 +157,7 @@ try {
   await waitFor(() => window.__ksuMock.modeTaskNumber === 2,
     "second mode task did not start");
   const failedTaskId = window.__ksuMock.lastModeTaskId;
-  window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=error|MESSAGE=preferred mode write failed|UPDATED_AT=now|TASK_ID=${failedTaskId}|PREFERRED_MODE=1|MODE_DEFAULTED=0|MODE_READ_ERROR=0|USER_LANG=en`;
+  window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=error|MESSAGE=canoe.cfg write failed|UPDATED_AT=now|TASK_ID=${failedTaskId}|ENTRY_ID=android-a|ENTRY_MODE=1|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en`;
   document.querySelector("#refreshButton").click();
   await waitFor(
     () => document.querySelector("#stateChip").textContent === "Status: error" &&

@@ -1,6 +1,5 @@
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
-	submodule_mode2_profile submodule_mode2_profile_android \
-	submodule_abl_tzmap submodule_ablfvextractor \
+	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
 	submodule_vbmetafixer canoe_device_script canoe_host build
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
@@ -41,17 +40,6 @@ submodule_mode2_profile: copy_resources
 	cargo build --locked --release --manifest-path ../../tools/mode2-profile/Cargo.toml
 	test -x ../../tools/mode2-profile/target/release/mode2_profile
 	cp ../../tools/mode2-profile/target/release/mode2_profile ./build/toolkit/bin/mode2_profile
-submodule_mode2_profile_android: copy_resources
-	# The arm64 build is pushed on-device by `canoe_stage --mode` for the
-	# preferred-mode write. Skipped with a loud warning when the NDK is absent
-	# so a host-only local build still packages; CI always has it.
-	if [ -n "$(NDK_PATH)" ]; then \
-		CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/mode2-profile/Cargo.toml && \
-		test -f ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile && \
-		cp ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile ./build/toolkit/bin/mode2_profile-arm64; \
-	else \
-		echo "WARNING: NDK_PATH unset; shipping without bin/mode2_profile-arm64 (canoe_stage --mode will be unavailable)"; \
-	fi
 submodule_abl_tzmap: copy_resources
 	cargo build --locked --release --manifest-path ../../tools/abl-tzmap/Cargo.toml
 	test -x ../../tools/abl-tzmap/target/release/abl_tzmap
@@ -61,7 +49,7 @@ submodule_ablfvextractor: copy_resources
 	cp ../../submodules/ablfvextractor/build/extractfv ./build/toolkit/bin/extractfv
 submodule_vbmetafixer: copy_resources
 	# vbmetaport grafts an official vbmeta onto a third-party image; vbmetabackup
-	# -f lifts that vbmeta out of a local firmware image. canoe_prep needs both.
+	# -f lifts that vbmeta out of a local firmware image. `canoe prep` needs both.
 	# Guarded like submodule_uefi: the vbmetafixer `build` target is not phony, so
 	# a stale build/ directory would otherwise make a plain `make build` a no-op.
 	cd ../../tools/vbmetafixer && \
@@ -77,19 +65,10 @@ canoe_device_script: copy_resources
 	chmod +x ./build/toolkit/canoe_device_install.sh
 	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
 canoe_host: copy_resources
-	# Host-side Canoe tools are shared by Linux and Windows and copied from
-	# one source tree so the two toolkits cannot drift.
-	cp -r ../../tools/canoe-host/canoe ./build/toolkit/canoe
-	find ./build/toolkit/canoe -type d -name __pycache__ -prune -exec rm -rf {} +
-	cp ../../tools/canoe-host/canoe_build \
-		../../tools/canoe-host/canoe_prep \
-		../../tools/canoe-host/canoe_prep_device \
-		../../tools/canoe-host/canoe_stage \
-		./build/toolkit/
-	chmod +x ./build/toolkit/canoe_build \
-		./build/toolkit/canoe_prep \
-		./build/toolkit/canoe_prep_device \
-		./build/toolkit/canoe_stage
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host
+	cp -r ../../tools/canoe-host/canoelib ./build/toolkit/canoelib
+	find ./build/toolkit/canoelib -type d -name __pycache__ -prune -exec rm -rf {} +
+	cp ../../tools/canoe-host/canoe ./build/toolkit/canoe
+	chmod +x ./build/toolkit/canoe
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host
 	# zip
 	cd build/toolkit && zip -r ../toolkit_linux.zip ./

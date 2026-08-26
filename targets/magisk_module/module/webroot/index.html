@@ -56,7 +56,7 @@
       </div>
 
       <fieldset class="mode-control">
-        <legend id="lblPreferredMode">首选启动模式</legend>
+        <legend id="lblPreferredMode">当前启动项模式</legend>
         <div class="mode-actions">
           <select id="preferredModeSelect" aria-labelledby="lblPreferredMode" aria-describedby="modeStatusText">
             <option value="0">Mode 0 - Honest unlocked</option>
@@ -65,7 +65,7 @@
           </select>
           <button class="ghost-button" id="saveModeButton" type="button" data-i18n="saveMode">保存</button>
         </div>
-        <p class="caption mode-status" id="modeStatusText" aria-live="polite">等待读取首选模式</p>
+        <p class="caption mode-status" id="modeStatusText" aria-live="polite">等待读取 canoe.cfg 启动项模式</p>
       </fieldset>
 
       <label class="option-check" for="updateEfispCheckbox">

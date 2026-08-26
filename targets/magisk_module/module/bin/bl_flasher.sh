@@ -120,10 +120,10 @@ else
   TEXT_PATCH_SLOT="Target slot"
 fi
 
-RUNTIME_DIR="$MODDIR/tmp"
-BY_NAME_DIR="/dev/block/by-name"
-PERSIST_MNT="/mnt/vendor/persist"
-EFISP_DIR="$PERSIST_MNT/efisp"
+RUNTIME_DIR="${RUNTIME_DIR:-$MODDIR/tmp}"
+BY_NAME_DIR="${BY_NAME_DIR:-/dev/block/by-name}"
+PERSIST_MNT="${PERSIST_MNT:-/mnt/vendor/persist}"
+EFISP_DIR="${EFISP_DIR:-$PERSIST_MNT/efisp}"
 BDS_EFI="$MODDIR/BDS.efi"
 IMAGE_NAMES="abl"
 LOG_FILE="$RUNTIME_DIR/flash.log"
@@ -351,56 +351,143 @@ build_mode2_profile() {
   return 0
 }
 
-mode_partition_geometry() {
-  mode_device="$1"
-  MODE_PARTITION_BYTES=$(blockdev --getsize64 "$mode_device" 2>/dev/null) || return 1
-  MODE_BLOCK_SIZE=$(blockdev --getss "$mode_device" 2>/dev/null) || return 1
-  case "$MODE_PARTITION_BYTES" in ''|*[!0-9]*) return 1 ;; esac
-  case "$MODE_BLOCK_SIZE" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$MODE_PARTITION_BYTES" -ge 1048576 ] || return 1
-  [ "$MODE_BLOCK_SIZE" -gt 0 ] || return 1
+config_file() {
+  echo "$1/canoe.cfg"
 }
 
-read_mode_record() {
-  mode_device="${1:-$BY_NAME_DIR/efisp}"
-  tool=$(mode2_profile_path)
-  [ -x "$tool" ] || return 1
-  mode_partition_geometry "$mode_device" || return 1
-  mode_output=$("$tool" mode-read --device "$mode_device" \
-    --partition-bytes "$MODE_PARTITION_BYTES" --block-size "$MODE_BLOCK_SIZE" 2>/dev/null) || return 1
-  PREFERRED_MODE=$(printf '%s\n' "$mode_output" | sed -n 's/.*MODE=\([012]\).*/\1/p' | tail -n 1)
-  MODE_DEFAULTED=$(printf '%s\n' "$mode_output" | sed -n 's/.*MODE_DEFAULTED=\([01]\).*/\1/p' | tail -n 1)
-  case "$PREFERRED_MODE:$MODE_DEFAULTED" in
-    0:0|1:0|2:0|0:1|1:1|2:1) return 0 ;;
-    *) return 1 ;;
+config_generation() {
+  config_target="$1"
+  config_value=0
+  if [ -f "$config_target" ]; then
+    config_value=$(awk '$1 == "generation" && $2 ~ /^[0-9]+$/ { print $2; exit }' \
+      "$config_target" 2>/dev/null)
+  fi
+  case "$config_value" in
+    ''|*[!0-9]*) config_value=0 ;;
+  esac
+  if [ "$config_value" -ge 4294967295 ]; then
+    echo 4294967295
+  else
+    echo $((config_value + 1))
+  fi
+}
+
+config_global_mode() {
+  config_target="$1"
+  config_mode=$(awk '$1 == "mode" && $2 ~ /^[012]$/ { print $2; exit }' \
+    "$config_target" 2>/dev/null)
+  case "$config_mode" in 0|1|2) echo "$config_mode" ;; *) echo 1 ;; esac
+}
+
+config_entry_mode() {
+  config_target="$1"
+  config_id="$2"
+  config_default="$3"
+  config_mode=$(awk -v wanted="$config_id" '
+    $1 == "entry" { in_entry = ($2 == wanted); next }
+    in_entry && $1 == "mode" && $2 ~ /^[012]$/ { print $2; exit }
+  ' "$config_target" 2>/dev/null)
+  case "$config_mode" in 0|1|2) echo "$config_mode" ;; *) echo "$config_default" ;; esac
+}
+config_mode_for_slot() {
+  config_target="$1"
+  config_slot="$2"
+  config_id=$(config_active_id "$config_slot")
+  [ -f "$config_target" ] || return 1
+  config_fallback=$(config_global_mode "$config_target")
+  config_mode=$(config_entry_mode "$config_target" "$config_id" "$config_fallback")
+  config_explicit=$(awk -v wanted="$config_id" '
+    $1 == "entry" { in_entry = ($2 == wanted); next }
+    in_entry && $1 == "mode" && $2 ~ /^[012]$/ { print 1; exit }
+  ' "$config_target" 2>/dev/null)
+  case "$config_explicit" in
+    1) CONFIG_MODE_DEFAULTED=0 ;;
+    *) CONFIG_MODE_DEFAULTED=1 ;;
+  esac
+  PREFERRED_MODE="$config_mode"
+  MODE_DEFAULTED="$CONFIG_MODE_DEFAULTED"
+  return 0
+}
+
+config_active_id() {
+  case "$1" in
+    _a) echo android-a ;;
+    _b) echo android-b ;;
+    *) echo android-a ;;
   esac
 }
 
-write_mode_record() {
-  mode_device="${1:-$BY_NAME_DIR/efisp}"
-  mode_value="$2"
-  case "$mode_value" in 0|1|2) ;; *) return 1 ;; esac
-  tool=$(mode2_profile_path)
-  [ -x "$tool" ] || return 1
-  mode_partition_geometry "$mode_device" || return 1
-  "$tool" mode-write --device "$mode_device" \
-    --partition-bytes "$MODE_PARTITION_BYTES" --block-size "$MODE_BLOCK_SIZE" \
-    --mode "$mode_value" >> "$LOG_FILE" 2>&1
+config_write_entry() {
+  config_target="$1"
+  config_id="$2"
+  config_title="$3"
+  config_image="$4"
+  config_mode="$5"
+  config_role="$6"
+  printf 'entry %s\n  title %s\n  image %s\n  mode %s\n  role %s\n\n' \
+    "$config_id" "$config_title" "$config_image" "$config_mode" "$config_role" \
+    >> "$config_target"
 }
-restore_preferred_mode() {
-  mode_device="${1:-$BY_NAME_DIR/efisp}"
-  mode_value="$2"
-  restore_mode_ok=1
-  if ! write_mode_record "$mode_device" "$mode_value"; then
-    restore_mode_ok=0
+
+write_canoe_config() {
+  config_target_dir="$1"
+  config_slot="${2:-_a}"
+  config_requested_mode="$3"
+  config_target=$(config_file "$config_target_dir")
+  config_fallback=$(config_global_mode "$config_target")
+  case "$config_requested_mode" in
+    0|1|2) config_fallback="$config_requested_mode" ;;
+    '') ;;
+    *) return 1 ;;
+  esac
+  config_active=$(config_active_id "$config_slot")
+  config_active_mode="$config_fallback"
+  if [ -f "$config_target" ] && [ -z "$config_requested_mode" ]; then
+    config_active_mode=$(config_entry_mode "$config_target" "$config_active" "$config_fallback")
   fi
-  if ! read_mode_record "$mode_device"; then
-    restore_mode_ok=0
-  elif [ "$PREFERRED_MODE" != "$mode_value" ] ||
-       [ "$MODE_DEFAULTED" != "0" ]; then
-    restore_mode_ok=0
+  config_generation_value=$(config_generation "$config_target")
+  config_output="$config_target"
+  config_temp="$config_output.tmp.$$"
+  rm -f "$config_temp"
+  {
+    printf '# canoe.cfg - generated by canoe-device\n'
+    printf 'version 1\n'
+    printf 'generation %s\n' "$config_generation_value"
+    printf 'timeout 5\n'
+    printf 'default %s\n' "$config_active"
+    printf 'mode %s\n' "$config_fallback"
+    printf 'lockstate asneeded\n\n'
+    if [ "$config_active" = android-a ]; then
+      config_write_entry "$config_temp" android-a 'Android (slot A)' boot.efi \
+        "$config_active_mode" active
+      config_inactive_id=android-b
+      config_inactive_title='Android (slot B)'
+    else
+      config_write_entry "$config_temp" android-b 'Android (slot B)' boot.efi \
+        "$config_active_mode" active
+      config_inactive_id=android-a
+      config_inactive_title='Android (slot A)'
+    fi
+    config_inactive_image="boot_${config_inactive_id#android-}.efi"
+    if [ -f "$config_target_dir/$config_inactive_image" ]; then
+      config_inactive_mode=$(config_entry_mode "$config_target" "$config_inactive_id" "$config_fallback")
+      config_write_entry "$config_temp" "$config_inactive_id" "$config_inactive_title" \
+        "$config_inactive_image" "$config_inactive_mode" inactive
+    fi
+    if [ -f "$config_target_dir/boot_backup.efi" ]; then
+      config_backup_mode=$(config_entry_mode "$config_target" android-backup "$config_fallback")
+      config_write_entry "$config_temp" android-backup 'Android (previous)' boot_backup.efi \
+        "$config_backup_mode" backup
+    fi
+  } > "$config_temp" || {
+    rm -f "$config_temp"
+    return 1
+  }
+  if ! mv "$config_temp" "$config_output" || ! sync; then
+    rm -f "$config_temp"
+    return 1
   fi
-  [ "$restore_mode_ok" = "1" ]
+  return 0
 }
 
 
@@ -413,6 +500,7 @@ pair_has_transaction_files() {
     "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" "$target/.canoe.new.tzmap" \
     "$target/.canoe.old.live.efi" "$target/.canoe.old.live.gm2p" "$target/.canoe.old.live.tzmap" \
     "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap" \
+    "$target/.canoe.old.cfg" "$target/.canoe.old.cfg.absent" \
     "$target/$PAIR_TXN_MARKER_NAME" "$target/$PAIR_TXN_MARKER_NAME.tmp.$$"; do
     [ -e "$pair_file" ] && return 0
   done
@@ -440,7 +528,8 @@ pair_transaction_cleanup() {
   for pair_file in \
     "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" "$target/.canoe.new.tzmap" \
     "$target/.canoe.old.live.efi" "$target/.canoe.old.live.gm2p" "$target/.canoe.old.live.tzmap" \
-    "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap"; do
+    "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap" \
+    "$target/.canoe.old.cfg" "$target/.canoe.old.cfg.absent"; do
     if [ -e "$pair_file" ] && ! rm -f "$pair_file"; then
       pair_cleanup_failed=1
     fi
@@ -573,6 +662,11 @@ pair_recover() {
     "$target/.canoe.old.backup.gm2p" "$pair_backup_profile_bit" || return 1
   pair_restore_one "$target" "$target/boot_backup.efi.tzmap" \
     "$target/.canoe.old.backup.tzmap" "$pair_backup_tzmap_bit" || return 1
+  if [ -e "$target/.canoe.old.cfg" ]; then
+    cp "$target/.canoe.old.cfg" "$target/canoe.cfg" || return 1
+  elif [ -e "$target/.canoe.old.cfg.absent" ]; then
+    rm -f "$target/canoe.cfg" || return 1
+  fi
   sync || return 1
   pair_transaction_cleanup "$target" || return 1
   sync || return 1
@@ -606,6 +700,13 @@ pair_prepare() {
   [ -e "$target/boot_backup.efi" ] && pair_backup_efi_bit=1
   [ -e "$target/boot_backup.efi.gm2p" ] && pair_backup_profile_bit=1
   [ -e "$target/boot_backup.efi.tzmap" ] && pair_backup_tzmap_bit=1
+  if [ -e "$target/canoe.cfg" ]; then
+    cp "$target/canoe.cfg" "$target/.canoe.old.cfg" || return 1
+    rm -f "$target/.canoe.old.cfg.absent"
+  else
+    rm -f "$target/.canoe.old.cfg"
+    : > "$target/.canoe.old.cfg.absent" || return 1
+  fi
   pair_marker_write "$target" prepared "$pair_live_efi_bit" \
     "$pair_live_profile_bit" "$pair_live_tzmap_bit" "$pair_backup_efi_bit" \
     "$pair_backup_profile_bit" "$pair_backup_tzmap_bit"
@@ -622,9 +723,9 @@ install_efisp_pair() {
   source_efi="$2"
   source_profile="$3"
   source_tzmap="$4"
+  active_slot="${5:-_a}"
   pair_begin "$target" || return 1
   cp "$source_efi" "$target/.canoe.new.efi" >> "$LOG_FILE" 2>&1 || {
-    pair_new_cleanup "$target" || :
     return 1
   }
   cp "$source_profile" "$target/.canoe.new.gm2p" >> "$LOG_FILE" 2>&1 || {
@@ -730,6 +831,10 @@ install_efisp_pair() {
     pair_install_failure "$target"
     return 1
   fi
+  if ! write_canoe_config "$target" "$active_slot"; then
+    pair_install_failure "$target"
+    return 1
+  fi
   if ! sync; then
     pair_install_failure "$target"
     return 1
@@ -780,6 +885,7 @@ update_efisp() {
   is_debug="$3"
   source_abl="$4"
   source_vbmeta="$5"
+  active_slot="${6:-_a}"
   clean_workdir
   build_patched_efi "$target_abl" || return 3
   if grep -q "Warning: Failed to patch ABL GBL" "$RUNTIME_DIR/patch.log"; then
@@ -817,11 +923,6 @@ update_efisp() {
       write_log "$TEXT_PERSIST_NOT_MOUNTED"
       return 1
     fi
-    if ! read_mode_record "$BY_NAME_DIR/efisp"; then
-      write_log "preferred mode read failed"
-      return 3
-    fi
-    preserved_mode="$PREFERRED_MODE"
     if ! pair_recover "$efisp_target"; then
       write_log "pair recovery failed"
       return 3
@@ -843,6 +944,8 @@ update_efisp() {
       return 1
     }
     place_efisp_tree_to "$efisp_target" || { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
+    write_canoe_config "$efisp_target" "$active_slot" ||
+      { write_log "$TEXT_EFISP_WRITE_FAILED"; return 1; }
     if ! sync; then
       write_log "$TEXT_EFISP_WRITE_FAILED"
       return 1
@@ -850,9 +953,9 @@ update_efisp() {
     write_log "$TEXT_EFISP_FILES_OK"
     return 0
   fi
-
   if ! install_efisp_pair "$efisp_target" "$source_patched_efi" \
-       "$RUNTIME_DIR/patched.efi.gm2p" "$RUNTIME_DIR/patched.efi.tzmap"; then
+       "$RUNTIME_DIR/patched.efi.gm2p" "$RUNTIME_DIR/patched.efi.tzmap" \
+       "$active_slot"; then
     if ! pair_restore "$efisp_target"; then
       write_log "pair recovery failed; transaction retained"
       return 3
@@ -877,27 +980,6 @@ update_efisp() {
     fi
     write_log "$TEXT_EFISP_FLASH_FAILED"
     return 1
-  fi
-  mode_write_ok=1
-  if ! write_mode_record "$BY_NAME_DIR/efisp" "$preserved_mode"; then
-    mode_write_ok=0
-  fi
-  mode_read_ok=1
-  if ! read_mode_record "$BY_NAME_DIR/efisp"; then
-    mode_read_ok=0
-  fi
-  if [ "$mode_write_ok" != "1" ] ||
-     [ "$mode_read_ok" != "1" ] ||
-     [ "$PREFERRED_MODE" != "$preserved_mode" ] ||
-     [ "$MODE_DEFAULTED" != "0" ]; then
-    mode_restore_ok=1
-    restore_preferred_mode "$BY_NAME_DIR/efisp" "$preserved_mode" || mode_restore_ok=0
-    if ! pair_restore "$efisp_target"; then
-      write_log "pair recovery failed; transaction retained"
-    fi
-    [ "$mode_restore_ok" = "1" ] || write_log "preferred mode restoration failed"
-    write_log "preferred mode write or verification failed"
-    return 3
   fi
   pair_commit "$efisp_target"
   pair_commit_status=$?
@@ -981,15 +1063,6 @@ update_bds_tools() {
   fi
 
 
-
-  # The raw mode record is part of the ESP tail. Read it before touching BDS
-  # and write the same value back afterwards, materializing the default.
-  read_mode_record "$BY_NAME_DIR/efisp" || {
-    write_log "preferred mode read failed"
-    return 1
-  }
-  preserved_mode="$PREFERRED_MODE"
-
   mkdir -p "$EFISP_DIR" >> "$LOG_FILE" 2>&1 || { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
   if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$LOG_FILE" 2>&1; then
     write_log "$TEXT_EFISP_SET_RW_FAILED"
@@ -1001,24 +1074,6 @@ update_bds_tools() {
   fi
   if ! sync; then
     write_log "$TEXT_EFISP_FLASH_FAILED"
-    return 1
-  fi
-  mode_write_ok=1
-  if ! write_mode_record "$BY_NAME_DIR/efisp" "$preserved_mode"; then
-    mode_write_ok=0
-  fi
-  mode_read_ok=1
-  if ! read_mode_record "$BY_NAME_DIR/efisp"; then
-    mode_read_ok=0
-  fi
-  if [ "$mode_write_ok" != "1" ] ||
-     [ "$mode_read_ok" != "1" ] ||
-     [ "$PREFERRED_MODE" != "$preserved_mode" ] ||
-     [ "$MODE_DEFAULTED" != "0" ]; then
-    mode_restore_ok=1
-    restore_preferred_mode "$BY_NAME_DIR/efisp" "$preserved_mode" || mode_restore_ok=0
-    [ "$mode_restore_ok" = "1" ] || write_log "preferred mode restoration failed"
-    write_log "preferred mode write or verification failed"
     return 1
   fi
   write_log "$TEXT_EFISP_FLASH_OK"
@@ -1050,17 +1105,18 @@ print_status() {
   _msg=$(read_line "$MESSAGE_FILE")
   _upd=$(read_line "$UPDATED_FILE")
   _task=$(read_line "$TASK_FILE")
-  mode_read_error=0
-  if read_mode_record "$BY_NAME_DIR/efisp"; then
+  config_read_error=0
+  status_mode=
+  status_defaulted=
+  entry_id=$(config_active_id "$current_slot")
+  if config_mode_for_slot "$EFISP_DIR/canoe.cfg" "$current_slot"; then
     status_mode="$PREFERRED_MODE"
     status_defaulted="$MODE_DEFAULTED"
   else
-    status_mode=
-    status_defaulted=
-    mode_read_error=1
+    config_read_error=1
   fi
 
-  out="CURRENT_SLOT=$current_slot|TARGET_SLOT=$target_slot|RUNNING=$running|PID=$pid|STATE=$_state|MESSAGE=$_msg|UPDATED_AT=$_upd|TASK_ID=$_task|PREFERRED_MODE=$status_mode|MODE_DEFAULTED=$status_defaulted|MODE_READ_ERROR=$mode_read_error|USER_LANG=$LANG"
+  out="CURRENT_SLOT=$current_slot|TARGET_SLOT=$target_slot|RUNNING=$running|PID=$pid|STATE=$_state|MESSAGE=$_msg|UPDATED_AT=$_upd|TASK_ID=$_task|ENTRY_ID=$entry_id|ENTRY_MODE=$status_mode|ENTRY_MODE_DEFAULTED=$status_defaulted|CONFIG_READ_ERROR=$config_read_error|USER_LANG=$LANG"
   emit "$out"
 }
 
@@ -1232,7 +1288,7 @@ run_flash() {
   current_vbmeta=$(partition_path vbmeta "$current_slot")
 
   if [ "$debug" = "yes" ]; then
-    update_efisp "$abl" "$vbmeta" yes
+    update_efisp "$abl" "$vbmeta" yes "" "" "$current_slot"
     efisp_res=$?
 
     patch_res=0
@@ -1251,11 +1307,11 @@ run_flash() {
 
   efisp_fail=0
   skip_abl_flash=0
-  update_efisp "$abl" "$vbmeta" no "$current_abl" "$current_vbmeta"
+  update_efisp "$abl" "$vbmeta" no "$current_abl" "$current_vbmeta" "$current_slot"
   res=$?
   if [ $res -eq 3 ]; then
-    write_log "ABL/vbmeta/mode transaction failed"
-    write_state error "ABL/vbmeta/mode transaction failed"
+    write_log "ABL/vbmeta/config transaction failed"
+    write_state error "ABL/vbmeta/config transaction failed"
     exit 3
   elif [ $res -eq 1 ]; then
     efisp_fail=1
@@ -1341,15 +1397,9 @@ abl_tzmap_installed() {
 
 mode_request_preflight() {
   mode_value="$1"
-  MODE_PREFLIGHT_ERROR=PREFERRED_MODE_PREFLIGHT
+  MODE_PREFLIGHT_ERROR=ENTRY_MODE_PREFLIGHT
   case "$mode_value" in 0|1|2) ;; *) return 1 ;; esac
-  [ -x "$BINDIR/mode2_profile" ] || {
-    MODE_PREFLIGHT_ERROR=MODE_PROFILE_TOOL_MISSING
-    return 1
-  }
-  [ -e "$BY_NAME_DIR/efisp" ] || return 1
-  [ -r "$BY_NAME_DIR/efisp" ] || return 1
-  mode_partition_geometry "$BY_NAME_DIR/efisp" || return 1
+  [ -d "$EFISP_DIR" ] || return 1
   if [ "$mode_value" = "2" ]; then
     [ -s "$EFISP_DIR/boot.efi.gm2p" ] || {
       MODE_PREFLIGHT_ERROR=MODE2_PROFILE_MISSING
@@ -1368,42 +1418,35 @@ mode_request_preflight() {
       return 1
     }
   fi
-  if [ -b "$BY_NAME_DIR/efisp" ]; then
-    mode_readonly=$(blockdev --getro "$BY_NAME_DIR/efisp" 2>/dev/null) || return 1
-    [ "$mode_readonly" = "0" ] || return 1
-  else
-    [ -w "$BY_NAME_DIR/efisp" ] || return 1
-  fi
-  read_mode_record "$BY_NAME_DIR/efisp" || return 1
   return 0
 }
 
-run_mode_write_worker() {
+run_config_mode_worker() {
   mode_value="$1"
   worker_task_id="$2"
   claim_worker_lock "$worker_task_id" || exit 1
   if ! mode_request_preflight "$mode_value"; then
-    write_state error "preferred mode preflight failed"
-    read_mode_record "$BY_NAME_DIR/efisp" >/dev/null 2>&1 || :
+    write_state error "entry mode preflight failed"
     exit 1
   fi
-  if ! write_mode_record "$BY_NAME_DIR/efisp" "$mode_value"; then
-    write_state error "preferred mode write failed"
-    if read_mode_record "$BY_NAME_DIR/efisp"; then
-      write_log "actual preferred mode: $PREFERRED_MODE|MODE_DEFAULTED=$MODE_DEFAULTED"
-    fi
+  current_slot=$(detect_current_slot) || {
+    write_state error "$TEXT_NO_SLOT"
+    exit 1
+  }
+  if ! write_canoe_config "$EFISP_DIR" "$current_slot" "$mode_value"; then
+    write_state error "canoe.cfg write failed"
     exit 1
   fi
-  if ! read_mode_record "$BY_NAME_DIR/efisp" || [ "$PREFERRED_MODE" != "$mode_value" ] || [ "$MODE_DEFAULTED" != "0" ]; then
-    write_state error "preferred mode verification failed"
-    if read_mode_record "$BY_NAME_DIR/efisp"; then
-      write_log "actual preferred mode: $PREFERRED_MODE|MODE_DEFAULTED=$MODE_DEFAULTED"
-    fi
+  if ! config_mode_for_slot "$EFISP_DIR/canoe.cfg" "$current_slot" ||
+     [ "$PREFERRED_MODE" != "$mode_value" ] ||
+     [ "$MODE_DEFAULTED" != "0" ]; then
+    write_state error "canoe.cfg verification failed"
     exit 1
   fi
-  write_state success "preferred mode saved"
+  write_state success "entry mode saved"
   exit 0
 }
+
 
 start_mode() {
   mode_value="$1"
@@ -1419,22 +1462,22 @@ start_mode() {
   fi
   if ! mode_request_preflight "$mode_value"; then
     echo "$task_id" > "$TASK_FILE"
-    write_state error "preferred mode preflight failed: $MODE_PREFLIGHT_ERROR"
+    write_state error "entry mode preflight failed: $MODE_PREFLIGHT_ERROR"
     cleanup_lock
-    emit "STARTED=0|TASK_ID=$task_id|ERROR_CODE=$MODE_PREFLIGHT_ERROR|ERROR=preferred mode preflight failed"
+    emit "STARTED=0|TASK_ID=$task_id|ERROR_CODE=$MODE_PREFLIGHT_ERROR|ERROR=entry mode preflight failed"
     return 1
   fi
   : > "$LOG_FILE"
   echo "$task_id" > "$TASK_FILE"
-  write_state running "saving preferred mode"
-  setsid sh "$0" mode-write-worker "$mode_value" "$task_id" >/dev/null 2>&1 </dev/null &
+  write_state running "saving entry mode"
+  setsid sh "$0" config-mode-worker "$mode_value" "$task_id" >/dev/null 2>&1 </dev/null &
   sleep 1
   if [ -n "$(current_pid)" ]; then
     emit "STARTED=1|TASK_ID=$task_id"
   else
     st=$(read_line "$STATE_FILE")
     if [ "$st" = "running" ]; then
-      write_state error "preferred mode worker failed to start"
+      write_state error "entry mode worker failed to start"
       st=error
     fi
     cleanup_lock
@@ -1556,7 +1599,7 @@ case "$1" in
   patch) run_patch "$2" "$3" ;;
   start-patch) start_patch "$2" ;;
   start-mode) start_mode "$2" ;;
-  mode-write-worker) run_mode_write_worker "$2" "$3" ;;
+  config-mode-worker) run_config_mode_worker "$2" "$3" ;;
   log) print_log ;;
   tail) tail_log ;;
   clear-log) clear_log ;;

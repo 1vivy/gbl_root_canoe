@@ -32,11 +32,11 @@ const i18n = {
     targetSlot: "目标槽位",
     imageCount: "镜像数量",
     taskStatus: "任务状态",
-    preferredMode: "首选启动模式",
+    entryMode: "当前启动项模式",
     saveMode: "保存",
-    modeDefaulted: "未保存模式；当前使用默认 Mode 1",
-    modeSaved: "已保存",
-    modeUnavailable: "无法读取首选模式",
+    modeDefaulted: "当前启动项未显式设置，使用文件 fallback Mode 1",
+    modeSaved: "启动项模式已保存",
+    modeUnavailable: "无法读取 canoe.cfg 启动项模式",
     mode2ProfileMissing: "Mode 2 profile 缺失；请先安装有效的 boot.efi.gm2p",
     mode2ProfileInvalid: "Mode 2 profile 无效；请重新安装匹配的 boot.efi.gm2p",
     modeProfileToolMissing: "mode2_profile 工具缺失；请重新安装模块",
@@ -80,8 +80,8 @@ const i18n = {
     toastDebugDone: "调试任务运行成功",
     toastFlashDone: "刷写任务运行成功",
     toastPatchDone: "分区修补任务运行成功",
-    toastStartMode: "首选启动模式保存任务已启动",
-    toastModeDone: "首选启动模式已保存",
+    toastStartMode: "启动项模式保存任务已启动",
+    toastModeDone: "启动项模式已保存",
     toastBlDone: "BL 刷写完成，但 efisp 未更新",
     toastFailed: "任务执行失败",
     toastStartError: "任务启动失败",
@@ -116,11 +116,11 @@ const i18n = {
     targetSlot: "Target Slot",
     imageCount: "Image Count",
     taskStatus: "Task Status",
-    preferredMode: "Preferred Boot Mode",
+    entryMode: "Current Boot Entry Mode",
     saveMode: "Save",
-    modeDefaulted: "No saved mode; currently using default Mode 1",
-    modeSaved: "Saved",
-    modeUnavailable: "Preferred mode unavailable",
+    modeDefaulted: "This entry has no explicit mode; using the file fallback Mode 1",
+    modeSaved: "Boot entry mode saved",
+    modeUnavailable: "Unable to read the canoe.cfg boot-entry mode",
     mode2ProfileMissing: "Mode 2 profile is missing; install a valid boot.efi.gm2p first",
     mode2ProfileInvalid: "Mode 2 profile is invalid; reinstall the matching boot.efi.gm2p",
     modeProfileToolMissing: "mode2_profile is missing; reinstall the module",
@@ -164,8 +164,8 @@ const i18n = {
     toastDebugDone: "Debug task succeeded",
     toastFlashDone: "Flash task succeeded",
     toastPatchDone: "Partition patch task succeeded",
-    toastStartMode: "Preferred boot mode save started",
-    toastModeDone: "Preferred boot mode saved",
+    toastStartMode: "Boot-entry mode save started",
+    toastModeDone: "Boot-entry mode saved",
     toastBlDone: "BL flashed, but efisp not updated",
     toastFailed: "Task finished (failed)",
     statusIdle: "Status: idle",
@@ -235,7 +235,7 @@ function applyLanguage(lang) {
   document.querySelector("#lblTargetSlot").textContent = t.targetSlot;
   document.querySelector("#lblImageCount").textContent = t.imageCount;
   document.querySelector("#lblTaskStatus").textContent = t.taskStatus;
-  document.querySelector("#lblPreferredMode").textContent = t.preferredMode;
+  document.querySelector("#lblPreferredMode").textContent = t.entryMode;
   document.querySelector("#lblUpdateEfisp").textContent = t.updateEfisp;
   document.querySelector("#lblDebugMode").textContent = t.debugMode;
   document.querySelector("#lblPatchVendorBoot").textContent = t.lblPatchVendorBoot;
@@ -395,12 +395,15 @@ function renderStatus(status) {
   else if (st === "error") elements.stateChip.classList.add("chip-danger");
   else if (st === "warning" || run) elements.stateChip.classList.add("chip-warn");
   elements.slotChip.textContent = (cur !== "-" && tar !== "-") ? `${state.lang === "zh" ? "当前" : "Current"} ${cur} → ${state.lang === "zh" ? "目标" : "Target"} ${tar}` : t.slotUnknown;
-  const preferredMode = status.PREFERRED_MODE || "";
-  const modeAvailable = BOOT_MODES.has(preferredMode);
+  const entryMode = status.ENTRY_MODE || "";
+  const modeAvailable = BOOT_MODES.has(entryMode);
+  const entryId = status.ENTRY_ID || (cur === "_b" ? "android-b" : "android-a");
+  document.querySelector("#lblPreferredMode").textContent = `${t.entryMode}: ${entryId}`;
   if (modeAvailable) {
-    elements.preferredModeSelect.value = preferredMode;
+    elements.preferredModeSelect.value = entryMode;
     const selectedLabel = elements.preferredModeSelect.selectedOptions[0].textContent;
-    elements.modeStatusText.textContent = status.MODE_DEFAULTED === "1" ? t.modeDefaulted : `${t.modeSaved}: ${selectedLabel}`;
+    elements.modeStatusText.textContent = status.ENTRY_MODE_DEFAULTED === "1" ?
+      t.modeDefaulted : `${t.modeSaved}: ${selectedLabel}`;
   } else {
     elements.modeStatusText.textContent = t.modeUnavailable;
   }

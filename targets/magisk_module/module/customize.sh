@@ -60,6 +60,14 @@ if [ "$LANG" = "zh" ]; then
   T_SOC="确保你的设备是8gen5/8elitegen5"
   T_CHECK_EXP="检测漏洞中..."
   T_INSTALL_CHOICE="请选择是否第一次安装假回锁"
+  T_MODE_ASK="请选择启动模式：音量上=Mode 1，音量下=Mode 0（Mode 2 可在 WebUI 为当前启动项设置）"
+  T_MODE_RECOVERY_WARN="Mode 1 需要先用 vbmeta 工具 graft 自定义 recovery；未 graft 的 recovery 无法完成数据格式化。是否继续？"
+  T_MODE_RECOVERY_YES="音量上 = 继续"
+  T_MODE_RECOVERY_NO="音量下 = 取消"
+  T_MODE_VENDOR_ASK="Mode 1 是否修补 vendor_boot？音量上=是，音量下=否"
+  T_MODE_VENDOR_YES="已选择修补 vendor_boot"
+  T_MODE_VENDOR_NO="已跳过 vendor_boot 修补"
+  T_REBOOT_COUNTDOWN="安装完成。需要重启到 recovery 格式化 data，因为假回锁启动链必须在干净的 userdata 上首次初始化。"
   T_VOL_UP="音量上为是（全新安装，需要格式化）"
   T_VOL_DOWN="音量下为否（如果之前安装过一次假回锁或者刚刚首次安装并格式化，建议选否）"
   T_TIP_YES="如果选择是，将会布置 efisp 启动项到 persist 并刷入 BDS 到 efisp，然后重启recovery 进行格式化，格式化后请安装一次这个模块来完成安装，这时选否"
@@ -128,6 +136,14 @@ else
   T_SOC="Ensure device is 8gen5 / 8elitegen5"
   T_CHECK_EXP="Detecting exploit..."
   T_INSTALL_CHOICE="Is this your first time installing Fake BL EFISP?"
+  T_MODE_ASK="Select boot mode: Vol+ = Mode 1, Vol- = Mode 0 (Mode 2 can be set for this entry in the WebUI)"
+  T_MODE_RECOVERY_WARN="Mode 1 requires grafting a custom recovery with the vbmeta tool first; without that graft data formatting cannot complete. Continue?"
+  T_MODE_RECOVERY_YES="Vol+ = continue"
+  T_MODE_RECOVERY_NO="Vol- = cancel"
+  T_MODE_VENDOR_ASK="Mode 1: patch vendor_boot? Vol+ = yes, Vol- = no"
+  T_MODE_VENDOR_YES="vendor_boot patch selected"
+  T_MODE_VENDOR_NO="vendor_boot patch skipped"
+  T_REBOOT_COUNTDOWN="Install complete. Reboot to recovery and format data because the first fake-lock boot-chain initialization needs clean userdata."
   T_VOL_UP="Vol+ = YES (Fresh install, requires format)"
   T_VOL_DOWN="Vol‑ = NO (If installed before or just formatted)"
   T_TIP_YES="If YES: efisp boot entries placed on persist and BDS flashed to efisp, reboot to recovery and format data, then reinstall this module and select NO"
@@ -197,36 +213,7 @@ detect_current_slot() {
   esac
 }
 
-ui_print ""
-ui_print "$T_OPT_MENU"
-ui_print "$T_OPT_ASK"
-ui_print "$T_OPT_UP_YES"
-ui_print "$T_OPT_DOWN_SKIP"
-
 EXTRA_PATCH_MODE=""
-while true; do
-  keyevent=$(read_volume_key)
-  if [ "$keyevent" = "up" ]; then
-    ui_print "$T_OPT_CHOICE1"
-    ui_print "$T_OPT_VB"
-    ui_print "$T_OPT_SUPER"
-    while true; do
-      keyevent2=$(read_volume_key)
-      if [ "$keyevent2" = "up" ]; then
-        EXTRA_PATCH_MODE="vendor_boot"
-        break
-      elif [ "$keyevent2" = "down" ]; then
-        EXTRA_PATCH_MODE="super"
-        break
-      fi
-    done
-    break
-  elif [ "$keyevent" = "down" ]; then
-    EXTRA_PATCH_MODE="skip"
-    ui_print "$T_OPT_SKIP"
-    break
-  fi
-done
 
 # ========== 修改2：执行修补前获取当前槽位，提取a/b字母 ==========
 current_slot_suffix=$(detect_current_slot)
@@ -527,40 +514,69 @@ pair_inactive_abl() {
   return 0
 }
 
-read_preferred_mode() {
-  [ -x "$MODE2_PROFILE" ] || return 1
-  mode_partition_bytes=$(blockdev --getsize64 "$BY_NAME_DIR/efisp" 2>/dev/null) || return 1
-  mode_block_size=$(blockdev --getss "$BY_NAME_DIR/efisp" 2>/dev/null) || return 1
-  mode_result=$("$MODE2_PROFILE" mode-read --device "$BY_NAME_DIR/efisp" \
-    --partition-bytes "$mode_partition_bytes" --block-size "$mode_block_size" 2>/dev/null) || return 1
-  preferred_mode=$(printf '%s\n' "$mode_result" | sed -n 's/.*MODE=\([012]\).*/\1/p' | tail -n 1)
-  preferred_defaulted=$(printf '%s\n' "$mode_result" | sed -n 's/.*MODE_DEFAULTED=\([01]\).*/\1/p' | tail -n 1)
-  case "$preferred_mode:$preferred_defaulted" in
-    0:0|1:0|2:0|0:1|1:1|2:1) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-write_preferred_mode() {
-  mode_value="$1"
-  "$MODE2_PROFILE" mode-write --device "$BY_NAME_DIR/efisp" \
-    --partition-bytes "$mode_partition_bytes" --block-size "$mode_block_size" \
-    --mode "$mode_value" >> "$RUNTIME_DIR/flash.log" 2>&1
-}
-
-restore_preferred_mode() {
-  mode_value="$1"
-  restore_mode_ok=1
-  write_preferred_mode "$mode_value" || restore_mode_ok=0
-  if ! read_preferred_mode; then
-    restore_mode_ok=0
-  elif [ "$preferred_mode" != "$mode_value" ] ||
-       [ "$preferred_defaulted" != "0" ]; then
-    restore_mode_ok=0
-  fi
-  [ "$restore_mode_ok" = "1" ]
-}
 
 
+config_global_mode() {
+  config_mode=$(awk '$1 == "mode" && $2 ~ /^[012]$/ { print $2; exit }' \
+    "$1" 2>/dev/null)
+  case "$config_mode" in 0|1|2) echo "$config_mode" ;; *) echo 1 ;; esac
+}
+
+config_entry_mode() {
+  config_target="$1"
+  config_id="$2"
+  config_default="$3"
+  config_mode=$(awk -v wanted="$config_id" '
+    $1 == "entry" { in_entry = ($2 == wanted); next }
+    in_entry && $1 == "mode" && $2 ~ /^[012]$/ { print $2; exit }
+  ' "$config_target" 2>/dev/null)
+  case "$config_mode" in 0|1|2) echo "$config_mode" ;; *) echo "$config_default" ;; esac
+}
+
+write_config_entry() {
+  printf 'entry %s\n  title %s\n  image %s\n  mode %s\n  role %s\n\n' \
+    "$1" "$2" "$3" "$4" "$5" >> "$6"
+}
+
+write_canoe_config() {
+  config_output_dir="$1"
+  requested_mode="$2"
+  active_id=android-a
+  active_title='Android (slot A)'
+  [ "$current_slot_suffix" = "_b" ] && {
+    active_id=android-b
+    active_title='Android (slot B)'
+  }
+  fallback=$(config_global_mode "$config_output_dir/canoe.cfg")
+  case "$requested_mode" in 0|1|2) fallback="$requested_mode" ;; *) return 1 ;; esac
+  generation=$(awk '$1 == "generation" && $2 ~ /^[0-9]+$/ { print $2; exit }' \
+    "$config_output_dir/canoe.cfg" 2>/dev/null)
+  case "$generation" in ''|*[!0-9]*) generation=0 ;; esac
+  [ "$generation" -lt 4294967295 ] && generation=$((generation + 1))
+  config_output="$config_output_dir/canoe.cfg"
+  temp="$config_output.tmp.$$"
+  rm -f "$temp"
+  active_mode=$(config_entry_mode "$config_output" "$active_id" "$fallback")
+  {
+    printf '# canoe.cfg - generated by canoe-device\n'
+    printf 'version 1\n'
+    printf 'generation %s\n' "$generation"
+    printf 'timeout 5\n'
+    printf 'default %s\n' "$active_id"
+    printf 'mode %s\n' "$fallback"
+    printf 'lockstate asneeded\n\n'
+    write_config_entry "$active_id" "$active_title" boot.efi "$active_mode" active "$temp"
+    if [ -f "$config_output_dir/boot_backup.efi" ]; then
+      backup_mode=$(config_entry_mode "$config_output" android-backup "$fallback")
+      write_config_entry android-backup 'Android (previous)' boot_backup.efi \
+        "$backup_mode" backup "$temp"
+    fi
+  } > "$temp" || {
+    rm -f "$temp"
+    return 1
+  }
+  mv "$temp" "$config_output" && sync
+}
 PAIR_TXN_MARKER_NAME=".canoe.pair.txn"
 PAIR_TXN_MARKER_MAGIC="CANOEP1"
 
@@ -570,6 +586,7 @@ pair_has_transaction_files() {
     "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" "$target/.canoe.new.tzmap" \
     "$target/.canoe.old.live.efi" "$target/.canoe.old.live.gm2p" "$target/.canoe.old.live.tzmap" \
     "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap" \
+    "$target/.canoe.old.cfg" "$target/.canoe.old.cfg.absent" \
     "$target/$PAIR_TXN_MARKER_NAME" "$target/$PAIR_TXN_MARKER_NAME.tmp.$$"; do
     [ -e "$pair_file" ] && return 0
   done
@@ -597,7 +614,8 @@ pair_transaction_cleanup() {
   for pair_file in \
     "$target/.canoe.new.efi" "$target/.canoe.new.gm2p" "$target/.canoe.new.tzmap" \
     "$target/.canoe.old.live.efi" "$target/.canoe.old.live.gm2p" "$target/.canoe.old.live.tzmap" \
-    "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap"; do
+    "$target/.canoe.old.backup.efi" "$target/.canoe.old.backup.gm2p" "$target/.canoe.old.backup.tzmap" \
+    "$target/.canoe.old.cfg" "$target/.canoe.old.cfg.absent"; do
     if [ -e "$pair_file" ] && ! rm -f "$pair_file"; then
       pair_cleanup_failed=1
     fi
@@ -728,6 +746,11 @@ pair_recover() {
     "$target/.canoe.old.backup.efi" "$pair_backup_efi_bit" || return 1
   pair_restore_one "$target" "$target/boot_backup.efi.gm2p" \
     "$target/.canoe.old.backup.gm2p" "$pair_backup_profile_bit" || return 1
+  if [ -e "$target/.canoe.old.cfg" ]; then
+    cp "$target/.canoe.old.cfg" "$target/canoe.cfg" || return 1
+  elif [ -e "$target/.canoe.old.cfg.absent" ]; then
+    rm -f "$target/canoe.cfg" || return 1
+  fi
   pair_restore_one "$target" "$target/boot_backup.efi.tzmap" \
     "$target/.canoe.old.backup.tzmap" "$pair_backup_tzmap_bit" || return 1
   sync || return 1
@@ -761,6 +784,13 @@ pair_prepare() {
   [ -e "$target/boot.efi.gm2p" ] && pair_live_profile_bit=1
   [ -e "$target/boot.efi.tzmap" ] && pair_live_tzmap_bit=1
   [ -e "$target/boot_backup.efi" ] && pair_backup_efi_bit=1
+  if [ -e "$target/canoe.cfg" ]; then
+    cp "$target/canoe.cfg" "$target/.canoe.old.cfg" || return 1
+    rm -f "$target/.canoe.old.cfg.absent"
+  else
+    rm -f "$target/.canoe.old.cfg"
+    : > "$target/.canoe.old.cfg.absent" || return 1
+  fi
   [ -e "$target/boot_backup.efi.gm2p" ] && pair_backup_profile_bit=1
   [ -e "$target/boot_backup.efi.tzmap" ] && pair_backup_tzmap_bit=1
   pair_marker_write "$target" prepared "$pair_live_efi_bit" \
@@ -893,6 +923,10 @@ install_pair() {
       return 1
     fi
   fi
+  if ! write_canoe_config "$target" "$selected_mode"; then
+    pair_install_failure "$target"
+    return 1
+  fi
   if ! sync; then
     pair_install_failure "$target"
     return 1
@@ -975,14 +1009,25 @@ while true; do
       ui_print "$T_NO_SLOT"
       abort "slot detection failed"
     fi
+
+    selected_mode=${CANOE_MODE:-}
+    case "$selected_mode" in 0|1|2) ;; *) selected_mode= ;;
+    esac
+    if [ -z "$selected_mode" ]; then
+      ui_print "$T_MODE_ASK"
+      keyevent=$(read_volume_key)
+      if [ "$keyevent" = "down" ]; then
+        selected_mode=0
+      else
+        selected_mode=1
+      fi
+    fi
+
     if ! preflight_current_pair; then
       abort "ABL/vbmeta/profile preflight failed"
     fi
-    if ! read_preferred_mode; then
-      abort "preferred mode read failed"
-    fi
     if ! pair_recover "$EFISP_DIR"; then
-      abort "pair transaction recovery failed before optional patch"
+      abort "pair transaction recovery failed before install"
     fi
     initial_pair_gbl_vulnerable="$CURRENT_PAIR_GBL_VULNERABLE"
     abl_downgrade_done=0
@@ -1019,34 +1064,13 @@ while true; do
       if ! flash_abl_image "$RUNTIME_DIR/repo_abl.img" "$abl_part" \
            "$RUNTIME_DIR/abl_pre.img"; then
         case "$ABL_FLASH_STATUS" in
-          setrw)
-            ui_print "$T_ABL_SETRW_FAIL"
-            abort "setrw abl failed"
-            ;;
-          size)
-            ui_print "$T_ABL_SIZE_FAIL"
-            abort "abl image does not fit"
-            ;;
-          snapshot)
-            ui_print "$T_ABL_SNAPSHOT_FAIL"
-            abort "abl snapshot failed"
-            ;;
-          readback_restore_ok)
-            ui_print "$T_ABL_RESTORE_OK"
-            abort "abl readback mismatch; restore succeeded"
-            ;;
-          readback_restore_fail)
-            ui_print "$T_ABL_RESTORE_FAIL"
-            abort "abl readback mismatch; restore failed"
-            ;;
-          sync)
-            ui_print "$T_ABL_FLASH_FAIL"
-            abort "sync downgraded abl failed"
-            ;;
-          *)
-            ui_print "$T_ABL_FLASH_FAIL"
-            abort "downgrade abl failed"
-            ;;
+          setrw) ui_print "$T_ABL_SETRW_FAIL"; abort "setrw abl failed" ;;
+          size) ui_print "$T_ABL_SIZE_FAIL"; abort "abl image does not fit" ;;
+          snapshot) ui_print "$T_ABL_SNAPSHOT_FAIL"; abort "abl snapshot failed" ;;
+          readback_restore_ok) ui_print "$T_ABL_RESTORE_OK"; abort "abl readback mismatch; restore succeeded" ;;
+          readback_restore_fail) ui_print "$T_ABL_RESTORE_FAIL"; abort "abl readback mismatch; restore failed" ;;
+          sync) ui_print "$T_ABL_FLASH_FAIL"; abort "sync downgraded abl failed" ;;
+          *) ui_print "$T_ABL_FLASH_FAIL"; abort "downgrade abl failed" ;;
         esac
       fi
       if ! preflight_current_pair; then
@@ -1065,18 +1089,32 @@ while true; do
       abort "non-vulnerable ABL was not downgraded"
     fi
 
+    EXTRA_PATCH_MODE=skip
+    if [ "$selected_mode" = "1" ]; then
+      ui_print "$T_MODE_RECOVERY_WARN"
+      ui_print "$T_MODE_RECOVERY_YES"
+      ui_print "$T_MODE_RECOVERY_NO"
+      keyevent=$(read_volume_key)
+      [ "$keyevent" = "up" ] || abort "custom recovery graft declined"
+      ui_print "$T_MODE_VENDOR_ASK"
+      keyevent=$(read_volume_key)
+      if [ "$keyevent" = "up" ]; then
+        EXTRA_PATCH_MODE=vendor_boot
+        ui_print "$T_MODE_VENDOR_YES"
+      else
+        ui_print "$T_MODE_VENDOR_NO"
+      fi
+    fi
+
     ui_print "$T_PLACE_BOOT"
     if ! pair_recover "$EFISP_DIR"; then
       abort "pair transaction recovery failed before paired install"
     fi
-
     if ! grep -q " $PERSIST_MNT " /proc/mounts; then
       ui_print "$T_PERSIST_NOT_MOUNTED"
       abort "persist not mounted"
     fi
     mkdir -p "$EFISP_DIR" || { ui_print "$T_EFISP_DIR_FAIL"; abort "efisp mkdir failed"; }
-    # All abort-prone boot-chain prerequisites passed; only now mutate optional
-    # partitions, immediately before committing the paired efisp install.
     run_optional_patch
     if ! install_pair "$EFISP_DIR"; then
       if ! pair_restore "$EFISP_DIR"; then
@@ -1088,72 +1126,40 @@ while true; do
     if ! "$ABL_TZMAP" verify --sidecar "$EFISP_DIR/boot.efi.tzmap" \
          --abl "$RUNTIME_DIR/LinuxLoader.efi" --allow-zero-digest \
          >> "$RUNTIME_DIR/tzmap.log" 2>&1; then
-      if ! pair_restore "$EFISP_DIR"; then
-        ui_print "$T_EFISP_WRITE_FAIL"
-      fi
+      pair_restore "$EFISP_DIR" || ui_print "$T_EFISP_WRITE_FAIL"
       ui_print "$T_TZMAP_BIND_FAIL"
       abort "ABL TrustZone map binding failed"
     fi
 
     ui_print "$T_FLASH_BDS"
-    if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$RUNTIME_DIR/flash.log" 2>&1; then
-      if ! pair_restore "$EFISP_DIR"; then
-        ui_print "$T_EFISP_WRITE_FAIL"
-      fi
-      ui_print "$T_SETRW_FAIL"
-      abort "setrw failed"
-    fi
-    if ! dd if="$MODPATH/BDS.efi" of="$BY_NAME_DIR/efisp" bs=4M conv=fsync >> "$RUNTIME_DIR/flash.log" 2>&1; then
-      if ! pair_restore "$EFISP_DIR"; then
-        ui_print "$T_EFISP_WRITE_FAIL"
-      fi
+    if ! blockdev --setrw "$BY_NAME_DIR/efisp" >> "$RUNTIME_DIR/flash.log" 2>&1 ||
+       ! dd if="$MODPATH/BDS.efi" of="$BY_NAME_DIR/efisp" bs=4M conv=fsync \
+         >> "$RUNTIME_DIR/flash.log" 2>&1 ||
+       ! sync; then
+      pair_restore "$EFISP_DIR" || ui_print "$T_EFISP_WRITE_FAIL"
       ui_print "$T_FLASH_FAIL"
-      abort "flash failed"
-    fi
-    if ! sync; then
-      if ! pair_restore "$EFISP_DIR"; then
-        ui_print "$T_EFISP_WRITE_FAIL"
-      fi
-      ui_print "$T_FLASH_FAIL"
-      abort "sync BDS failed"
-    fi
-    wanted_mode="$preferred_mode"
-    mode_write_ok=1
-    if ! write_preferred_mode "$wanted_mode"; then
-      mode_write_ok=0
-    fi
-    mode_read_ok=1
-    if ! read_preferred_mode; then
-      mode_read_ok=0
-    fi
-    if [ "$mode_write_ok" != "1" ] ||
-       [ "$mode_read_ok" != "1" ] ||
-       [ "$preferred_mode" != "$wanted_mode" ] ||
-       [ "$preferred_defaulted" != "0" ]; then
-      mode_restore_ok=1
-      restore_preferred_mode "$wanted_mode" || mode_restore_ok=0
-      if ! pair_restore "$EFISP_DIR"; then
-        ui_print "$T_EFISP_WRITE_FAIL"
-      fi
-      [ "$mode_restore_ok" = "1" ] || ui_print "$T_EFISP_WRITE_FAIL"
-      abort "preferred mode write failed"
+      abort "BDS write failed"
     fi
     pair_commit "$EFISP_DIR"
     pair_commit_status=$?
     case "$pair_commit_status" in
       0) ;;
-      2)
-        abort "efisp pair committed; cleanup pending"
-        ;;
+      2) abort "efisp pair committed; cleanup pending" ;;
       *)
-        if ! pair_restore "$EFISP_DIR"; then
-          ui_print "$T_EFISP_WRITE_FAIL"
-        fi
+        pair_restore "$EFISP_DIR" || ui_print "$T_EFISP_WRITE_FAIL"
         abort "efisp pair commit failed"
         ;;
     esac
     pair_inactive_abl
     ui_print "$T_DONE_YES"
+    ui_print "$T_REBOOT_COUNTDOWN"
+    countdown=5
+    while [ "$countdown" -gt 0 ]; do
+      ui_print "$countdown"
+      sleep 1
+      countdown=$((countdown - 1))
+    done
+    command -v reboot >/dev/null 2>&1 && reboot recovery
     rm -rf "$RUNTIME_DIR"
     break
   elif [ "$keyevent" = "down" ]; then

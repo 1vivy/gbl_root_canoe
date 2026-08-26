@@ -1,15 +1,14 @@
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
-	submodule_mode2_profile submodule_mode2_profile_android \
-	submodule_abl_tzmap submodule_ablfvextractor \
-	submodule_vbmetafixer canoe_device_script canoe_host python_embed build
+	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
+	submodule_vbmetafixer canoe_device_script canoe_host python_embed ext4_tools build
 
-NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
-export NDK_PATH
 PYTHON_EMBED_VERSION ?= 3.14.7
 PYTHON_EMBED_SHA256 ?= d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15
 PYTHON_EMBED_URL ?= https://www.python.org/ftp/python/$(PYTHON_EMBED_VERSION)/python-$(PYTHON_EMBED_VERSION)-embed-amd64.zip
 PYTHON_EMBED_CACHE ?= ../../.cache/python-embed
 PYTHON_EMBED_ARCHIVE = $(PYTHON_EMBED_CACHE)/python-$(PYTHON_EMBED_VERSION)-embed-amd64.zip
+WINFSP_SHA256 ?= 073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a
+LKL_FUSE_SHA256 ?= 71abdcb94234fbb0b3f32eaaaf30fa8c4e9c0ac5055b60e04f21b01521afd908
 
 clean:
 	rm -rf build || true
@@ -45,17 +44,6 @@ submodule_mode2_profile: copy_resources
 	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/mode2-profile/Cargo.toml
 	test -f ../../tools/mode2-profile/target/x86_64-pc-windows-gnu/release/mode2_profile.exe
 	cp ../../tools/mode2-profile/target/x86_64-pc-windows-gnu/release/mode2_profile.exe ./build/toolkit/bin/mode2_profile.exe
-submodule_mode2_profile_android: copy_resources
-	# The arm64 build is pushed on-device by `canoe_stage --mode` for the
-	# preferred-mode write. Skipped with a loud warning when the NDK is absent
-	# so a host-only local build still packages; CI always has it.
-	if [ -n "$(NDK_PATH)" ]; then \
-		CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/mode2-profile/Cargo.toml && \
-		test -f ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile && \
-		cp ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile ./build/toolkit/bin/mode2_profile-arm64; \
-	else \
-		echo "WARNING: NDK_PATH unset; shipping without bin/mode2_profile-arm64 (canoe_stage --mode will be unavailable)"; \
-	fi
 submodule_abl_tzmap: copy_resources
 	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/abl-tzmap/Cargo.toml
 	test -f ../../tools/abl-tzmap/target/x86_64-pc-windows-gnu/release/abl_tzmap.exe
@@ -65,7 +53,7 @@ submodule_ablfvextractor: copy_resources
 	cp ../../submodules/ablfvextractor/build/extractfv.exe ./build/toolkit/bin/extractfv.exe
 submodule_vbmetafixer: copy_resources
 	# vbmetaport grafts an official vbmeta onto a third-party image; vbmetabackup
-	# -f lifts that vbmeta out of a local firmware image. canoe_prep needs both.
+	# -f lifts that vbmeta out of a local firmware image. `canoe prep` needs both.
 	# Guarded like submodule_uefi: the vbmetafixer `build_windows` target is not
 	# phony, so a stale build/ directory would otherwise make a plain make build a no-op.
 	cd ../../tools/vbmetafixer && \
@@ -81,24 +69,12 @@ canoe_device_script: copy_resources
 	chmod +x ./build/toolkit/canoe_device_install.sh
 	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
 canoe_host: copy_resources
-	# Host-side Canoe tools are shared by Linux and Windows and copied from
-	# one source tree so the two toolkits cannot drift.
-	cp -r ../../tools/canoe-host/canoe ./build/toolkit/canoe
-	find ./build/toolkit/canoe -type d -name __pycache__ -prune -exec rm -rf {} +
-	cp ../../tools/canoe-host/canoe_build \
-		../../tools/canoe-host/canoe_prep \
-		../../tools/canoe-host/canoe_prep_device \
-		../../tools/canoe-host/canoe_stage \
-		./build/toolkit/
-	chmod +x ./build/toolkit/canoe_build \
-		./build/toolkit/canoe_prep \
-		./build/toolkit/canoe_prep_device \
-		./build/toolkit/canoe_stage
-	cp ../../tools/canoe-host/canoe_build.cmd \
-		../../tools/canoe-host/canoe_prep.cmd \
-		../../tools/canoe-host/canoe_prep_device.cmd \
-		../../tools/canoe-host/canoe_stage.cmd \
-		./build/toolkit/
+	# Keep one user-facing launcher; the package is an internal implementation detail.
+	cp -r ../../tools/canoe-host/canoelib ./build/toolkit/canoelib
+	find ./build/toolkit/canoelib -type d -name __pycache__ -prune -exec rm -rf {} +
+	cp ../../tools/canoe-host/canoe ./build/toolkit/canoe
+	cp ../../tools/canoe-host/canoe.cmd ./build/toolkit/canoe.cmd
+	chmod +x ./build/toolkit/canoe
 python_embed: copy_resources $(PYTHON_EMBED_ARCHIVE)
 	@set -eu; \
 	expected="$(PYTHON_EMBED_SHA256)"; \
@@ -124,6 +100,15 @@ $(PYTHON_EMBED_ARCHIVE):
 	rm -f "$$tmp"; \
 	wget --no-verbose --tries=3 --output-document="$$tmp" "$(PYTHON_EMBED_URL)"; \
 	mv "$$tmp" "$@"
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_mode2_profile_android submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host python_embed
-	# zip
+ext4_tools: copy_resources
+	@printf '%s\n' \
+		'' \
+		'Windows ext4 channel:' \
+		'  Pinned WinFsp SHA-256: $(WINFSP_SHA256)' \
+		'  Pinned LKL lklfuse SHA-256: $(LKL_FUSE_SHA256)' \
+		'  After persist is exported over USB Mass Storage, mount the device block with lklfuse and choose the resulting drive letter.' \
+		'  Then edit <drive>:\\efisp\\canoe.cfg and the boot-root files, safely eject, and reboot.' \
+		'  A checksum failure stops before mounting; delete the Canoe ext4 cache and retry.' \
+		>> build/toolkit/README.canoe.md
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host python_embed ext4_tools
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./
