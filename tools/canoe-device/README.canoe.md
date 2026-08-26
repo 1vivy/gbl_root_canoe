@@ -3,22 +3,29 @@
 Two independent pathways install the canoe boot chain. They share the staging
 step and nothing else; pick one.
 
-Both the Linux and Windows toolkits ship one shared Python host implementation.
-Linux users run the extensionless launchers; Windows users run the matching
-`.cmd` wrappers, which invoke the bundled interpreter. Options and behaviour
-are identical:
+Both the Linux and Windows toolkits ship one shared Python host implementation
+behind one command. Linux runs `./canoe`; Windows runs `canoe.cmd`, which
+invokes the bundled interpreter. Options and behaviour are identical.
 
-| Linux | Windows |
+Run it with no arguments for the interactive wizard, which asks what it needs
+and is the intended path for a person. The subcommands below are the same work
+without the questions, for scripts and CI:
+
+| Command | What it does |
 |---|---|
-| `canoe_build` | `canoe_build.cmd` |
-| `canoe_prep_device` | `canoe_prep_device.cmd` |
-| `canoe_prep` | `canoe_prep.cmd` |
-| `canoe_stage` | `canoe_stage.cmd` |
+| `canoe` | interactive wizard |
+| `canoe build` | patch the ABL and derive both sidecars |
+| `canoe prep-device` | derive from the device's own `abl`/`vbmeta` |
+| `canoe prep` | prepare alongside a firmware package |
+| `canoe install` | install the boot root, then write the BDS |
+| `canoe oneshot --abl IMG --mode 0\|1` | temp-root a locked device; writes nothing permanent |
 
-`canoe_build` / `canoe_build.cmd` on its own only *derives* artifacts. Nothing
-below changes what the BDS or the sidecars are: the BDS is written raw to
-`efisp`, and `boot.efi` plus `boot.efi.gm2p` / `boot.efi.tzmap` and `BOOTENTRIES`
-live under the persist partition's `efisp/` directory.
+`canoe build` on its own only *derives* artifacts. Nothing below changes what
+the BDS or the sidecars are: the BDS is written raw to `efisp`, and `boot.efi`
+plus `boot.efi.gm2p` / `boot.efi.tzmap`, `BOOTENTRIES` and `canoe.cfg` live
+under the persist partition's `efisp/` directory. `canoe.cfg` is the declarative
+menu state the BDS reads and never writes; its format is specified in
+`wiki/docs/canoe-cfg.md`.
 
 ## Pathway A — standalone
 
@@ -30,8 +37,8 @@ On Linux:
 
 ```bash
 # 1. in custom recovery, with adb up
-./canoe_prep_device        # pull abl + vbmeta, derive boot.efi/.gm2p/.tzmap
-./canoe_stage              # install the persist tree, then write the BDS
+./canoe prep-device        # pull abl + vbmeta, derive boot.efi/.gm2p/.tzmap
+./canoe install            # install the persist tree, then write the BDS
 
 # 2. only if the abl partition is not already a GBL-vulnerable version
 fastboot flash abl <vulnerable>.img
@@ -40,15 +47,15 @@ fastboot flash abl <vulnerable>.img
 On Windows:
 
 ```bat
-canoe_prep_device.cmd
-canoe_stage.cmd
+canoe.cmd prep-device
+canoe.cmd install
 ```
 
 The pull defaults to the active slot. Right after an `adb sideload` — the usual
 custom-ROM flow — the sideload wrote the *other* slot and has not booted it
 yet; pass `--slot inactive` to derive from that slot instead.
 
-Order matters. `canoe_prep_device` derives `boot.efi` from `abl` and
+Order matters. `canoe prep-device` derives `boot.efi` from `abl` and
 `boot.efi.gm2p` from `vbmeta`, and those two must describe the **same** firmware.
 Pulling both from the device gives a matching pair only while the `abl` partition
 still holds its original image, so run it *before* flashing a downgraded ABL. If
@@ -57,13 +64,13 @@ you have already downgraded, supply a matching stock pair explicitly.
 On Linux:
 
 ```bash
-./canoe_prep_device --abl stock_abl.img --vbmeta stock_vbmeta.img
+./canoe prep-device --abl stock_abl.img --vbmeta stock_vbmeta.img
 ```
 
 On Windows:
 
 ```bat
-canoe_prep_device.cmd --abl stock_abl.img --vbmeta stock_vbmeta.img
+canoe.cmd prep-device --abl stock_abl.img --vbmeta stock_vbmeta.img
 ```
 
 The two flags must be given together — accepting one alone would reintroduce the
@@ -86,7 +93,7 @@ On Linux:
 
 ```bash
 # 1. host side, no device needed
-./canoe_prep --pkg OOS_FILES_HERE \
+./canoe prep --pkg OOS_FILES_HERE \
              --recovery <custom>.img \
              --abl <vulnerable>.img \
              --in-place
@@ -95,18 +102,18 @@ On Linux:
 bash Super_Flasher.sh
 
 # 3. boot the custom recovery, enable ADB
-./canoe_stage
+./canoe install
 ```
 
 On Windows:
 
 ```bat
-canoe_prep.cmd --pkg OOS_FILES_HERE ^
+canoe.cmd prep --pkg OOS_FILES_HERE ^
                --recovery <custom>.img ^
                --abl <vulnerable>.img ^
                --in-place
 
-canoe_stage.cmd
+canoe.cmd install
 ```
 
 `--in-place` substitutes the prepared images into the package directory and keeps
@@ -115,7 +122,7 @@ with an already-substituted image.
 
 Because the flasher writes the package's `recovery.img` to both slots, keeping a
 custom recovery means the image it writes has to be the custom one — hence the
-graft step. `canoe_prep` lifts the official recovery vbmeta out of the package's
+graft step. `canoe prep` lifts the official recovery vbmeta out of the package's
 own `recovery.img` with `vbmetabackup -f` (host-side, no device) and transplants
 it onto the custom recovery with `vbmetaport`, preserving the partition size and
 the custom payload below `original_size`.
@@ -126,15 +133,15 @@ pair, because that is the pair `boot.efi` and `boot.efi.gm2p` must agree with.
 
 ## How staging works
 
-`canoe_stage` and `canoe_stage.cmd` are thin drivers. They validate the local
-artifacts, push them into a staging directory inside the boot root, and hand the
-actual transaction to `canoe_device_install.sh` running on the device. Staging
-inside the boot root is deliberate: the staged files land on the same filesystem
-as their destination, so the commit is a rename rather than a copy.
+`canoe install` is a thin driver. It validates the local artifacts, pushes them
+into a staging directory inside the boot root, and hands the actual transaction
+to `canoe_device_install.sh` running on the device. Staging inside the boot root
+is deliberate: the staged files land on the same filesystem as their
+destination, so the commit is a rename rather than a copy.
 
 The transaction — snapshot, commit, rollback, the `efisp` backup and the
 byte-for-byte verification — lives in that one device-side shell script and
-nowhere else, so the two host launchers cannot drift apart.
+nowhere else, so the host and the on-device module cannot drift apart.
 
 Guarantees:
 
@@ -165,22 +172,20 @@ Guarantees:
   `.canoe.foreign/` and reported one per line. Existing entries there are never
   overwritten; a suffixed name is used instead. This move is transactional:
   a failed install puts the entries back.
-- The preferred-mode record is left untouched unless `--mode N` is passed, in
-  which case it is written after a successful install by an on-device
-  `mode2_profile mode-write` (aligned read-modify-write, verified by reread)
-  from the shipped `bin/mode2_profile-arm64`. It sits 3072 bytes before the end
-  of `efisp`, outside the written region, and an absent or malformed record
-  already means Mode 1. Modes can also be changed from the BDS menu or the
-  module WebUI.
+- The transaction writes `canoe.cfg` atomically inside the same pair
+  transaction as the live triplet and backup generation. It records the active,
+  inactive (when a slot image is present), and backup roles, with mode stored
+  per entry and a file-global fallback. A failed install restores the prior
+  config byte-for-byte. The normative syntax and path rules live in
+  `wiki/docs/canoe-cfg.md`.
 - The `abl` partition is never touched by any of these scripts.
 
 ## Files
 
 | file | role |
 |---|---|
-| `canoe_build` / `canoe_build.cmd` | derive `boot.efi` + sidecars from `images/abl.img` + `images/vbmeta.img` |
-| `canoe_prep_device` / `.cmd` | pathway A preparation: derive from the device |
-| `canoe_prep` / `.cmd` | pathway B preparation: graft + substitute into a package |
-| `canoe_stage` / `.cmd` | host driver: validate, stage, invoke the device script; `--mode N` also sets the preferred boot mode |
+| `canoe` | unified host entry point for the install, device-preparation and package-preparation subcommands |
+| `canoe install` | validate, stage and invoke the device-side install transaction |
+| `canoe prep-device` | pathway A: derive the boot entry from the device |
+| `canoe prep` | pathway B: graft and substitute into a package |
 | `canoe_device_install.sh` | the install transaction, executed on the device |
-| `bin/mode2_profile-arm64` | Android-arm64 `mode2_profile`, pushed on-device by `canoe_stage --mode` |
