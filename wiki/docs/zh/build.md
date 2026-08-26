@@ -39,12 +39,11 @@ canoe                              交互式向导（默认）
 canoe build                        派生 ABL/profile/map 产物
 canoe prep [--pkg ...]             准备固件包
 canoe prep-device [--slot ...]     从设备拉取配对并派生产物
-canoe install [--skip-bds ...]     通过 ADB 安装启动根目录
+canoe install [--via adb|mass-storage] [--boot-root PATH]
+                                   安装启动根目录并 UPSERT 启动项
 canoe oneshot --abl <img> --mode 0|1
                                    临时、非交互式启动
 ```
-
-Windows 将入口替换为 `canoe.cmd`。旧选项在对应的新动词下保持不变。候选镜像必须是原厂镜像，并且必须匹配正在启动的固件版本。
 
 ## 生成 ABL/profile/map 配对
 
@@ -61,15 +60,39 @@ Linux 工具包运行 `./canoe build`，Windows 工具包运行 `canoe.cmd build
 
 ## 电脑端安装命令
 
-两条安装路径仍然彼此独立：
+安装分为两个 bundle。Bundle 1 仅在电脑端执行：
 
-- **独立的第三方 Recovery + ADB：** `canoe prep-device [--slot ...]` 从设备拉取 ABL/vbmeta 配对并派生产物；进入第三方 Recovery 后运行 `canoe install` 布置启动根目录。刚由 `adb sideload` 写入另一个槽位时，请使用 `--slot inactive`。
-- **配合固件包：** `canoe prep --pkg <dir> --recovery <custom>.img --abl <vulnerable>.img --in-place` 将固件包的官方 recovery vbmeta graft 到第三方 Recovery 并替换准备好的镜像。原样运行固件包自己的刷机脚本，再从第三方 Recovery 运行 `canoe install`。
+```bash
+# 仅当已安装的 ABL 没有 GBL 漏洞时执行：
+fastboot flash abl <vulnerable>.img
+fastboot flash efisp BDS.efi
+```
 
-Windows 使用 `canoe.cmd` 加同样的子命令。`canoe install --skip-bds` 只安装 persist 目录树，不写入 BDS。电脑端驱动会把事务交给 `canoe_device_install.sh`；该脚本仍然是 shell，因为 Recovery/Android 上不保证提供 Python。
+如果已安装的 ABL 已经带有漏洞，则省略第一条命令。Bundle 1 只使用 fastboot；电脑端路径不需要 Android 或内核写权限。
 
-所有电脑端工具都不触碰 `abl` 分区：让该分区带上 GBL 漏洞是独立的 `fastboot flash abl` 步骤。
+Bundle 2 将启动根目录安装或刷新到 `persist/efisp`，并 UPSERT 槽位的 `canoe.cfg` 启动项。默认 ADB 路径从第三方 Recovery 或已 Root 系统通过 ADB 暂存，并在设备上运行共享的 `canoe_device_install.sh` 事务：
 
+```bash
+./canoe install --via adb
+```
+
+对于 BDS `oem mass-storage:persist` 导出的磁盘，`./canoe install
+--via mass-storage` 会让运行中的 BDS 执行 `fastboot oem
+mass-storage:persist`，等待 USB 磁盘，以读写方式挂载 `persist`，然后在本地运行同一事务：
+
+```bash
+./canoe install --via mass-storage
+```
+
+对于已经挂载的 persist 文件系统，使用 `--boot-root PATH`；PATH 可以是 persist 挂载点，也可以是其中的 `efisp` 目录。这也是 Windows WinFsp + LKL `lklfuse` 路径：
+
+```bash
+./canoe install --boot-root <persist-mount>
+```
+
+启动根目录不能通过 fastboot 提供：`persist` 是保存厂商校准数据的 live ext4 文件系统，因此 `fastboot flash persist` 会替换整个文件系统。整条链中只有原始 BDS 是 whole-partition image。KernelSU 模块和 OTA watcher 也使用同一个 Bundle 2 启动项生成逻辑。
+
+Windows 将相同的子命令入口替换为 `canoe.cmd`。共享的 `tools/canoe-device/canoe_boot_entry.sh` 是唯一的 `canoe.cfg` 写入器；它的 UPSERT 会保留其他启动项，包括手动添加的自定义 ROM 启动项。
 ## one-shot
 
 `canoe oneshot --abl <img> --mode 0|1` 是面向 Bootloader 已锁定设备的非交互式临时 root 启动。输入镜像必须事先确认是原厂镜像且与设备匹配。它不会写入任何永久内容。

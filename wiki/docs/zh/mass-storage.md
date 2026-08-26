@@ -23,9 +23,7 @@ fastboot oem mass-storage:logfs       # logfs
 
 导出 `persist` 前 BDS 会显示警告，因为这是正在使用中的文件系统。请把导出的磁盘当作设备当前正在使用的存储，只进行明确的修复操作，并在结束会话前完成写入。
 
-## 会话限制与结束方式
-
-每次会话只导出一个分区，作为一个 USB LUN 使用；不会同时暴露 `persist` 和 `logfs`。在设备上按**音量下**（Volume Down）停止导出；拔线或 USB 链路中断也会结束主机会话。会话结束后，BDS 会返回菜单。
+每次会话只导出一个分区，作为一个 USB LUN 使用；不会同时暴露 `persist` 和 `logfs`。在设备上按**音量下**（Volume Down）停止导出；拔线或 USB 链路中断**不会**结束会话，重新插线会恢复同一会话。电脑端刷新所有写入并卸载 `persist` 后，操作员必须在设备上按**音量下**结束会话并返回 BDS 菜单。
 
 ## Windows 挂载与修复
 
@@ -39,4 +37,4 @@ Windows 压缩包内附带 `platform-tools`。ext4 读写路径使用 **WinFsp �
 4. 编辑 `persist/efisp` 下的启动根目录（例如修复 `canoe.cfg` 或启动项文件），完成写入后刷新并安全卸载。
 5. 在设备上按**音量下**结束导出会话。
 
-每次会话只能导出一个分区。配置语法请参阅规范版 [`canoe.cfg` 契约](../canoe-cfg.md)。
+每次会话只能导出一个分区。配置语法请参阅规范版 [`canoe.cfg` 契约](./canoe-cfg.md)。

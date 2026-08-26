@@ -17,15 +17,27 @@ record at `end - 1024`. Two problems followed from that:
   is already one failed boot away from EDL.
 
 7.x inverts it. **The BDS never writes to storage.** It reads `canoe.cfg` and
-renders it. Everything that authors state is one of exactly two processes:
+renders it. There is exactly one writer:
+`tools/canoe-device/canoe_boot_entry.sh`. The host toolkit, the KernelSU module,
+and the OTA watcher all call this same script.
 
-| Process | Channel | Writes |
-| --- | --- | --- |
-| Host-side | `adb` / custom recovery / USB Mass Storage | `canoe.cfg` and the boot root |
-| Device-side | KernelSU/Magisk module, running as root | `canoe.cfg` and the boot root |
+The writer's interface is:
 
-Both have real read-write access to `persist`. The BDS does not, and this is not
-an oversight to be engineered around:
+```text
+sh canoe_boot_entry.sh set <boot_root> --id ID --title TITLE --image IMAGE \
+  --role active|inactive|backup|other [--mode 0|1|2] [--default] \
+  [--global-mode 0|1|2] [--timeout SECONDS] \
+  [--devinfo-repair asneeded|never]
+sh canoe_boot_entry.sh remove <boot_root> --id ID
+sh canoe_boot_entry.sh show <boot_root>
+```
+
+`set` is an UPSERT: it creates or replaces the named entry in place while
+preserving every other entry verbatim, including hand-added custom-ROM entries
+and OTA-added slot entries. `show` writes nothing. This page remains the
+normative grammar and path-limit reference for the document the writer emits.
+The host and device-side callers have real read-write access to `persist`; the
+BDS does not, and this is not an oversight to be engineered around:
 
 - The ext4 driver linked into the BDS is read-only **by construction**. Upstream
   `edk2-platforms` `Features/Ext4Pkg` returns `EFI_WRITE_PROTECTED` from
@@ -88,8 +100,8 @@ mode, and a key that exists only at file scope — `timeout`, `default`,
 | Key | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `entry` | id: 1–31 chars of `[A-Za-z0-9._-]` | — | Opens the block. A duplicate id rejects the later block. |
-| `title` | up to 47 ASCII chars | the id | The menu row text. |
-| `image` | boot-root-relative path | — | **Required.** No `.` or `..` component, no double separator, no trailing separator, and `/` is folded to `\`. |
+| `title` | 1–47 printable ASCII chars | the id | The menu row text. |
+| `image` | boot-root-relative path, up to 198 chars | — | **Required.** No `.` or `..` component, no double separator, no trailing separator, and `/` is folded to `\`. |
 | `mode` | `0`, `1`, `2` | the global `mode` | The boot policy this image is launched under. |
 | `role` | `active`, `inactive`, `backup`, `other` | `other` | Presentation only. The menu suffixes the row. |
 
@@ -135,8 +147,6 @@ every managed launch, in every mode.
 - Mode 0 is a hook-free passthrough. Nothing is read, nothing is written.
 - `devinfo-repair never` refuses the repair outright; a launch that needed it is
   reported and continues honestly in Mode 0.
-- `devinfo-repair asneeded` repairs only when the observed state actually differs
-  from what the requested mode requires.
 
 Either way the **observed** state is recorded before any decision, as
 `SFB: MARK devinfo-repair observed-unlocked=<0|1> observed-critical=<0|1>
@@ -145,8 +155,8 @@ required=<0|1> action=<none|repair|refused>`.
 ## Example
 
 ```
-# canoe.cfg - written by canoe-host 7.0.0-b1. Hand edits are fine; the
-# authoring tools rewrite the whole file and will drop comments.
+# canoe.cfg - managed by canoe_boot_entry.sh. Hand edits are fine; the
+# authoring tool rewrites the whole file and will drop comments.
 version 1
 generation 4
 timeout 5

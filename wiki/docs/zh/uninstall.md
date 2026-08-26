@@ -26,7 +26,7 @@
    fastboot -w
    ```
 
-删除 `canoe.cfg` 即可清除 7.x 的启动根目录配置；不再有需要单独清除的加载器策略。如果在擦除原始分区前无法访问启动根目录，`efisp` 被擦除后该配置也不会再被使用，但条件允许时仍应通过 Recovery 或 USB Mass Storage 将其删除。
+删除 `canoe.cfg` 即可清除 7.x 的启动根目录配置；不再有需要单独清除的加载器策略。`fastboot erase efisp` 会移除 Bundle 1 写入的原始 BDS，不会格式化或替换 `persist`。如果在擦除原始分区前无法访问启动根目录，`efisp` 被擦除后该配置也不会再被使用，但条件允许时仍应通过 Recovery 或 USB Mass Storage 将其删除。
 
 ## 4. 没有官方 fastboot 时
 
