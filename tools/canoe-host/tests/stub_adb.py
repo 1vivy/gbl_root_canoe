@@ -102,10 +102,9 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-# The corruption has to happen INSIDE the device script. canoe_stage hands the
-# whole transaction over, so the outer adb command is just
-# `sh canoe_device_install.sh ...`; rewriting that would prove nothing about the
-# script's own byte-for-byte readback, which is the guard under test. Shadowing
+# The corruption has to happen INSIDE the device script. `canoe install` hands
+# the whole transaction over, so the outer adb command is just
+# `sh canoe_device_install.sh`; rewriting that would prove nothing about the
 # `dd` on PATH is the same technique the device-side suite uses.
 CORRUPT_SHIM = r"""#!/bin/sh
 # Corrupting dd, installed by stub_adb.py under $STUB_CORRUPT.

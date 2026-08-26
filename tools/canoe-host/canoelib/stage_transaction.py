@@ -66,7 +66,7 @@ def run_transaction(context: Context, efisp_device: str | None) -> Receipt:
     args = [quote(context.stage), quote(context.boot_root)]
     if context.install_bds:
         if efisp_device is None:
-            raise CanoeError("efisp geometry was not read")
+            raise CanoeError("efisp device was not resolved")
         args.extend((quote(efisp_device), quote(f"{context.stage}/{BACKUP_NAME}")))
     script = quote(f"{context.stage}/canoe_device_install.sh")
     result = context.adb.shell(f"sh {script} {' '.join(args)}")

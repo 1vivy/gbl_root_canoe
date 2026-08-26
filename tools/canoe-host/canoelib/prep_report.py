@@ -22,7 +22,7 @@ def prep_report(summary: PrepSummary) -> str:
     lines = [
         "",
         "========================================",
-        "canoe_prep: done.",
+        "canoe prep: done.",
         "",
         "Prepared:",
     ]
@@ -65,7 +65,7 @@ def prep_report(summary: PrepSummary) -> str:
     lines.extend(
         (
             "  2. Boot the custom recovery and enable ADB from its UI.",
-            "  3. Run: ./canoe_stage",
+            "  3. Run: ./canoe install",
             "========================================",
         ),
     )

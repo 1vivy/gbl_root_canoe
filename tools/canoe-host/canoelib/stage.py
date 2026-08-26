@@ -4,58 +4,32 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 
 from .adb import Adb
+from .config import Config, ConfigEntry, ConfigError, read_config, write_config
 from .device import find_persist, resolve_part
 from .errors import CanoeError
-from .layout import (
-    GM2P_BYTES,
-    TZMAP_BYTES,
-    Toolkit,
-    require_exact,
-    require_nonempty,
-)
+from .layout import GM2P_BYTES, TZMAP_BYTES, Toolkit, require_exact, require_nonempty
 from .proc import Completed, run
-from .stage_mode import ModeRequest, set_preferred_mode
 from .stage_report import stage_report
 from .stage_transaction import Context, check, pull_backup, quote, run_transaction
 from .ui import emit, note, run_entry, step
 
-PROG: Final = "canoe_stage"
+PROG: Final = "canoe install"
 
 
 @dataclass(frozen=True, slots=True)
-class Options:  # noqa: D101
+class Options:
+    """Parsed non-interactive staging options."""
+
     serial: str | None
     persist: str | None
     install_bds: bool
-    mode: int | None
+    mode: int
     work: Path | None
-
-
-Geometry = tuple[str, int]
-
-
-def entry(argv: Sequence[str]) -> int:
-    """Run canoe_stage."""
-    return run_entry(PROG, _run, argv)
-
-
-def _parse_mode(raw: str) -> int:
-    """Parse the three mode values accepted by the device store."""
-    match raw:
-        case "0":
-            return 0
-        case "1":
-            return 1
-        case "2":
-            return 2
-        case _:
-            # This is untrusted command-line text, so the parse default raises.
-            raise argparse.ArgumentTypeError("must be 0, 1 or 2")
 
 
 class _ParsedArgs(argparse.Namespace):
@@ -64,8 +38,20 @@ class _ParsedArgs(argparse.Namespace):
     serial: str | None = None
     persist: str | None = None
     skip_bds: bool = False
-    mode: int | None = None
+    mode: int = 1
     work: str | None = None
+
+
+def entry(argv: Sequence[str]) -> int:
+    """Run canoe install."""
+    return run_entry(PROG, _run, argv)
+
+
+def _parse_mode(raw: str) -> int:
+    """Parse the three mode values accepted by canoe.cfg."""
+    if raw not in ("0", "1", "2"):
+        raise argparse.ArgumentTypeError("must be 0, 1 or 2")
+    return int(raw)
 
 
 def _options(argv: Sequence[str]) -> Options:
@@ -74,34 +60,20 @@ def _options(argv: Sequence[str]) -> Options:
         prog=PROG,
         description="Install the prepared canoe boot chain over ADB.",
         epilog=(
-            "Needs only a custom recovery with ADB enabled: persist is writable there and no "
-            "root on the running system is required. Expects, in the toolkit directory: "
-            "efisp/boot.efi, efisp/boot.efi.gm2p, efisp/boot.efi.tzmap, efisp/BOOTENTRIES, "
-            "efisp/tools/, BDS.efi and canoe_device_install.sh. Never touches the abl "
-            "partition."
+            "Needs a custom recovery with ADB enabled and expects efisp/boot.efi, its sidecars, "
+            "BOOTENTRIES, canoe.cfg, BDS.efi and canoe_device_install.sh in the toolkit."
         ),
         exit_on_error=False,
     )
     parser.add_argument("-s", "--serial", help="adb device serial")
-    parser.add_argument(
-        "--persist",
-        metavar="PATH",
-        help="persist mount point (default: autodetect /persist, then /mnt/vendor/persist)",
-    )
-    parser.add_argument(
-        "--skip-bds",
-        action="store_true",
-        help="install the persist tree only; do not write efisp",
-    )
+    parser.add_argument("--persist", metavar="PATH", help="persist mount point")
+    parser.add_argument("--skip-bds", action="store_true", help="install the persist tree only")
     parser.add_argument(
         "--mode",
         type=_parse_mode,
+        default=1,
         metavar="0|1|2",
-        help=(
-            "after a successful install, set the preferred boot mode on efisp "
-            "(0=honest unlocked, 1=ABL fake locked, 2=KM/SPSS profile); "
-            "needs bin/mode2_profile-arm64"
-        ),
+        help="mode written into the installed canoe.cfg entry",
     )
     parser.add_argument("--work", metavar="DIR", help="local backup directory (default: ./work)")
     parsed = _ParsedArgs()
@@ -123,6 +95,7 @@ def _stage_inputs(context: Context) -> None:
         (context.toolkit.boot_efi, "boot.efi"),
         (context.toolkit.gm2p, "boot.efi.gm2p"),
         (context.toolkit.tzmap, "boot.efi.tzmap"),
+        (context.toolkit.canoe_cfg, "canoe.cfg"),
         (context.toolkit.bootentries, "BOOTENTRIES"),
     ]
     if context.toolkit.efisp_tools.is_dir():
@@ -131,7 +104,8 @@ def _stage_inputs(context: Context) -> None:
             for item in sorted(context.toolkit.efisp_tools.iterdir(), key=lambda p: p.name)
             if item.is_file()
         )
-    files += [(context.toolkit.bds, "BDS.efi")] if context.install_bds else []
+    if context.install_bds:
+        files.append((context.toolkit.bds, "BDS.efi"))
     files.append((context.toolkit.device_install, "canoe_device_install.sh"))
     for local, name in files:
         context.adb.push(local, f"{context.stage}/{name}")
@@ -144,6 +118,7 @@ def _validate_stage(context: Context) -> None:
         ("boot.efi", context.toolkit.boot_efi.stat().st_size, "boot.efi"),
         ("boot.efi.gm2p", GM2P_BYTES, "gm2p"),
         ("boot.efi.tzmap", TZMAP_BYTES, "tzmap"),
+        ("canoe.cfg", context.toolkit.canoe_cfg.stat().st_size, "canoe.cfg"),
     ]
     if context.install_bds:
         checks.append(("BDS.efi", context.toolkit.bds.stat().st_size, "BDS.efi"))
@@ -168,11 +143,10 @@ def _verify_tzmap(toolkit: Toolkit) -> None:
     if not toolkit.abl_original.is_file():
         note("skipping ABL/tzmap consistency check: ABL_original.efi is unavailable")
         return
-    tool = toolkit.tool("abl_tzmap")
     _check_verify(
         run(
             [
-                tool,
+                toolkit.tool("abl_tzmap"),
                 "verify",
                 "--sidecar",
                 toolkit.tzmap,
@@ -185,32 +159,42 @@ def _verify_tzmap(toolkit: Toolkit) -> None:
     )
 
 
-def _geometry(context: Context, mode: int | None) -> Geometry | None:
-    """Read the efisp geometry once, before the transaction, only if it is needed."""
-    if not (context.install_bds or mode is not None):
-        return None
-    device = resolve_part(context.adb, "efisp", None)
-    size = context.adb.partition_bytes(device)
-    note(f"efisp device: {device} ({size} bytes)")
-    return device, size
+def _config(toolkit: Toolkit, mode: int) -> None:
+    """Generate the complete menu declaration that accompanies this install."""
+    try:
+        existing = read_config(toolkit.canoe_cfg) if toolkit.canoe_cfg.is_file() else None
+    except ConfigError:
+        existing = None
+    if existing is None:
+        config = Config((ConfigEntry("android-a", "Android (slot A)", "boot.efi", mode, "active"),), mode=mode, default="android-a")
+    else:
+        entries = tuple(
+            replace(entry, mode=mode) if entry.image == "boot.efi" else entry for entry in existing.entries
+        )
+        if not any(entry.image == "boot.efi" for entry in entries):
+            entries += (ConfigEntry("android-a", "Android (slot A)", "boot.efi", mode, "active"),)
+        config = Config(entries, existing.generation, existing.timeout, existing.default, mode, existing.lockstate)
+    try:
+        generation = write_config(toolkit.canoe_cfg, config)
+    except ConfigError as exc:
+        raise CanoeError(str(exc)) from exc
+    note(f"canoe.cfg generation: {generation}")
 
 
 def _run(argv: Sequence[str]) -> None:
     """Run the complete host-side staging and install sequence."""
     options = _options(argv)
     toolkit = Toolkit.shipped()
-    message = " (run canoe_prep or canoe_prep_device first)"
     for path in (toolkit.boot_efi, toolkit.gm2p, toolkit.tzmap, toolkit.bootentries):
-        require_nonempty(path, f"missing or empty: {path.relative_to(toolkit.root)}{message}")
-    if not toolkit.device_install.is_file():
-        raise CanoeError("missing canoe_device_install.sh")
+        require_nonempty(path, f"missing or empty: {path.relative_to(toolkit.root)}")
+    require_nonempty(toolkit.device_install, "missing canoe_device_install.sh")
     require_exact(toolkit.gm2p, GM2P_BYTES, "boot.efi.gm2p")
     require_exact(toolkit.tzmap, TZMAP_BYTES, "boot.efi.tzmap")
+    _config(toolkit, options.mode)
+    require_nonempty(toolkit.canoe_cfg, "missing or empty: efisp/canoe.cfg")
     _verify_tzmap(toolkit)
     if options.install_bds:
-        require_nonempty(
-            toolkit.bds, "missing or empty: BDS.efi (use --skip-bds to install the tree only)"
-        )
+        require_nonempty(toolkit.bds, "missing or empty: BDS.efi (use --skip-bds to install the tree only)")
     work = options.work or toolkit.root / "work"
     work.mkdir(parents=True, exist_ok=True)
     adb = Adb.connect(toolkit, options.serial)
@@ -221,31 +205,25 @@ def _run(argv: Sequence[str]) -> None:
         raise CanoeError(f"{persist} is not writable")
     note(f"persist: {persist} (writable)")
     boot_root = f"{persist}/efisp"
+    efisp_device = resolve_part(adb, "efisp", None) if options.install_bds else None
     context = Context(adb, toolkit, f"{boot_root}/.canoe.stage", boot_root, options.install_bds)
     step(f"Staging into {context.stage}")
-    geometry: Geometry | None = None
+    receipt = None
     try:
         _stage_inputs(context)
         _validate_stage(context)
-        geometry = _geometry(context, options.mode)
         install_step = "Running the device-side install"
         if not context.install_bds:
             install_step += " (tree only)"
         step(install_step)
-        receipt = run_transaction(context, geometry[0] if geometry else None)
+        receipt = run_transaction(context, efisp_device)
         if context.install_bds:
             pull_backup(context, work)
     finally:
         adb.shell(f"rm -rf {quote(context.stage)}")
+    if receipt is None:
+        raise CanoeError("device-side transaction did not run")
     check(receipt)
-    if options.mode is not None:
-        if geometry is None:
-            raise CanoeError("efisp geometry was not read")
-        set_preferred_mode(
-            adb,
-            toolkit,
-            ModeRequest(options.mode, geometry[0], geometry[1]),
-        )
     emit(
         stage_report(
             destination=boot_root,

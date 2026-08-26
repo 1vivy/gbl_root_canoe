@@ -1,4 +1,4 @@
-"""The bilingual operator report canoe_build prints when a derive succeeds.
+"""The bilingual operator report for the `canoe build` subcommand.
 
 Text only. It lives apart from the pipeline so the pipeline stays reviewable and
 so a wording or translation change never touches derive logic.
@@ -21,15 +21,16 @@ Patched. Outputs:
 
 ---- Install over ADB from a custom recovery (recommended) ----
 Standalone, no firmware package:
-     ./canoe_prep_device    # derive from the device's own abl/vbmeta
-     ./canoe_stage          # install the persist tree, then the BDS
+     ./canoe prep-device    # derive from the device's own abl/vbmeta
+     ./canoe install        # install the persist tree, then the BDS
 Alongside a Super Flasher / RegionalHybrid package:
-     ./canoe_prep --pkg <dir> --recovery <custom>.img \\
+     ./canoe prep --pkg <dir> --recovery <custom>.img \\
                   --abl <vulnerable>.img --in-place
      # run the package's own flasher, then:
-     ./canoe_stage
+     ./canoe install
 See README.canoe.md for the full contract and guarantees.
 """
+
 
 _GBL_MISSING: Final = """
 WARNING: No GBL exploit found in this ABL (Failed to patch ABL GBL).

@@ -4,8 +4,8 @@
 #   sh tools/canoe-device/tests/test_canoe_device_install.sh
 #
 # tools/canoe-device/canoe_device_install.sh is the single implementation of the
-# install transaction; the host driver (canoe_stage, shared by the Linux and the
-# Windows toolkit) pushes it to the device and invokes it. It stays a shell
+# install transaction; the host driver (`canoe install`, shared by the Linux and
+# the Windows toolkit) pushes it to the device and invokes it. It stays a shell
 # script because it runs on the device. Because every absolute device path
 # arrives as an argument, the transaction runs unmodified against ordinary
 # directories and a regular file standing in for the efisp block device, so
@@ -59,6 +59,7 @@ setup() {
     dd if=/dev/zero bs=1 count=120 2>/dev/null | tr '\0' 'B' > "$D/boot_backup.efi.gm2p"
     dd if=/dev/zero bs=1 count=256 2>/dev/null | tr '\0' 'B' > "$D/boot_backup.efi.tzmap"
     printf 'Android:boot.efi\nOLD-MENU\n' > "$D/BOOTENTRIES"
+    printf 'version 1\ngeneration 9\ndefault android-a\nmode 1\nlockstate asneeded\n\nentry android-a\n  title Old A\n  image boot.efi\n  mode 1\n  role active\n\nentry android-backup\n  title Old backup\n  image boot_backup.efi\n  mode 1\n  role backup\n' > "$D/canoe.cfg"
     printf 'OLD-BLTOOLS' > "$D/tools/BLTools.efi"
   fi
   { printf 'MZOLDBDS'; dd if=/dev/zero bs=1024 count=2048 2>/dev/null; } > "$DEV"
@@ -96,6 +97,11 @@ run_install "$ST" "$D" "$DEV" "$BK" || fail "1: transaction failed: $(cat "$ERR"
 [ -s "$BK" ] || fail '1: no efisp backup was taken'
 expected_gen="CANOEG1|$(sha_full "$ST/BDS.efi")|$(sha_full "$D/boot.efi")|$(sha_full "$D/boot.efi.gm2p")|$(sha_full "$D/boot.efi.tzmap")"
 [ "$(cat "$D/.canoe.gen")" = "$expected_gen" ] || fail '1: generation stamp does not describe installed bytes'
+grep -q '^version 1$' "$D/canoe.cfg" || fail '1: canoe.cfg version missing'
+grep -q '^entry android-a$' "$D/canoe.cfg" || fail '1: active entry missing'
+grep -q '^  role active$' "$D/canoe.cfg" || fail '1: active role missing'
+grep -q '^entry android-backup$' "$D/canoe.cfg" || fail '1: backup entry missing'
+grep -q '^  role backup$' "$D/canoe.cfg" || fail '1: backup role missing'
 grep -q 'CANOE-MARK: efisp-verified' "$OUT" || fail '1: BDS was not verified'
 pass 'success rotates the generation, installs the menu tree and verifies the BDS'
 
@@ -115,6 +121,7 @@ setup c3 yes 120 256
 printf 'CANOEG1|old-generation\n' > "$D/.canoe.gen"
 OUT="$TMP/c3/out"; ERR="$TMP/c3/err"
 live=$(sha "$D/boot.efi"); back=$(sha "$D/boot_backup.efi")
+cfg=$(sha "$D/canoe.cfg")
 menu=$(sha "$D/BOOTENTRIES"); tool=$(sha "$D/tools/BLTools.efi"); dev=$(sha "$DEV")
 shadow c3 cmp '#!/bin/sh
 exit 1'
@@ -122,6 +129,7 @@ if run_install "$ST" "$D" "$DEV" "$BK"; then fail '3: accepted a failed verifica
 grep -q 'verification' "$ERR" || fail '3: wrong failure message'
 [ "$(sha "$D/boot.efi")" = "$live" ] || fail '3: live triplet not restored'
 [ "$(sha "$D/boot_backup.efi")" = "$back" ] || fail '3: backup not restored'
+[ "$(sha "$D/canoe.cfg")" = "$cfg" ] || fail '3: canoe.cfg not restored'
 [ "$(cat "$D/.canoe.gen")" = 'CANOEG1|old-generation' ] || fail '3: generation stamp not restored'
 [ "$(sha "$D/BOOTENTRIES")" = "$menu" ] || fail '3: BOOTENTRIES not restored'
 [ "$(sha "$D/tools/BLTools.efi")" = "$tool" ] || fail '3: tools/ not restored'
@@ -135,6 +143,8 @@ OUT="$TMP/c4/out"; ERR="$TMP/c4/err"; SHADOW=""
 new=$(sha "$ST/boot.efi")
 run_install "$ST" "$D" "$DEV" "$BK" || fail "4: first install failed: $(cat "$ERR")"
 [ "$(sha "$D/boot.efi")" = "$new" ] || fail '4: boot.efi not installed'
+[ -s "$D/canoe.cfg" ] || fail '4: canoe.cfg not installed'
+grep -q '^entry android-a$' "$D/canoe.cfg" || fail '4: active entry missing'
 [ "$(sha "$D/boot_backup.efi")" = ABSENT ] || fail '4: invented a backup'
 grep -q 'CANOE-MARK: first-install' "$OUT" || fail '4: first install not reported'
 pass 'a first install creates no bogus backup'
@@ -147,6 +157,7 @@ shadow c5 cmp '#!/bin/sh
 exit 1'
 if run_install "$ST" "$D" "$DEV" "$BK"; then fail '5: accepted a failed verification'; fi
 [ "$(sha "$D/.canoe.gen")" = ABSENT ] || fail '5: generation stamp left behind'
+[ "$(sha "$D/canoe.cfg")" = ABSENT ] || fail '5: partial canoe.cfg left behind'
 [ "$(sha "$D/boot.efi")" = ABSENT ] || fail '5: partial boot.efi left behind'
 [ "$(sha "$D/boot_backup.efi")" = ABSENT ] || fail '5: invented a backup'
 [ "$(sha "$D/BOOTENTRIES")" = ABSENT ] || fail '5: left a menu with no loader'
@@ -157,12 +168,14 @@ pass 'a failed first install leaves nothing behind'
 setup c6 yes 120 256
 OUT="$TMP/c6/out"; ERR="$TMP/c6/err"
 live=$(sha "$D/boot.efi"); back=$(sha "$D/boot_backup.efi")
+cfg=$(sha "$D/canoe.cfg")
 menu=$(sha "$D/BOOTENTRIES"); dev=$(sha "$DEV")
 shadow c6 mv '#!/bin/sh
 exit 1'
 if run_install "$ST" "$D" "$DEV" "$BK"; then fail '6: accepted a failed commit'; fi
 [ "$(sha "$D/boot.efi")" = "$live" ] || fail '6: live not restored'
 [ "$(sha "$D/boot_backup.efi")" = "$back" ] || fail '6: backup not restored'
+[ "$(sha "$D/canoe.cfg")" = "$cfg" ] || fail '6: canoe.cfg not restored'
 [ "$(sha "$D/BOOTENTRIES")" = "$menu" ] || fail '6: menu not restored'
 [ "$(sha "$DEV")" = "$dev" ] || fail '6: device changed'
 [ "$(temps "$D")" = 0 ] || fail '6: snapshot files were left behind'
