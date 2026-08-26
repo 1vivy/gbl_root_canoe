@@ -22,6 +22,7 @@
 #include "Hook/SuperFbManagedPath.h"
 #include "Hook/SuperFbProfile.h"
 #include "SuperFbLaunchPolicy.h"
+#include "SuperFbSlots.h"
 
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbEntriesModuleTag = "SuperFbEntries";
@@ -673,6 +674,117 @@ SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
   Root->Close (Root);
 }
 
+/* Case-insensitive ASCII suffix test, for the slot markers in config fields. */
+STATIC
+BOOLEAN
+SfbAsciiEndsWith (IN CONST CHAR8 *Text, IN CONST CHAR8 *Suffix)
+{
+  UINTN  TextLength;
+  UINTN  SuffixLength;
+  UINTN  Index;
+
+  if (Text == NULL || Suffix == NULL) {
+    return FALSE;
+  }
+  TextLength = AsciiStrLen (Text);
+  SuffixLength = AsciiStrLen (Suffix);
+  if (SuffixLength == 0 || SuffixLength > TextLength) {
+    return FALSE;
+  }
+
+  for (Index = 0; Index < SuffixLength; Index++) {
+    CHAR8  Left = Text[TextLength - SuffixLength + Index];
+    CHAR8  Right = Suffix[Index];
+
+    if (Left >= 'A' && Left <= 'Z') {
+      Left = (CHAR8)(Left + ('a' - 'A'));
+    }
+    if (Right >= 'A' && Right <= 'Z') {
+      Right = (CHAR8)(Right + ('a' - 'A'));
+    }
+    if (Left != Right) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/*
+ * The slot a config entry claims, or SfbSlotUnknown when it claims none.
+ *
+ * Two things in an entry can name a slot, and the installers use both. The
+ * inactive entry gets a slot-suffixed image (`boot_a.efi` / `boot_b.efi`),
+ * which is the more specific statement and so wins. The active entry does not:
+ * its image is always plain `boot.efi`, and the only thing that varies with the
+ * slot is its id (`android-a` / `android-b`). Reading the image alone would
+ * therefore call every active entry slot A and fire a mismatch on every device
+ * running from slot B.
+ *
+ * An entry that names no slot at all - a hand-written config, a Linux entry -
+ * answers Unknown and is never checked. Verification must have something
+ * definite to disagree with before it withholds a boot.
+ */
+STATIC
+SFB_SLOT
+SfbConfigEntrySlot (IN CONST CHAR8 *Id, IN CONST CHAR8 *Image)
+{
+  if (SfbAsciiEndsWith (Image, "_a.efi")) {
+    return SfbSlotA;
+  }
+  if (SfbAsciiEndsWith (Image, "_b.efi")) {
+    return SfbSlotB;
+  }
+  if (SfbAsciiEndsWith (Id, "-a") || SfbAsciiEndsWith (Id, "_a")) {
+    return SfbSlotA;
+  }
+  if (SfbAsciiEndsWith (Id, "-b") || SfbAsciiEndsWith (Id, "_b")) {
+    return SfbSlotB;
+  }
+  return SfbSlotUnknown;
+}
+
+/*
+ * Check the config's `active` label against the slot the GPT marks active.
+ *
+ * Roles are presentation-only and are written by whoever authored the config.
+ * When an OTA flips the active slot and the device-side watcher has not run
+ * yet - because Android has not booted - the config still labels the old slot
+ * active and `default` still points at it. Nothing else in this design can
+ * notice, and the BDS would unattended-launch an entry the config no longer
+ * describes correctly, on a device one bad boot from EDL.
+ *
+ * Verification only: no entry is ever selected by slot and no slot is ever
+ * written. The config author still decides what boots.
+ */
+STATIC
+VOID
+SfbCheckConfigSlots (IN OUT SFB_MENU_STATE *Menu, IN CONST SFB_CONFIG *Config)
+{
+  SFB_SLOT  Active;
+  UINTN     Index;
+
+  Active = SfbActiveSlot ();
+  if (Active == SfbSlotUnknown) {
+    return;
+  }
+
+  for (Index = 0; Index < Config->Count; Index++) {
+    SFB_SLOT  Claimed;
+
+    if (Config->Entry[Index].Role != SfbConfigRoleActive) {
+      continue;
+    }
+    Claimed = SfbConfigEntrySlot (Config->Entry[Index].Id,
+                                  Config->Entry[Index].Image);
+    if (Claimed != SfbSlotUnknown && Claimed != Active) {
+      DEBUG ((EFI_D_WARN,
+              "SFB: MARK slot-stale entry='%a' image='%a'\n",
+              Config->Entry[Index].Id, Config->Entry[Index].Image));
+      Menu->SlotMismatch = TRUE;
+    }
+  }
+}
+
 STATIC
 VOID
 SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu,
@@ -687,7 +799,16 @@ SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu,
       Config->DefaultIndex < Config->Count &&
       Menu->DefaultIndex != SFB_NO_INDEX &&
       Menu->DefaultIndex < Menu->Count) {
-    Menu->DefaultFromConfig = TRUE;
+    /*
+     * A stale `active` label must not boot unattended: the entry it points at
+     * is the one the flipped slot invalidated. The row stays highlighted so it
+     * is still one keypress away, but the user has to look first. A default
+     * carrying any other role is untouched - only `active` makes a claim about
+     * the slot.
+     */
+    Menu->DefaultFromConfig =
+      (BOOLEAN)!(Menu->SlotMismatch &&
+                 Menu->Entry[Menu->DefaultIndex].Role == SfbConfigRoleActive);
     return;
   }
 
@@ -729,18 +850,36 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
     Menu->LockPolicy = Config.LockPolicy;
     Menu->RejectedLines = Config.RejectedLines;
     SfbAppendConfigEntries (Menu, &Config, ConfigVolume);
-  } else {
-    SfbScanVolumes (Menu);
-    for (Index = 0; Index < Menu->Count; Index++) {
-      if (Menu->Entry[Index].Kind == SfbEntryEfiFile) {
-        Menu->Entry[Index].Mode = Mode;
-        Menu->Entry[Index].ModeFromConfig = FALSE;
-      }
-    }
+    SfbCheckConfigSlots (Menu, &Config);
+  }
+
+  /*
+   * Every row appended from here on is one no config describes: the known-name
+   * probe that stands in for an absent canoe.cfg, and the removable discovery
+   * that runs beside a valid one. Both launch under the session mode.
+   */
+  Unconfigured = Menu->Count;
+
+  if (!Menu->ConfigValid) {
+    SfbAppendBootRootEntries (Menu);
+  }
+
+  /*
+   * Discovery comes after the configured rows on purpose. It keeps every config
+   * row's index - and with it Menu->DefaultIndex, set by SfbAppendConfigEntries
+   * - the same no matter what is plugged in, and it makes the truncation below
+   * shed discovered rows rather than configured ones when the budget is hit.
+   */
+  SfbScanRemovableVolumes (Menu);
+
+  for (Index = Unconfigured; Index < Menu->Count; Index++) {
+    Menu->Entry[Index].Mode = Mode;
+    Menu->Entry[Index].ModeFromConfig = FALSE;
   }
 
   ReservedRows = MandatoryRows +
-                 ((Menu->ConfigValid && Menu->RejectedLines != 0) ? 1 : 0);
+                 ((Menu->ConfigValid && Menu->RejectedLines != 0) ? 1 : 0) +
+                 (Menu->SlotMismatch ? 1 : 0);
   while (Menu->Count > SFB_MAX_ENTRIES - ReservedRows) {
     Menu->Count--;
     SfbFreeEntry (&Menu->Entry[Menu->Count]);
@@ -755,8 +894,13 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
     SfbAppendBuiltIn (Menu, SfbEntryBack, Rejected);
   }
 
+  if (Menu->SlotMismatch) {
+    SfbAppendBuiltIn (Menu, SfbEntryBack, L"Config slot role is stale");
+  }
+
   SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Fastboot");
   SfbAppendBuiltIn (Menu, SfbEntrySelector, L"Enter EFI Program Selector");
+  SfbAppendBuiltIn (Menu, SfbEntryTools, L"EFI Tools");
   SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");
   SfbAppendBuiltIn (Menu, SfbEntryRecovery, L"Reboot to Recovery");
   SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power Off");

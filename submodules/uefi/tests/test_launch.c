@@ -19,6 +19,7 @@
 
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.h"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlots.h"
 
 EFI_BOOT_SERVICES *gBS;
 EFI_HANDLE gImageHandle;
@@ -61,6 +62,58 @@ static UINTN mImageLoadedMarkerCount;
 static UINTN mImageStartMarkerCount;
 static UINTN mImageReturnMarkerCount;
 static UINTN mImageLoadMarkerCount;
+static UINTN mDemotedMarkerCount;
+static BOOLEAN mPrepareDenyFirst;
+static CONST SFB_MODE2_PROFILE *mLastPrepareProfile;
+static SFB_SLOT mFakeActiveSlot;
+
+/* Second volume: a FAT32 stick beside the persist boot root. Discovery has to
+ * tell them apart, so the harness has to be able to present both at once. */
+static EFI_FILE_PROTOCOL mFatRoot;
+static EFI_HANDLE mFatVolume = (EFI_HANDLE)(UINTN)0x2345;
+static BOOLEAN mFatVolumePresent;
+static BOOLEAN mFatBootFilePresent;
+static BOOLEAN mBootRootIsExt4;
+static BOOLEAN mBootRootBackupPresent;
+static BOOLEAN mBootRootBootentriesPresent;
+static BOOLEAN mBootRootBootaaPresent;
+
+/*
+ * One device path per (volume, file). The menu suppresses duplicates by
+ * comparing device paths, so a harness handing out a single shared object
+ * would make every entry look like a duplicate of the first and hide exactly
+ * the bug these tests exist to catch.
+ */
+static EFI_DEVICE_PATH_PROTOCOL mDevicePaths[16];
+static EFI_HANDLE mDevicePathVolume[16];
+static CHAR16 mDevicePathName[16][SFB_PATH_CHARS];
+static UINTN mDevicePathCount;
+
+static void
+FakeCopyChars(OUT CHAR16 *Destination, IN CONST CHAR16 *Source, IN UINTN Chars)
+{
+  UINTN Index;
+
+  for (Index = 0; Index + 1 < Chars && Source[Index] != L'\0'; ++Index) {
+    Destination[Index] = Source[Index];
+  }
+  Destination[Index] = L'\0';
+}
+
+static void
+ResetVolumes(void)
+{
+  mVolumesAvailable = FALSE;
+  mFatVolumePresent = FALSE;
+  mFatBootFilePresent = FALSE;
+  mBootRootIsExt4 = FALSE;
+  mBootRootConfigPresent = FALSE;
+  mBootRootManagedPresent = FALSE;
+  mBootRootBackupPresent = FALSE;
+  mBootRootBootentriesPresent = FALSE;
+  mBootRootBootaaPresent = FALSE;
+  mFakeActiveSlot = SfbSlotUnknown;
+}
 
 static EFI_STATUS
 SfbJoinPath(IN OUT CHAR16 *Path, IN UINTN PathChars,
@@ -1022,6 +1075,282 @@ TestEntriesSafety(void)
   assert(mDisarmCount == 6);
 }
 
+typedef struct {
+  UINTN           Count;
+  UINTN           DefaultIndex;
+  BOOLEAN         DefaultFromConfig;
+  SFB_ENTRY_KIND  Kind[SFB_MAX_ENTRIES];
+  CHAR16          Desc[SFB_MAX_ENTRIES][SFB_DESC_CHARS];
+} FAKE_MENU_SNAPSHOT;
+
+static void
+SnapshotMenu(IN CONST SFB_MENU_STATE *Menu, OUT FAKE_MENU_SNAPSHOT *Out)
+{
+  UINTN Index;
+
+  Out->Count = Menu->Count;
+  Out->DefaultIndex = Menu->DefaultIndex;
+  Out->DefaultFromConfig = Menu->DefaultFromConfig;
+  for (Index = 0; Index < Menu->Count; ++Index) {
+    Out->Kind[Index] = Menu->Entry[Index].Kind;
+    FakeCopyChars (Out->Desc[Index], Menu->Entry[Index].Desc, SFB_DESC_CHARS);
+  }
+}
+
+static BOOLEAN
+SameMenu(IN CONST FAKE_MENU_SNAPSHOT *A, IN CONST FAKE_MENU_SNAPSHOT *B)
+{
+  UINTN Index;
+
+  if (A->Count != B->Count || A->DefaultIndex != B->DefaultIndex ||
+      A->DefaultFromConfig != B->DefaultFromConfig) {
+    return FALSE;
+  }
+  for (Index = 0; Index < A->Count; ++Index) {
+    if (A->Kind[Index] != B->Kind[Index] ||
+        StrCmp (A->Desc[Index], B->Desc[Index]) != 0) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/*
+ * A dd-only upgrade writes a new BDS straight to efisp and never runs the
+ * installer, so the boot root holds boot.efi with no canoe.cfg beside it. The
+ * known-name probe is the only thing that keeps such a device bootable from
+ * the menu, and a stale 6.x BOOTENTRIES left in the same directory must
+ * contribute nothing now that its grammar is gone.
+ */
+static void
+TestBootRootProbe(void)
+{
+  SFB_MENU_STATE Menu;
+  UINTN Index;
+  UINTN Files = 0;
+  BOOLEAN Tools = FALSE;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  mVolumesAvailable = TRUE;
+  mBootRootManagedPresent = TRUE;
+  mBootRootBootentriesPresent = TRUE;
+
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
+      Files++;
+      assert(StrCmp (Menu.Entry[Index].Desc, L"Android") == 0);
+      assert(Menu.Entry[Index].Mode == SfbBootModeAblFakeLocked);
+      assert(!Menu.Entry[Index].ModeFromConfig);
+    } else if (Menu.Entry[Index].Kind == SfbEntryTools) {
+      Tools = TRUE;
+    }
+  }
+  assert(Files == 1);
+  assert(Tools);
+  /* Nothing authored this menu, so it must be shown rather than launched. */
+  assert(!Menu.DefaultFromConfig);
+  SfbFreeMenu (&Menu);
+
+  /* The demoted generation is offered as soon as it exists. */
+  mBootRootBackupPresent = TRUE;
+  Files = 0;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
+      Files++;
+    }
+  }
+  assert(Files == 2);
+  assert(StrCmp (Menu.Entry[1].Desc, L"Android") == 0);
+  assert(StrCmp (Menu.Entry[2].Desc, L"Android (previous)") == 0);
+  assert(!Menu.DefaultFromConfig);
+  SfbFreeMenu (&Menu);
+
+  ResetVolumes ();
+}
+
+/*
+ * Removable discovery is additive: it runs beside a valid canoe.cfg, not only
+ * when one is missing. It must leave every configured row's index alone, must
+ * not touch the configured default, and must skip the ext4 boot root even when
+ * that volume happens to carry a well-known loader path of its own.
+ */
+static void
+TestAdditiveDiscovery(void)
+{
+  static const CHAR8 ConfigText[] =
+    "version 1\n"
+    "default android-a\n"
+    "mode 1\n"
+    "entry android-a\n"
+    "title Configured A\n"
+    "image boot.efi\n"
+    "role active\n"
+    "entry android-backup\n"
+    "title Configured backup\n"
+    "image boot_backup.efi\n"
+    "role backup\n";
+  SFB_MENU_STATE Menu;
+  FAKE_MENU_SNAPSHOT Alone;
+  FAKE_MENU_SNAPSHOT WithMedia;
+  FAKE_MENU_SNAPSHOT MediaWithoutLoader;
+  UINTN Index;
+  UINTN Discovered = SFB_NO_INDEX;
+  UINTN Files = 0;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfigText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootConfigPresent = TRUE;
+  mBootRootManagedPresent = TRUE;
+  mBootRootBackupPresent = TRUE;
+  mBootRootIsExt4 = TRUE;
+  mBootRootBootaaPresent = TRUE;
+
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SnapshotMenu (&Menu, &Alone);
+  SfbFreeMenu (&Menu);
+  assert(Alone.DefaultFromConfig);
+
+  mFatVolumePresent = TRUE;
+  mFatBootFilePresent = TRUE;
+
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SnapshotMenu (&Menu, &WithMedia);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind != SfbEntryEfiFile) {
+      continue;
+    }
+    Files++;
+    if (StrCmp (Menu.Entry[Index].Desc, L"Ventoy") == 0) {
+      Discovered = Index;
+      assert(!Menu.Entry[Index].ModeFromConfig);
+      assert(Menu.Entry[Index].Mode == SfbBootModeAblFakeLocked);
+    }
+  }
+  SfbFreeMenu (&Menu);
+
+  /* Two configured rows and exactly one discovered row: the boot root's own
+   * BOOTAA64.EFI is not offered a second time. */
+  assert(Files == 3);
+  assert(Discovered == 3);
+  assert(WithMedia.Count == Alone.Count + 1);
+  assert(WithMedia.DefaultFromConfig);
+  assert(WithMedia.DefaultIndex == Alone.DefaultIndex);
+  for (Index = 0; Index < Alone.Count; ++Index) {
+    if (Alone.Kind[Index] != SfbEntryEfiFile) {
+      continue;
+    }
+    assert(WithMedia.Kind[Index] == SfbEntryEfiFile);
+    assert(StrCmp (WithMedia.Desc[Index], Alone.Desc[Index]) == 0);
+  }
+
+  /* Same medium with nothing bootable on it changes the menu not at all. */
+  mFatBootFilePresent = FALSE;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SnapshotMenu (&Menu, &MediaWithoutLoader);
+  SfbFreeMenu (&Menu);
+  assert(SameMenu (&MediaWithoutLoader, &Alone));
+
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
+/*
+ * Roles are written by whoever authored canoe.cfg. An OTA that flips the
+ * active slot makes the `active` label a lie until the device-side watcher
+ * re-runs, which it cannot do before Android boots. The BDS must notice and
+ * refuse to launch that entry unattended - and must still notice nothing when
+ * the label is right, or when the entry names no slot at all.
+ */
+static void
+TestStaleSlotRole(void)
+{
+  static const CHAR8 ConfigText[] =
+    "version 1\n"
+    "default android-a\n"
+    "mode 1\n"
+    "entry android-a\n"
+    "title Android (slot A)\n"
+    "image boot.efi\n"
+    "role active\n";
+  static const CHAR8 NoSlotText[] =
+    "version 1\n"
+    "default mine\n"
+    "mode 1\n"
+    "entry mine\n"
+    "title My own\n"
+    "image boot.efi\n"
+    "role active\n";
+  SFB_MENU_STATE Menu;
+  UINTN Index;
+  BOOLEAN Warned;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfigText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootConfigPresent = TRUE;
+  mBootRootManagedPresent = TRUE;
+
+  /* The config says slot A is active; the GPT says B. */
+  mFakeActiveSlot = SfbSlotB;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  Warned = FALSE;
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryBack &&
+        StrCmp (Menu.Entry[Index].Desc, L"Config slot role is stale") == 0) {
+      Warned = TRUE;
+    }
+  }
+  assert(Menu.SlotMismatch);
+  assert(Warned);
+  /* Still highlighted, but no longer launched without a keypress. */
+  assert(!Menu.DefaultFromConfig);
+  assert(Menu.DefaultIndex != SFB_NO_INDEX);
+  SfbFreeMenu (&Menu);
+
+  /* Agreement is silent. */
+  mFakeActiveSlot = SfbSlotA;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  assert(!Menu.SlotMismatch);
+  assert(Menu.DefaultFromConfig);
+  SfbFreeMenu (&Menu);
+
+  /* An unrecognised partition layout must never suppress a boot. */
+  mFakeActiveSlot = SfbSlotUnknown;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  assert(!Menu.SlotMismatch);
+  assert(Menu.DefaultFromConfig);
+  SfbFreeMenu (&Menu);
+
+  /*
+   * An entry that claims no slot is not evidence of staleness. The active
+   * entry's image is always plain boot.efi, so the id is the only thing that
+   * carries the slot; reading the image alone would flag every slot-B device.
+   */
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, NoSlotText, sizeof (NoSlotText) - 1);
+  mEntriesFixtureBytes = sizeof (NoSlotText) - 1;
+  mFakeActiveSlot = SfbSlotB;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  assert(!Menu.SlotMismatch);
+  assert(Menu.DefaultFromConfig);
+  SfbFreeMenu (&Menu);
+
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
 int
 main(void)
 {
@@ -1031,6 +1360,11 @@ main(void)
   TestBootRootEmpty ();
   TestConfigEntries ();
   TestEntriesSafety ();
+  TestLockRefusalDemotes ();
+  TestBootRootProbe ();
+  TestUnmanagedPassthrough ();
+  TestAdditiveDiscovery ();
+  TestStaleSlotRole ();
   return 0;
 }
 
@@ -1155,9 +1489,15 @@ SfbVolumeRootPrefix(IN EFI_HANDLE Volume)
 BOOLEAN
 SfbVolumeIsExt4(IN EFI_HANDLE Volume)
 {
-  (void)Volume;
-  return FALSE;
+  return (BOOLEAN)(Volume == mVolume && mBootRootIsExt4);
 }
+
+SFB_SLOT
+SfbActiveSlot(VOID)
+{
+  return mFakeActiveSlot;
+}
+
 EFI_STATUS
 SfbStartFatStack(VOID)
 {

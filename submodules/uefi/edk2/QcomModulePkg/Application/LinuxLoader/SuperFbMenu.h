@@ -165,6 +165,13 @@ typedef struct {
   /* Non-zero means canoe.cfg was partly refused. Surfaced in the menu: a
    * half-applied config must be visible, never silent. */
   UINTN                  RejectedLines;
+  /*
+   * TRUE when a config entry labelled `active` claims a different slot than
+   * the GPT marks active. Surfaced as a row, and it withholds the unattended
+   * launch: a stale label means the config no longer describes what it points
+   * at, which is not a thing to boot without looking.
+   */
+  BOOLEAN                SlotMismatch;
   /* TRUE when the boot root holds neither a canoe.cfg nor a boot.efi: nothing
    * is installed yet, so the only useful destination is fastboot. */
   BOOLEAN         FirstRun;
@@ -196,15 +203,6 @@ typedef enum {
  */
 EFI_STATUS
 SfbStartFatStack (VOID);
-
-/*
- * Case-insensitive compare of a GPT PartitionName field against a wanted name.
- * The field is a CHAR16[36] that is not required to be NUL terminated and is
- * space padded by some writers, so this is the only correct way to compare one
- * and every caller uses it.
- */
-BOOLEAN
-SfbGptNameMatches (IN CONST CHAR16 *Stored, IN CONST CHAR16 *Want);
 
 /*
  * Find the Block I/O instance for the GPT partition named Name. Returns

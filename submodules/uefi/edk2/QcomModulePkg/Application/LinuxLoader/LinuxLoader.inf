@@ -78,6 +78,8 @@
 	SuperFbEntries.c
 	SuperFbMenu.c
 	SuperFbBrowser.c
+	SuperFbSlots.h
+	SuperFbSlots.c
 	SuperFbMassStorage.h
 	SuperFbMassStorage.c
 	SuperFbLaunchPolicy.h
