@@ -13,6 +13,7 @@
 #   6  refusals: id, role, title, image, mode, missing entry, 25th entry
 #   7  a lenient read drops what the BDS would reject, and still writes
 #   8  show writes nothing and does not bump the generation
+#   9  mode re-modes an existing entry only, and refuses anything else
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -203,5 +204,26 @@ entry show "$D" || fail "8: show refused: $(cat "$ERR")"
 [ "$(cat "$OUT")" = "$snapshot" ] || fail '8: show did not print the document'
 [ "$(temps "$D")" = 0 ] || fail '8: show left temp files'
 pass 'show writes nothing and does not bump the generation'
+
+# ------------------------------------------------------------------ case 9 --
+# `mode` exists so a caller that only wants to re-mode a row cannot create one,
+# or silently restate its role, by getting an argument wrong.
+root c9
+entry set "$D" --id android-a --title 'A' --image boot.efi --role active --mode 2 --default ||
+  fail "9: refused: $(cat "$ERR")"
+printf '\nentry lineage\n  title LineageOS\n  image roms/lineage.efi\n  mode 2\n  role other\n' >> "$CFG"
+generation=$(value "$CFG" generation)
+entry mode "$D" --id android-a --mode 1 || fail "9: mode refused: $(cat "$ERR")"
+[ "$(entry_field "$CFG" android-a mode)" = 1 ] || fail '9: mode was not applied'
+[ "$(entry_field "$CFG" android-a role)" = active ] || fail '9: role was rewritten'
+[ "$(entry_field "$CFG" android-a image)" = boot.efi ] || fail '9: image was rewritten'
+[ "$(entry_field "$CFG" lineage mode)" = 2 ] || fail '9: another entry was re-moded'
+[ "$(value "$CFG" generation)" -gt "$generation" ] || fail '9: generation did not advance'
+grep -q 'CANOE-MARK: entry-mode-set id=android-a mode=1' "$OUT" || fail '9: no mode receipt'
+if entry mode "$D" --id ghost --mode 1; then fail '9: re-moded an entry that does not exist'; fi
+if entry mode "$D" --id android-a --mode 7; then fail '9: accepted an invalid mode'; fi
+[ "$(grep -c '^entry ' "$CFG")" = 2 ] || fail '9: a refusal changed the entry count'
+[ "$(temps "$D")" = 0 ] || fail '9: temp files left behind'
+pass 'mode re-modes an existing entry only, and refuses anything else'
 
 echo "all canoe boot-entry fixtures passed"

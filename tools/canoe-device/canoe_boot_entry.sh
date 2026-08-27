@@ -5,11 +5,17 @@
 #          --role active|inactive|backup|other [--mode 0|1|2] [--default] \
 #          [--global-mode 0|1|2] [--timeout SECONDS] \
 #          [--devinfo-repair asneeded|never]
+#   sh canoe_boot_entry.sh mode <boot_root> --id ID --mode 0|1|2
 #   sh canoe_boot_entry.sh remove <boot_root> --id ID
 #   sh canoe_boot_entry.sh show <boot_root>
 #
+# `mode` re-modes an entry that already exists and nothing else. It is separate
+# from `set` because the callers that only want to change a launch mode - the
+# WebUI mode selector, and the signer gate downgrading a Mode 2 row - must not
+# be able to create a row or restate its role by getting an argument wrong.
+#
 # One writer, because there were six: canoe_device_install.sh, the module's
-# customize.sh and bin/bl_flasher.sh, the module's OTA service.sh, and the
+# customize.sh and bin/bl_flasher.sh, its OTA watcher, and the
 # host's canoelib/config.py - each with its own idea of which entries survive a
 # write. The host even pushed a config the device then threw away, which is how
 # `canoe install --mode 0` used to land `mode 1`.
@@ -81,6 +87,10 @@ case "$OP" in
     [ -n "$CBE_TITLE" ] || die "set needs --title"
     [ -n "$CBE_IMAGE" ] || die "set needs --image"
     [ -n "$CBE_ROLE" ]  || die "set needs --role"
+    ;;
+  mode)
+    [ -n "$CBE_ID" ]   || die "mode needs --id"
+    [ -n "$CBE_MODE" ] || die "mode needs --mode"
     ;;
   remove) [ -n "$CBE_ID" ] || die "remove needs --id" ;;
   show) ;;
@@ -234,6 +244,10 @@ END {
     mode[target] = new_mode
     role[target] = ENVIRON["CBE_ROLE"]
     if (ENVIRON["CBE_DEFAULT"] == "yes") default_id = target
+  } else if (op == "mode") {
+    if (!(target in seen)) bad("no such entry: " target)
+    if (ENVIRON["CBE_MODE"] !~ /^[012]$/) bad("entry mode must be 0, 1 or 2")
+    mode[target] = ENVIRON["CBE_MODE"]
   } else if (op == "remove") {
     if (!(target in seen)) bad("no such entry: " target)
     delete seen[target]
@@ -315,5 +329,6 @@ sync || :
 
 case "$OP" in
   set)    mark "entry-set id=$CBE_ID role=$CBE_ROLE mode=${CBE_MODE:-inherited} generation=$GENERATION" ;;
+  mode)   mark "entry-mode-set id=$CBE_ID mode=$CBE_MODE generation=$GENERATION" ;;
   remove) mark "entry-removed id=$CBE_ID generation=$GENERATION" ;;
 esac
