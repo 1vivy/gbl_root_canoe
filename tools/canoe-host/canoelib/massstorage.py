@@ -39,9 +39,14 @@ class Export:
 
 _SYS_BLOCK: Final = Path("/sys/block")
 _DEV_ROOT: Final = Path("/dev")
-_USB_MODESWITCH_DB: Final = Path("/usr/share/usb_modeswitch")
 _USB_MODESWITCH_OVERRIDE: Final = Path("/etc/usb_modeswitch.d")
 _MSC_GADGET_ID: Final = "05c6:f000"
+# The BDS rewrites the resident export driver's presentation to this canoe
+# identity before the session starts (fixed-disk INQUIRY, pid.codes VID,
+# product "efisp boot root"). 05c6:f000 remains accepted because an
+# unfamiliar firmware layout degrades to the stock presentation.
+_MSC_CANOE_GADGET_ID: Final = "1209:ca0e"
+_MSC_GADGET_IDS: Final = frozenset({_MSC_GADGET_ID, _MSC_CANOE_GADGET_ID})
 _MOUNTINFO: Final = Path("/proc/self/mountinfo")
 # `<id> <parent> <maj:min> <root> <point> <opts> [tags] - <fstype> <source> <opts>`
 _MOUNTINFO_POINT: Final = 4
@@ -143,7 +148,7 @@ def _usb_disks() -> dict[str, str | None]:
 
 def _exported_disks(disks: dict[str, str | None]) -> tuple[str, ...]:
     """Names of the disks whose USB identity is the BDS export gadget."""
-    return tuple(name for name, gadget in disks.items() if gadget == _MSC_GADGET_ID)
+    return tuple(name for name, gadget in disks.items() if gadget in _MSC_GADGET_IDS)
 
 
 def _unescape_mountinfo(field: str) -> str:
@@ -307,25 +312,24 @@ def _mount_export(node: Path) -> Export:
     )
 
 
-def _modeswitch_unguarded() -> bool:
-    """True when usb_modeswitch is poised to eject the BDS export mid-scan.
+def _stock_identity_hint(disks: dict[str, str | None]) -> str:
+    """Name the modeswitch trap only when the stock identity is what showed up.
 
-    The export gadget presents 05c6:f000, which the stock udev rules match to
-    a Siptune/EWangshikong modem whose packaged switch config requests a
-    StandardEject. Measured on this machine: the dispatcher claims the
-    interface (silently detaching usb-storage between bind and scan) and the
-    eject tears the export session down on the device. A same-named file in
-    /etc/usb_modeswitch.d with DisableSwitching=1 is the supported opt-out.
+    The BDS presents the export as the canoe identity, which no udev rule
+    claims. A session that came up as the stock 05c6:f000 means the device
+    fell back to its own driver, and on that identity stock rules match
+    a mode-switching modem whose packaged config ejects the disk between
+    usb-storage binding and the kernel scan.
     """
-    if not (_USB_MODESWITCH_DB / _MSC_GADGET_ID).exists():
-        return False
-    try:
-        text = (_USB_MODESWITCH_OVERRIDE / _MSC_GADGET_ID).read_text(
-            encoding="utf-8", errors="replace"
-        )
-    except OSError:
-        return True
-    return "disableswitching" not in text.lower()
+    if _MSC_GADGET_ID not in disks.values():
+        return ""
+    return (
+        f" The session came up with the stock {_MSC_GADGET_ID} identity rather than"
+        f" {_MSC_CANOE_GADGET_ID}, so the device used its own driver; stock"
+        " usb_modeswitch rules eject that identity mid-scan. Create"
+        f" {_USB_MODESWITCH_OVERRIDE / _MSC_GADGET_ID} containing"
+        " 'DisableSwitching=1' and retry."
+    )
 
 
 def _find_export(before: frozenset[str], timeout: float) -> Export:
@@ -344,15 +348,7 @@ def _find_export(before: frozenset[str], timeout: float) -> Export:
                 return _mount_export(node)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            remedy = (
-                f" usb_modeswitch has a packaged rule for the export's {_MSC_GADGET_ID}"
-                " identity and ejects the device between usb-storage binding and the"
-                " kernel scan; create"
-                f" {_USB_MODESWITCH_OVERRIDE / _MSC_GADGET_ID} containing"
-                " 'DisableSwitching=1' and retry."
-                if _modeswitch_unguarded()
-                else ""
-            )
+            remedy = _stock_identity_hint(disks)
             raise CanoeError(
                 "mass-storage export did not expose a new USB SCSI disk within"
                 f" {timeout:g}s; the device enumerated but never presented a LUN.{remedy}"

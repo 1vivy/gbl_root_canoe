@@ -8,6 +8,10 @@ clean:
 	rm -rf ./build || true
 build:
 	cp -r ./Conf ./edk2/
+	# Bake the bundled mass-storage driver into the image; a missing blob
+	# builds the platform-driver fallback instead.
+	python3 embed_variant.py blobs/canoe-usbmsd.efi \
+		edk2/QcomModulePkg/Application/LinuxLoader/Generated/CanoeMsdVariantData.c
 	# Remove the previous output first. The EDK2 invocation below is tolerated
 	# with `|| true`, so an existence check alone would accept a FAILED rebuild
 	# whenever a stale artifact was still lying around, and the packages would
