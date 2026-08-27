@@ -22,6 +22,15 @@
 #include <Protocol/SimpleFileSystem.h>
 
 #include "SuperFbConfig.h"
+/*
+ * Value exposed by the canoe-bds fastboot variable and used by the host for
+ * Super-Fastboot detection and compatibility checks. The build injects the
+ * stamped value from the repo-root version.mk; this fallback appears only in
+ * an unstamped local build.
+ */
+#ifndef SFB_BDS_VERSION
+#define SFB_BDS_VERSION "0.0.0-dev"
+#endif
 
 /* The boot loader we look for on every FAT32 volume, and the optional ANSI
  * one-liner describing it. */
@@ -172,9 +181,6 @@ typedef struct {
    * at, which is not a thing to boot without looking.
    */
   BOOLEAN                SlotMismatch;
-  /* TRUE when the boot root holds neither a canoe.cfg nor a boot.efi: nothing
-   * is installed yet, so the only useful destination is fastboot. */
-  BOOLEAN         FirstRun;
 } SFB_MENU_STATE;
 
 typedef enum {
@@ -315,18 +321,18 @@ SfbGetVolumeLabel (IN EFI_FILE_PROTOCOL *Root,
 /* ---- SuperFbEntries.c: entry list and launching -------------------------- */
 
 /*
- * Read and parse <boot root>\canoe.cfg from the first volume that carries one.
- * Returns EFI_NOT_FOUND when no volume has the file, EFI_COMPROMISED_DATA when
- * one does but it cannot be believed. *Volume is set to the volume the file
- * came from, so entry paths resolve against the same boot root.
+ * Parse canoe.cfg from the first boot volume that carries one; Volume receives
+ * the handle it was read from. EFI_NOT_FOUND when no volume holds one, which
+ * the callers treat as "no configured policy" rather than as an error.
  */
 EFI_STATUS
 SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume);
 
 /*
- * TRUE when the boot root exists but holds neither a canoe.cfg nor a boot.efi.
- * That is the first-run signal: nothing is installed, so the only destination
- * that can change it is fastboot.
+ * TRUE when no boot volumes can be located, no located volume can be opened as
+ * a root, or every opened root holds neither a canoe.cfg nor a boot.efi. Any
+ * of those first-run states has no launchable destination, so use fastboot.
+ * FALSE only when an opened root contains a canoe.cfg or boot.efi.
  */
 BOOLEAN
 SfbBootRootIsEmpty (VOID);

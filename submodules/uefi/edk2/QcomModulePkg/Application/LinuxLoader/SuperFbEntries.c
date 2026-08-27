@@ -117,6 +117,10 @@ SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume)
   return EFI_NOT_FOUND;
 }
 
+/*
+ * A missing or unreachable root is first-run too: when nothing can be
+ * launched, fastboot is the only useful destination for installation.
+ */
 BOOLEAN
 SfbBootRootIsEmpty (VOID)
 {
@@ -127,8 +131,10 @@ SfbBootRootIsEmpty (VOID)
   BOOLEAN FoundRoot = FALSE;
 
   Status = SfbLocateVolumes (&Volumes, &VolumeCount);
-  if (EFI_ERROR (Status) || Volumes == NULL) {
-    return FALSE;
+  if (EFI_ERROR (Status) || Volumes == NULL || VolumeCount == 0) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK boot-root reason=no-volumes status=%r\n", Status));
+    return TRUE;
   }
 
   for (Index = 0; Index < VolumeCount; Index++) {
@@ -145,6 +151,7 @@ SfbBootRootIsEmpty (VOID)
                                  SFB_CONFIG_FILE_PATH, ConfigPath,
                                  ARRAY_SIZE (ConfigPath))) &&
         SfbFileExists (Root, ConfigPath)) {
+      DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=populated\n"));
       Root->Close (Root);
       FreePool (Volumes);
       return FALSE;
@@ -153,6 +160,7 @@ SfbBootRootIsEmpty (VOID)
                                  SFB_MANAGED_BOOT_NAME, ManagedPath,
                                  ARRAY_SIZE (ManagedPath))) &&
         SfbFileExists (Root, ManagedPath)) {
+      DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=populated\n"));
       Root->Close (Root);
       FreePool (Volumes);
       return FALSE;
@@ -161,7 +169,12 @@ SfbBootRootIsEmpty (VOID)
   }
 
   FreePool (Volumes);
-  return FoundRoot;
+  if (!FoundRoot) {
+    DEBUG ((EFI_D_WARN, "SFB: MARK boot-root reason=no-root\n"));
+    return TRUE;
+  }
+  DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=empty-root\n"));
+  return TRUE;
 }
 
 VOID
@@ -837,7 +850,6 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   Menu->DefaultIndex = SFB_NO_INDEX;
   Menu->TimeoutSeconds = SFB_CONFIG_DEFAULT_TIMEOUT;
   Menu->LockPolicy = SfbConfigLockAsNeeded;
-  Menu->FirstRun = SfbBootRootIsEmpty ();
 
   /* The mode row is a session-only override, never a persisted setting. */
   SfbAppendBuiltIn (Menu, SfbEntryMode, L"Session boot mode");

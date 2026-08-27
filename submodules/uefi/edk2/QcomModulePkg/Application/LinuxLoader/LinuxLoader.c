@@ -191,8 +191,10 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
             (UINT32)Mode, (UINT32)!EFI_ERROR (Status)));
 
     /*
-     * First-run is checked before key intent: an empty boot root has no image
-     * or menu to show, so fastboot is the only useful destination.
+     * First-run is checked before key intent: a root that cannot be located or
+     * opened, or one with no image or menu, has no launchable destination, so
+     * fastboot is the only useful destination. Misreporting a fresh device as
+     * populated strands it instead of letting the PC install it.
      */
     if (SfbBootRootIsEmpty ()) {
       DEBUG ((EFI_D_INFO, "SFB: MARK bootflow first-run=1\n"));

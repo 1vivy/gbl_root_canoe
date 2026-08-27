@@ -97,6 +97,8 @@ found at
 #include "FastbootMain.h"
 #include "LinuxLoaderLib.h"
 #include "../../Application/LinuxLoader/SuperFbMenu.h"
+/* CmdOem already depends on SuperFb; this slot lookup adds no new layering. */
+#include "../../Application/LinuxLoader/SuperFbSlots.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -2795,6 +2797,25 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
 
   AsciiSPrint (FullProduct, sizeof (FullProduct), "%a", PRODUCT_NAME);
   FastbootPublishVar ("product", FullProduct);
+
+  FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
+
+  /*
+   * Without this value the host wizard must ask which slot is active, and a
+   * wrong answer mislabels every menu row. BDS already computed it from the
+   * enumerated GPT, so do not guess when the layout is unknown.
+   */
+  switch (SfbActiveSlot ()) {
+    case SfbSlotA:
+      FastbootPublishVar ("current-slot", "a");
+      break;
+    case SfbSlotB:
+      FastbootPublishVar ("current-slot", "b");
+      break;
+    case SfbSlotUnknown:
+    default:
+      break;
+  }
 
   GetPartitionCount (&PartitionCount);
   Status = PublishGetVarPartitionInfo (PublishedPartInfo, PartitionCount);

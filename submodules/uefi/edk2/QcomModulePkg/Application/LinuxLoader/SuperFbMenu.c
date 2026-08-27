@@ -25,8 +25,16 @@
 CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
 
 #define SFB_ATTR_NORMAL    EFI_TEXT_ATTR (EFI_LIGHTGRAY, EFI_BLACK)
-/* Project credit line shown under the boot-menu title. */
-#define SFB_MENU_CREDIT  L"gbl_root_canoe 7.0.0-b1 by 1vivy"
+/*
+ * Project credit line shown under the boot-menu title. The version is the
+ * build-stamped SFB_BDS_VERSION, which is the same value the host reads back
+ * as the `canoe-bds` fastboot variable, so the screen and the wire can never
+ * disagree. SFB_BDS_VERSION is a narrow literal because fastboot publishes
+ * CHAR8; widening it here keeps the credit one compile-time literal.
+ */
+#define SFB_WIDEN_(x)    L##x
+#define SFB_WIDEN(x)     SFB_WIDEN_ (x)
+#define SFB_MENU_CREDIT  L"gbl_root_canoe " SFB_WIDEN (SFB_BDS_VERSION) L" by 1vivy"
 #define SFB_ATTR_SELECTED  EFI_TEXT_ATTR (EFI_BLACK, EFI_LIGHTGRAY)
 #define SFB_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
 
