@@ -1,5 +1,5 @@
 #!/bin/sh
-# Focused device-module flow coverage for the 7.x config contract.
+# Focused device-module flow coverage for the 7.x install contract.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -9,39 +9,76 @@ BIN="$TMP/bin"
 BY_NAME="$TMP/by-name"
 PERSIST="$TMP/persist"
 EFISP="$PERSIST/efisp"
-LOG="$TMP/flow.log"
-trap 'rm -rf "$TMP"' EXIT INT TERM HUP
+SUPPLIED="$TMP/supplied"
+LOG="$MOD/tmp/flash.log"
+QUESTION_LOG="$TMP/question.log"
+if [ "${KEEP_TMP:-0}" = 1 ]; then
+  trap ':' EXIT INT TERM HUP
+else
+  trap 'rm -rf "$TMP"' EXIT INT TERM HUP
+fi
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok - $*"; }
+assert_no_entry() {
+  if printf '%s\n' "$1" | /usr/bin/grep -q "^entry $2$"; then
+    fail "$3"
+  fi
+}
 assert_file() { [ -f "$1" ] || fail "missing file: $1"; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3 (got '$1', want '$2')"; }
 assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3" ;; esac; }
+assert_not_contains() { case "$1" in *"$2"*) fail "$3" ;; esac; }
 
-mkdir -p "$MOD/bin" "$MOD/efisp/tools" "$BIN" "$BY_NAME" "$EFISP"
+mkdir -p "$MOD/bin" "$MOD/efisp/tools" "$BIN" "$BY_NAME" "$EFISP" "$SUPPLIED"
 cp "$ROOT/tools/canoe-device/canoe_device_install.sh" "$MOD/canoe_device_install.sh"
 cp "$ROOT/tools/canoe-device/canoe_boot_entry.sh" "$MOD/canoe_boot_entry.sh"
-chmod +x "$MOD/canoe_device_install.sh" "$MOD/canoe_boot_entry.sh"
+cp "$ROOT/targets/magisk_module/module/bin/canoe_vendor_boot.sh" "$MOD/bin/canoe_vendor_boot.sh"
+chmod +x "$MOD/canoe_device_install.sh" "$MOD/canoe_boot_entry.sh" "$MOD/bin/canoe_vendor_boot.sh"
 printf 'BDS fixture\n' > "$MOD/BDS.efi"
 printf 'tool\n' > "$MOD/efisp/tools/BLTools.efi"
-printf 'abl-a-v1\n' > "$BY_NAME/abl_a"
-printf 'abl-b-v1\n' > "$BY_NAME/abl_b"
+
+make_profile() {
+  profile_path=$1
+  profile_name=$2
+  awk -v value="profile-$profile_name" \
+    'BEGIN { printf "%-56s%-32s%-32s", substr(value, 1, 56), "fixture-signer", "fixture-tail" }' \
+    > "$profile_path"
+}
+make_tzmap() {
+  awk -v value="tzmap-$1" 'BEGIN { printf "%-256s", value }' > "$2"
+}
+
+printf 'abl-a-v1-vulnerable\n' > "$BY_NAME/abl_a"
+printf 'abl-b-v1-vulnerable\n' > "$BY_NAME/abl_b"
 printf 'vbmeta-a\n' > "$BY_NAME/vbmeta_a"
 printf 'vbmeta-b\n' > "$BY_NAME/vbmeta_b"
 printf 'old-live\n' > "$EFISP/boot.efi"
-printf 'old-profile\n' > "$EFISP/boot.efi.gm2p"
-printf 'old-tzmap\n' > "$EFISP/boot.efi.tzmap"
+make_profile "$EFISP/boot.efi.gm2p" old-live
+make_tzmap old-live "$EFISP/boot.efi.tzmap"
 printf 'old-backup\n' > "$EFISP/boot_backup.efi"
+make_profile "$EFISP/boot_backup.efi.gm2p" old-backup
+make_tzmap old-backup "$EFISP/boot_backup.efi.tzmap"
 truncate -s 2097152 "$BY_NAME/efisp"
-printf 'old-backup-profile\n' > "$EFISP/boot_backup.efi.gm2p"
-printf 'old-backup-tzmap\n' > "$EFISP/boot_backup.efi.tzmap"
+
+# Plant a stale passthrough row and a hand-added row; the transaction must
+# migrate only the former while preserving the latter.
+sh "$MOD/canoe_boot_entry.sh" set "$EFISP" \
+  --id android-b --title 'Android (slot B)' --image boot_b.efi \
+  --role inactive --mode 2 >/dev/null
+sh "$MOD/canoe_boot_entry.sh" set "$EFISP" \
+  --id lineage --title 'Lineage custom' --image lineage.efi \
+  --role other --mode 1 >/dev/null
+printf 'stale-b\n' > "$EFISP/boot_b.efi"
+make_profile "$EFISP/boot_b.efi.gm2p" stale-b
+make_tzmap stale-b "$EFISP/boot_b.efi.tzmap"
 
 cat > "$BIN/getprop" <<'EOF'
 #!/bin/sh
 case "$1" in
-  ro.boot.slot_suffix) echo _a ;;
+  ro.boot.slot_suffix) echo "${SLOT_SUFFIX:-_a}" ;;
   ro.product.name) echo test-device ;;
-  ro.product.model) echo Test Model ;;
+  ro.product.model) echo Test-Model ;;
   ro.board.platform) echo sm8850 ;;
 esac
 EOF
@@ -68,11 +105,16 @@ in= out=
 for arg in "$@"; do
   case "$arg" in if=*) in=${arg#*=} ;; of=*) out=${arg#*=} ;; esac
 done
-printf 'dd %s -> %s\n' "$in" "$out" >> "$FLOW_LOG"
-if [ -n "$out" ]; then
-  [ -f "$in" ] && /bin/cp "$in" "$out"
+printf 'dd %s -> %s\n' "$in" "$out" >> "${FLOW_LOG:?}"
+if [ "$out" = "${BY_NAME_DIR:-}/efisp" ] && [ -f "$out" ]; then
+  old_size=$(stat -c '%s' "$out")
+  temp_out="$out.dd.$$"
+  /usr/bin/dd "$@" of="$temp_out" >/dev/null 2>&1
+  /usr/bin/dd if="$temp_out" of="$out" conv=notrunc >/dev/null 2>&1
+  truncate -s "$old_size" "$out"
+  rm -f "$temp_out"
 else
-  [ -n "$in" ] && [ -f "$in" ] && /bin/cat "$in"
+  exec /usr/bin/dd "$@"
 fi
 EOF
 cat > "$BIN/sync" <<'EOF'
@@ -86,11 +128,16 @@ abl=
 while [ "$#" -gt 0 ]; do
   case "$1" in -o) out=$2; shift 2 ;; -v) abl=$2; shift 2 ;; *) shift ;; esac
 done
-printf 'loader-from=' > "$out/LinuxLoader.efi"
+printf 'extractfv source=%s\n' "$abl" >> "${FLOW_LOG:?}"
+printf 'loader-from=%s\n' "$abl" > "$out/LinuxLoader.efi"
 cat "$abl" >> "$out/LinuxLoader.efi"
 EOF
 cat > "$BIN/patch_abl" <<'EOF'
 #!/bin/sh
+printf 'patch_abl source=%s\n' "$1" >> "${FLOW_LOG:?}"
+if /usr/bin/grep -q nonvulnerable "$1"; then
+  echo 'Warning: Failed to patch ABL GBL'
+fi
 /bin/cp "$1" "$2"
 EOF
 cat > "$BIN/mode2_profile" <<'EOF'
@@ -102,14 +149,22 @@ case "$cmd" in
     while [ "$#" -gt 0 ]; do
       case "$1" in --vbmeta) vbmeta=$2; shift 2 ;; --out) out=$2; shift 2 ;; *) shift ;; esac
 done
-    awk -v value="profile-from=$(cat "$vbmeta")" 'BEGIN { printf "%-120s", value }' > "$out"
+    printf 'mode2_profile source=%s\n' "$vbmeta" >> "${FLOW_LOG:?}"
+    value="profile-from=$(cat "$vbmeta")"
+    signer=fixture-signer
+    if /usr/bin/grep -q supplied "$vbmeta"; then signer=supplied-signer
+    elif /usr/bin/grep -q custom "$vbmeta"; then signer=custom-signer
+    fi
+    awk -v value="$value" -v signer="$signer" \
+      'BEGIN { printf "%-56s%-32s%-32s", substr(value, 1, 56), signer, "fixture-tail" }' \
+      > "$out"
     ;;
   validate)
     input=
     while [ "$#" -gt 0 ]; do
       case "$1" in --input) input=$2; shift 2 ;; *) shift ;; esac
 done
-    [ -s "$input" ]
+    [ "$(wc -c < "$input" | tr -d '[:space:]')" = 120 ]
     ;;
   *) exit 1 ;;
 esac
@@ -123,10 +178,11 @@ case "$cmd" in
     while [ "$#" -gt 0 ]; do
       case "$1" in -o) out=$2; shift 2 ;; *) shift ;; esac
 done
-    awk -v value="tzmap-from=$(cat "$abl")" 'BEGIN { printf "%-256s", value }' > "$out"
+    printf 'abl_tzmap source=%s\n' "$abl" >> "${FLOW_LOG:?}"
+    awk 'BEGIN { printf "%-256s", "fixture-tzmap" }' > "$out"
     ;;
   validate)
-    [ -s "$1" ]
+    [ "$(wc -c < "$1" | tr -d '[:space:]')" = 256 ]
     ;;
   verify)
     sidecar= abl=
@@ -138,74 +194,272 @@ done
   *) exit 1 ;;
 esac
 EOF
-cat > "$BIN/patch_tools" <<'EOF'
-#!/bin/sh
-printf 'patch_tools %s\n' "$*" >> "$FLOW_LOG"
-EOF
 chmod +x "$BIN"/*
-cp "$BIN/extractfv" "$BIN/patch_abl" "$BIN/mode2_profile" "$BIN/abl_tzmap" "$BIN/patch_tools" "$MOD/bin/"
+cp "$BIN/extractfv" "$BIN/patch_abl" "$BIN/mode2_profile" "$BIN/abl_tzmap" "$MOD/bin/"
 
 run() {
   MODDIR="$MOD" BY_NAME_DIR="$BY_NAME" PERSIST_MNT="$PERSIST" EFISP_DIR="$EFISP" \
-    RUNTIME_DIR="$MOD/tmp" LOG_FILE="$LOG" \
+    RUNTIME_DIR="$MOD/tmp" LOG_FILE="$LOG" SUPPLIED_DIR="$SUPPLIED" \
     FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
     sh "$MOD/bin/bl_flasher.sh" "$@"
 }
 cp "$ROOT/targets/magisk_module/module/bin/bl_flasher.sh" "$MOD/bin/bl_flasher.sh"
 chmod +x "$MOD/bin/bl_flasher.sh"
-printf 'inactive-efi\n' > "$EFISP/boot_b.efi"
-printf 'inactive-profile\n' > "$EFISP/boot_b.efi.gm2p"
-printf 'inactive-tzmap\n' > "$EFISP/boot_b.efi.tzmap"
 
-run flash update-efisp
-normalized=$(sh "$MOD/canoe_boot_entry.sh" show "$EFISP")
-assert_contains "$normalized" 'version 1' 'shared writer did not emit grammar-valid config'
-assert_file "$EFISP/canoe.cfg"
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'version 1' 'config version missing'
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'entry android-a' 'active entry missing'
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'role active' 'active role missing'
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'entry android-backup' 'backup entry missing'
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'role backup' 'backup role missing'
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'image boot_backup.efi' 'backup image missing'
-pass 'module pair install writes a valid active and backup canoe.cfg'
+run flash update-efisp > "$TMP/initial.out"
+cfg=$(cat "$EFISP/canoe.cfg")
+assert_contains "$cfg" 'entry android-a' 'active entry missing'
+assert_contains "$cfg" 'role active' 'active role missing'
+assert_contains "$cfg" 'entry android-backup' 'backup entry missing'
+assert_contains "$cfg" 'image boot_backup.efi' 'backup image missing'
+assert_contains "$cfg" 'entry lineage' 'hand-added row was not preserved'
+assert_no_entry "$cfg" android-b 'passthrough row was not migrated'
+[ ! -e "$EFISP/boot_b.efi" ] || fail 'passthrough loader survived migration'
+[ ! -e "$EFISP/boot_b.efi.gm2p" ] || fail 'passthrough profile survived migration'
+[ ! -e "$EFISP/boot_b.efi.tzmap" ] || fail 'passthrough tzmap survived migration'
+assert_contains "$(cat "$LOG")" 'CANOE-MARK: passthrough-row-migrated id=android-b' \
+  'passthrough migration mark missing'
+pass 'module pair install writes active and backup rows and migrates passthrough state'
 
 run start-mode 2 >/dev/null
 sleep 1
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'entry android-a' 'mode rewrite removed active entry'
+cfg=$(cat "$EFISP/canoe.cfg")
 active_block=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
-assert_contains "$active_block" 'mode 2' 'mode selector did not set the active entry mode'
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'entry android-b' 'inactive entry missing'
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'role inactive' 'inactive role missing'
-active_before=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
-pass 'mode selector rewrites the current boot entry, not a partition record'
+assert_contains "$active_block" 'mode 2' 'mode selector did not update the existing active row'
+assert_no_entry "$cfg" android-b 'mode selector resurrected passthrough row'
+pass 'mode selector updates only the installed managed row'
 
-old_digest=$(sha256sum "$BY_NAME/abl_b" | cut -d ' ' -f1)
-printf '%s\n' "$old_digest" > "$EFISP/.canoe.abl_b.sha256"
-printf 'abl-b-v2\n' > "$BY_NAME/abl_b"
-run_service() {
-  MODDIR="$MOD" BY_NAME_DIR="$BY_NAME" EFISP_DIR="$EFISP" \
-    PERSIST_MNT="$PERSIST" RUNTIME_DIR="$MOD/tmp" LOG_FILE="$LOG" PATH="$BIN:$PATH" \
-    sh "$MOD/service.sh" event "$BY_NAME/abl_b"
+: > "$LOG"
+printf 'target-vulnerable\n' > "$BY_NAME/abl_b"
+run flash update-efisp >/dev/null
+log=$(cat "$LOG")
+assert_contains "$log" 'canoe: abl source=partition vbmeta source=partition' \
+  'partition provenance was not logged'
+assert_contains "$log" "extractfv source=$BY_NAME/abl_b" \
+  'default derivation did not read target ABL partition'
+assert_contains "$log" "mode2_profile source=$BY_NAME/vbmeta_b" \
+  'default derivation did not read target vbmeta partition'
+assert_not_contains "$log" 'source=supplied' 'default derivation unexpectedly used supplied images'
+pass 'default image provenance uses the target partitions'
+
+printf 'supplied-nonvulnerable\n' > "$SUPPLIED/abl.img"
+printf 'supplied-vbmeta\n' > "$SUPPLIED/vbmeta.img"
+: > "$LOG"
+run flash update-efisp,abl=supplied,vbmeta=supplied >/dev/null
+log=$(cat "$LOG")
+assert_contains "$log" 'canoe: abl source=supplied vbmeta source=supplied' \
+  'supplied provenance was not logged'
+assert_contains "$log" "extractfv source=$SUPPLIED/abl.img" \
+  'supplied ABL was not passed to extractfv'
+assert_contains "$log" "mode2_profile source=$SUPPLIED/vbmeta.img" \
+  'supplied vbmeta was not passed to mode2_profile'
+assert_contains "$log" "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
+  'ABL flash did not source the current partition'
+pass 'supplied derivation images are accepted while ABL flashing remains partition-to-partition'
+
+cp "$BY_NAME/abl_b" "$TMP/abl-b-before-empty"
+cp "$EFISP/canoe.cfg" "$TMP/cfg-before-empty"
+: > "$SUPPLIED/abl.img"
+: > "$LOG"
+if run flash update-efisp,abl=supplied >/dev/null 2>&1; then
+  fail 'empty supplied ABL was accepted'
+fi
+cmp "$TMP/abl-b-before-empty" "$BY_NAME/abl_b" || fail 'empty supplied ABL changed a partition'
+cmp "$TMP/cfg-before-empty" "$EFISP/canoe.cfg" || fail 'empty supplied ABL changed canoe.cfg'
+assert_not_contains "$(cat "$LOG")" "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
+  'empty supplied ABL reached the flash step'
+pass 'empty supplied images are refused before any write'
+printf 'supplied-nonvulnerable\n' > "$SUPPLIED/abl.img"
+
+cat > "$BIN/bootctl" <<'EOF'
+#!/bin/sh
+echo 1
+EOF
+chmod +x "$BIN/bootctl"
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+: > "$LOG"
+run flash update-efisp >/dev/null
+cfg=$(cat "$EFISP/canoe.cfg")
+assert_contains "$cfg" 'entry android-b' 'next-slot probe did not label the target slot'
+assert_not_contains "$(cat "$LOG")" 'next-slot probe unavailable' \
+  'available next-slot probe was reported unavailable'
+pass 'bootctl next-slot probe labels the next active row'
+
+rm -f "$BIN/bootctl"
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+: > "$LOG"
+run flash update-efisp >/dev/null
+cfg=$(cat "$EFISP/canoe.cfg")
+assert_contains "$cfg" 'entry android-a' 'missing bootctl did not keep running slot label'
+assert_contains "$(cat "$LOG")" \
+  'next-slot probe unavailable; labelling the row with the running slot' \
+  'missing bootctl fallback log is absent'
+pass 'missing next-slot probe keeps the running slot label'
+
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+: > "$LOG"
+run flash update-efisp >/dev/null
+assert_contains "$(cat "$LOG")" "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
+  'non-vulnerable target did not copy the current ABL'
+pass 'non-vulnerable target ABL is replaced from the current partition'
+
+printf 'target-vulnerable\n' > "$BY_NAME/abl_b"
+: > "$LOG"
+run flash update-efisp >/dev/null
+assert_not_contains "$(cat "$LOG")" "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
+  'vulnerable target ABL was unnecessarily overwritten'
+pass 'vulnerable target ABL is not overwritten'
+
+printf 'custom-vbmeta\n' > "$BY_NAME/vbmeta_b"
+: > "$LOG"
+run flash update-efisp >/dev/null
+cfg=$(cat "$EFISP/canoe.cfg")
+active_block=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
+assert_contains "$(cat "$LOG")" 'CANOE-MARK: signer-changed source=partition' \
+  'partition signer change was not reported'
+assert_contains "$(cat "$LOG")" 'Mode 2 downgraded to Mode 1 after signer change' \
+  'Mode 2 was not downgraded after a partition signer change'
+assert_contains "$active_block" 'mode 1' \
+  'partition signer change left the active row in Mode 2'
+pass 'partition signer changes are reported and Mode 2 is downgraded'
+
+printf 'supplied-custom-vbmeta\n' > "$SUPPLIED/vbmeta.img"
+: > "$LOG"
+run flash update-efisp,abl=supplied,vbmeta=supplied >/dev/null
+assert_contains "$(cat "$LOG")" 'CANOE-MARK: signer-changed source=supplied' \
+  'supplied signer change was not reported as supplied'
+assert_not_contains "$(cat "$LOG")" '签名者已变化' \
+  'supplied signer change unexpectedly emitted a partition warning'
+pass 'supplied signer changes proceed without a Mode 2 downgrade'
+printf 'vbmeta-b\n' > "$BY_NAME/vbmeta_b"
+printf 'supplied-vbmeta\n' > "$SUPPLIED/vbmeta.img"
+
+# Synthetic vendor_boot partition: only the 40-byte token append may change.
+VENDOR="$BY_NAME/vendor_boot_a"
+VENDOR_BEFORE="$TMP/vendor-before.img"
+truncate -s 4096 "$VENDOR"
+printf VNDRBOOT | dd of="$VENDOR" bs=1 seek=0 conv=notrunc 2>/dev/null
+printf 'console=ttyS0' | dd of="$VENDOR" bs=1 seek=28 conv=notrunc 2>/dev/null
+cp "$VENDOR" "$VENDOR_BEFORE"
+patch_output=$(BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
+  PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a)
+assert_eq "$patch_output" patched 'vendor_boot patch did not report a change'
+diff_count=$(cmp -l "$VENDOR_BEFORE" "$VENDOR" | wc -l | tr -d '[:space:]')
+assert_eq "$diff_count" 40 'vendor_boot patch changed the wrong number of bytes'
+if cmp -l "$VENDOR_BEFORE" "$VENDOR" | awk '$1 - 1 < 28 || $1 - 1 > 2075 { bad=1 } END { exit bad }'; then :; else
+  fail 'vendor_boot patch changed bytes outside the cmdline field'
+fi
+cp "$VENDOR" "$TMP/vendor-after-first.img"
+patch_output=$(BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
+  PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a)
+assert_eq "$patch_output" 'already patched' 'vendor_boot patch was not idempotent'
+cmp "$TMP/vendor-after-first.img" "$VENDOR" || fail 'second vendor_boot patch changed the image'
+pass 'vendor_boot patch appends exactly 40 bytes and is idempotent'
+
+VENDOR_BAD="$BY_NAME/vendor_boot_b"
+truncate -s 4096 "$VENDOR_BAD"
+printf BADMAGIC | dd of="$VENDOR_BAD" bs=1 seek=0 conv=notrunc 2>/dev/null
+cp "$VENDOR_BAD" "$TMP/vendor-bad-before.img"
+if BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
+  sh "$MOD/bin/canoe_vendor_boot.sh" b >/dev/null 2>&1; then
+  fail 'bad vendor_boot magic was accepted'
+fi
+cmp "$TMP/vendor-bad-before.img" "$VENDOR_BAD" || fail 'bad magic changed vendor_boot'
+
+truncate -s 4096 "$VENDOR_BAD"
+printf VNDRBOOT | dd of="$VENDOR_BAD" bs=1 seek=0 conv=notrunc 2>/dev/null
+awk 'BEGIN { for (i = 0; i < 2048; i++) printf "x" }' > "$TMP/full-field"
+dd if="$TMP/full-field" of="$VENDOR_BAD" bs=1 seek=28 conv=notrunc 2>/dev/null
+cp "$VENDOR_BAD" "$TMP/vendor-full-before.img"
+if BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
+  sh "$MOD/bin/canoe_vendor_boot.sh" b >/dev/null 2>&1; then
+  fail 'overfull vendor_boot cmdline was accepted'
+fi
+cmp "$TMP/vendor-full-before.img" "$VENDOR_BAD" || fail 'overfull cmdline changed vendor_boot'
+pass 'vendor_boot patch refuses invalid magic and a full cmdline without writing'
+
+run_questionnaire() {
+  question_name=$1
+  question_keys=$2
+  question_mod="$TMP/$question_name-module"
+  question_bin="$TMP/$question_name-bin"
+  question_persist="$TMP/$question_name-persist"
+  question_efisp="$question_persist/efisp"
+  question_log="$TMP/$question_name.log"
+  question_count="$TMP/$question_name.count"
+  question_supplied_dir=${3:-}
+  mkdir -p "$question_mod/bin" "$question_mod/efisp/tools" \
+    "$question_bin" "$question_efisp"
+  cp "$ROOT/targets/magisk_module/module/customize.sh" "$question_mod/customize.sh"
+  cp "$ROOT/targets/magisk_module/module/bin/canoe_vendor_boot.sh" \
+    "$question_mod/bin/canoe_vendor_boot.sh"
+  cp "$BIN/extractfv" "$BIN/patch_abl" "$BIN/mode2_profile" "$BIN/abl_tzmap" \
+    "$question_mod/bin/"
+  cp "$MOD/BDS.efi" "$question_mod/BDS.efi"
+  cp -r "$MOD/efisp/tools/." "$question_mod/efisp/tools/"
+  cat > "$question_mod/canoe_device_install.sh" <<'EOF'
+#!/bin/sh
+printf 'CANOE_MODE=%s\n' "$CANOE_MODE" >> "${QUESTION_LOG:?}"
+exit 0
+EOF
+  cat > "$question_bin/getevent" <<'EOF'
+#!/bin/sh
+number=$(cat "${QUESTION_COUNT:?}" 2>/dev/null || echo 0)
+printf '%s\n' $((number + 1)) > "$QUESTION_COUNT"
+key=$(printf '%s' "${QUESTION_KEYS:?}" | cut -c "$((number + 1))")
+case "$key" in
+  U) echo KEY_VOLUMEUP ;;
+  D) echo KEY_VOLUMEDOWN ;;
+esac
+EOF
+  cat > "$question_bin/ksud" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  cat > "$question_bin/reboot" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  cat > "$question_mod/question-wrapper.sh" <<'EOF'
+#!/bin/sh
+ui_print() { printf '%s\n' "$*" >> "${QUESTION_LOG:?}"; }
+abort() { printf 'ABORT: %s\n' "$*" >> "${QUESTION_LOG:?}"; exit 1; }
+set_perm_recursive() { :; }
+set_perm() { :; }
+EOF
+  cat "$question_mod/customize.sh" >> "$question_mod/question-wrapper.sh"
+  chmod +x "$question_bin/"* "$question_mod/question-wrapper.sh" "$question_mod/customize.sh" \
+    "$question_mod/canoe_device_install.sh" "$question_mod/bin/"*
+  : > "$question_count"
+  : > "$question_log"
+  QUESTION_COUNT="$question_count" QUESTION_KEYS="$question_keys" \
+    QUESTION_LOG="$question_log" FLOW_LOG="$question_log" \
+    MODPATH="$question_mod" BY_NAME_DIR="$BY_NAME" \
+    PERSIST_MNT="$question_persist" EFISP_DIR="$question_efisp" \
+    RUNTIME_DIR="$question_mod/tmp" PATH="$question_bin:$BIN:$PATH" \
+    sh "$question_mod/question-wrapper.sh" > "$TMP/$question_name.stdout" 2>&1
 }
-cp "$ROOT/targets/magisk_module/module/service.sh" "$MOD/service.sh"
-chmod +x "$MOD/service.sh"
-run_service
-new_digest=$(sha256sum "$BY_NAME/abl_b" | cut -d ' ' -f1)
-assert_eq "$(cat "$EFISP/.canoe.abl_b.sha256")" "$new_digest" 'watcher did not stamp the changed ABL digest'
-active_after=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
-assert_eq "$active_after" "$active_before" \
-  'OTA slot update removed or changed the booting entry'
-assert_file "$EFISP/boot_b.efi"
-count_before=$(grep -c 'slot _b changed; derived new boot entry' "$LOG" || true)
-run_service
-count_after=$(grep -c 'slot _b changed; derived new boot entry' "$LOG" || true)
-assert_eq "$count_after" "$count_before" 'unchanged OTA event derived more than once'
-assert_contains "$(cat "$EFISP/canoe.cfg")" 'role inactive' 'watcher omitted inactive role'
-pass 'OTA watcher derives once and keeps the previous boot entry'
-run flash update-bds-tools
-assert_contains "$(sh "$MOD/canoe_boot_entry.sh" show "$EFISP")" \
-  'entry android-a' 'BDS/tools update did not use shared boot-entry writer'
-pass 'BDS and tools refresh uses the shared install transaction'
 
+run_questionnaire questionnaire-mode2 DUUD
+assert_contains "$(cat "$TMP/questionnaire-mode2.log")" 'CANOE_MODE=2' \
+  'Mode 2 questionnaire selection did not reach the device transaction'
+assert_contains "$(cat "$TMP/questionnaire-mode2.log")" \
+  'Select boot mode: Vol+ = keep Mode 1, Vol- = Mode 2' \
+  'Mode 2 second-stage question was not shown'
+assert_not_contains "$(cat "$TMP/questionnaire-mode2.log")" \
+  'Mode 1: patch vendor_boot? Vol+ = yes, Vol- = no' 'Mode 2 unexpectedly asked the vendor_boot question'
+assert_contains "$(cat "$TMP/questionnaire-mode2.log")" \
+  'Data format is required. On a first-time installation it is not optional' 'format-data explanation was not printed'
+pass 'questionnaire reaches Mode 2 and skips Mode 1-only questions'
+
+run_questionnaire questionnaire-mode1 DUUUUU
+assert_contains "$(cat "$TMP/questionnaire-mode1.log")" 'CANOE_MODE=1' \
+  'Mode 1 questionnaire selection did not reach the device transaction'
+assert_contains "$(cat "$TMP/questionnaire-mode1.log")" \
+  'Mode 1: patch vendor_boot? Vol+ = yes, Vol- = no' \
+  'Mode 1 vendor_boot question was not shown'
+assert_contains "$(cat "$TMP/questionnaire-mode1.stdout")" patched \
+  'Mode 1 vendor_boot selection did not invoke the patcher'
+pass 'questionnaire reaches Mode 1 and enables the vendor_boot patch'
 
 echo 'all module flow fixtures passed'

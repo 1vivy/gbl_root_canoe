@@ -56,11 +56,9 @@ if [ "$LANG" = "zh" ]; then
   TEXT_PATCH_START="分区修补任务运行中"
   TEXT_PATCH_VENDORBOOT_START="修补 vendor_boot"
   TEXT_PATCH_VENDORBOOT_DONE="vendor_boot 修补完成"
-  TEXT_PATCH_SUPER_START="修补 super 分区"
-  TEXT_PATCH_SUPER_DONE="super 修补完成"
   TEXT_PATCH_DEBUG_SAVE="调试模式：跳过实际刷写"
   TEXT_PATCH_NO_SELECTED="未勾选任何需要修补的分区"
-  TEXT_PATCH_BOTH_ERR="不能同时修补 vendor_boot 和 super"
+  TEXT_SIGNER_CHANGED="vbmeta 签名者已变化。这在切换到或离开自定义 ROM 时是预期的；此处没有任何工具能证明哪个密钥才是 OEM 的。Mode 2 已降级为 Mode 1。"
   TEXT_PATCH_ERR="分区修补出错"
   TEXT_PATCH_DONE="分区修补任务已完成"
   TEXT_BIN_NOT_FOUND="修补文件未找到"
@@ -105,11 +103,9 @@ else
   TEXT_PATCH_START="Partition patch task running"
   TEXT_PATCH_VENDORBOOT_START="Patch vendor_boot"
   TEXT_PATCH_VENDORBOOT_DONE="vendor_boot patched"
-  TEXT_PATCH_SUPER_START="Patch super partition"
-  TEXT_PATCH_SUPER_DONE="super patched"
   TEXT_PATCH_DEBUG_SAVE="Debug mode: skip actual flash"
+  TEXT_SIGNER_CHANGED="The vbmeta signer changed. This is expected when moving to or from a custom ROM; no tool here can prove which key is the OEM's. Mode 2 was downgraded to Mode 1."
   TEXT_PATCH_NO_SELECTED="No partition selected for patching"
-  TEXT_PATCH_BOTH_ERR="Cannot patch vendor_boot and super at the same time"
   TEXT_PATCH_ERR="Partition patch error"
   TEXT_PATCH_DONE="Partition patch task completed"
   TEXT_BIN_NOT_FOUND="Binary not found"
@@ -129,6 +125,8 @@ STATE_FILE="$RUNTIME_DIR/state"
 MESSAGE_FILE="$RUNTIME_DIR/message"
 UPDATED_FILE="$RUNTIME_DIR/updated"
 TASK_FILE="$RUNTIME_DIR/task_id"
+SUPPLIED_DIR="${SUPPLIED_DIR:-/data/local/tmp/canoe}"
+SIGNER_SOURCE=partition
 PID_FILE="$RUNTIME_DIR/flash.pid"
 LOCK_DIR="$RUNTIME_DIR/flash.lock"
 LOCK_OWNER_FILE="$LOCK_DIR/owner.pid"
@@ -191,6 +189,19 @@ other_slot() {
 
 slot_suffix_to_letter() {
   echo "${1#_}"
+}
+next_boot_slot() {
+  bootctl_path=/data/adb/ksu/bin/bootctl
+  if [ ! -x "$bootctl_path" ]; then
+    bootctl_path=$(command -v bootctl 2>/dev/null || :)
+  fi
+  [ -x "$bootctl_path" ] || return 1
+  boot_slot=$("$bootctl_path" get-active-boot-slot 2>/dev/null) || return 1
+  case "$boot_slot" in
+    0) echo _a ;;
+    1) echo _b ;;
+    *) return 1 ;;
+  esac
 }
 
 partition_path() { echo "$BY_NAME_DIR/$1$2"; }
@@ -423,21 +434,45 @@ install_efisp_pair() {
     rm -rf "$stage"
     return 1
   fi
+  transaction_log="$RUNTIME_DIR/transaction.log"
+  rm -f "$transaction_log"
   if [ "$flash_bds" = "yes" ]; then
-    if ! CANOE_MODE="$install_mode" CANOE_ACTIVE_SLOT="$active_slot" \
-         CANOE_BOOT_ENTRY="$MODDIR/canoe_boot_entry.sh" \
-         sh "$MODDIR/canoe_device_install.sh" "$stage" "$target" \
-         "$BY_NAME_DIR/efisp" "$RUNTIME_DIR/efisp.backup" \
-         >> "$LOG_FILE" 2>&1; then
-      rm -rf "$stage"
-      return 1
+    if CANOE_ALLOW_NEW_SIGNER=1 CANOE_SIGNER_SOURCE="$SIGNER_SOURCE" \
+        CANOE_MODE="$install_mode" CANOE_ACTIVE_SLOT="$active_slot" \
+        CANOE_BOOT_ENTRY="$MODDIR/canoe_boot_entry.sh" \
+        sh "$MODDIR/canoe_device_install.sh" "$stage" "$target" \
+        "$BY_NAME_DIR/efisp" "$RUNTIME_DIR/efisp.backup" \
+        > "$transaction_log" 2>&1; then
+      transaction_status=0
+    else
+      transaction_status=$?
     fi
-  elif ! CANOE_MODE="$install_mode" CANOE_ACTIVE_SLOT="$active_slot" \
-       CANOE_BOOT_ENTRY="$MODDIR/canoe_boot_entry.sh" \
-       sh "$MODDIR/canoe_device_install.sh" "$stage" "$target" \
-       >> "$LOG_FILE" 2>&1; then
+  elif CANOE_ALLOW_NEW_SIGNER=1 CANOE_SIGNER_SOURCE="$SIGNER_SOURCE" \
+      CANOE_MODE="$install_mode" CANOE_ACTIVE_SLOT="$active_slot" \
+      CANOE_BOOT_ENTRY="$MODDIR/canoe_boot_entry.sh" \
+      sh "$MODDIR/canoe_device_install.sh" "$stage" "$target" \
+      > "$transaction_log" 2>&1; then
+    transaction_status=0
+  else
+    transaction_status=$?
+  fi
+  cat "$transaction_log" >> "$LOG_FILE"
+  if [ "$transaction_status" -ne 0 ]; then
     rm -rf "$stage"
     return 1
+  fi
+  if grep -q 'CANOE-MARK: signer-changed' "$transaction_log" &&
+     [ "$SIGNER_SOURCE" != "supplied" ]; then
+    write_log "$TEXT_SIGNER_CHANGED"
+    if [ "$install_mode" = "2" ]; then
+      entry_id=$(config_active_id "$active_slot")
+      if ! sh "$MODDIR/canoe_boot_entry.sh" mode "$target" \
+           --id "$entry_id" --mode 1 >> "$LOG_FILE" 2>&1; then
+        rm -rf "$stage"
+        return 1
+      fi
+      write_log "Mode 2 downgraded to Mode 1 after signer change"
+    fi
   fi
   rm -rf "$stage"
   return 0
@@ -609,24 +644,17 @@ print_status() {
   emit "$out"
 }
 
-# 返回值：0=成功 1=失败/互斥错误 2=未选择任何修补项
+# Return values: 0=success, 1=patch failure, 2=no patch selected.
 exec_patch_by_args() {
   arg_str="$1"
   slot_override="$2"
 
-  arg_super=0
   arg_vendor_boot=0
   arg_debug=0
-  case ",$arg_str," in *,super=1,*) arg_super=1 ;; esac
   case ",$arg_str," in *,vendor_boot=1,*) arg_vendor_boot=1 ;; esac
   case ",$arg_str," in *,debug=1,*) arg_debug=1 ;; esac
 
-  if [ "$arg_super" = "1" ] && [ "$arg_vendor_boot" = "1" ]; then
-    write_log "$TEXT_PATCH_BOTH_ERR"
-    return 1
-  fi
-
-  if [ "$arg_super" != "1" ] && [ "$arg_vendor_boot" != "1" ]; then
+  if [ "$arg_vendor_boot" != "1" ]; then
     write_log "$TEXT_PATCH_NO_SELECTED"
     return 2
   fi
@@ -641,51 +669,19 @@ exec_patch_by_args() {
 
   _old_pwd="$PWD"
   cd "$BINDIR" || { write_log "$TEXT_BIN_NOT_FOUND: $BINDIR"; return 1; }
-
-  if [ "$arg_vendor_boot" = "1" ]; then
-    write_log "$TEXT_PATCH_VENDORBOOT_START"
-    if [ "$arg_debug" = "1" ]; then
-      write_log "$TEXT_PATCH_DEBUG_SAVE"
-    else
-      if [ -x "$BINDIR/patch_tools" ]; then
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" >> "$LOG_FILE" 2>/dev/null
-        ret=$?
-        if [ $ret -ne 0 ]; then
-          write_log "$TEXT_PATCH_ERR (ret:$ret)"
-          cd "$_old_pwd"
-          return 1
-        fi
-      else
-        write_log "$TEXT_BIN_NOT_FOUND: patch_tools"
-        cd "$_old_pwd"
-        return 1
-      fi
-    fi
-    write_log "$TEXT_PATCH_VENDORBOOT_DONE"
+  write_log "$TEXT_PATCH_VENDORBOOT_START"
+  if [ "$arg_debug" = "1" ]; then
+    write_log "$TEXT_PATCH_DEBUG_SAVE"
+  elif [ ! -x "$BINDIR/canoe_vendor_boot.sh" ]; then
+    write_log "$TEXT_BIN_NOT_FOUND: canoe_vendor_boot.sh"
+    cd "$_old_pwd"
+    return 1
+  elif ! sh "$BINDIR/canoe_vendor_boot.sh" "$slot_letter" >> "$LOG_FILE" 2>&1; then
+    write_log "$TEXT_PATCH_ERR"
+    cd "$_old_pwd"
+    return 1
   fi
-
-  if [ "$arg_super" = "1" ]; then
-    write_log "$TEXT_PATCH_SUPER_START"
-    if [ "$arg_debug" = "1" ]; then
-      write_log "$TEXT_PATCH_DEBUG_SAVE"
-    else
-      if [ -x "$BINDIR/patch_tools" ]; then
-        "$BINDIR/patch_tools" patch_vendor "$slot_letter" super >> "$LOG_FILE" 2>/dev/null
-        ret=$?
-        if [ $ret -ne 0 ]; then
-          write_log "$TEXT_PATCH_ERR (ret:$ret)"
-          cd "$_old_pwd"
-          return 1
-        fi
-      else
-        write_log "$TEXT_BIN_NOT_FOUND: patch_tools"
-        cd "$_old_pwd"
-        return 1
-      fi
-    fi
-    write_log "$TEXT_PATCH_SUPER_DONE"
-  fi
-
+  write_log "$TEXT_PATCH_VENDORBOOT_DONE"
   cd "$_old_pwd"
   return 0
 }
@@ -744,6 +740,10 @@ run_flash() {
   target_slot=$(other_slot "$current_slot")
   [ -z "$current_slot" ] && { write_state error "$TEXT_NO_SLOT"; exit 1; }
   [ -z "$target_slot" ] && { write_state error "$TEXT_NO_TARGET_SLOT"; exit 1; }
+  arg_abl_supplied=0
+  arg_vbmeta_supplied=0
+  case ",$patch_args," in *,abl=supplied,*) arg_abl_supplied=1 ;; esac
+  case ",$patch_args," in *,vbmeta=supplied,*) arg_vbmeta_supplied=1 ;; esac
 
   # skip-efisp 模式：仅修补分区，不碰 ABL/efisp
   if [ "$base_mode" = "skip-efisp" ]; then
@@ -775,9 +775,49 @@ run_flash() {
   vbmeta=$(partition_path vbmeta "$target_slot")
   current_abl=$(partition_path abl "$current_slot")
   current_vbmeta=$(partition_path vbmeta "$current_slot")
+  abl_source_kind=partition
+  vbmeta_source_kind=partition
+  derivation_abl="$abl"
+  derivation_vbmeta="$vbmeta"
+  derivation_source_abl="$current_abl"
+  derivation_source_vbmeta="$current_vbmeta"
+  if [ "$arg_abl_supplied" = "1" ]; then
+    if [ ! -s "$SUPPLIED_DIR/abl.img" ]; then
+      write_log "supplied abl.img is missing or empty"
+      write_state error "supplied abl.img is missing or empty"
+      exit 1
+    fi
+    abl_source_kind=supplied
+    derivation_abl="$SUPPLIED_DIR/abl.img"
+    derivation_source_abl="$SUPPLIED_DIR/abl.img"
+  fi
+  if [ "$arg_vbmeta_supplied" = "1" ]; then
+    if [ ! -s "$SUPPLIED_DIR/vbmeta.img" ]; then
+      write_log "supplied vbmeta.img is missing or empty"
+      write_state error "supplied vbmeta.img is missing or empty"
+      exit 1
+    fi
+    vbmeta_source_kind=supplied
+    derivation_vbmeta="$SUPPLIED_DIR/vbmeta.img"
+    derivation_source_vbmeta="$SUPPLIED_DIR/vbmeta.img"
+  fi
+  if [ "$arg_vbmeta_supplied" = "1" ]; then
+    SIGNER_SOURCE=supplied
+  else
+    SIGNER_SOURCE=partition
+  fi
+  write_log "canoe: abl source=$abl_source_kind vbmeta source=$vbmeta_source_kind"
+  active_slot="$current_slot"
+  next_slot=$(next_boot_slot || :)
+  if [ -n "$next_slot" ] && [ "$next_slot" != "$current_slot" ]; then
+    active_slot="$next_slot"
+  else
+    write_log "next-slot probe unavailable; labelling the row with the running slot"
+  fi
 
   if [ "$debug" = "yes" ]; then
-    update_efisp "$abl" "$vbmeta" yes "" "" "$current_slot"
+    update_efisp "$derivation_abl" "$derivation_vbmeta" yes \
+      "$derivation_source_abl" "$derivation_source_vbmeta" "$active_slot"
     efisp_res=$?
 
     patch_res=0
@@ -796,7 +836,8 @@ run_flash() {
 
   efisp_fail=0
   skip_abl_flash=0
-  update_efisp "$abl" "$vbmeta" no "$current_abl" "$current_vbmeta" "$current_slot"
+  update_efisp "$derivation_abl" "$derivation_vbmeta" no \
+    "$derivation_source_abl" "$derivation_source_vbmeta" "$active_slot"
   res=$?
   if [ $res -eq 3 ]; then
     write_log "ABL/vbmeta/config transaction failed"
@@ -911,13 +952,9 @@ run_config_mode_worker() {
     exit 1
   }
   entry_id=$(config_active_id "$current_slot")
-  entry_title='Android (slot A)'
-  [ "$current_slot" = "_b" ] && entry_title='Android (slot B)'
-  if ! sh "$MODDIR/canoe_boot_entry.sh" set "$EFISP_DIR" \
-       --id "$entry_id" --title "$entry_title" --image boot.efi \
-       --role active --mode "$mode_value" --global-mode "$mode_value" \
-       --default >> "$LOG_FILE" 2>&1; then
-    write_state error "canoe.cfg write failed"
+  if ! sh "$MODDIR/canoe_boot_entry.sh" mode "$EFISP_DIR" \
+       --id "$entry_id" --mode "$mode_value" >> "$LOG_FILE" 2>&1; then
+    write_state error "canoe.cfg mode write failed"
     exit 1
   fi
   if ! config_mode_for_slot "$EFISP_DIR/canoe.cfg" "$current_slot" ||
