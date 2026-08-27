@@ -415,21 +415,37 @@ EFI_STATUS HandleUsbEvents (VOID)
 /*
  * On-device fastboot mode screen.
  *
- * While fastboot waits for a USB host it also offers two on-device actions -
- * power off and restart - driven by the same volume/power keys as the boot
- * menu. The USB event loop polls the console between transfers, so a host
- * connecting and issuing commands is unaffected.
+ * While fastboot waits for a USB host it also offers the on-device actions the
+ * host cannot reach, driven by the same volume/power keys as the boot menu. The
+ * USB event loop polls the console between transfers, so a host connecting and
+ * issuing commands is unaffected.
+ *
+ * Recovery is on this screen because it is otherwise unreachable from here. The
+ * boot menu's "Reboot to Recovery" row runs before FastbootInitialize and
+ * cannot be re-entered from inside the fastboot loop, and a device whose boot
+ * root is empty never sees that menu at all: first-run goes straight to
+ * fastboot. Ending a mass-storage export still needs Volume Down on the device,
+ * but what to do afterwards no longer does.
+ *
+ * The first row is inert on purpose. The cursor starts and is reset to 0, so
+ * whatever sits there is what a stray keypress selects; with "Power Off" there,
+ * a queued key left over from another screen could shut the device down in the
+ * middle of an operator's work. Selecting this row only repaints, which also
+ * shows the screen is still being serviced.
  */
 VOID RebootDevice (UINT8 RebootReason);
 VOID ShutdownDevice (VOID);
 
 /* Reboot reason values, mirroring ShutdownServices.h's RebootReasonType. The
  * header is deliberately not pulled in here just for these constants. */
-#define NORMAL_MODE  0x0
+#define NORMAL_MODE    0x0
+#define RECOVERY_MODE  0x1
 
-#define FB_ACTION_ROWS  2
+#define FB_ACTION_ROWS  4
 
 STATIC CONST CHAR16 *mFbActionRow[FB_ACTION_ROWS] = {
+  L"Stay in Fastboot",
+  L"Reboot to Recovery",
   L"Power Off",
   L"Restart",
 };
@@ -441,6 +457,7 @@ STATIC UINTN mFbActionCursor = 0;
 
 typedef enum {
   FbActionNone = 0,
+  FbActionRecovery,
   FbActionPowerOff,
   FbActionRestart
 } FB_ACTION;
@@ -519,7 +536,21 @@ FastbootPollActionKey (VOID)
     return FbActionNone;
   }
 
-  return (mFbActionCursor == 0) ? FbActionPowerOff : FbActionRestart;
+  switch (mFbActionCursor) {
+  case 1:
+    return FbActionRecovery;
+
+  case 2:
+    return FbActionPowerOff;
+
+  case 3:
+    return FbActionRestart;
+
+  default:
+    /* The inert row: confirm just repaints. */
+    FastbootDrawModeScreen ();
+    return FbActionNone;
+  }
 }
 
 /*
@@ -553,10 +584,11 @@ EFI_STATUS FastbootInitialize (VOID)
   StoreRootDeviceType ();
 
   /*
-   * Draw the on-device fastboot mode screen with the power/restart actions. A
-   * key held while entering fastboot (the power press that confirmed "Enter
-   * Fastboot") is released and drained first, with a brief pause, so it cannot
-   * fire a spurious confirm on the highlighted action row.
+   * Draw the on-device fastboot mode screen with its action rows. A key held
+   * while entering fastboot (the power press that confirmed "Enter Fastboot")
+   * is released and drained first, with a brief pause, so it cannot fire a
+   * spurious confirm; the cursor also starts on the inert row, so a key that
+   * survives both cannot do anything worse than repaint.
    */
   gBS->Stall (1000000);
   gST->ConIn->Reset (gST->ConIn, FALSE);
@@ -572,6 +604,11 @@ EFI_STATUS FastbootInitialize (VOID)
     }
 
     switch (FastbootPollActionKey ()) {
+    case FbActionRecovery:
+      FastbootShowActionScreen (L"Rebooting to recovery...");
+      RebootDevice (RECOVERY_MODE);
+      return EFI_SUCCESS;
+
     case FbActionPowerOff:
       FastbootShowActionScreen (L"Powering off...");
       ShutdownDevice ();
