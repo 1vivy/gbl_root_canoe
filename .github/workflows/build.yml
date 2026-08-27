@@ -76,6 +76,11 @@ jobs:
         test -f artifacts/toolkit_windows/bin/patch_abl.exe
         test -f artifacts/toolkit_windows/bin/mode2_profile.exe
         test -f artifacts/toolkit_windows/bin/abl_tzmap.exe
+        test -f artifacts/toolkit_windows/Platform-Tools/fastboot.exe
+        test ! -e artifacts/toolkit_windows/Platform-Tools/adb.exe
+        test -f artifacts/toolkit_windows/ext4/ext4windows.exe
+        test -f artifacts/toolkit_windows/ext4/winfsp-x64.dll
+        test -f artifacts/toolkit_windows/ext4/winfsp-2.1.25156.msi
         test -x artifacts/toolkit_android/bin/patch_abl
         test -x artifacts/toolkit_android/bin/mode2_profile
         test -x artifacts/toolkit_android/bin/abl_tzmap
@@ -86,10 +91,9 @@ jobs:
         test -f artifacts/toolkit_windows/bin/extractfv.exe
         test -x artifacts/toolkit_android/bin/extractfv
         test -x artifacts/magisk_module/bin/extractfv
-        test -x artifacts/magisk_module/bin/patch_tools
         # One launcher, not four. `canoe` with no arguments is the interactive
-        # wizard; `canoe build|prep|prep-device|install|oneshot` are the
-        # non-interactive subcommands CI and scripts use.
+        # wizard; `canoe build|install` are the non-interactive subcommands CI
+        # and scripts use.
         test -x "artifacts/toolkit_linux/canoe"
         # Both halves must ship: the .cmd only picks the interpreter, and the
         # extensionless file beside it is the script that interpreter runs.
@@ -103,11 +107,15 @@ jobs:
         done
         test -f artifacts/magisk_module/customize.sh
         test -f artifacts/magisk_module/bin/bl_flasher.sh
-        test -f artifacts/magisk_module/service.sh
+        test -f artifacts/magisk_module/bin/canoe_vendor_boot.sh
         test -f artifacts/magisk_module/webroot/app.js
         test -f artifacts/magisk_module/webroot/index.html
         test -f artifacts/magisk_module/webroot/style.css
         test -f artifacts/magisk_module/module.prop
+        for package in toolkit_android magisk_module; do
+          test -x "artifacts/$package/canoe_device_install.sh"
+          test -x "artifacts/$package/canoe_boot_entry.sh"
+        done
         for package in toolkit_linux toolkit_windows toolkit_android magisk_module; do
           test -s "artifacts/$package/BDS.efi"
           test -s "artifacts/$package/efisp/tools/RebootTools.efi"
@@ -201,11 +209,6 @@ jobs:
           *"ELF 64-bit"*"ARM aarch64"*) ;;
           *) echo "unexpected Magisk extractfv: $module_extractfv_type"; exit 1 ;;
         esac
-        module_patch_tools_type="$(file -b artifacts/magisk_module/bin/patch_tools)"
-        case "$module_patch_tools_type" in
-          *"ELF 64-bit"*"ARM aarch64"*) ;;
-          *) echo "unexpected Magisk patch_tools: $module_patch_tools_type"; exit 1 ;;
-        esac
 
         for efi in BDS.efi efisp/tools/RebootTools.efi efisp/tools/BLTools.efi efisp/tools/ArbTools.efi; do
           efi_type="$(file -b "artifacts/toolkit_linux/$efi")"
@@ -243,10 +246,16 @@ jobs:
         # rather than in the build tree they came from.
         rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
         for exe in canoe \
-                   canoe_device_install.sh bin/patch_abl bin/mode2_profile \
+                   bin/patch_abl bin/mode2_profile \
                    bin/abl_tzmap bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in archive: $exe"; exit 1; }
+        done
+        for package in toolkit_android magisk_module; do
+          rm -rf modecheck && unzip -q -o "release/$package.zip" -d modecheck
+          for script in canoe_device_install.sh canoe_boot_entry.sh; do
+            test -x "modecheck/$script" || { echo "not executable in $package archive: $script"; exit 1; }
+          done
         done
         rm -rf modecheck
 
