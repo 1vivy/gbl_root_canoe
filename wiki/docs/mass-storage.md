@@ -28,6 +28,17 @@ Older BDS builds started the oem export without drawing a screen and silently
 swallowed keypresses. If the screen does not change, the running BDS predates
 this fix.
 
+**The export's identity.** Before the first session of a boot, the BDS
+rewrites the resident export driver's presentation in memory: the gadget
+enumerates as **`1209:ca0e`** (product `efisp boot root`, fixed disk) instead
+of Qualcomm's `05c6:f000`. No system rule claims that identity, so the
+modeswitch problem below cannot happen to a patched export; `05c6:f000`
+remains the fallback when a firmware layout defeats the patch, and both
+identities are accepted by the tooling. A fourth **msdimage** menu row (and
+`fastboot oem mass-storage:msdimage`) exports a copy of the resident driver
+itself as a RAM disk, which is how per-firmware calibration data reaches the
+[canoe-msd](https://github.com/1vivy/canoe-msd) project.
+
 **Linux: usb_modeswitch kills the export.** The gadget enumerates as
 `05c6:f000`, which stock udev rules match to a mode-switching 4G modem whose
 packaged config ejects the device: `usb-storage` is detached before the kernel
@@ -41,7 +52,8 @@ printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 `canoe install` names this remediation when its wait for the disk times out
 on a host that still has the rule active.
 
-`canoe install` finds the LUN by its `05c6:f000` USB identity rather than by
+`canoe install` finds the LUN by its USB identity (`1209:ca0e`, or `05c6:f000`
+when unpatched) rather than by
 watching for a new disk name, so a run that timed out or was interrupted can be
 repeated against the same live session: it adopts the disk already on the bus
 instead of asking the BDS for a second export, which the BDS would not answer

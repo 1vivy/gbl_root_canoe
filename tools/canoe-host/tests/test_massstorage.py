@@ -79,6 +79,19 @@ def test_usb_disks_read_identity_off_the_resolved_scsi_under_usb_chain(
     assert massstorage._exported_disks(disks) == ("sda",)
 
 
+def test_exported_disks_accept_the_canoe_variant_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A BDS that rewrote the resident driver to the canoe VID:PID is found too."""
+    sys_block = _usb_scsi_tree(tmp_path, massstorage._MSC_CANOE_GADGET_ID)
+    monkeypatch.setattr(massstorage, "_SYS_BLOCK", sys_block)
+
+    disks = massstorage._usb_disks()
+
+    assert disks == {"sda": "1209:ca0e"}
+    assert massstorage._exported_disks(disks) == ("sda",)
+
+
 def test_local_boot_root_rejects_file_and_non_directory_efisp(tmp_path: Path) -> None:
     """Given a file at either boundary, refuse it with an operator-facing error."""
     persist_file = tmp_path / "persist-file"

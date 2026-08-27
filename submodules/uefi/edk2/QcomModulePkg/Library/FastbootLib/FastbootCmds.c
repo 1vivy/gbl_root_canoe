@@ -2352,6 +2352,8 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     Target = L"persist";
   } else if (AsciiStrCmp (Arg, "mass-storage:logfs") == 0) {
     Target = L"logfs";
+  } else if (AsciiStrCmp (Arg, "mass-storage:msdimage") == 0) {
+    Target = L"msdimage";
   } else {
     FastbootFail ("unknown oem command");
     return;
@@ -2361,11 +2363,15 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
    * Resolve before acknowledging. This is the last point at which fastboot
    * can still answer FAIL; SfbExportPartitionByName resolves again because it
    * is also the non-interactive public entry point used by other callers.
+   * msdimage is a RAM disk around the resident driver's own loaded image, so
+   * there is no partition to resolve for it.
    */
-  Status = SfbFindPartitionByName (Target, &BlockIo);
-  if (EFI_ERROR (Status) || BlockIo == NULL) {
-    FastbootFail ("mass-storage partition not found");
-    return;
+  if (StrCmp (Target, L"msdimage") != 0) {
+    Status = SfbFindPartitionByName (Target, &BlockIo);
+    if (EFI_ERROR (Status) || BlockIo == NULL) {
+      FastbootFail ("mass-storage partition not found");
+      return;
+    }
   }
 
   /*
@@ -2379,8 +2385,8 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
   Status = SfbExportPartitionByName (Target);
   if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
     DEBUG ((EFI_D_ERROR,
-            "SFB: MARK msc-run target=%a status=%r reason=post-handoff\n",
-            (StrCmp (Target, L"logfs") == 0) ? "logfs" : "persist", Status));
+            "SFB: MARK msc-run target=%s status=%r reason=post-handoff\n",
+            Target, Status));
   }
 
   /*

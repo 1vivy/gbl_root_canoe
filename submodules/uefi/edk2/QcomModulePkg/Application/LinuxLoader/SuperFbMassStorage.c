@@ -258,6 +258,15 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
   DEBUG ((EFI_D_INFO, "SFB: MARK msc-export target=%a maxlun=%u revision=0x%x\n",
           (Tag != NULL) ? Tag : "?", (UINT32)MaxLun, Msd->Revision));
 
+  /*
+   * The canoe presentation variant is applied to the resident driver before
+   * the first real export of the boot. msdimage is skipped on purpose: the
+   * calibration dump must hand the host the bytes exactly as they are.
+   */
+  if (Tag == NULL || AsciiStrCmp (Tag, "msdimage") != 0) {
+    SfbMsdApplyVariant ();
+  }
+
   Status = Msd->AssignBlkIoHandle (Msd, BlockIo, 0);
   if (EFI_ERROR (Status)) {
     SfbUsbCensus ();
@@ -390,9 +399,14 @@ SfbMassStorageDrawTarget (IN CONST SFB_MASS_STORAGE_TARGET *Target,
   CHAR16 Text[128];
   UINT64 Size;
 
-  Size = SfbMassStoragePartitionBytes (Target->BlockIo);
-  UnicodeSPrint (Text, sizeof (Text), L"%s (%Lu MiB)",
-                 Target->Name, Size / (1024 * 1024));
+  if (Target->BlockIo == NULL) {
+    UnicodeSPrint (Text, sizeof (Text), L"%s (resident driver dump)",
+                   Target->Name);
+  } else {
+    Size = SfbMassStoragePartitionBytes (Target->BlockIo);
+    UnicodeSPrint (Text, sizeof (Text), L"%s (%Lu MiB)",
+                   Target->Name, Size / (1024 * 1024));
+  }
   SfbDrawRow (Selected, L" ", Text);
 }
 
@@ -436,7 +450,7 @@ SfbMassStorageConfirmPersist (VOID)
 VOID
 SfbRunMassStorageMenu (VOID)
 {
-  SFB_MASS_STORAGE_TARGET Targets[2];
+  SFB_MASS_STORAGE_TARGET Targets[3];
   UINTN                   Count = 0;
   UINTN                   Cursor = 0;
   UINTN                   Index;
@@ -447,6 +461,9 @@ SfbRunMassStorageMenu (VOID)
   Targets[1].Name = L"logfs";
   Targets[1].Tag = "logfs";
   Targets[1].BlockIo = NULL;
+  Targets[2].Name = L"msdimage";
+  Targets[2].Tag = "msdimage";
+  Targets[2].BlockIo = NULL;
 
   /*
    * Resolve each target at draw time. logfs is optional, and hiding an absent
@@ -455,7 +472,20 @@ SfbRunMassStorageMenu (VOID)
   for (Index = 0; Index < ARRAY_SIZE (Targets); Index++) {
     EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
     EFI_STATUS             Status;
+    SFB_MSD_IMAGE          Image;
 
+    /*
+     * msdimage needs no partition: the row exists whenever the resident
+     * driver's loaded image can be found.
+     */
+    if (StrCmp (Targets[Index].Name, L"msdimage") == 0) {
+      if (EFI_ERROR (SfbMsdLocateImage (&Image))) {
+        continue;
+      }
+      Targets[Count] = Targets[Index];
+      Count++;
+      continue;
+    }
     Status = SfbFindPartitionByName (Targets[Index].Name, &BlockIo);
     if (EFI_ERROR (Status) || BlockIo == NULL) {
       continue;
@@ -497,6 +527,14 @@ SfbRunMassStorageMenu (VOID)
       continue;
     }
 
+    if (StrCmp (Targets[Cursor].Name, L"msdimage") == 0) {
+      EFI_STATUS Status = SfbExportMsdImage ();
+      if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
+        SfbReportStatus (L"Could not start mass storage", Status);
+      }
+      continue;
+    }
+
     {
       EFI_STATUS Status;
 
@@ -525,6 +563,9 @@ SfbExportPartitionByName (IN CONST CHAR16 *Target)
 
   if (Target == NULL) {
     return EFI_INVALID_PARAMETER;
+  }
+  if (StrCmp (Target, L"msdimage") == 0) {
+    return SfbExportMsdImage ();
   }
   if (StrCmp (Target, L"persist") == 0) {
     Tag = "persist";

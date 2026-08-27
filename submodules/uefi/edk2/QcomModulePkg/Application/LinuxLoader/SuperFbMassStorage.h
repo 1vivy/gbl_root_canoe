@@ -28,4 +28,38 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
 VOID
 SfbUsbCensus (VOID);
 
+/*
+ * Where the resident UsbMsdDxe lives once its protocol is installed: the
+ * loaded image's base, size and an FNV-1a identity over its bytes. The FNV
+ * is a debug-build calibration key, not a cryptographic hash; per-firmware
+ * calibration tables key off the full SHA-256 of the dumped bytes on the
+ * host side instead.
+ */
+typedef struct {
+  VOID   *Base;
+  UINTN  Size;
+  UINT64 Fnv;
+} SFB_MSD_IMAGE;
+
+EFI_STATUS
+SfbMsdLocateImage (OUT SFB_MSD_IMAGE *Image);
+
+/*
+ * Rewrite the resident driver's mass-storage presentation to the canoe
+ * identity (fixed-disk INQUIRY, VID 0x1209 PID 0xCA0E, canoe INQUIRY
+ * strings) before the session starts. Idempotent and best-effort: an
+ * unfamiliar firmware layout leaves the stock presentation, which keeps the
+ * export working the way it always has.
+ */
+VOID
+SfbMsdApplyVariant (VOID);
+
+/*
+ * Export a copy of the resident driver's loaded image as a read-only
+ * RAM-disk LUN, so any target can hand its exact blob to the host for
+ * calibration without any filesystem write support on the device.
+ */
+EFI_STATUS
+SfbExportMsdImage (VOID);
+
 #endif
