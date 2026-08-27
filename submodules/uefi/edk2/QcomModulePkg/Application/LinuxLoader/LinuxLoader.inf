@@ -111,6 +111,7 @@
 
 [LibraryClasses]
 	DxeServicesTableLib
+	CacheMaintenanceLib
 	UefiLib
 	UefiApplicationEntryPoint
 	ArmLib

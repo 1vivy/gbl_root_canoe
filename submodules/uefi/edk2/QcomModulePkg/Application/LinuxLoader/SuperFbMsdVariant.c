@@ -36,11 +36,15 @@
  */
 
 #include "SuperFbMassStorage.h"
+#include <PiDxe.h>
+#include <Library/BaseLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/DxeServicesTableLib.h>
+#include <Library/CacheMaintenanceLib.h>
 #include <Protocol/LoadedImage.h>
 
 /* The canoe presentation identity. 0x1209 is the pid.codes community VID;
@@ -164,6 +168,44 @@ SfbMsdFind (IN CONST UINT8 *Hay, IN UINTN HaySize,
   return MAX_UINTN;
 }
 
+/*
+ * Writes to the resident image must never take the device down: if a
+ * platform marks the region read-only/read-protect in the GCD map the write
+ * would raise a data abort and the oplus XBL turns that into a QUSB_BULK
+ * dump-mode reset. Check the map first and skip instead. The map says
+ * nothing about XPUs, so every step is also bracketed by marks: a reset
+ * between step=… marks names the faulting write in the next session's log.
+ */
+STATIC BOOLEAN
+SfbMsdRangeWritable (IN UINTN Address, IN UINTN Length)
+{
+  EFI_STATUS                       Status;
+  EFI_GCD_MEMORY_SPACE_DESCRIPTOR  *Map = NULL;
+  UINTN                            Count = 0;
+  UINTN                            Index;
+  UINT64                           Start = Address;
+  UINT64                           End = (UINT64)Address + Length - 1;
+
+  Status = gDS->GetMemorySpaceMap (&Count, &Map);
+  if (EFI_ERROR (Status) || Map == NULL) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Count; Index++) {
+    UINT64 Base = Map[Index].BaseAddress;
+    UINT64 Last = Base + Map[Index].Length - 1;
+
+    if (Map[Index].Length == 0 || Last < Start || Base > End) {
+      continue;
+    }
+    if ((Map[Index].Attributes & (EFI_MEMORY_RO | EFI_MEMORY_RP)) != 0) {
+      FreePool (Map);
+      return FALSE;
+    }
+  }
+  FreePool (Map);
+  return TRUE;
+}
+
 STATIC UINT32
 SfbMsdPatchRmb (IN OUT UINT8 *Image, IN UINTN Size)
 {
@@ -177,7 +219,18 @@ SfbMsdPatchRmb (IN OUT UINT8 *Image, IN UINTN Size)
   if (Image[Off + 1] == 0x00) {
     return 2;   /* already the canoe form */
   }
+  if (!SfbMsdRangeWritable ((UINTN)(Image + Off), sizeof (mSfbMsdRmbPatch))) {
+    return 3;   /* map says read-only: skipping beats a dump-mode reset */
+  }
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=rmb write\n"));
   CopyMem (Image + Off, mSfbMsdRmbPatch, sizeof (mSfbMsdRmbPatch));
+  /*
+   * The patched word is an instruction: push the write out of the data
+   * cache and pull the instruction cache down before the INQUIRY handler
+   * can fetch the line.
+   */
+  WriteBackDataCacheRange (Image + Off, sizeof (mSfbMsdRmbPatch));
+  InvalidateInstructionCacheRange (Image + Off, sizeof (mSfbMsdRmbPatch));
   return (Image[Off] == mSfbMsdRmbPatch[0] && Image[Off + 1] == 0x00) ? 1 : 0;
 }
 
@@ -208,6 +261,11 @@ SfbMsdPatchDescriptors (IN OUT UINT8 *Image, IN UINTN Size)
     if (Off < 8 || Image[Off - 8] != 0x12 || Image[Off - 7] != 0x01) {
       continue;
     }
+    if (!SfbMsdRangeWritable ((UINTN)(Image + Off), sizeof (Canoe))) {
+      continue;   /* map says read-only: skipping beats a dump-mode reset */
+    }
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=desc write off=0x%Lx\n",
+            (UINT64)Off));
     CopyMem (Image + Off, Canoe, sizeof (Canoe));
     if (CompareMem (Image + Off, Canoe, sizeof (Canoe)) == 0) {
       Patched++;
@@ -243,6 +301,10 @@ SfbMsdPatchStrings (IN OUT UINT8 *Image, IN UINTN Size)
     Off = SfbMsdFind (Image, Size, (CONST UINT8 *)Canoe, 24, 0);
     return (Off == MAX_UINTN) ? 0 : 2;
   }
+  if (!SfbMsdRangeWritable ((UINTN)(Image + Off), 24)) {
+    return 3;   /* map says read-only: skipping beats a dump-mode reset */
+  }
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=str write\n"));
   CopyMem (Image + Off, Canoe, 24);
   return (CompareMem (Image + Off, Canoe, 24) == 0) ? 1 : 0;
 }
@@ -269,12 +331,16 @@ SfbMsdApplyVariant (VOID)
     return;
   }
 
-  Rmb  = SfbMsdPatchRmb (Image.Base, Image.Size);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=rmb scan\n"));
+  Rmb = SfbMsdPatchRmb (Image.Base, Image.Size);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=desc scan\n"));
   Desc = SfbMsdPatchDescriptors (Image.Base, Image.Size);
-  Str  = SfbMsdPatchStrings (Image.Base, Image.Size);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=str scan\n"));
+  Str = SfbMsdPatchStrings (Image.Base, Image.Size);
 
+  /* 0 = anchor absent, 1 = patched now, 2 = already canoe, 3 = read-only. */
   DEBUG ((EFI_D_ERROR,
-          "SFB: MARK msc-variant fnv=0x%Lx rmb=%u desc=%u str=%u\n",
+          "SFB: MARK msc-variant fnv=0x%Lx rmb=%u desc=%u str=%u step=done\n",
           Image.Fnv, Rmb, Desc, Str));
 }
 

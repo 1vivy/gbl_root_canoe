@@ -179,6 +179,17 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     }
     SfbMountLogfs ();
 
+    /*
+     * Everything below is interactive: the menu, the fastboot screen and any
+     * mass-storage export all wait on the operator or the host for as long as
+     * they take. The platform watchdog (oplus sets 60 s via Phoenix, UEFI
+     * default five minutes) has no business resetting a device that is sitting
+     * at a prompt; measured on the OnePlus 15 it resets an idle fastboot
+     * session right out from under a host mid-conversation. The export loop
+     * already disables it per session; do it once here for the whole run.
+     */
+    gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
+
     Status = SfbLoadBootConfig (&Config, &ConfigVolume);
     (VOID)ConfigVolume;
     if (!EFI_ERROR (Status)) {
