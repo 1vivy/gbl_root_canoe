@@ -56,5 +56,6 @@ typedef struct FasbootDevice {
 FastbootDeviceData *GetFastbootDeviceData (VOID);
 EFI_STATUS HandleUsbEvents (VOID);
 EFI_STATUS FastbootUsbDeviceStop (VOID);
+VOID FastbootRestoreModeScreen (VOID);
 EFI_STATUS FastbootInitialize (VOID);
 #endif

@@ -15,12 +15,40 @@ fastboot oem mass-storage:persist     # persist
 fastboot oem mass-storage:logfs       # logfs
 ```
 
-Only one partition is exported per session as one USB LUN. Finish every write
-and unmount the filesystem before ending the session.
+The export screen is shown for both the on-device menu path and the
+`fastboot oem mass-storage:persist` path. Only one partition is exported per
+session as one USB LUN. Finish every write and unmount the filesystem before
+ending the session.
 
-**Volume Down on the device is the only way to end a BDS mass-storage session.**
-Disconnecting or losing the USB link does not cancel it; reconnect and finish
-the unmount, then press Volume Down on the device.
+**Volume Down on the device ends the session for both paths, including the
+fastboot oem path.** Disconnecting or losing the USB link does not cancel it;
+reconnect and finish the unmount, then press Volume Down on the device.
+
+Older BDS builds started the oem export without drawing a screen and silently
+swallowed keypresses. If the screen does not change, the running BDS predates
+this fix.
+
+**Linux: usb_modeswitch kills the export.** The gadget enumerates as
+`05c6:f000`, which stock udev rules match to a mode-switching 4G modem whose
+packaged config ejects the device: `usb-storage` is detached before the kernel
+scan, and the eject ends the session on the device. If the disk never appears
+(and the phone drops back to the fastboot menu), disable the switch once:
+
+```bash
+printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
+```
+
+`canoe install` names this remediation when its wait for the disk times out
+on a host that still has the rule active.
+
+`canoe install` finds the LUN by its `05c6:f000` USB identity rather than by
+watching for a new disk name, so a run that timed out or was interrupted can be
+repeated against the same live session: it adopts the disk already on the bus
+instead of asking the BDS for a second export, which the BDS would not answer
+while it sits in its export loop. It also unmounts the copy the desktop
+automounter took (GNOME and KDE mount the LUN under `/run/media` the moment it
+enumerates), because the install owns the flush and unmount that must finish
+before Volume Down.
 
 ## Host install through the export
 

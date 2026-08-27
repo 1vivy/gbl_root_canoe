@@ -97,6 +97,8 @@ found at
 #include "FastbootMain.h"
 #include "LinuxLoaderLib.h"
 #include "../../Application/LinuxLoader/SuperFbMenu.h"
+/* CmdOem already depends on SuperFb; this slot lookup adds no new layering. */
+#include "../../Application/LinuxLoader/SuperFbSlots.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -2353,6 +2355,32 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
             "SFB: MARK msc-run target=%a status=%r reason=post-handoff\n",
             (StrCmp (Target, L"logfs") == 0) ? "logfs" : "persist", Status));
   }
+
+  /*
+   * Re-seed the fastboot receive transfer after the export hands the USB
+   * controller back. The queue is normally primed by the Connected state
+   * event in HandleUsbEvents; whether the MSD client's StopDevice re-delivers
+   * that event is the vendor stack's business, and on the OnePlus 15 the
+   * gadget re-enumerates with no receive pending, so the host's next command
+   * waits forever even though lsusb shows fastboot again. A duplicate Send on
+   * a live queue just fails, which the mark records and the loop ignores.
+   */
+  {
+    FastbootDeviceData *Fbd    = GetFastbootDeviceData ();
+    EFI_STATUS          Reseed =
+      Fbd->UsbDeviceProtocol->Send (0x1, 511, Fbd->gRxBuffer);
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-reseed status=%r\n", Reseed));
+  }
+
+  /*
+   * Put the fastboot mode screen back. The export screen is still painted at
+   * this point, advertising a Volume Down that now only nudges the mode
+   * screen's cursor, so the operator is left reading a session that ended and
+   * has no stated way back. Redrawing here is that way back, and it is the
+   * only one available on this path: the boot menu ran before
+   * FastbootInitialize and cannot be re-entered from inside the fastboot loop.
+   */
+  FastbootRestoreModeScreen ();
 }
 
 
@@ -2798,6 +2826,25 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
 
   AsciiSPrint (FullProduct, sizeof (FullProduct), "%a", PRODUCT_NAME);
   FastbootPublishVar ("product", FullProduct);
+
+  FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
+
+  /*
+   * Without this value the host wizard must ask which slot is active, and a
+   * wrong answer mislabels every menu row. BDS already computed it from the
+   * enumerated GPT, so do not guess when the layout is unknown.
+   */
+  switch (SfbActiveSlot ()) {
+    case SfbSlotA:
+      FastbootPublishVar ("current-slot", "a");
+      break;
+    case SfbSlotB:
+      FastbootPublishVar ("current-slot", "b");
+      break;
+    case SfbSlotUnknown:
+    default:
+      break;
+  }
 
   GetPartitionCount (&PartitionCount);
   Status = PublishGetVarPartitionInfo (PublishedPartInfo, PartitionCount);

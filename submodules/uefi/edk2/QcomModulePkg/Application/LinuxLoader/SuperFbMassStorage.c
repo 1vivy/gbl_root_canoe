@@ -8,6 +8,11 @@
  * public Mu-Silicium EFIUsbMsd.h; the GUID is the one the census finds
  * installed on device (msda=1), and it is the same stack fastboot uses.
  *
+ * The export screen is rendered by SfbMassStorageExportDisk for every caller,
+ * including fastboot oem mass-storage. Keeping it on the menu path left a
+ * stale, unserviced menu painted while the cancel poll silently consumed every
+ * keypress, leaving the operator with no visible state or advertised way out.
+ *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
  */
@@ -194,6 +199,31 @@ SfbMassStorageCancelled (VOID)
   return (BOOLEAN)(Key.ScanCode == SCAN_DOWN);
 }
 
+typedef struct {
+  CONST CHAR16            *Name;
+  CONST CHAR8             *Tag;
+  EFI_BLOCK_IO_PROTOCOL   *BlockIo;
+} SFB_MASS_STORAGE_TARGET;
+
+STATIC
+UINT64
+SfbMassStoragePartitionBytes (IN EFI_BLOCK_IO_PROTOCOL *BlockIo)
+{
+  UINT64 Blocks;
+
+  if (BlockIo == NULL || BlockIo->Media == NULL ||
+      BlockIo->Media->BlockSize == 0) {
+    return 0;
+  }
+  if (BlockIo->Media->LastBlock == MAX_UINT64 ||
+      BlockIo->Media->LastBlock + 1 >
+        MAX_UINT64 / BlockIo->Media->BlockSize) {
+    return MAX_UINT64;
+  }
+  Blocks = BlockIo->Media->LastBlock + 1;
+  return Blocks * BlockIo->Media->BlockSize;
+}
+
 EFI_STATUS
 SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
                           IN CONST CHAR8           *Tag)
@@ -235,6 +265,16 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
             (Tag != NULL) ? Tag : "?", Status));
     return Status;
   }
+  /*
+   * Draw after assigning the LUN and before draining keys. The chooser's
+   * confirm keystroke is still queued here, so the screen must be visible
+   * before the drain hands control to the export loop.
+   */
+  SfbBeginScreen (L"USB Mass Storage", L"The host may now mount the disk.");
+  Print (L"Partition: %a\r\n", (Tag != NULL) ? Tag : "?");
+  Print (L"Size: %Lu bytes\r\n", SfbMassStoragePartitionBytes (BlockIo));
+  Print (L"\r\nVolume Down ends this session.\r\n");
+  SfbEndScreen (L"Volume Down: stop export");
 
   /* Nothing queued may reach the cancel test: the confirm press that opened
    * this screen is still in the queue at this point. */
@@ -318,6 +358,18 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
   Msd->StopDevice (Msd);
   Msd->AssignBlkIoHandle (Msd, NULL, 0);
 
+  /*
+   * Drain on the way out as well as on the way in. Volume Down itself is
+   * consumed by SfbMassStorageCancelled, but its trailing events and anything
+   * the operator pressed while the host was mounting are still queued, and
+   * the next screen receives them as its own input. On the menu path that
+   * next screen is the chooser and then the rebuilt boot menu, whose first
+   * row is "Enter Fastboot": a stray confirm makes the session look like it
+   * ended straight into fastboot mode, which is not a place the operator
+   * asked to be and has no way back to the menu.
+   */
+  SfbMassStorageDrainKeys ();
+
   /* Poll counts make a starved loop visible in the log: a session that lasted
    * seconds but polled only a few hundred times is not servicing the link. */
   DEBUG ((EFI_D_ERROR,
@@ -328,31 +380,6 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
           (Tag != NULL) ? Tag : "?", Status,
           Cancelled ? "cancelled" : "handler-error"));
   return Cancelled ? EFI_ABORTED : EFI_SUCCESS;
-}
-
-typedef struct {
-  CONST CHAR16            *Name;
-  CONST CHAR8             *Tag;
-  EFI_BLOCK_IO_PROTOCOL   *BlockIo;
-} SFB_MASS_STORAGE_TARGET;
-
-STATIC
-UINT64
-SfbMassStoragePartitionBytes (IN EFI_BLOCK_IO_PROTOCOL *BlockIo)
-{
-  UINT64 Blocks;
-
-  if (BlockIo == NULL || BlockIo->Media == NULL ||
-      BlockIo->Media->BlockSize == 0) {
-    return 0;
-  }
-  if (BlockIo->Media->LastBlock == MAX_UINT64 ||
-      BlockIo->Media->LastBlock + 1 >
-        MAX_UINT64 / BlockIo->Media->BlockSize) {
-    return MAX_UINT64;
-  }
-  Blocks = BlockIo->Media->LastBlock + 1;
-  return Blocks * BlockIo->Media->BlockSize;
 }
 
 STATIC
@@ -470,13 +497,6 @@ SfbRunMassStorageMenu (VOID)
       continue;
     }
 
-    SfbBeginScreen (L"USB Mass Storage", L"The host may now mount the disk.");
-    Print (L"Partition: %s\r\n", Targets[Cursor].Name);
-    Print (L"Size: %Lu bytes\r\n",
-           SfbMassStoragePartitionBytes (Targets[Cursor].BlockIo));
-    Print (L"\r\nVolume Down ends this session.\r\n");
-    SfbEndScreen (L"Volume Down: stop export");
-
     {
       EFI_STATUS Status;
 
@@ -489,6 +509,13 @@ SfbRunMassStorageMenu (VOID)
   }
 }
 
+/*
+ * SfbMassStorageExportDisk draws the export screen for every caller,
+ * including this fastboot oem mass-storage path and the interactive menu.
+ * Previously that path left a stale, unserviced menu painted while the cancel
+ * poll silently consumed every keypress, leaving no visible state or
+ * advertised way out.
+ */
 EFI_STATUS
 SfbExportPartitionByName (IN CONST CHAR16 *Target)
 {

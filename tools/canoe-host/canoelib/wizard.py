@@ -6,10 +6,10 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from . import build, stage
+from . import build, sfb, stage
 from .errors import CanoeError
 from .layout import Toolkit
-from .ui import ask_choice, ask_yes_no, emit, note, run_entry, step
+from .ui import ask_choice, ask_yes_no, emit, note, run_entry, step, warn
 
 _COMMANDS = ("build", "install")
 
@@ -62,38 +62,41 @@ def _wait_for_images(toolkit: Toolkit) -> None:
             return
         time.sleep(1)
 
-def _interactive() -> None:
-    toolkit = Toolkit.shipped()
-    _wait_for_images(toolkit)
-    slot = ask_choice("Which slot is currently active", ("a", "b"), "a")
-    note("This labels the menu rows; if it is wrong, re-run the install with the correct slot.")
-    mode = int(ask_choice("Which mode", ("0", "1", "2"), "1"))
-    vendor_boot: Path | None = None
-    if mode == 1:
-        note("Graft with: vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>")
-        note("The grafted output must not grow.")
-        if not ask_yes_no(
-            "A custom recovery must be grafted with the vbmeta tool, flashed, and returned here. "
-            "Proceed?",
-            default=True,
-        ):
-            note("No files were changed.")
-            return
-        while ask_yes_no("Patch vendor_boot to blacklist oplus_secure_guard_new?", default=False):
-            candidate = toolkit.images / "vendor_boot.img"
-            if candidate.is_file():
-                vendor_boot = candidate
-                break
-            note("images/vendor_boot.img is absent; add it or answer no.")
-    if not ask_yes_no("Generate a boot entry from these matching stock files?", default=True):
-        note("No files were changed.")
-        return
-    step("Deriving the boot entry")
-    build.derive(toolkit)
-    note(f"Derived boot.efi and sidecars from {toolkit.abl_image} and {toolkit.vbmeta_image}")
-    arguments = ["--slot", slot, "--mode", str(mode)]
-    if vendor_boot is not None:
-        arguments.extend(("--vendor-boot", str(vendor_boot)))
+def _confirm_environment(toolkit: Toolkit) -> sfb.Identity | None:
+    """Identify the device, warning when it is not Super Fastboot.
+
+    Returns None when the operator declined to continue. A probe failure and an
+    unrecognised device are separate warnings because they have separate
+    remedies: the first means fastboot itself is missing, the second means the
+    device is not in the BDS.
+    """
+    try:
+        identity = sfb.identify(toolkit.root)
+    except CanoeError as exc:
+        # The interactive wizard always reaches massstorage.export(), so a
+        # missing fastboot is certainly fatal later. Surfacing it before the
+        # questionnaire beats failing after every question has been answered.
+        warn(f"Could not identify the device with fastboot: {exc}")
+        if not ask_yes_no("Continue despite the fastboot probe failure?", default=False):
+            return None
+        return sfb.Identity(None, None)
+    if identity.bds_version is None:
+        warn(
+            "The device does not look like Super Fastboot; "
+            "fastboot oem mass-storage:persist does not exist outside the BDS."
+        )
+        if not ask_yes_no("Continue without Super Fastboot detection?", default=False):
+            return None
+    return identity
+
+
+def _install_with_signer_gate(arguments: list[str]) -> bool:
+    """Install, offering the signer-change override once.
+
+    False when the operator declined the override. A signer change is expected
+    when moving to or from a custom ROM, so it is a question rather than a
+    refusal; any other failure propagates untouched.
+    """
     try:
         stage.install(arguments)
     except CanoeError as exc:
@@ -105,9 +108,53 @@ def _interactive() -> None:
             "This is expected when moving to or from a custom ROM. Continue?",
             default=False,
         ):
+            return False
+        stage.install([*arguments, "--allow-new-signer"])
+    return True
+
+
+def _interactive() -> None:
+    toolkit = Toolkit.shipped()
+    _wait_for_images(toolkit)
+    identity = _confirm_environment(toolkit)
+    if identity is None:
+        note("No files were changed.")
+        return
+    if identity.current_slot is None:
+        slot = ask_choice("Which slot is currently active", ("a", "b"), "a")
+        note("This labels the menu rows; if it is wrong, re-run the install with the correct slot.")
+    else:
+        slot = identity.current_slot
+        note(f"Read active slot {slot} from the device rather than guessing.")
+    mode = int(ask_choice("Which mode", ("0", "1", "2"), "1"))
+    vendor_boot: Path | None = None
+    if mode == 1:
+        note("Graft with: vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>")
+        note("The grafted output must not grow.")
+        if not ask_yes_no(
+            "Mode 1 requires grafting a custom recovery with the vbmeta tool, flashing it, "
+            "and returning here. Declining cancels the installation. Proceed?",
+            default=True,
+        ):
             note("No files were changed.")
             return
-        stage.install([*arguments, "--allow-new-signer"])
+        candidate = toolkit.images / "vendor_boot.img"
+        if candidate.is_file() and ask_yes_no(
+            "Patch vendor_boot to blacklist oplus_secure_guard_new?", default=False
+        ):
+            vendor_boot = candidate
+    if not ask_yes_no("Generate a boot entry from these matching stock files?", default=True):
+        note("No files were changed.")
+        return
+    step("Deriving the boot entry")
+    build.derive(toolkit)
+    note(f"Derived boot.efi and sidecars from {toolkit.abl_image} and {toolkit.vbmeta_image}")
+    arguments = ["--slot", slot, "--mode", str(mode)]
+    if vendor_boot is not None:
+        arguments.extend(("--vendor-boot", str(vendor_boot)))
+    if not _install_with_signer_gate(arguments):
+        note("No files were changed.")
+        return
     emit(
         "Data format is required. On a first-time installation it is not optional:\n"
         "Mode 1 projects a locked DeviceInfo to the OS, and the TEE will refuse the\n"

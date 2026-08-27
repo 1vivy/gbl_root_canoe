@@ -947,8 +947,14 @@ TestBootRootEmpty(void)
   mBootRootManagedPresent = TRUE;
   assert(!SfbBootRootIsEmpty ());
 
+  /*
+   * No locatable volume is first-run, not "populated". Answering FALSE here
+   * stranded a freshly flashed device: LinuxLoader skipped its first-run
+   * branch, so the BDS never auto-entered fastboot and the only way to install
+   * from a PC was to navigate the menu by hand.
+   */
   mVolumesAvailable = FALSE;
-  assert(!SfbBootRootIsEmpty ());
+  assert(SfbBootRootIsEmpty ());
   mBootRootManagedPresent = FALSE;
 }
 
