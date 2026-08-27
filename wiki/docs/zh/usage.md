@@ -1,28 +1,35 @@
-# Superfastboot 使用指南
+# Super Fastboot 使用指南
 
-## 启动相关
+## 进入 Super Fastboot
 
-- 将 BDS 临时启动到内存（不会写入闪存）：
+- 将 BDS 临时启动到内存，不写入闪存：
 
   ```bash
   fastboot stage <BDS.efi>
   fastboot oem boot-efi
   ```
 
-- 开启 OEM 解锁且开机出现小白字时，**必须按音量加（Volume Up）键才能进入 Superfastboot 模式。**
+- 启动时出现 OEM 解锁警告后，按**音量上**进入 Super Fastboot。
 
-## 首次运行与启动菜单
+## 首次运行与菜单
 
-如果启动根目录中既没有 `canoe.cfg` 也没有 `boot.efi`，BDS 会显示首次运行界面并直接进入 Super Fastboot。此时没有任何可启动内容，只有 fastboot 能够安装内容。
+如果启动根目录中既没有 `canoe.cfg` 也没有 `boot.efi`，BDS 会显示首次运行
+信息并进入 Super Fastboot。此时没有可启动的启动项。
 
-启动菜单包含：
+菜单包括：
 
-- **Reboot to Recovery**
-- **USB Mass Storage**
+- **Reboot to Recovery**；
+- **USB Mass Storage**；
+- 文件存在时显示受管理的 `Android (slot A)`、`Android (slot B)` 与
+  `Android (previous)`；
+- 启动根目录 `tools/` 中文件对应的 **EFI Tools**。
 
-USB Mass Storage 会将一个分区作为普通 USB 磁盘导出给连接的电脑。`persist` 的 `/efisp` 中包含启动根目录；设备没有可用 ADB 时，它是修复通道。只有在 `logfs` 分区存在时才提供该选项，它适合从无法启动的设备中取出启动日志。导出 `persist` 前会先显示警告，因为这是正在使用中的文件系统。每次会话只能导出一个分区（一个 USB LUN），按**音量下**（Volume Down）结束会话。
+USB Mass Storage 会将一个分区作为一个 USB 磁盘导出。`persist` 的
+`/efisp` 中包含启动根目录；仅当 `logfs` 存在时才会提供它。导出正在使用的
+`persist` 文件系统前，BDS 会显示警告。电脑端流程见
+[`mass-storage.md`](./mass-storage.md)。
 
-也可以在 fastboot 中使用：
+也可以在 fastboot 中导出：
 
 ```bash
 fastboot oem mass-storage             # persist（默认）
@@ -30,60 +37,60 @@ fastboot oem mass-storage:persist     # persist
 fastboot oem mass-storage:logfs       # logfs
 ```
 
-完整流程与 Windows 挂载步骤见 [USB Mass Storage 指南](./mass-storage.md)。
+每次会话只导出一个分区。**结束 Mass Storage 会话的唯一方式是设备上的音量下**。
+断开数据线不会结束会话。
 
-## 模式选择与 DeviceInfo 修复
+## 模式与 DeviceInfo
 
-Mode 1 或 Mode 2 启动只有在观测到的状态不满足请求模式时才会修复底层 `DeviceInfo`。`canoe.cfg` 中的 `devinfo-repair never` 会拒绝修复；这次启动随后会如实以 Mode 0 继续。Mode 0 是无 hook 的直通模式，既不读取也不写入 `DeviceInfo`。观测到的状态始终会记录在启动日志中。
+菜单中的模式选择是下一次启动的临时覆盖，绝不会保存。启动项自身的模式优先，
+文件全局 `mode` 作为回退；详见 [`canoe-cfg.md`](./canoe-cfg.md)。
 
+- **Mode 0** 是不启用 hook 的直通模式，不读取也不写入 `DeviceInfo`；
+- **Mode 1** 投射锁定的 DeviceInfo 视图并应用受管理 hook；
+- **Mode 2** 还使用匹配的 120 字节 `boot.efi.gm2p` profile 和生成的映射。
+  它通过内核命令行禁止 `oplus_secure_guard_new`，无需重新打包 boot 镜像。
 
-## BL 相关
+Mode 1 或 Mode 2 在观测状态不满足策略时可以修复 `DeviceInfo`。
+`devinfo-repair never` 会拒绝修复并如实以 Mode 0 继续，`asneeded` 允许修复。
+启动日志会记录观测状态与采取的动作。
 
-- 锁定 BL，**触发数据清除**：
+Mode 2 profile 只能证明 `vbmeta` 已解析并带有签名和公钥 blob，不能证明密钥属于
+OEM，本工具无法证明这一点。自动保护只检测公钥摘要是否相对于已安装世代发生变化。
 
-  ```bash
-  fastboot flashing lock
-  ```
+## Bootloader 命令
 
-- 解锁 BL，**不触发数据清除**：
+回锁 Bootloader 会触发平台的数据清除行为：
 
-  ```bash
-  fastboot flashing unlock
-  fastboot flashing unlock_critical
-  ```
+```bash
+fastboot flashing lock
+```
 
-> 注意：如果 TEE 状态不一致，设备会拒绝下发 data key，从而导致数据无法访问。
+不清除数据的解锁方式：
 
-## 刷写相关
+```bash
+fastboot flashing unlock
+fastboot flashing unlock_critical
+```
 
-- 刷写分区镜像：
+TEE 状态不一致时，设备可能拒绝提供数据密钥。
 
-  ```bash
-  fastboot flash <partition> <file.img>
-  ```
+## 刷写与擦除
 
-- 擦除指定分区：
+```bash
+fastboot flash <partition> <file.img>
+fastboot erase <partition>
+```
 
-  ```bash
-  fastboot erase <partition>
-  ```
+操作员先将带漏洞的 ABL 刷入 `abl`，再将 `BDS.efi` 刷入 `efisp`；电脑端安装器
+不会写入分区。
 
-## 重启相关
+## 重启
 
-- 重启至引导加载器，下一次正常启动进入官方 Fastboot：
+```bash
+fastboot reboot bootloader
+fastboot reboot
+```
 
-  ```bash
-  fastboot reboot bootloader
-  ```
-
-- 重启至恢复模式，下一次正常启动进入 Recovery：
-
-  ```bash
-  fastboot reboot recovery
-  ```
-
-- 普通重启设备：
-
-  ```bash
-  fastboot reboot
-  ```
+此 BDS 的 fastboot `reboot` 处理器只支持 **Normal** 模式。
+`fastboot reboot recovery` 在这里不是进入 Recovery 的命令；请在 BDS 菜单选择
+**Reboot to Recovery**，或通过 **EFI Tools** 打开 Recovery 启动项。

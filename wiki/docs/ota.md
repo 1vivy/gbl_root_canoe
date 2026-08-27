@@ -1,81 +1,86 @@
-# Xiaomi & OnePlus System Update Security Warning
+# OTA update procedure
 
-## The 7.x OTA watcher
+An OTA normally installs the next system generation into the other A/B slot.
+The loader in that slot must be prepared before the device boots it.
 
-The installed device module now includes a background `service.sh` watcher. It watches the `abl_a` and `abl_b` device nodes with `inotifyd`, checks a candidate change against the SHA-256 digest recorded at install, and falls back to slow polling when `inotifyd` is unavailable. An OTA normally changes the inactive slot; when the ABL really changes, the watcher re-derives that slot's pair and adds a new entry to `canoe.cfg` with the right role.
+## Required pre-reboot procedure
 
-The watcher leaves the entry that currently boots in place. The previously working entry is never removed. You do not need to reopen the WebUI and flash again after every OTA. If you want to change a mode, the WebUI selector still works, but it names and rewrites a `canoe.cfg` entry rather than a partition record.
+1. Install the OTA and let it finish writing the other slot.
+2. Keep the device running in its current slot; do **not** reboot yet.
+3. Open the KernelSU module WebUI and press **Flash To Other Slot**.
+4. Wait for the action to derive and validate the target loader, profile, and
+   TrustZone map. It labels the active `canoe.cfg` row with the slot that will
+   boot next and preserves the prior generation as `boot_backup.efi`.
+5. Reboot after the action completes.
 
-## Universal SCM safeguards (all modes)
+The action derives from the target ABL when it is already vulnerable. Otherwise
+it derives from the current ABL and copies that vulnerable ABL to the target
+slot. The copy is a partition update; the generated `boot.efi` and its sidecars
+are installed in the boot root. A managed Mode 2 profile belongs to the
+installed generation and is refreshed by this action, never by an OTA.
 
-All modes (0/1/2) best-effort suppress the TrustZone fuse and anti-rollback SCM requests during launch and OTA refresh. This prevents **further advancement only**: it cannot un-blow an already-blown fuse or lower an already-raised rollback floor. If the SCM protocol is absent, launch continues and the `hooks-armed ... scm=0` marker records that the safeguard was unavailable.
+If the action is forgotten, the new slot carries a stock ABL. The GBL exploit is
+absent, so BDS is simply not loaded and the device boots stock and unhooked.
+Nothing is bricked. Boot back into the other slot, or run **Flash To Other Slot**
+and reboot again.
+
+Automatic post-OTA patching is deliberately deferred. The module performs this
+work only when the operator presses the WebUI action before rebooting.
+
+## Custom-ROM image sources
+
+The default derivation inputs are always the device partitions. The WebUI can
+offer an independent toggle for each non-empty supplied file:
+
+| Input | Supplied path | Default |
+| --- | --- | --- |
+| ABL | `/data/local/tmp/canoe/abl.img` | Target or current device partition as selected by the action |
+| vbmeta | `/data/local/tmp/canoe/vbmeta.img` | Corresponding device partition |
+
+A supplied image is a derivation input only and is never a flash payload. The
+checkbox is disabled when its exact path is absent or empty. This permits a
+Custom ROM to provide its own matching pair without changing the stock-ROM
+path.
+
+## Signer and Mode 2 limitation
+
+A successful Mode 2 derivation means only that `vbmeta` parsed and carries a
+signature and public-key blob. No tool here can prove which key is the OEM's.
+The only automatic protection is detection of a changed public-key digest since
+the last installed generation. A change is expected when moving to or from a
+Custom ROM. An explicitly supplied `vbmeta` declares that choice; the module
+allows that derivation and reports the signer change.
+
+## Universal SCM safeguards
+
+Modes 0, 1, and 2 best-effort suppress TrustZone fuse and anti-rollback SCM
+requests during launch and refresh. This prevents further advancement only; it
+cannot undo a blown fuse or lower an existing rollback floor. If the SCM
+protocol is unavailable, launch continues and records `hooks-armed ... scm=0`.
 
 ## Xiaomi
 
-Currently, Xiaomi fixed the GBL vulnerability in version **300**, but as of version **306**, XBL retains the ability to boot an old version of ABL to indirectly load `efisp`.
+Xiaomi fixed the GBL vulnerability in version **300**. As of version **306**,
+XBL can still boot an older ABL to load `efisp` indirectly. Check the ABL
+anti-rollback version before updating and test an OTA on a non-critical device.
+A changed ABL that is incompatible with the device can still cause a hard
+brick; the pre-reboot action does not make an incompatible vendor ABL safe.
 
-**OTA method:**
-
-The watcher handles the ABL change on the inactive slot and adds a matching entry to `canoe.cfg`; it does not remove the entry that currently boots. Nothing needs to be flashed manually after every OTA. Keep the module installed so its watcher can run, and use the WebUI only when you intentionally want to change the mode of a named entry. The patched loader and `.gm2p` sidecar still have to describe the same stock firmware pair.
-
-**Critical risk:**
-
-If the ABL AVB version changes, this method can cause a **hard brick**. The watcher does not make an already-incompatible vendor ABL safe.
-
-**Recommendation:**
-
-- Use **Hail** to freeze system updates.
-- **Do NOT update unless necessary / on a primary device.**
-- If you must update, ensure you check ABL's anti-rollback version, or wait for others to have tested it.
-
-**Version info:**
-
-- Fixed ABL version (loading `efisp`): OS3.0.300
-- Highest version successfully updated using the module in testing: 3.0.306
+Use a package freezer such as Hail when appropriate, and do not install an OTA
+without confirming that the vulnerable ABL and the target firmware are
+compatible.
 
 ## OnePlus
 
-Newer builds fix the loader path, so an older vulnerable ABL stays on the `abl` partition; given the previous fuse incident, it is still recommended to use Hail to freeze system updates.
+Newer OnePlus builds fix the loader path. Keep a vulnerable older ABL in the
+partition and use **Flash To Other Slot** after each OTA, before rebooting, so
+the patched loader tracks the firmware generation. Builds through
+`16.0.5.7xx` and below are vulnerable; newer builds may be fixed. Check the
+anti-rollback version and wait for tested results before updating a primary
+device.
 
-**Warnings:**
+## Anti-rollback caution
 
-- **Do NOT update unless necessary / on a primary device.**
-- If you must update, ensure you check ABL's anti-rollback version, wait for others to have tested it, or confirm that the new version still has the GBL vulnerability.
-- The module watcher can add the inactive-slot entry after an OTA; it does not remove the entry that currently boots.
-
-**Version info:**
-
-- Vulnerable through `16.0.5.7xx` and below; newer builds are fixed, so keep a vulnerable ABL for the `abl` partition and let the patched loader track your firmware.
-
-## Regarding future fuse of ABL anti-rollback versions
-
-If ABL anti-rollback versions are really being fused in the future, it is recommended to abandon updates entirely, or only update **HLOS**.
-
-### How to extract HLOS
-
-1. Extract `payload.bin` to the `images` directory.
-2. Use the following script to check if files in the `images` directory contain the `AVB0` header. If yes, it is considered an HLOS image; otherwise non-HLOS.
-
-```python
-#!/usr/bin/env python3
-img_dir = "./images"
-import os
-for img in os.listdir(img_dir):
-    with open(os.path.join(img_dir, img), "rb") as f:
-        if b"AVB0" in f.read():
-            print(f"{img} is an hlos image")
-```
-
-3. Flash these partitions using fastboot.
-
-## Boot failure symptoms
-
-| Symptom | Likely cause | Recovery |
-|---------|--------------|----------|
-| Black screen after the vendor logo, no fastboot text; the host sees `QUSB_BULK_CID` (EDL 9008) | Pre-ABL failure: the ABL on the active slot cannot run — e.g. a foreign ABL was flashed, or the bootloader swapped onto a slot the module never paired | Authorized EDL flash of the matching current firmware |
-| Bootloader and recovery still work, but the system will not boot | Mismatched or half-installed chain: the BDS in `efisp` and the sidecar set in `persist` come from different generations | Re-run the full install or toolkit staging flow as one unit, so `BDS.efi`, `boot.efi`, `.gm2p` and `.tzmap` are all from one generation |
-| Red screen | Verified-boot state refused by the firmware | Boot into recovery and refresh or remove the chain |
-
-## About the module
-
-The module installer and WebUI support both Chinese and English.
+If future firmware burns ABL anti-rollback versions, consider avoiding the OTA
+or updating only HLOS. To identify HLOS images, extract `payload.bin` and look
+for the `AVB0` header in each image before choosing partitions to flash.

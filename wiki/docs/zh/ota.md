@@ -1,81 +1,76 @@
-# 小米与一加系统更新安全警告
+# OTA 更新流程
 
-## 7.x OTA watcher
+OTA 通常会把下一代系统安装到 A/B 的另一个槽位。设备启动该槽位前，必须
+先准备好其中的加载器。
 
-已安装的设备端模块现在包含后台 `service.sh` watcher。它使用 `inotifyd` 监视 `abl_a` 与 `abl_b` 设备节点，并根据安装时记录的 SHA-256 摘要检查候选变化；没有 `inotifyd` 时会改用慢速轮询。OTA 通常会更改非当前槽位；ABL 真正发生变化后，watcher 会重新派生该槽位的配对，并以正确的 role 将新的启动项加入 `canoe.cfg`。
+## 重启前的必要流程
 
-watcher 会保留当前正在启动的启动项。之前能正常工作的启动项绝不会被删除。OTA 后不需要每次重新打开 WebUI 并刷写。如果要更改模式，WebUI 选择器仍然可用，但它修改的是指定名称的 `canoe.cfg` 启动项，而不是分区记录。
+1. 安装 OTA，等待它完成对另一个槽位的写入。
+2. 继续在当前槽位运行，**不要重启**。
+3. 打开 KernelSU 模块 WebUI，按下 **Flash To Other Slot**。
+4. 等待操作完成加载器、profile 与 TrustZone 映射的派生和验证。它会用即将
+   启动的槽位标记 `canoe.cfg` 活动行，并将上一世代保留为
+   `boot_backup.efi`。
+5. 操作成功后再重启。
 
-## 通用 SCM 保护（所有模式）
+如果目标 ABL 已经带漏洞，操作会从目标 ABL 派生；否则从当前 ABL 派生，并
+将带漏洞的 ABL 复制到目标槽位。复制是分区更新；生成的 `boot.efi` 及附属
+文件安装在启动根目录。受管理的 Mode 2 profile 属于安装世代，只能由此操作
+刷新，OTA 本身不会刷新它。
 
-Mode 0/1/2 在启动和 OTA 刷新期间都会尽力抑制 TrustZone 熔断和 anti-rollback SCM 请求，但这只能阻止**进一步推进**：无法让已经熔断的 fuse 复原，也无法降低已经升高的 rollback floor。如果 SCM 协议不存在，启动仍会继续，并通过 `hooks-armed ... scm=0` 标记记录保护不可用。
+如果忘记执行该操作，新槽位仍带有原厂 ABL。该处没有 GBL 漏洞，因此 BDS
+不会加载，设备会以原厂状态启动且没有挂钩。不会变砖：返回另一个槽位启动，
+或者按下 **Flash To Other Slot** 后再次重启即可。
+
+自动的 OTA 后修补被有意推迟。模块只会在操作员于重启前按下 WebUI 操作时
+执行这些工作。
+
+## Custom ROM 的镜像来源
+
+默认派生输入始终是设备分区。对于每个存在且非空的提供文件，WebUI 可以独立
+显示一个开关：
+
+| 输入 | 提供文件路径 | 默认来源 |
+| --- | --- | --- |
+| ABL | `/data/local/tmp/canoe/abl.img` | 操作选定的目标或当前设备分区 |
+| vbmeta | `/data/local/tmp/canoe/vbmeta.img` | 对应的设备分区 |
+
+提供的镜像只作为派生输入，绝不会作为刷写载荷。精确路径不存在或为空时，
+复选框会禁用。这让 Custom ROM 可以提供自己的匹配文件，同时不改变原厂 ROM
+路径。
+
+## 签名与 Mode 2 限制
+
+成功的 Mode 2 派生只能说明 `vbmeta` 已解析并带有签名和公钥 blob，不能说明
+该密钥属于 OEM；本工具无法证明这一点。唯一的自动保护是检测公钥摘要是否
+相对于上一安装世代发生变化。从 Custom ROM 切换过去或切换回来时，变化是
+预期情况。明确提供 `vbmeta` 就是操作员的选择声明；模块会允许该派生并报告
+签名变化。
+
+## 通用 SCM 保护
+
+Mode 0、1、2 在启动与刷新期间会尽力抑制 TrustZone 熔断和 anti-rollback SCM
+请求，但这只能阻止进一步推进，不能复原已熔断的 fuse 或降低已有的 rollback
+floor。如果 SCM 协议不可用，启动仍会继续并记录 `hooks-armed ... scm=0`。
 
 ## 小米
 
-目前小米在 **300** 修复了 GBL 漏洞，但是截止 **306**，XBL 仍有启动旧版 ABL 来间接加载 `efisp` 的能力。
+小米在 **300** 修复了 GBL 漏洞；截至 **306**，XBL 仍可启动旧版 ABL 来间接
+加载 `efisp`。更新前检查 ABL anti-rollback 版本，并在非关键设备上测试 OTA。
+不兼容设备的 ABL 仍可能造成黑砖；重启前操作不会让不兼容的厂商 ABL 变得安全。
 
-**OTA 方式：**
-
-watcher 会处理非当前槽位的 ABL 变化，并将匹配的新启动项加入 `canoe.cfg`；它不会删除当前正在启动的启动项。每次 OTA 后不需要手动刷写。只要保持模块安装，让 watcher 在后台运行即可；只有想要更改某个启动项的模式时，才需要使用 WebUI。修补后的 loader 与 `.gm2p` 附属文件仍必须描述同一套原厂固件配对。
-
-**严重风险：**
-
-如果 ABL 的 AVB 版本发生变化，该方法可能导致**黑砖**。watcher 无法让本身不兼容的厂商 ABL 变得安全。
-
-**建议：**
-
-- 使用**雹**冻结系统更新。
-- **非必要 / 主力机器不要更新。**
-- 如果一定更新，请确保检查 ABL 的 anti-rollback 版本，或等待前人测试过。
-
-**版本信息：**
-
-- 修复加载 `efisp` 的 ABL 版本：OS3.0.300
-- 当前测试最高使用模块成功更新版本：3.0.306
+在适合时使用 Hail 等冻结更新的工具。未确认漏洞 ABL 与目标固件兼容前，不要
+安装 OTA。
 
 ## 一加
 
-较新的版本修复了 loader 路径，因此应让旧版漏洞 ABL 留在 `abl` 分区；鉴于之前的熔断事件，仍建议使用雹冻结系统更新。
+较新的 OnePlus 构建已修复加载器路径。应让较旧的漏洞 ABL 留在分区中，并在每次
+OTA 后、重启前按 **Flash To Other Slot**，让已修补加载器跟随固件世代。
+`16.0.5.7xx` 及更低版本带漏洞；更新版本可能已经修复。更新主力设备前，检查
+anti-rollback 版本并等待经过测试的结果。
 
-**警告：**
+## Anti-rollback 注意事项
 
-- **非必要 / 主力机器不要更新。**
-- 如果一定更新，请确保检查 ABL 的 anti-rollback 版本，或等待前人测试过，或确认新版本仍未修复 GBL 漏洞。
-- OTA 后模块 watcher 可以添加非当前槽位的启动项；它不会删除当前正在启动的启动项。
-
-**版本信息：**
-
-- `16.0.5.7xx` 及更低版本带漏洞；更新的版本已修复，因此 `abl` 分区要保留一个带漏洞的 ABL，让修补后的 loader 跟随你的固件。
-
-## 关于未来熔断 ABL anti-rollback 版本
-
-如果后续真的开始熔断 ABL anti-rollback 版本，建议直接放弃更新，或者只更新 **HLOS**。
-
-### 提取 HLOS 方法
-
-1. 解压 `payload.bin` 到 `images` 目录。
-2. 使用以下脚本检查 `images` 目录下的文件是否包含 AVB0 头，如果包含则认为是 HLOS，否则认为是非 HLOS。
-
-```python
-#!/usr/bin/env python3
-img_dir = "./images"
-import os
-for img in os.listdir(img_dir):
-    with open(os.path.join(img_dir, img), "rb") as f:
-        if b"AVB0" in f.read():
-            print(f"{img} is an hlos image")
-```
-
-3. 使用 fastboot 刷写这些分区。
-
-## 启动故障症状对照
-
-| 症状 | 可能原因 | 恢复方式 |
-|------|----------|----------|
-| 厂商 logo 之后黑屏，没有 fastboot 界面；电脑端识别为 `QUSB_BULK_CID`（EDL 9008） | ABL 启动之前就已失败：当前槽位上的 ABL 无法运行——例如刷入了不属于本机的 ABL，或 Bootloader 切换到了模块从未配对过的槽位 | 通过授权 EDL 刷写与设备匹配的当前固件 |
-| Bootloader 和 Recovery 都正常，但系统无法启动 | 启动链不匹配或只装了一半：`efisp` 里的 BDS 与 `persist` 里的 sidecar 来自不同世代 | 将整条启动链作为整体重装（重装模块或重新走工具包安装流程），确保 `BDS.efi`、`boot.efi`、`.gm2p`、`.tzmap` 同属一套 |
-| 红屏 | 固件拒绝了 verified-boot 状态 | 进入 Recovery，刷新或移除启动链 |
-
-## 关于模块
-
-模块安装脚本与 WebUI 均支持中文和英文。
+如果未来固件开始熔断 ABL anti-rollback 版本，应考虑放弃 OTA，或只更新 HLOS。
+要识别 HLOS 镜像，可先解压 `payload.bin`，再检查每个镜像是否包含 `AVB0` 头，
+然后再选择要刷写的分区。

@@ -1,3 +1,5 @@
+include ../../version.mk
+
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
 	submodule_vbmetafixer canoe_host python_embed platform_tools ext4_tools build

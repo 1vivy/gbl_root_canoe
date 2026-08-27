@@ -1,49 +1,58 @@
 # Uninstall Guide
 
-## 1. Back up your data
+## 1. Back up data
 
-Before performing any uninstall operation, fully back up important data to prevent data loss.
+Back up important data before removing the chain. Unlock state, recovery
+behavior, and data access are device-specific.
 
-## 2. Hardware re-lock requirement
+## 2. Remove the boot-root configuration
 
-If the bootloader has been **hardware re-locked** (a real `fastboot flashing lock`, not a BDS launch policy), it must be unlocked first. Use the unlock path supported by the device, such as the vendor's account-based flow or Superfastboot's `fastboot flashing unlock` while the chain is still installed. The reserve-token safeguard only helps when the chain was present when the re-lock happened.
+Use either of these routes:
 
-## 3. Remove the boot root and BDS
+- boot into a recovery that can mount `persist`, then remove
+  `/persist/efisp/canoe.cfg`; or
+- enter BDS **USB Mass Storage**, export `persist`, mount it on the computer,
+  remove `efisp/canoe.cfg`, flush the write, and unmount it.
 
-1. Boot into **official fastboot** mode, or into a recovery that can access `persist`.
-2. Remove `canoe.cfg` from the boot root if it is still present:
-   - booted Android: `/mnt/vendor/persist/efisp/canoe.cfg`
-   - recovery or an exported `persist`: `/persist/efisp/canoe.cfg`
-3. Erase the raw BDS partition:
+On a running Android system the same file is
+`/mnt/vendor/persist/efisp/canoe.cfg`. Removing the file prevents BDS from
+using the configured managed entries; it does not erase the `persist` filesystem.
 
-   ```bash
-   fastboot erase efisp
-   ```
+When the edit is complete, press **Volume Down on the device** to end the BDS
+mass-storage session. That is the only session-cancellation control.
 
-4. Format and wipe user data if your device's uninstall procedure requires it:
+## 3. Erase BDS
 
-   ```bash
-   fastboot -w
-   ```
+Boot official fastboot and erase the raw BDS partition:
 
-Removing `canoe.cfg` clears the 7.x boot-root configuration; no separate loader policy remains to clear. `fastboot erase efisp` removes the raw BDS from Bundle 1; it does not format or replace `persist`. If the boot root is not reachable before the raw partition is erased, the configuration becomes unused once `efisp` is gone, but remove it through Recovery or USB Mass Storage when possible.
+```bash
+fastboot erase efisp
+```
 
-## 4. If stock fastboot is unavailable
+This removes `BDS.efi` but does not format or replace `persist`. If official
+fastboot is unavailable and BDS is still running, use the BDS fastboot service:
 
-If the only fastboot available is the Superfastboot served by the BDS, complete the hardware re-lock and chain erase in one session:
+```bash
+fastboot flashing lock       # only if hardware re-lock is intended
+fastboot erase efisp
+```
 
-1. From the BDS, enter Superfastboot.
-2. Run:
+Keep this order when hardware re-locking: complete the lock operation while the
+chain is still present, then erase `efisp`. A real hardware re-lock may require
+the vendor's account or device-specific unlock procedure.
 
-   ```bash
-   fastboot flashing lock
-   fastboot erase efisp
-   ```
+## 4. Optional data wipe
 
-Keep this order. The lock operation must complete while the chain is still present; erasing `efisp` first can remove the only route to the supported re-lock flow. If you can enter Recovery or USB Mass Storage first, remove `canoe.cfg` from `persist/efisp` as described above.
+If the device-specific uninstall procedure requires a clean data partition:
 
-## Important notes
+```bash
+fastboot -w
+```
 
-- Confirm the device-specific BL requirements before proceeding.
-- `fastboot -w` wipes the data partition; verify that important files are backed up.
-- After uninstall, the BDS chain is removed and the device returns to its normal unlocked/root state according to the device's remaining software.
+This destroys user data; verify the backup first.
+
+## Result
+
+After `canoe.cfg` and raw `efisp` are removed, the BDS chain is no longer
+available. The device follows the remaining vendor software and its actual
+bootloader state.

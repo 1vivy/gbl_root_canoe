@@ -1,6 +1,9 @@
+include ../../version.mk
+
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
 	canoe_device_script build
+
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
 
