@@ -16,7 +16,7 @@ from . import proc
 from .errors import CanoeError
 from .layout import platform_names
 from .massstorage_windows import export as export_windows
-from .ui import warn
+from .ui import note, warn
 
 __all__: Final = ("Export", "export", "fastboot_binary", "local_boot_root", "release")
 
@@ -39,9 +39,14 @@ class Export:
 
 _SYS_BLOCK: Final = Path("/sys/block")
 _DEV_ROOT: Final = Path("/dev")
-_WINDOWS_DISKS: Final = (
-    "Get-Disk | Where-Object BusType -eq 'USB' | Select-Object -ExpandProperty Number"
-)
+_USB_MODESWITCH_DB: Final = Path("/usr/share/usb_modeswitch")
+_USB_MODESWITCH_OVERRIDE: Final = Path("/etc/usb_modeswitch.d")
+_MSC_GADGET_ID: Final = "05c6:f000"
+_MOUNTINFO: Final = Path("/proc/self/mountinfo")
+# `<id> <parent> <maj:min> <root> <point> <opts> [tags] - <fstype> <source> <opts>`
+_MOUNTINFO_POINT: Final = 4
+_MOUNTINFO_SOURCE: Final = 1
+_MOUNTINFO_ESCAPES: Final = {"040": " ", "011": "\t", "012": "\n", "134": "\\"}
 
 
 def _write_probe(directory: Path, description: str) -> None:
@@ -79,25 +84,145 @@ def local_boot_root(path: Path) -> Export:
     return Export(boot_root=boot_root, mount=mount, node=None, owned=False)
 
 
-def _is_usb_device(device: Path) -> bool:
-    for node in (device, *device.parents):
+def _usb_gadget(device: Path) -> Path | None:
+    """Return the USB device node behind a sysfs block device, if any.
+
+    `/sys/block/<name>/device` is a symlink into `/sys/devices`, so the USB
+    ancestry exists only along the *resolved* path: the lexical parents are
+    `/sys/block/<name>`, `/sys/block` and `/sys`, and none of those is ever a
+    usb node. Measured on the BDS export, the link resolves to
+    `.../usb8/8-2/8-2.2/8-2.2:1.0/host12/target12:0:0/12:0:0:0`, whose own
+    subsystem is `scsi`; the identity sits four levels up on `8-2.2`. Walking
+    the unresolved link is why discovery matched nothing and timed out on every
+    run even while the LUN was present and mountable.
+
+    The interface node `8-2.2:1.0` is in the usb subsystem too but carries no
+    `idVendor`, so the walk continues up to the device that does.
+    """
+    try:
+        resolved = device.resolve(strict=True)
+    except OSError:
+        return None
+    for node in (resolved, *resolved.parents):
+        if node.name == "sys" or node == Path(node.root):
+            break
         try:
             subsystem = (node / "subsystem").resolve(strict=True)
         except OSError:
-            subsystem = None
-        if subsystem is not None and subsystem.name == "usb":
-            return True
-        if node == Path("/sys"):
-            break
-    return False
+            continue
+        if subsystem.name == "usb" and (node / "idVendor").is_file():
+            return node
+    return None
 
 
-def _usb_scsi_snapshot() -> set[str]:
+def _gadget_id(gadget: Path) -> str | None:
+    """Read a USB device's `vid:pid` in the lowercase hex sysfs spelling."""
     try:
-        entries = tuple(_SYS_BLOCK.iterdir())
+        vendor = (gadget / "idVendor").read_text(encoding="utf-8").strip()
+        product = (gadget / "idProduct").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return f"{vendor.lower()}:{product.lower()}"
+
+
+def _usb_disks() -> dict[str, str | None]:
+    """Map every USB-backed whole disk to the gadget id behind it."""
+    try:
+        entries = sorted(_SYS_BLOCK.iterdir())
     except OSError as exc:
         raise CanoeError(f"could not inspect {_SYS_BLOCK}: {exc}") from exc
-    return {entry.name for entry in entries if entry.is_dir() and _is_usb_device(entry / "device")}
+    disks: dict[str, str | None] = {}
+    for entry in entries:
+        if not entry.is_dir():
+            continue
+        gadget = _usb_gadget(entry / "device")
+        if gadget is not None:
+            disks[entry.name] = _gadget_id(gadget)
+    return disks
+
+
+def _exported_disks(disks: dict[str, str | None]) -> tuple[str, ...]:
+    """Names of the disks whose USB identity is the BDS export gadget."""
+    return tuple(name for name, gadget in disks.items() if gadget == _MSC_GADGET_ID)
+
+
+def _unescape_mountinfo(field: str) -> str:
+    """Decode the escapes the kernel writes into /proc/*/mountinfo.
+
+    `mangle_path()` escapes exactly space, tab, newline and backslash, each as
+    an octal triple; every other byte is written verbatim.
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(field):
+        escape = (
+            _MOUNTINFO_ESCAPES.get(field[index + 1 : index + 4]) if field[index] == "\\" else None
+        )
+        if escape is None:
+            out.append(field[index])
+            index += 1
+            continue
+        out.append(escape)
+        index += 4
+    return "".join(out)
+
+
+def _mounts_of(node: Path) -> tuple[Path, ...]:
+    """Mount points the kernel currently lists for one block device."""
+    try:
+        text = _MOUNTINFO.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise CanoeError(f"could not read {_MOUNTINFO}: {exc}") from exc
+    wanted = str(node)
+    mounts: list[Path] = []
+    for line in text.splitlines():
+        head, separator, tail = line.partition(" - ")
+        if not separator:
+            continue
+        fields, source = head.split(" ", _MOUNTINFO_POINT + 1), tail.split(" ", 2)
+        if len(fields) <= _MOUNTINFO_POINT or len(source) <= _MOUNTINFO_SOURCE:
+            continue
+        if _unescape_mountinfo(source[_MOUNTINFO_SOURCE]) != wanted:
+            continue
+        mounts.append(Path(_unescape_mountinfo(fields[_MOUNTINFO_POINT])))
+    return tuple(mounts)
+
+
+def _detach_commands(node: Path, mount: Path) -> tuple[list[str | Path], ...]:
+    """Unmounters to try, best first: udisksctl also reaps the dir it created."""
+    commands: list[list[str | Path]] = []
+    udisksctl = shutil.which("udisksctl")
+    if udisksctl is not None:
+        commands.append([udisksctl, "unmount", "-b", node])
+    umount, sudo = shutil.which("umount"), shutil.which("sudo")
+    if umount is not None:
+        commands.append([sudo, umount, mount] if sudo is not None else [umount, mount])
+    return tuple(commands)
+
+
+def _detach_automounts(node: Path) -> None:
+    """Take the export off the desktop automounter before canoe mounts it.
+
+    udisks mounts the LUN the moment it enumerates (measured: /dev/sda at
+    /run/media/<user>/<uuid>). That mount would outlive `release()`, so the
+    operator's Volume Down would then pull the LUN out from under a live ext4
+    carrying unflushed journal state. canoe owns the export lifecycle, so the
+    stranger's copy goes first; only mounts whose source is this exact node are
+    ever touched.
+    """
+    for mount in _mounts_of(node):
+        note(f"Releasing the automounted export at {mount}")
+        commands = _detach_commands(node, mount)
+        if not commands:
+            raise CanoeError(f"{node} is mounted at {mount} and no unmounter is available")
+        for command in commands:
+            if _release_command(command, "unmount") is None:
+                break
+        else:
+            raise CanoeError(
+                f"could not unmount the automounted export {node} from {mount};"
+                " unmount it by hand and retry"
+            )
 
 
 def _stop_export_process(process: subprocess.Popen[bytes]) -> None:
@@ -155,6 +280,7 @@ def _mount(node: Path, mount: Path) -> MountKind:
 
 
 def _mount_export(node: Path) -> Export:
+    _detach_automounts(node)
     try:
         mount = Path(tempfile.mkdtemp(prefix="canoe-persist-"))
     except OSError as exc:
@@ -181,17 +307,55 @@ def _mount_export(node: Path) -> Export:
     )
 
 
-def _find_export(before: set[str], timeout: float) -> Export:
+def _modeswitch_unguarded() -> bool:
+    """True when usb_modeswitch is poised to eject the BDS export mid-scan.
+
+    The export gadget presents 05c6:f000, which the stock udev rules match to
+    a Siptune/EWangshikong modem whose packaged switch config requests a
+    StandardEject. Measured on this machine: the dispatcher claims the
+    interface (silently detaching usb-storage between bind and scan) and the
+    eject tears the export session down on the device. A same-named file in
+    /etc/usb_modeswitch.d with DisableSwitching=1 is the supported opt-out.
+    """
+    if not (_USB_MODESWITCH_DB / _MSC_GADGET_ID).exists():
+        return False
+    try:
+        text = (_USB_MODESWITCH_OVERRIDE / _MSC_GADGET_ID).read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return True
+    return "disableswitching" not in text.lower()
+
+
+def _find_export(before: frozenset[str], timeout: float) -> Export:
+    """Wait for the export LUN, by BDS USB identity first and novelty second.
+
+    Identity comes first so a LUN that was already on the bus, or one that
+    re-enumerated under a name seen in `before`, is still found; the novelty
+    diff stays as the fallback for a firmware that ships a different gadget id.
+    """
     deadline = time.monotonic() + timeout
     while True:
-        for name in sorted(_usb_scsi_snapshot() - before):
+        disks = _usb_disks()
+        for name in _exported_disks(disks) or tuple(sorted(set(disks) - before)):
             node = _DEV_ROOT / name
             if node.exists():
                 return _mount_export(node)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            remedy = (
+                f" usb_modeswitch has a packaged rule for the export's {_MSC_GADGET_ID}"
+                " identity and ejects the device between usb-storage binding and the"
+                " kernel scan; create"
+                f" {_USB_MODESWITCH_OVERRIDE / _MSC_GADGET_ID} containing"
+                " 'DisableSwitching=1' and retry."
+                if _modeswitch_unguarded()
+                else ""
+            )
             raise CanoeError(
-                f"mass-storage export did not expose a new USB SCSI disk within {timeout:g}s"
+                "mass-storage export did not expose a new USB SCSI disk within"
+                f" {timeout:g}s; the device enumerated but never presented a LUN.{remedy}"
             )
         time.sleep(min(0.1, remaining))
 
@@ -233,7 +397,16 @@ def export(toolkit_root: Path, *, target: str = "persist", timeout: float = 60.0
     fastboot = fastboot_binary(toolkit_root)
     if os.name == "nt":
         return _windows_export(toolkit_root, target, timeout, fastboot)
-    before = _usb_scsi_snapshot()
+    disks = _usb_disks()
+    for name in _exported_disks(disks):
+        node = _DEV_ROOT / name
+        if node.exists():
+            # The BDS is already inside its export loop, where it does not
+            # answer fastboot: a second `oem mass-storage:` would block until
+            # discovery gave up, and tearing that process down must not disturb
+            # the live session. Adopt the LUN already on the bus instead.
+            note(f"Adopting the mass-storage export already live at {node}")
+            return _mount_export(node)
     try:
         process = subprocess.Popen(
             [str(fastboot), "oem", f"mass-storage:{target}"],
@@ -243,7 +416,7 @@ def export(toolkit_root: Path, *, target: str = "persist", timeout: float = 60.0
     except OSError as exc:
         raise CanoeError(f"could not start fastboot mass-storage export: {exc}") from exc
     try:
-        return _find_export(before, timeout)
+        return _find_export(frozenset(disks), timeout)
     except CanoeError:
         _stop_export_process(process)
         raise
