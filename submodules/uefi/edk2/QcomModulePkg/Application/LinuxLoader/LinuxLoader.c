@@ -115,6 +115,14 @@ WaitForVolumeUpKey (IN UINT32 TimeoutMs)
                  SfbKeyUp);
 }
 
+/* The Phoenix 60 s arm can be re-applied after our one-shot disable; the
+ * periodic guard re-asserts it for the whole interactive run. */
+STATIC VOID EFIAPI
+SfbWatchdogGuardNotify (IN EFI_EVENT Event, IN VOID *Context)
+{
+  gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
+}
+
 EFI_STATUS EFIAPI  __attribute__ ( (no_sanitize ("safe-stack")))
 LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
@@ -178,6 +186,30 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       DEBUG ((EFI_D_ERROR, "Unable to start the FAT stack: %r\n", Status));
     }
     SfbMountLogfs ();
+
+    /*
+     * Everything below is interactive: the menu, the fastboot screen and any
+     * mass-storage export all wait on the operator or the host for as long as
+     * they take. The platform watchdog (oplus sets 60 s via Phoenix, UEFI
+     * default five minutes) has no business resetting a device that is sitting
+     * at a prompt; measured on the OnePlus 15 it resets an idle fastboot
+     * session right out from under a host mid-conversation.
+     *
+     * Disable it once now, and keep disabling it: Phoenix's 60 s arm can be
+     * re-applied by later firmware phases, so a slow periodic event re-asserts
+     * the disable for as long as the BDS owns the machine. The event leaks by
+     * design - its job ends when the BDS exits.
+     */
+    {
+      EFI_EVENT GuardEvent;
+
+      gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
+      if (!EFI_ERROR (gBS->CreateEvent (EVT_TIMER | EVT_NOTIFY_SIGNAL,
+                                        TPL_CALLBACK, SfbWatchdogGuardNotify,
+                                        NULL, &GuardEvent))) {
+        gBS->SetTimer (GuardEvent, TimerPeriodic, EFI_TIMER_PERIOD_SECONDS (30));
+      }
+    }
 
     Status = SfbLoadBootConfig (&Config, &ConfigVolume);
     (VOID)ConfigVolume;
