@@ -280,6 +280,50 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
   return Status;
 }
 
+/*
+ * Bring the gadget back after a mass-storage export borrowed the controller.
+ * The export's StopDevice restores the fastboot descriptor set inside the
+ * vendor stack but nothing re-announces on the bus: the operator sees the
+ * FASTBOOT MODE screen while the host sees no device, and only a cable
+ * replug (a fresh attach event) revives it. Do exactly what the first start
+ * does - signal the controller-init event, StartEx the descriptor set again,
+ * and re-prime the receive queue that the Connected event normally seeds.
+ * The RX Send is best-effort: a stack that did re-deliver Connected already
+ * has a pending receive, and the duplicate attempt just fails.
+ */
+EFI_STATUS
+FastbootUsbReconnect (VOID)
+{
+  EFI_STATUS Status;
+  EFI_EVENT  UsbConfigEvt;
+  EFI_GUID   InitUsbControllerGuid = {
+      0x1c0cffce,
+      0xfc8d,
+      0x4e44,
+      {0x8c, 0x78, 0x9c, 0x9e, 0x5b, 0x53, 0xd, 0x36}};
+
+  if (Fbd.UsbDeviceProtocol == NULL) {
+    return EFI_NOT_STARTED;
+  }
+
+  Status = gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK, DummyNotify,
+                               NULL, &InitUsbControllerGuid, &UsbConfigEvt);
+  if (!EFI_ERROR (Status)) {
+    gBS->SignalEvent (UsbConfigEvt);
+    gBS->CloseEvent (UsbConfigEvt);
+  }
+
+  Status = Fbd.UsbDeviceProtocol->StartEx (&DescSet);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-reconnect status=%r\n", Status));
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Status = Fbd.UsbDeviceProtocol->Send (0x1, 511, Fbd.gRxBuffer);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-reseed status=%r\n", Status));
+  return EFI_SUCCESS;
+}
+
 /* API to stop USB device when booting to kernel, used for "fastboot boot" */
 EFI_STATUS
 FastbootUsbDeviceStop (VOID)

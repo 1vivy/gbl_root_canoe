@@ -78,6 +78,7 @@
 #include <Protocol/EFICardInfo.h>
 #include <Protocol/SimpleTextIn.h>
 #include "SuperFbMenu.h"
+#include "SuperFbOemWatchdog.h"
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -178,6 +179,32 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       DEBUG ((EFI_D_ERROR, "Unable to start the FAT stack: %r\n", Status));
     }
     SfbMountLogfs ();
+
+    /*
+     * Everything below is interactive: the menu, the fastboot screen and any
+     * mass-storage export all wait on the operator or the host for as long as
+     * they take. Nothing that sits at a prompt should be reset underneath it;
+     * measured on the OnePlus 15, an idle fastboot session was reset out from
+     * under a host mid-conversation.
+     *
+     * Two unrelated timers can do that, so both are handled once, here, before
+     * the first prompt:
+     *
+     *   - An OEM applet's private reset timer (60 s on the measured target).
+     *     gBS->SetWatchdogTimer () cannot reach it at all; it is cancelled
+     *     through the applet's own protocol, and a device without the applet
+     *     skips it. See SuperFbOemWatchdog.c.
+     *   - The UEFI architectural watchdog, which the caller that started this
+     *     image armed with the five-minute default.
+     *
+     * Neither needs re-asserting on a timer. Nothing in this loader arms a
+     * watchdog, and the one thing that can - a launched child that returns to
+     * us - re-asserts the disable at its own return point in
+     * SuperFbLaunchPolicy.c. The vendor's fastboot path disables it again on
+     * entry (FastbootCmds.c), which is where upstream does this and only this.
+     */
+    SfbOemWatchdogDisable ();
+    gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
 
     Status = SfbLoadBootConfig (&Config, &ConfigVolume);
     (VOID)ConfigVolume;

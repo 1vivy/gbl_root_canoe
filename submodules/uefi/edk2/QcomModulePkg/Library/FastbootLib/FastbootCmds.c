@@ -2382,25 +2382,18 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
   Status = SfbExportPartitionByName (Target);
   if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
     DEBUG ((EFI_D_ERROR,
-            "SFB: MARK msc-run target=%a status=%r reason=post-handoff\n",
-            (StrCmp (Target, L"logfs") == 0) ? "logfs" : "persist", Status));
+            "SFB: MARK msc-run target=%s status=%r reason=post-handoff\n",
+            Target, Status));
   }
 
   /*
-   * Re-seed the fastboot receive transfer after the export hands the USB
-   * controller back. The queue is normally primed by the Connected state
-   * event in HandleUsbEvents; whether the MSD client's StopDevice re-delivers
-   * that event is the vendor stack's business, and on the OnePlus 15 the
-   * gadget re-enumerates with no receive pending, so the host's next command
-   * waits forever even though lsusb shows fastboot again. A duplicate Send on
-   * a live queue just fails, which the mark records and the loop ignores.
+   * The export's StopDevice restores the fastboot descriptor set inside the
+   * vendor stack, but nothing re-announces on the bus: the device shows the
+   * FASTBOOT MODE screen while the host sees no gadget at all until a cable
+   * replug forces a fresh attach event. Reconnect actively - controller-init
+   * event, StartEx, receive re-prime - instead of waiting for the plug.
    */
-  {
-    FastbootDeviceData *Fbd    = GetFastbootDeviceData ();
-    EFI_STATUS          Reseed =
-      Fbd->UsbDeviceProtocol->Send (0x1, 511, Fbd->gRxBuffer);
-    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-reseed status=%r\n", Reseed));
-  }
+  FastbootUsbReconnect ();
 
   /*
    * Put the fastboot mode screen back. The export screen is still painted at
