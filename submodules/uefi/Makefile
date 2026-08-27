@@ -1,3 +1,5 @@
+include ../../version.mk
+
 .PHONY: clean build tools tools-clean test
 
 clean:
@@ -11,7 +13,7 @@ build:
 	# whenever a stale artifact was still lying around, and the packages would
 	# then ship it silently.
 	rm -f edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi
-	bash -c 'cd edk2 && . ./edksetup.sh && make BOARD_BOOTLOADER_PRODUCT_NAME=canoe TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
+	bash -c 'cd edk2 && . ./edksetup.sh && make BOARD_BOOTLOADER_PRODUCT_NAME=canoe CANOE_VERSION="$(CANOE_VERSION)" TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
   		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- VERIFIED_BOOT_ENABLED=1 \
   		VERIFIED_BOOT_LE=0 AB_RETRYCOUNT_DISABLE=0 TARGET_BOARD_TYPE_AUTO=0 \
   		BUILD_USES_RECOVERY_AS_BOOT=0 DISABLE_PARALLEL_DOWNLOAD_FLASH=0 PVMFW_BCC_ENABLED=-DPVMFW_BCC\
@@ -35,7 +37,7 @@ tools:
 	cp -r ./Conf ./edk2/ 2>/dev/null || true
 	@TOOLS_DIR=edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64; \
 	rm -f $$TOOLS_DIR/RebootTools.efi $$TOOLS_DIR/ArbTools.efi $$TOOLS_DIR/BLTools.efi
-	bash -c 'cd edk2 && . ./edksetup.sh && make tools BOARD_BOOTLOADER_PRODUCT_NAME=canoe TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
+	bash -c 'cd edk2 && . ./edksetup.sh && make tools BOARD_BOOTLOADER_PRODUCT_NAME=canoe CANOE_VERSION="$(CANOE_VERSION)" TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
   		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- VERIFIED_BOOT_ENABLED=1 \
   		VERIFIED_BOOT_LE=0 AB_RETRYCOUNT_DISABLE=0 TARGET_BOARD_TYPE_AUTO=0 \
   		BUILD_USES_RECOVERY_AS_BOOT=0 DISABLE_PARALLEL_DOWNLOAD_FLASH=0 PVMFW_BCC_ENABLED=-DPVMFW_BCC \

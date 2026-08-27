@@ -12,6 +12,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Check version consistency
+      run: make version-check
     - name: Setup Python
       uses: actions/setup-python@v5
       with:

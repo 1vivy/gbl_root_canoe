@@ -1,3 +1,5 @@
+include version.mk
+
 .PHONY: clean clean_submodules targets_clean \
 	submodule_uefi_clean submodule_patcher_clean submodule_ablfvextractor_clean \
 	target_toolkit_windows_clean target_toolkit_linux_clean \
@@ -5,7 +7,8 @@
 	target_toolkit_windows target_toolkit_linux target_magisk_module \
 	target_toolkit_android dev_target_extract_and_patch \
 	tools_vbmetafixer_linux tools_vbmetafixer_windows \
-	tools_vbmetafixer_android test uefi_discard fetch-verified
+	tools_vbmetafixer_android test uefi_discard fetch-verified \
+	bump version-check
 
 # UEFI_REBUILD=1 forces a from-scratch BDS, ONCE for the whole invocation.
 #
@@ -52,6 +55,88 @@ target_toolkit_android_clean:
 targets_clean: clean_submodules target_toolkit_windows_clean target_toolkit_linux_clean target_magisk_module_clean target_toolkit_android_clean
 
 clean: targets_clean clean_submodules
+
+bump:
+	@set -eu; \
+	version='$(VERSION)'; \
+	version_code='$(if $(VERSION_CODE),$(VERSION_CODE),$(CANOE_VERSION_CODE))'; \
+	awk -v value="$$version" 'BEGIN { exit !(value ~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$$/) }' || { \
+		printf 'Invalid VERSION: %s\n' "$$version" >&2; \
+		exit 2; \
+	}; \
+	awk -v value="$$version_code" 'BEGIN { exit !(value ~ /^[0-9]+$$/) }' || { \
+		printf 'Invalid VERSION_CODE: %s\n' "$$version_code" >&2; \
+		exit 2; \
+	}; \
+	trap 'rm -f version.mk.tmp tools/canoe-host/canoelib/version.py.tmp targets/magisk_module/module/module.prop.tmp' EXIT HUP INT TERM; \
+	printf '%s\n' \
+		'# Single source of truth for Canoe versions.' \
+		'# `make bump` regenerates every derived file.' \
+		'# `make version-check` fails when they drift.' \
+		'CANOE_VERSION = '"$$version" \
+		'CANOE_VERSION_CODE = '"$$version_code" > version.mk.tmp; \
+	if ! cmp -s version.mk.tmp version.mk; then mv version.mk.tmp version.mk; else rm version.mk.tmp; fi; \
+	printf '%s\n' \
+		'"""Build version generated from version.mk by ``make bump``.' \
+		'' \
+		'``make version-check`` verifies that this generated module stays synchronized.' \
+		'"""' \
+		'' \
+		'from typing import Final' \
+		'' \
+		"VERSION: Final = \"$$version\"" > tools/canoe-host/canoelib/version.py.tmp; \
+	if ! cmp -s tools/canoe-host/canoelib/version.py.tmp tools/canoe-host/canoelib/version.py; then \
+		mv tools/canoe-host/canoelib/version.py.tmp tools/canoe-host/canoelib/version.py; \
+	else \
+		rm tools/canoe-host/canoelib/version.py.tmp; \
+	fi; \
+	sed -e "s/^version=.*/version=$$version/" \
+		-e "s/^versionCode=.*/versionCode=$$version_code/" \
+		targets/magisk_module/module/module.prop > targets/magisk_module/module/module.prop.tmp; \
+	if ! cmp -s targets/magisk_module/module/module.prop.tmp targets/magisk_module/module/module.prop; then \
+		mv targets/magisk_module/module/module.prop.tmp targets/magisk_module/module/module.prop; \
+	else \
+		rm targets/magisk_module/module/module.prop.tmp; \
+	fi; \
+	printf 'Bumped Canoe to %s (version code %s)\n' "$$version" "$$version_code"
+
+version-check:
+	@set -eu; \
+	version='$(CANOE_VERSION)'; \
+	version_code='$(CANOE_VERSION_CODE)'; \
+	fail=0; \
+	if [ -f tools/canoe-host/canoelib/version.py ]; then \
+		actual="$$(awk -F= '$$1 == "VERSION: Final " { value=$$2; sub(/^[ \t]*/, "", value); sub(/[ \t]*$$/, "", value); gsub(/"/, "", value); print value; found=1 } END { if (!found) print "<missing>" }' tools/canoe-host/canoelib/version.py)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'tools/canoe-host/canoelib/version.py' "$$version" "$$actual"; \
+		fail=1; \
+	fi; \
+	if [ -f targets/magisk_module/module/module.prop ]; then \
+		actual="$$(awk -F= '$$1 == "version" { print substr($$0, index($$0, "=") + 1); found=1 } END { if (!found) print "<missing>" }' targets/magisk_module/module/module.prop)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'targets/magisk_module/module/module.prop (version)' "$$version" "$$actual"; \
+		fail=1; \
+	fi; \
+	if [ -f targets/magisk_module/module/module.prop ]; then \
+		actual="$$(awk -F= '$$1 == "versionCode" { print substr($$0, index($$0, "=") + 1); found=1 } END { if (!found) print "<missing>" }' targets/magisk_module/module/module.prop)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version_code" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'targets/magisk_module/module/module.prop (versionCode)' "$$version_code" "$$actual"; \
+		fail=1; \
+	fi; \
+	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
+	printf 'Version check passed: %s (version code %s)\n' "$$version" "$$version_code"
 
 target_toolkit_windows:
 	cd targets/toolkit_windows && $(MAKE) build
