@@ -2352,6 +2352,22 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
             "SFB: MARK msc-run target=%a status=%r reason=post-handoff\n",
             (StrCmp (Target, L"logfs") == 0) ? "logfs" : "persist", Status));
   }
+
+  /*
+   * Re-seed the fastboot receive transfer after the export hands the USB
+   * controller back. The queue is normally primed by the Connected state
+   * event in HandleUsbEvents; whether the MSD client's StopDevice re-delivers
+   * that event is the vendor stack's business, and on the OnePlus 15 the
+   * gadget re-enumerates with no receive pending, so the host's next command
+   * waits forever even though lsusb shows fastboot again. A duplicate Send on
+   * a live queue just fails, which the mark records and the loop ignores.
+   */
+  {
+    FastbootDeviceData *Fbd    = GetFastbootDeviceData ();
+    EFI_STATUS          Reseed =
+      Fbd->UsbDeviceProtocol->Send (0x1, 511, Fbd->gRxBuffer);
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-reseed status=%r\n", Reseed));
+  }
 }
 
 
