@@ -1,90 +1,105 @@
-# Superfastboot Usage Guide
+# Super Fastboot Usage Guide
 
-## Booting
+## Entering Super Fastboot
 
-- Temporarily boot the BDS in RAM (nothing is written to flash):
+- Temporarily boot BDS in RAM without writing flash:
 
   ```bash
   fastboot stage <BDS.efi>
   fastboot oem boot-efi
   ```
 
-- When OEM unlocking is enabled and the white warning text appears on boot, **press Volume Up to enter Superfastboot mode.**
+- When the OEM-unlocking warning appears during boot, press **Volume Up** to
+  enter Super Fastboot.
 
-## First run and boot menu
+## First run and menu
 
-If the boot root contains neither `canoe.cfg` nor `boot.efi`, the BDS shows a first-run screen and goes straight to Super Fastboot. There is nothing to boot; fastboot is the only channel that can install anything.
+If the boot root has neither `canoe.cfg` nor `boot.efi`, BDS shows first-run
+information and enters Super Fastboot. There is no entry to launch yet.
 
-The boot menu includes:
+The menu includes:
 
 - **Reboot to Recovery**
 - **USB Mass Storage**
+- configured `Android (slot A)`, `Android (slot B)`, and `Android (previous)`
+  rows when their managed files exist;
+- **EFI Tools** for files in the boot root's `tools/` directory.
 
-USB Mass Storage exports one partition to a connected PC as a normal USB disk. `persist` contains the boot root at `/efisp` and is the repair channel for a device with no working ADB. `logfs` is offered only when that partition exists and is useful for pulling boot logs from a device that will not boot. Exporting `persist` shows a warning first because it is a live filesystem. Only one partition (one USB LUN) is exported per session; **Volume Down** ends the session.
+USB Mass Storage exports one partition as one USB disk. `persist` contains the
+boot root at `/efisp`; `logfs` is offered only when it exists. BDS warns before
+exporting the live `persist` filesystem. See [`mass-storage.md`](./mass-storage.md)
+for the host procedure.
 
-The same feature is reachable from fastboot:
+The same export is available from fastboot:
 
 ```bash
-fastboot oem mass-storage             # persist (the default)
+fastboot oem mass-storage             # persist (default)
 fastboot oem mass-storage:persist     # persist
 fastboot oem mass-storage:logfs       # logfs
 ```
 
-See the [USB Mass Storage guide](./mass-storage.md) for the full procedure and Windows mount step.
+Only one partition is exported per session. **Volume Down on the device is the
+only way to end a mass-storage session.** Disconnecting the cable does not end
+it.
 
-## Mode selection and DeviceInfo repair
+## Modes and DeviceInfo
 
-The menu's mode row is a **session override**. It applies to the next launch and is never written anywhere. An entry with its own configured mode ignores the row because its `.gm2p`/`.tzmap` sidecars are bound to that exact policy. The persisted fallback is the file-global `mode` in [`canoe.cfg`](./canoe-cfg.md).
+The menu's mode selector is a session-only override for the next launch. It is
+never saved. An entry's configured mode takes precedence, with file-global
+`mode` as the fallback; see [`canoe-cfg.md`](./canoe-cfg.md).
 
-A Mode 1 or Mode 2 launch repairs the backing `DeviceInfo` only when the observed state does not already satisfy the requested mode. `devinfo-repair never` in `canoe.cfg` refuses that repair; the launch then continues honestly in Mode 0. Mode 0 is a hook-free passthrough that neither reads nor writes `DeviceInfo`. The observed state is always recorded in the boot log.
+- **Mode 0** is a hook-free passthrough and neither reads nor writes
+  `DeviceInfo`.
+- **Mode 1** projects the locked DeviceInfo view and applies the managed hooks.
+- **Mode 2** additionally uses the matching 120-byte `boot.efi.gm2p` profile and
+  the generated map. Its kernel cmdline blacklist handles
+  `oplus_secure_guard_new` without repacking a boot image.
 
-## Bootloader (BL) Related
+A Mode 1 or Mode 2 launch may repair `DeviceInfo` when its observed state does
+not satisfy the requested policy. `devinfo-repair never` refuses that repair
+and continues honestly in Mode 0; `asneeded` permits it. The boot log records
+the observed state and action.
 
-- Lock the BL **data wipe**:
+Mode 2's profile proves only that `vbmeta` parsed and carries a signature and
+public-key blob. No tool here can prove which key is the OEM's. Automatic
+protection detects a changed public-key digest relative to the installed
+generation.
 
-  ```bash
-  fastboot flashing lock
-  ```
+## Bootloader commands
 
-- Unlock the BL **without data wipe**:
+Locking the bootloader triggers the platform's data-wipe behavior:
 
-  ```bash
-  fastboot flashing unlock
-  fastboot flashing unlock_critical
-  ```
+```bash
+fastboot flashing lock
+```
 
-> Note: If the TEE status is inconsistent, the device will refuse to provide the data key, causing data access failure.
+Unlocking without a data wipe uses:
 
-## Flashing
+```bash
+fastboot flashing unlock
+fastboot flashing unlock_critical
+```
 
-- Flash an image to a partition:
+An inconsistent TEE state can cause the device to refuse the data key.
 
-  ```bash
-  fastboot flash <partition> <file.img>
-  ```
+## Flashing and erasing
 
-- Erase a partition:
+```bash
+fastboot flash <partition> <file.img>
+fastboot erase <partition>
+```
 
-  ```bash
-  fastboot erase <partition>
-  ```
+The operator flashes a vulnerable ABL to `abl` and `BDS.efi` to `efisp` as
+separate prerequisite operations; the host installer never writes a partition.
 
 ## Rebooting
 
-- Reboot into bootloader; next normal boot enters official fastboot:
+```bash
+fastboot reboot bootloader
+fastboot reboot
+```
 
-  ```bash
-  fastboot reboot bootloader
-  ```
-
-- Reboot into recovery mode; next normal boot enters recovery:
-
-  ```bash
-  fastboot reboot recovery
-  ```
-
-- Normal reboot of device:
-
-  ```bash
-  fastboot reboot
-  ```
+This BDS implements the fastboot `reboot` handler for **Normal** mode only.
+`fastboot reboot recovery` is not a recovery navigation command here. To enter
+recovery, select **Reboot to Recovery** in the BDS menu or open the recovery
+entry through **EFI Tools**.

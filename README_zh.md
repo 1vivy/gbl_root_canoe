@@ -2,221 +2,146 @@
 
 [English](README.md)
 
-`gbl_root_canoe` 是一个基于 EDK2 的工作区，用于修补高通 ABL（Android Bootloader）内的 EFI 程序。目标是在骁龙 8 Gen 5 / 8 Elite (Gen 5) 设备上实现**假回锁**：Bootloader 实际处于解锁状态，但所有查询者都会得到「已锁定」的答复，从而通过解锁状态检测。
+GBL Root Canoe 是一个基于 EDK2 的工作区，用于修补高通 ABL 镜像中的 EFI
+程序。它在骁龙 8 Gen 5 / 8 Elite 设备上实现假回锁状态：硬件仍处于解锁，
+但已修补的加载器向软件呈现所需的锁定状态。
 
-> **状态：** 已重新启动开发。本仓库曾在 6.x 阶段归档，[ARCHIVE.md](ARCHIVE.md) 保留那段历史。当前里程碑为 **7.0.0-b1**，属于重新设计而非修补版本，详见 [7.x 的变化](#7x-的变化)。
-
-### 启动链的工作原理
-
-整条链路涉及三个重要分区，名称本身就对应了它们在链路中的作用：
+## 启动链
 
 ```mermaid
 graph LR
-  A["<b>abl</b><br/>带漏洞的 ABL<br/><i>已签名、原厂、旧版</i>"]
-  B["<b>efisp</b><br/>BDS.efi<br/><i>原始、未签名</i>"]
-  C["<b>persist</b> /efisp/<br/>boot.efi<br/><i>已修补 ABL</i>"]
+  A["abl<br/>带漏洞的签名 ABL"]
+  B["efisp<br/>BDS.efi"]
+  C["persist /efisp/<br/>boot.efi + 附属文件"]
   D["Android"]
-  A -->|"GBL 漏洞：把<br/>efisp 作为 EFI 镜像加载"| B
-  B -->|"读取 canoe.cfg，<br/>链式启动所选项"| C
-  C -->|"强制 AVB 通过，<br/>投射锁定状态"| D
+  A -->|"GBL 加载 efisp"| B
+  B -->|"读取 canoe.cfg"| C
+  C -->|"投射策略"| D
 ```
 
-1. **`abl`** 中存放一份*已签名、原厂、且故意保持旧版*的 ABL。它是真正的厂商代码，因此 Boot ROM 会接受它。它唯一有价值的特性是存在 GBL（Generic Bootloader Loader）漏洞：会把原始 `efisp` 分区当作 EFI 镜像加载且不做校验。整套设计仅依赖这一个突破口，没有任何环节去破解签名。
-2. **`efisp`** 是 EFI 系统分区。它没有文件系统——`BDS.efi` 以原始方式写入其中，由含漏洞的 ABL 直接执行。这是我们的代码，也是该分区上唯一的内容。
-3. **`persist`** 是一个普通的 ext4 分区，恢复出厂设置后依然保留。其 `efisp/` 子目录即**启动根目录**：`canoe.cfg`、已修补的 ABL `boot.efi`，以及该 ABL 的两个附属文件。`BDS.efi` 读取配置、绘制菜单，并链式启动所选的 `boot.efi`，后者再以「AVB 强制通过、锁定状态投射」的方式启动 Android。
+- `abl` 保存签名、原厂且有意保持较旧的带 GBL 漏洞 ABL；
+- `efisp` 不格式化，由操作员将 `BDS.efi` 原始写入；
+- `persist/efisp` 是启动根目录，包含 `canoe.cfg`、已修补的 `boot.efi` 及其
+  匹配的 `.gm2p` 和 `.tzmap` 附属文件。
 
-已修补的 ABL 之所以放在 `persist` 而不是写回 `abl`，原因在于 `abl` 必须保留真实的厂商签名才可能被加载。因此，已签名的旧版 ABL 留在 Boot ROM 会查找的位置，而已修补的当期版本则从一个无人校验的数据分区被链式加载。
+BDS 读取启动根目录，从不写入存储。`boot.efi.gm2p` 是从匹配 `vbmeta` 派生的
+120 字节 profile；`boot.efi.tzmap` 是从未修补 ABL 派生的 256 字节映射。原始
+BDS 是启动链中唯一的 whole-partition image。
 
-`boot.efi` 旁边有两个附属文件，均按镜像逐一派生并与之绑定：`boot.efi.gm2p` 是从匹配的原厂 `vbmeta` 派生的 120 字节 KeyMint profile；`boot.efi.tzmap` 是从**未修补**的 ABL 派生的 256 字节 `GTZM` TrustZone 接口映射。两者均在安装时于本地生成，不随压缩包分发。
+## 五种支持的场景
 
-### 7.x 的变化
+### 1. 电脑端首次安装
 
-**BDS 不再写入任何存储。** 6.x 曾在原始 `efisp` 分区的尾部保留三条 1 KiB 记录——首选模式、默认启动项、自定义启动项——并由启动菜单负责写入。这样做有两个问题：`dd` 写入新的 `BDS.efi` 时只覆盖镜像长度，因此旧记录会比写下它的加载器活得更久，于某个版本下选择的模式会静默地作用于下一个版本；而且它让 Bootloader 成为写入者，而这台设备距离 EDL 只差一次启动失败。
-
-7.x 用启动根目录下的单一声明式文件 [`canoe.cfg`](wiki/docs/zh/canoe-cfg.md) 取代了这三条记录。BDS 只负责读取与呈现。写入方严格只有一个：`tools/canoe-device/canoe_boot_entry.sh`；电脑端工具、KernelSU 模块和 OTA watcher 都调用这一份脚本。它的 `set` 操作是 UPSERT：只替换指定名称的启动项，同时原样保留其他所有启动项，包括手动添加的自定义 ROM 启动项。
-
-启动根目录的事务由共享的 `canoe_device_install.sh` 负责；启动项写入则由另一份共享脚本负责，因此三个调用方使用完全相同的配置逻辑。两份脚本都能真正读写 `persist`，而 BDS 的 ext4 驱动从设计上就是只读的。
-
-由此带来的几点变化：
-
-- **启动策略按启动项分别设置**，不再是一个全局开关。`.gm2p` 与 `.tzmap` 附属文件本来就是按镜像生成的；全局模式可能造成不匹配，而按启动项设置不会。
-- **备份启动项是并列的第三行**，与 A/B 两个槽位处于同一级，通过 `role backup` 区分。BDS 不会自行推断槽位状态——写入配置的一方已经知道哪个槽位处于活动状态。
-- **`efisp` 分区不会被加载器触碰**，其中只有原始写入的 `BDS.efi`。
-- **首次运行会被明确识别**，而不是猜测：启动根目录为空时，设备会直接进入 Super Fastboot；只有 fastboot 能够安装任何内容。
-
----
-
-## 构建者指南
-
-本节面向希望从源码编译工具包的开发者。
-
-### 前置条件
-
-必须在 **Linux** 主机上构建本项目：
-- `gcc` / `clang`、`lld`、`make`、`zip`、`python3`
-- `pytest`——电脑端工具测试套件的开发依赖（`make test`）
-- Rust 工具链（`cargo`/`rustup`），用于原生与交叉编译目标
-- `liblzma-dev`（编译 `extractfv`）
-- **Android NDK**（`make target_magisk_module` 交叉编译 Android 工具时需要）
-- **MinGW-w64**
-
-### 电脑端工具
-
-电脑端实现是 `canoelib/` Python 包；两个工具包压缩包内都复制了同一份包。Linux 主机需要 Python 3.11+；Windows 无需单独安装 Python，因为压缩包在 `python/` 下附带 embeddable CPython。
-
-面向人工操作的推荐入口是交互式向导：
-
-```text
-Linux：   ./canoe
-Windows： canoe.cmd
-```
-
-向导按以下顺序提问：
-
-1. 这是首次安装还是更新；
-2. 使用哪一种启动模式；
-3. Mode 1 下，提示必须先用 vbmeta 工具将第三方 Recovery graft、刷入，再返回此处后，是否继续；
-4. Mode 1 下，是否修补 `vendor_boot`；
-5. 检查匹配的原厂 `abl.img` 与 `vbmeta.img`：二者必须与正在启动的固件版本匹配且必须是原厂镜像；如果 `images/` 为空，就显示所需文件并持续监视目录，直到文件出现；
-6. 是否根据这些文件生成启动项；
-7. 输出易读的结果。
-
-脚本和 CI 使用同一个入口，并通过以下子命令工作。Windows 请将 `canoe` 替换为 `canoe.cmd`：
-
-```text
-canoe                              交互式向导（默认，不带参数）
-canoe build                        派生 ABL/profile/map 产物
-canoe prep [--pkg ...]             准备固件包
-canoe prep-device [--slot ...]     从设备拉取配对并派生产物
-canoe install [--via adb|mass-storage] [--boot-root PATH]
-                                   安装启动根目录并 UPSERT 启动项
-canoe oneshot --abl <img> --mode 0|1
-                                   临时、非交互式启动
-```
-
-电脑端实现由两套压缩包共享；各压缩包内的 `README.canoe.md` 还包含平台打包说明。
-
-当 Bootloader 已锁定、且已知原厂镜像时，使用 one-shot 命令进行非交互式临时启动：
+操作员使用 fastboot 刷入带漏洞的 ABL 和 BDS，进入 Super Fastboot，再运行交互式
+Python 程序。电脑端只通过 `fastboot oem mass-storage:persist` 访问启动根目录。
 
 ```bash
-canoe oneshot --abl <img> --mode 0
-# 或使用 --mode 1
+fastboot flash abl <vulnerable>.img       # 当前 ABL 已修复时执行
+fastboot flash efisp BDS.efi
+./canoe
+# Windows：canoe.cmd
 ```
 
-提供的镜像应当是原厂镜像，并且已确认与设备匹配。one-shot 只为本次启动获取 root，不会写入任何永久状态。
+问卷会等待匹配的原厂 `images/abl.img` 和 `images/vbmeta.img`，询问槽位与模式，
+然后将选定世代提交到 `persist/efisp`。
 
-### 核心构建目标
+### 2. 电脑端更新
 
-**注意**：在仅编译工具包或模块时，**不需要**事先提供 `abl.img`。
+使用同一电脑端流程构建并安装下一套匹配世代。当前三件套会连同匹配附属文件
+降为 `boot_backup.efi`，并生成可选择的 `android-backup`。手动添加的启动项
+会被保留。
 
-- **`make target_toolkit_linux`**
-  从 `uefi` 子模块构建 superfastboot BDS（`BDS.efi`），并将工具（`extractfv`、`patch_abl`、`mode2_profile`、`abl_tzmap`）编译为 Linux 原生程序。`mode2_profile` 只提供 `derive` 与 `validate`，用于匹配的 profile；`abl_tzmap` 从未修补 ABL 在本地生成并验证 256 字节的 `boot.efi.tzmap`。
+### 3. KernelSU 模块安装
 
-- **`make target_toolkit_windows`**
-  逻辑与 `target_toolkit_linux` 相同，但使用 MinGW-w64 将工具（`extractfv.exe`、`patch_abl.exe`、`mode2_profile.exe`、`abl_tzmap.exe`）交叉编译为 Windows 原生的 `.exe` 文件。
+在已 Root 的设备上安装模块，按中英文首次安装问卷操作，选择 Mode 0、1 或 2。
+Mode 1 会询问 Recovery vbmeta graft 以及是否修补 `vendor_boot` 命令行。模块
+默认从设备分区派生，提交启动根目录，并执行所需的设备分区写入。
 
-- **`make target_magisk_module`**
-  使用 NDK 将工具（`extractfv`、`patch_abl`、`mode2_profile`、`abl_tzmap`）交叉编译至 Android 原生平台架构，构建 BDS，并封装为一个标准的 KernelSU/Magisk 模块。
+两个派生来源都可以独立切换到非空的提供文件：
+`/data/local/tmp/canoe/abl.img` 与 `/data/local/tmp/canoe/vbmeta.img`。默认始终
+使用对应设备分区；提供镜像绝不会作为刷写载荷。
 
-- **`make target_toolkit_android`**
-  构建独立的 Android arm64 工具包（`toolkit_android.zip`），包含 Android 原生二进制工具（`extractfv`、`patch_abl`、`mode2_profile`、`abl_tzmap`），可在设备上脱离模块独立使用。
+### 4. KernelSU 更新或 OTA 后安装
 
----
+安装 OTA 后、重启前，在模块 WebUI 中按 **Flash To Other Slot**。它为即将启动的
+槽位派生并安装加载器，刷新附属文件，用该槽位标记活动行，并在需要时把漏洞
+ABL 复制到那里。
 
-## 普通用户使用指南
+如果跳过该操作，新槽位带有没有 GBL 漏洞的原厂 ABL。BDS 不会加载，设备会以
+原厂状态启动且没有挂钩。不会变砖：返回另一个槽位启动，或按下操作后再次重启。
+受管理的 Mode 2 profile 属于安装世代，只由该操作刷新，OTA 本身不会刷新。自动
+的 OTA 后修补被有意推迟。
 
-更详细的使用说明请参考 [Wiki](https://github.com/1vivy/gbl_root_canoe/wiki)。
+### 5. 锁定 Bootloader 的临时 root
 
-### 1. 使用模块版本（手机端）
+Android 工具包中的设备端 shell 包装器从活动槽位提供临时 root：
 
-模块可直接通过 Root 管理器在有 Root 权限的手机上刷入运行。
+```sh
+su -c sh ./build.sh --mode 0
+su -c sh ./build.sh --mode 1
+```
 
-**设备要求：**
-- 必须是骁龙 8 Gen 5 / 8 Elite (Gen 5) 芯片设备。
-- 设备 BL 锁已经解锁。
-- 仅限 KernelSU 模块路径：内核必须允许写入 `abl` 与 `efisp`。Baseband Guard 会拦截；允许写入的内核（据称 WildKernel 现在可以）没有问题。若写入被拒绝，请改用 LKM 或原厂 boot 镜像。电脑端工具包路径不需要内核写权限：其 Bootloader bundle 会用 fastboot 刷写这两个分区。
-- `abl` 分区上的 ABL 必须包含 GBL 漏洞。若没有，请先刷写一个带有该漏洞的旧版本 ABL；生成的 `boot.efi` 及其附属文件仍必须来自同一套匹配的原厂固件镜像。
+它只接受 Mode 0 和 Mode 1，只改变启动根目录树，不写入分区。可选的
+`--abl PATH` 和 `--vbmeta PATH` 只改变派生输入。易受攻击的 ABL 和
+`BDS.efi` 到 `efisp` 的 `dd` 由操作员自行负责。
 
-**安装及使用流程：**
-设备端模块首次安装时依次询问：是否首次安装、使用哪一种模式、是否接受 Mode 1 的第三方 Recovery graft 警告，以及（Mode 1 下）是否修补 `vendor_boot`。随后输出易读结果，并在倒计时后自动重启到 Recovery，供你格式化 Data。之后再次安装时是普通安装，不再提问。
+## 命令界面
 
-模块还会在后台运行 OTA watcher。当 OTA 更改了非当前槽位的 ABL 后，watcher 会检测到真实变化，重新派生该槽位的配对，并以正确的 role 将新启动项加入 `canoe.cfg`。当前正在启动的启动项会原样保留；之前能正常工作的启动项绝不会被删除。OTA 后不需要每次重新打开 WebUI 并再次刷写。WebUI 中的模式选择器仍然可用：它现在重写指定的 `canoe.cfg` 启动项，而不是分区记录。
+Linux 与 Windows 使用同一电脑端入口（`canoe` 或 `canoe.cmd`）：
 
-### 2. 使用 PC 工具包（Linux / Windows）
+```text
+canoe
+canoe build [--abl IMG] [--vbmeta IMG]
+canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
+              [--vendor-boot IMG] [--allow-new-signer]
+```
 
-推荐人工使用向导。解压 `target_toolkit_linux` 或 `target_toolkit_windows`，Linux 执行 `./canoe`，Windows 执行 `canoe.cmd`，再按提示操作。将匹配的**原厂** `abl.img` 与 `vbmeta.img` 放入 `images/`；缺文件时向导会说明需要什么，并持续等待这对文件出现。
+`canoe build` 默认使用 `images/abl.img` 与 `images/vbmeta.img`；提供值会在派生
+前复制到这些路径。省略 `--boot-root` 时，`canoe install` 使用 BDS 导出；否则
+使用已挂载的 `persist/efisp`。电脑端实现是 Python，不会调用 shell。
 
-可重复执行的脚本使用同一套子命令。安装分成两个 bundle：
+Mode 1 的 Recovery 准备使用独立 graft 工具：
 
-- **Bundle 1——Bootloader（仅电脑端）：** 如果已安装的 ABL 没有 GBL 漏洞，先刷入旧版漏洞 ABL，再刷入 BDS：
+```text
+vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>
+```
 
-  ```bash
-  fastboot flash abl <vulnerable>.img
-  fastboot flash efisp BDS.efi
-  ```
+输出大小不得增加。`vendor_boot` 功能是固定偏移的命令行修改，不附带 boot-image
+二进制。
 
-  如果已安装的 ABL 已经带有漏洞，则省略第一条命令。这个 bundle 只使用 fastboot，不涉及 Android 或内核写权限。
-- **Bundle 2——启动根目录与启动项：** 将启动根目录安装或刷新到 `<persist mount>/efisp`，然后派生槽位 triplet 并 UPSERT 其 `canoe.cfg` 启动项。默认的 ADB 路径从第三方 Recovery 或已 Root 系统通过 ADB 暂存，并在设备上运行共享事务：`canoe install --via adb`。使用 BDS 导出时，`canoe install --via mass-storage` 会让运行中的 BDS 执行 `fastboot oem mass-storage:persist`，等待 USB 磁盘并挂载；对于已挂载的 persist 文件系统，使用 `canoe install --boot-root <mount>`。OTA 更新也使用同一个 bundle。
+## 签名限制
 
-启动根目录不能通过 fastboot 提供。`persist` 是一个保存厂商校准数据的 live ext4 文件系统，所以 `fastboot flash persist` 会替换整个文件系统。整条链中只有原始 BDS 是 whole-partition image。
+成功的 Mode 2 派生只能说明 `vbmeta` 已解析并带有签名和公钥 blob，不能说明密钥
+属于 OEM；本工具无法证明这一点。自动保护仅检测公钥摘要是否相对于上一安装世代
+发生变化。切换到或切换回 Custom ROM 时，变化是预期的；电脑端需要
+`--allow-new-signer`，而明确提供设备端 `vbmeta` 即表示操作员作出该选择。
 
-`canoe install` 会校验并暂存完整文件集，然后调用共享事务与启动项写入器。安装器会先快照当前文件集和上一份备份，将上一代保留为菜单中可选择的备份启动项，同步 persist 树后再提交，并在提交失败时回滚整套内容。启动项写入器的 UPSERT 会保留其他启动项（包括手动添加的自定义 ROM 启动项）；配置规范见 [canoe.cfg 格式](wiki/docs/zh/canoe-cfg.md)。
+## 构建发布包
 
-### Windows ext4 访问
-
-Windows 压缩包内附带 `platform-tools`。其 ext4 读写路径使用 **WinFsp 与 LKL `lklfuse`**。这些组件在首次使用时下载并进行 SHA-256 校验，不会被 vendored 进仓库。这条路径用于 BDS 通过 USB Mass Storage 导出后挂载 `persist`；当 ADB 不可用时，可以直接编辑启动根目录进行修复。
-
-### 3. OTA 升级
-
-OTA 后，模块后台 watcher 会注意到非当前槽位 ABL 的变化，并用安装时记录的摘要确认确实发生了变化；随后重新派生该槽位的配对，用正确的 role 加入 `canoe.cfg`。当前正在启动的启动项会保留，之前能正常工作的启动项绝不会被删除。你不需要记住每次 OTA 后手动打开 WebUI 刷写。如果要更改某个启动项的模式，请使用 WebUI 模式选择器；它会明确显示并重写被选中的启动项。
-
-### 4. Superfastboot 使用方法
-
-开启 OEM 解锁且开机出现小白字时，按 **音量加**（Volume Up）键进入 Superfastboot 模式（即 BDS）。
-
-首次运行时，如果启动根目录中既没有 `canoe.cfg` 也没有 `boot.efi`，BDS 会显示首次运行界面并直接进入 Super Fastboot。此时没有任何可启动内容，只有 fastboot 能够安装内容。
-
-BDS 启动菜单新增 **Reboot to Recovery** 与 **USB Mass Storage**。USB Mass Storage 每次只将一个分区作为普通 USB 磁盘导出：
-
-- `persist` 的 `/efisp` 中包含启动根目录；设备没有可用 ADB 时，它是修复通道。导出前 BDS 会发出警告，因为这是正在使用中的文件系统。
-- 只有在 `logfs` 分区存在时才提供该选项；它适合从无法启动的设备中取出启动日志。
-- 每次会话只能导出一个分区（一个 USB LUN）。按**音量下**（Volume Down）结束会话。
-
-也可以在 fastboot 中使用相同功能：
+在 Linux 开发主机上构建：
 
 ```bash
-fastboot oem mass-storage             # persist（默认）
-fastboot oem mass-storage:persist     # persist
-fastboot oem mass-storage:logfs       # logfs
+make target_toolkit_linux
+make target_toolkit_windows
+make target_toolkit_android
+make target_magisk_module
 ```
 
-菜单中的模式行是**本次会话的临时覆盖**：它只作用于下一次启动，绝不会写入任何位置。带有自身配置模式的启动项会忽略该行，因为它的 `.gm2p`/`.tzmap` 附属文件已经与该策略绑定。持久化的回退策略是 [`canoe.cfg`](wiki/docs/zh/canoe-cfg.md) 文件全局的 `mode`。
+Linux 与 Android 工具包包含 `extractfv`、`patch_abl`、`mode2_profile` 和
+`abl_tzmap`；Windows 工具包包含对应 `.exe`。Windows 还附带固定版本的
+`fastboot.exe`、Ext4Windows 与 WinFsp。Ext4Windows 默认只读，安装导出磁盘时
+必须使用：
 
-对于 DeviceInfo 修复，Mode 1 或 Mode 2 启动只有在观测到的状态不满足请求模式时才会修复底层 `DeviceInfo`。`canoe.cfg` 中的 `devinfo-repair never` 会直接拒绝修复；这次启动随后会如实以 Mode 0 继续。Mode 0 是无 hook 的直通模式，既不读取也不写入 `DeviceInfo`。观测到的状态始终会记录在启动日志中。
+```text
+ext4windows.exe mount \\.\PhysicalDrive<N> Z: --rw
+```
 
-完整的导出与 Windows 挂载流程见 [USB Mass Storage 指南](wiki/docs/zh/mass-storage.md)。
+如果挂载失败，请运行 `ext4windows.exe --scan`，手动挂载卷，然后带必需槽位和
+模式参数重新运行 `canoe.cmd install --boot-root <drive>:\efisp`。详见
+[安装指南](wiki/docs/zh/install.md)、[`canoe.cfg` 契约](wiki/docs/zh/canoe-cfg.md)
+和 [USB Mass Storage 指南](wiki/docs/zh/mass-storage.md)。
 
-常用命令包括：
-- **将 BDS 临时启动到内存（不会写入闪存）：**
-  ```bash
-  fastboot stage <BDS.efi>
-  fastboot oem boot-efi
-  ```
-- **锁定与解锁（BL 锁相关）：**
-  - 锁定 BL，触发数据清除：`fastboot flashing lock`
-  - 解锁 BL，不触发数据清除：`fastboot flashing unlock` 或 `fastboot flashing unlock_critical`
-  - 注意：如果 TEE 状态不一致，设备会拒绝下发 data key 导致数据无法访问。
-- **刷写与擦除：**
-  - `fastboot flash <partition> <file.img>`
-  - `fastboot erase <partition>`
-- **重启设备：**
-  - `fastboot reboot bootloader`（下一次正常启动进入官方 Fastboot）
-  - `fastboot reboot recovery`
-  - `fastboot reboot`
+## 许可证与历史
 
-### 5. 文件说明
-
-1. `BDS.efi`：superfastboot BDS，以原始方式刷入 `efisp` 分区。
-2. `canoe.cfg`：启动根目录声明式配置，包含文件全局回退模式以及各启动项的模式和 role。格式规范见 [`wiki/docs/zh/canoe-cfg.md`](wiki/docs/zh/canoe-cfg.md)。
-3. `boot.efi` / `boot.efi.gm2p` / `boot.efi.tzmap`：修补后的 ABL、从匹配原厂 vbmeta 派生的 120 字节锁定/绿色 KeyMint profile，以及从未修补 ABL 派生的 256 字节 TrustZone 映射，存放在 `persist` 的 `efisp/` 下；映射在本地生成，不包含在发布压缩包内。
-4. `ABL_original.efi`：从原始 ABL 提取的未修补版本，仅供分析，**不要刷入 `efisp`**。
+项目采用 GPL-2.0-or-later。旧版 6.x 内容记录在 [`ARCHIVE.md`](ARCHIVE.md)；当前
+发布界面仅包含上面的五种场景。

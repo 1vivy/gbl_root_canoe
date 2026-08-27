@@ -2,48 +2,55 @@
 
 ## 1. 备份数据
 
-进行任何卸载操作前，务必完整备份重要数据，避免数据丢失。
+移除启动链前先备份重要数据。解锁状态、Recovery 行为和数据访问方式取决于
+具体设备。
 
-## 2. 硬件真回锁要求
+## 2. 移除启动根目录配置
 
-若 Bootloader 已被**硬件真回锁**（真正执行过 `fastboot flashing lock`，而不是 BDS 的启动策略），必须先解锁 BL。请使用设备支持的解锁途径，例如厂商账号解锁流程，或在启动链仍在时通过 Superfastboot 执行 `fastboot flashing unlock`。只有在真回锁发生时启动链仍然存在，reserve token 保护机制才可能保留这条解锁路径。
+可以使用以下任一路径：
 
-## 3. 移除启动根目录与 BDS
+- 进入能够挂载 `persist` 的 Recovery，删除
+  `/persist/efisp/canoe.cfg`；或
+- 在 BDS 中选择 **USB Mass Storage**，导出 `persist`，在电脑端挂载后删除
+  `efisp/canoe.cfg`，刷新写入并卸载。
 
-1. 进入**官方 fastboot**，或进入能够访问 `persist` 的 Recovery。
-2. 如果启动根目录中仍有 `canoe.cfg`，先将其删除：
-   - 已启动的 Android：`/mnt/vendor/persist/efisp/canoe.cfg`
-   - Recovery 或已导出的 `persist`：`/persist/efisp/canoe.cfg`
-3. 擦除原始 BDS 分区：
+已启动的 Android 系统中，同一文件路径为
+`/mnt/vendor/persist/efisp/canoe.cfg`。删除该文件会阻止 BDS 使用受管理启动
+项，但不会擦除 `persist` 文件系统。
 
-   ```bash
-   fastboot erase efisp
-   ```
+完成编辑后，在**设备上按音量下**结束 BDS Mass Storage 会话。这是唯一的会话
+取消控制。
 
-4. 如果设备的卸载流程要求清除用户数据，再执行：
+## 3. 擦除 BDS
 
-   ```bash
-   fastboot -w
-   ```
+进入官方 fastboot，擦除原始 BDS 分区：
 
-删除 `canoe.cfg` 即可清除 7.x 的启动根目录配置；不再有需要单独清除的加载器策略。`fastboot erase efisp` 会移除 Bundle 1 写入的原始 BDS，不会格式化或替换 `persist`。如果在擦除原始分区前无法访问启动根目录，`efisp` 被擦除后该配置也不会再被使用，但条件允许时仍应通过 Recovery 或 USB Mass Storage 将其删除。
+```bash
+fastboot erase efisp
+```
 
-## 4. 没有官方 fastboot 时
+这会移除 `BDS.efi`，但不会格式化或替换 `persist`。如果官方 fastboot 不可用
+而 BDS 仍在运行，可使用 BDS fastboot 服务：
 
-如果设备唯一可用的 fastboot 是 BDS 提供的 Superfastboot，请在同一次会话中完成硬件真回锁和启动链擦除：
+```bash
+fastboot flashing lock       # 只有计划硬件回锁时执行
+fastboot erase efisp
+```
 
-1. 从 BDS 进入 Superfastboot。
-2. 按顺序执行：
+如果要硬件回锁，必须保持这个顺序：在启动链仍存在时完成回锁，再擦除
+`efisp`。真正的硬件回锁可能需要厂商账号或设备专用的解锁流程。
 
-   ```bash
-   fastboot flashing lock
-   fastboot erase efisp
-   ```
+## 4. 可选的数据清除
 
-请保持这个顺序。回锁必须在启动链仍存在时完成；如果先擦除 `efisp`，可能会失去设备支持的回锁路径。如果能先进入 Recovery 或 USB Mass Storage，请按上文说明从 `persist/efisp` 删除 `canoe.cfg`。
+如果设备的卸载流程要求清空数据分区：
 
-## 注意事项
+```bash
+fastboot -w
+```
 
-- 操作前确认设备对应的 BL 要求。
-- `fastboot -w` 会清除数据分区，请确认重要文件已经备份。
-- 卸载后，BDS 启动链会被移除，设备将根据其余软件状态恢复为正常的解锁/root 状态。
+这会删除用户数据，请先确认备份有效。
+
+## 结果
+
+删除 `canoe.cfg` 和原始 `efisp` 后，BDS 启动链不再可用，设备将遵循剩余的
+厂商软件和实际 Bootloader 状态。

@@ -20,22 +20,22 @@ hero:
 
 features:
   - title: Install
-    details: Release download & flashing guide — BDS Modes 0/1/2 (honest unlocked / ABL fake locked / KM-SPSS profile spoof); hardware re-lock is a separate, non-BDS operation
+    details: Five supported scenarios: host install and update, KernelSU install and post-OTA action, and a locked-device temporary-root wrapper
     link: /install
   - title: Usage
-    details: Superfastboot command reference — boot menu, mass storage, lock/unlock BL, flash, reboot
+    details: Super Fastboot command reference — boot menu, mass storage, lock/unlock BL, flash, and reboot
     link: /usage
   - title: USB Mass Storage
-    details: Export persist or logfs, repair the boot root without ADB, and mount ext4 on Windows
+    details: Export persist or logfs, repair the boot root, and mount ext4 on Windows with the bundled tool
     link: /mass-storage
   - title: OTA
-    details: Xiaomi & OnePlus update security warnings, OTA watcher, anti-rollback fuse risk
+    details: Press Flash To Other Slot after installing an OTA and before rebooting; includes anti-rollback cautions
     link: /ota
   - title: Uninstall
-    details: Remove the efisp chain and canoe.cfg, restore unlocked root state
+    details: Remove the efisp chain and canoe.cfg, then restore the device's remaining boot state
     link: /uninstall
   - title: Build
-    details: Device-specific and generic builds from source
+    details: Build the Linux, Windows, Android, and KernelSU packages from source
     link: /build
   - title: Contribute
     details: Fork, modify, submit PR — GPL licensed

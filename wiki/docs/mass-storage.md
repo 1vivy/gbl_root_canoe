@@ -1,40 +1,83 @@
 # USB Mass Storage Guide
 
-Superfastboot can export one physical partition to a connected PC as a normal USB disk. This is useful when ADB does not work: `persist` contains the boot root, while `logfs` can hold the boot log from a device that does not reach Android.
+Super Fastboot can export one physical partition as a USB disk. The `persist`
+partition contains the boot root under `/efisp`; `logfs` is useful for collecting
+logs when it exists.
 
-## Enter the export
+## Start an export
 
-From the BDS boot menu, choose **USB Mass Storage**. Select one of the offered targets and confirm. `logfs` is shown only when that partition exists.
-
-The same operation is available from fastboot:
+From the BDS menu, choose **USB Mass Storage**, select `persist`, and confirm the
+live-filesystem warning. The same operation can be started from fastboot:
 
 ```bash
-fastboot oem mass-storage             # persist (the default)
+fastboot oem mass-storage             # persist (default)
 fastboot oem mass-storage:persist     # persist
 fastboot oem mass-storage:logfs       # logfs
 ```
 
-Connect the device to the PC before or after selecting the target, then wait for the PC to enumerate the exported disk.
+Only one partition is exported per session as one USB LUN. Finish every write
+and unmount the filesystem before ending the session.
 
-## Targets
+**Volume Down on the device is the only way to end a BDS mass-storage session.**
+Disconnecting or losing the USB link does not cancel it; reconnect and finish
+the unmount, then press Volume Down on the device.
 
-- **`persist`** — contains the boot root under `/efisp`, including `canoe.cfg`, the configured entries, and their sidecars. It is the repair channel for a device with no working ADB.
-- **`logfs`** — offered only if the partition exists; use it to pull boot logs from a device that will not boot.
+## Host install through the export
 
-Before exporting `persist`, BDS shows a warning because it is a live filesystem. Treat the exported disk as the device's active storage: only make deliberate repairs, and finish writes before ending the session.
+On Linux, let `canoe install` perform the export and mount, or pass an already
+mounted boot root:
 
-Each session exports exactly one partition as one USB LUN. The feature does not expose `persist` and `logfs` simultaneously. Press **Volume Down** on the device to stop the export; unplugging or losing the USB link does **not** end the session, and replugging resumes it. After the host has flushed all writes and unmounted `persist`, the operator must press **Volume Down** to return to the BDS menu.
+```bash
+canoe install --slot a --mode 1
+canoe install --boot-root /path/to/persist/efisp --slot a --mode 1
+```
 
-## Windows mount and repair
+The host installer commits only inside the mounted `persist/efisp` directory.
+It never flashes a partition. The operator separately owns the vulnerable ABL
+and `BDS.efi` fastboot commands described in [`install.md`](./install.md).
 
-The Windows archive bundles `platform-tools`. For ext4 read/write, its Windows path uses **WinFsp plus LKL `lklfuse`**. They are not vendored into the repository: on first use they are fetched and SHA-256-verified, then made available to the Windows helper.
+## Windows mount and install
 
-To repair the boot root from Windows:
+The Windows package bundles `fastboot.exe`, `ext4windows.exe`,
+`winfsp-x64.dll`, and the WinFsp installer. Ext4Windows defaults to read-only;
+`--rw` is required for the boot-root transaction.
 
-1. Start the `persist` export and acknowledge the live-filesystem warning.
-2. Let Windows enumerate the exported USB disk.
-3. Use the fetched, verified WinFsp + LKL `lklfuse` bridge to mount that disk's ext4 filesystem read/write.
-4. Edit the boot root at `persist/efisp` (for example, repair `canoe.cfg` or a boot-entry file), flush and unmount it cleanly.
-5. Press **Volume Down** on the device to end the export session.
+1. Start `fastboot oem mass-storage:persist` or select **USB Mass Storage** in
+   the BDS menu and acknowledge the warning.
+2. In an elevated PowerShell, record the USB disks before and after the export:
 
-Use only one partition per session. For the configuration syntax, see the normative [`canoe.cfg` contract](./canoe-cfg.md).
+   ```powershell
+   Get-Disk | Where-Object BusType -eq 'USB' | Select-Object -ExpandProperty Number
+   ```
+
+   Choose the newly enumerated physical number, never a disk that was already
+   present before the export.
+3. Run `ext4windows.exe status` and choose the first free drive letter from
+   `Z:` downward.
+4. Mount the exported disk read-write:
+
+   ```text
+   ext4windows.exe mount \\.\PhysicalDrive<N> Z: --rw
+   ```
+
+5. Install against the boot root:
+
+   ```text
+   canoe.cmd install --boot-root Z:\efisp --slot a --mode 1
+   ```
+
+6. Flush the installation and unmount the volume:
+
+   ```text
+   ext4windows.exe unmount Z:
+   ```
+
+7. Press **Volume Down on the device**. This is the only session-cancellation
+   control; unmounting alone does not end the BDS export.
+
+If the bundled mount fails, the recovery is exact: run
+`ext4windows.exe --scan`, mount the volume manually, then re-run
+`canoe.cmd install --boot-root <drive>:\efisp --slot a --mode 1`.
+
+For the configuration format, see the normative
+[`canoe.cfg` contract](./canoe-cfg.md).
