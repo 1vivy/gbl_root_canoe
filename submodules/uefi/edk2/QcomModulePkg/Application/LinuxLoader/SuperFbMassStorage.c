@@ -358,6 +358,18 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
   Msd->StopDevice (Msd);
   Msd->AssignBlkIoHandle (Msd, NULL, 0);
 
+  /*
+   * Drain on the way out as well as on the way in. Volume Down itself is
+   * consumed by SfbMassStorageCancelled, but its trailing events and anything
+   * the operator pressed while the host was mounting are still queued, and
+   * the next screen receives them as its own input. On the menu path that
+   * next screen is the chooser and then the rebuilt boot menu, whose first
+   * row is "Enter Fastboot": a stray confirm makes the session look like it
+   * ended straight into fastboot mode, which is not a place the operator
+   * asked to be and has no way back to the menu.
+   */
+  SfbMassStorageDrainKeys ();
+
   /* Poll counts make a starved loop visible in the log: a session that lasted
    * seconds but polled only a few hundred times is not servicing the link. */
   DEBUG ((EFI_D_ERROR,

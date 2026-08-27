@@ -2368,6 +2368,16 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
       Fbd->UsbDeviceProtocol->Send (0x1, 511, Fbd->gRxBuffer);
     DEBUG ((EFI_D_ERROR, "SFB: MARK msc-reseed status=%r\n", Reseed));
   }
+
+  /*
+   * Put the fastboot mode screen back. The export screen is still painted at
+   * this point, advertising a Volume Down that now only nudges the mode
+   * screen's cursor, so the operator is left reading a session that ended and
+   * has no stated way back. Redrawing here is that way back, and it is the
+   * only one available on this path: the boot menu ran before
+   * FastbootInitialize and cannot be re-entered from inside the fastboot loop.
+   */
+  FastbootRestoreModeScreen ();
 }
 
 

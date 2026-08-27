@@ -94,6 +94,9 @@ found at
 #include "FastbootCmds.h"
 #include "FastbootMain.h"
 #include "UsbDescriptors.h"
+/* CmdOem in this same library already depends on SuperFb for the mass-storage
+ * export; SfbReportStatus adds no new layering. */
+#include "../../Application/LinuxLoader/SuperFbMenu.h"
 
 #define USB_BUFF_SIZE USB_BUFFER_SIZE
 
@@ -193,8 +196,17 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
   /* Locate the USBFastboot  Protocol from DXE */
   Status = gBS->LocateProtocol (&UsbDeviceProtolGuid, NULL,
                                 (VOID **)&Fbd.UsbDeviceProtocol);
+  /*
+   * Both of this function's failure exits used to be DEBUG-only. The screen at
+   * this point already reads "FASTBOOT MODE", drawn by SfbShowFastbootMode
+   * before control left the menu, so a silent failure is indistinguishable
+   * from a working gadget: the operator sees fastboot mode while the host sees
+   * no device at all, and `fastboot devices` stays empty with nothing on the
+   * device saying why.
+   */
   if (Status != EFI_SUCCESS) {
     DEBUG ((EFI_D_ERROR, "couldnt find USB device protocol, exiting now"));
+    SfbReportStatus (L"Fastboot USB device protocol not found", Status);
     return Status;
   }
 
@@ -230,9 +242,18 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
 
   /* Start the usb device */
   Status = Fbd.UsbDeviceProtocol->StartEx (&DescSet);
+  /*
+   * Marked unconditionally: this is the one place that says whether the
+   * gadget came up, and it is the question left open when fastboot is entered
+   * after a mass-storage session has already claimed and released the shared
+   * controller. A logfs line here separates "our start failed" from "the
+   * vendor stack started us but the host cannot see it".
+   */
+  DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-start status=%r\n", Status));
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR,
             "Error start the usb device, cannot enter fastboot mode\n"));
+    SfbReportStatus (L"Fastboot USB did not start", Status);
     return EFI_NOT_STARTED;
   }
 
@@ -499,6 +520,22 @@ FastbootPollActionKey (VOID)
   }
 
   return (mFbActionCursor == 0) ? FbActionPowerOff : FbActionRestart;
+}
+
+/*
+ * Repaint the fastboot mode screen after another screen has taken the console.
+ *
+ * The mass-storage export draws over it and, once the session ends, leaves its
+ * own "Volume Down ends this session" affordance painted for a session that no
+ * longer exists; the advertised key then does nothing but move this screen's
+ * hidden cursor. The export path drains the console before it returns, so the
+ * cursor is reset here only to match what is drawn.
+ */
+VOID
+FastbootRestoreModeScreen (VOID)
+{
+  mFbActionCursor = 0;
+  FastbootDrawModeScreen ();
 }
 
 EFI_STATUS FastbootInitialize (VOID)
