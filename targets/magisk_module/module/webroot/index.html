@@ -82,13 +82,19 @@
         <input id="patchVendorBootCheckbox" type="checkbox" />
         <span id="lblPatchVendorBoot">修补 vendor_boot 分区</span>
       </label>
+      <p class="caption hint-text" id="lblPatchVendorBootHint">Mode 2 已取代原有的分区修补绕过方案。</p>
 
-      <label class="option-check" for="patchSuperCheckbox">
-        <input id="patchSuperCheckbox" type="checkbox" />
-        <span id="lblPatchSuper">修补 super 分区</span>
+      <label class="option-check" for="suppliedAblCheckbox">
+        <input id="suppliedAblCheckbox" type="checkbox" disabled />
+        <span id="lblSuppliedAbl">使用提供的 abl.img</span>
       </label>
+      <p class="caption hint-text" id="suppliedAblHint">未找到非空文件 /data/local/tmp/canoe/abl.img</p>
 
-      <p class="caption hint-text" id="patchMutualTip">vendor_boot 和 super 仅可选择一项</p>
+      <label class="option-check" for="suppliedVbmetaCheckbox">
+        <input id="suppliedVbmetaCheckbox" type="checkbox" disabled />
+        <span id="lblSuppliedVbmeta">使用提供的 vbmeta.img</span>
+      </label>
+      <p class="caption hint-text" id="suppliedVbmetaHint">未找到非空文件 /data/local/tmp/canoe/vbmeta.img</p>
 
       <p class="warning-copy" id="lblWarning">
         刷写对象是 bootloader 相关分区，风险较高。开始前请确认镜像与机型严格匹配。

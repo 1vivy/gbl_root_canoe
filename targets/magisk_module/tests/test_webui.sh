@@ -25,7 +25,10 @@ localStorage.setItem("blFlasherPendingTaskKind", "mode");
 window.__ksuMock = {
   status: "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=other-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en",
   failStatus: false,
+  suppliedAblAvailable: false,
+  suppliedVbmetaAvailable: false,
   toasts: [],
+  lastStartCommand: "",
   lastStartModeCommand: "",
   startModeFailure: false,
   modeTaskNumber: 0,
@@ -39,6 +42,14 @@ window.ksu = {
     window.__ksuMock.toasts.push(message);
   },
   exec(command, _options, callbackName) {
+    if (command.includes("test -s '/data/local/tmp/canoe/abl.img'")) {
+      window[callbackName](window.__ksuMock.suppliedAblAvailable ? 0 : 1, "", "");
+      return;
+    }
+    if (command.includes("test -s '/data/local/tmp/canoe/vbmeta.img'")) {
+      window[callbackName](window.__ksuMock.suppliedVbmetaAvailable ? 0 : 1, "", "");
+      return;
+    }
     if (command.includes(" status")) {
       if (window.__ksuMock.failStatus) {
         window[callbackName](1, "", "status unavailable");
@@ -49,6 +60,11 @@ window.ksu = {
     }
     if (command.includes(" tail")) {
       window[callbackName](0, "", "");
+      return;
+    }
+    if (command.includes(" start '")) {
+      window.__ksuMock.lastStartCommand = command;
+      window[callbackName](0, "STARTED=1|TASK_ID=flash-task", "");
       return;
     }
     if (command.includes(" start-mode")) {
@@ -87,7 +103,8 @@ const optionControls = [
   "#updateEfispCheckbox",
   "#debugModeCheckbox",
   "#patchVendorBootCheckbox",
-  "#patchSuperCheckbox"
+  "#suppliedAblCheckbox",
+  "#suppliedVbmetaCheckbox"
 ];
 
 try {
@@ -106,6 +123,32 @@ try {
     "preferred mode Save action label is missing");
   assert(localStorage.getItem("blFlasherPendingTaskId") === null,
     "stale pending task was not reconciled");
+  assert(optionControls.length === 5, "unexpected Flash option control set");
+  const checkboxIds = [...document.querySelectorAll('input[type="checkbox"]')]
+    .map(input => input.id);
+  assert(JSON.stringify(checkboxIds) === JSON.stringify([
+    "updateEfispCheckbox",
+    "debugModeCheckbox",
+    "patchVendorBootCheckbox",
+    "suppliedAblCheckbox",
+    "suppliedVbmetaCheckbox"
+  ]), "Flash controls contain an unexpected checkbox");
+  assert(document.querySelector("#suppliedAblCheckbox") !== null,
+    "supplied ABL checkbox is missing");
+  assert(document.querySelector("#suppliedVbmetaCheckbox") !== null,
+    "supplied vbmeta checkbox is missing");
+  assert(document.querySelector("#lblSuppliedAbl").textContent === "Use supplied abl.img",
+    "supplied ABL label is incorrect");
+  assert(document.querySelector("#lblSuppliedVbmeta").textContent === "Use supplied vbmeta.img",
+    "supplied vbmeta label is incorrect");
+  assert(disabled("#suppliedAblCheckbox") && disabled("#suppliedVbmetaCheckbox"),
+    "missing supplied images must disable both checkboxes");
+  assert(document.querySelector("#suppliedAblHint").textContent.includes(
+    "/data/local/tmp/canoe/abl.img"), "ABL absence hint omitted its path");
+  assert(document.querySelector("#suppliedVbmetaHint").textContent.includes(
+    "/data/local/tmp/canoe/vbmeta.img"), "vbmeta absence hint omitted its path");
+  assert(document.querySelector("#lblPatchVendorBootHint").textContent.includes(
+    "Mode 2"), "vendor_boot hint does not describe the replacement workflow");
 
   window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=defaulted-task|ENTRY_ID=android-a|ENTRY_MODE=1|ENTRY_MODE_DEFAULTED=1|CONFIG_READ_ERROR=0|USER_LANG=en";
   document.querySelector("#refreshButton").click();
@@ -184,6 +227,39 @@ try {
   assert(window.__ksuMock.toasts.includes(
     "Mode 2 profile is missing; install a valid boot.efi.gm2p first"),
     "missing Mode 2 profile error did not reach the toast");
+
+  window.__ksuMock.suppliedAblAvailable = true;
+  window.__ksuMock.suppliedVbmetaAvailable = true;
+  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=idle-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
+  document.querySelector("#refreshButton").click();
+  await waitFor(() => !disabled("#suppliedAblCheckbox") && !disabled("#suppliedVbmetaCheckbox"),
+    "available supplied images did not enable their checkboxes");
+  document.querySelector("#suppliedAblCheckbox").checked = true;
+  document.querySelector("#suppliedVbmetaCheckbox").checked = true;
+  document.querySelector("#flashButton").click();
+  document.querySelector("#nextConfirmButton").click();
+  document.querySelector("#nextConfirmButton").click();
+  await waitFor(() => window.__ksuMock.lastStartCommand.includes("abl=supplied") &&
+    window.__ksuMock.lastStartCommand.includes("vbmeta=supplied"),
+    "both supplied image arguments were not passed to the worker");
+
+  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=flash-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
+  document.querySelector("#refreshButton").click();
+  await waitFor(() => !disabled("#flashButton"), "Flash action did not re-enable");
+  window.__ksuMock.lastStartCommand = "";
+  document.querySelector("#suppliedAblCheckbox").checked = false;
+  document.querySelector("#suppliedVbmetaCheckbox").checked = true;
+  document.querySelector("#flashButton").click();
+  document.querySelector("#nextConfirmButton").click();
+  document.querySelector("#nextConfirmButton").click();
+  await waitFor(() => window.__ksuMock.lastStartCommand.includes("vbmeta=supplied"),
+    "selected vbmeta source was not passed to the worker");
+  assert(!window.__ksuMock.lastStartCommand.includes("abl=supplied"),
+    "unselected ABL source was passed to the worker");
+
+  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=flash-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
+  document.querySelector("#refreshButton").click();
+  await waitFor(() => !disabled("#saveModeButton"), "controls did not re-enable after source test");
 
   window.__ksuMock.failStatus = true;
   document.querySelector("#refreshButton").click();
