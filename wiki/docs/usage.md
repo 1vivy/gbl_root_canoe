@@ -42,6 +42,40 @@ Only one partition is exported per session. **Volume Down on the device is the
 only way to end a mass-storage session.** Disconnecting the cable does not end
 it.
 
+## Fastboot mode screen
+
+While Super Fastboot waits for a host it shows its own rows, moved with Volume
+Up/Down and chosen with Power:
+
+- **Stay in Fastboot** - inert; it only repaints, and it is where the cursor
+  starts so a stray keypress cannot do anything;
+- **Reboot to Recovery**
+- **Power Off**
+- **Restart**
+
+Recovery is here because the boot menu's row is out of reach from fastboot: the
+menu runs before the fastboot loop starts, and on a device whose boot root is
+empty it never runs at all. That row is what to reach for after an export
+session, when the install is done and the device should go to recovery.
+
+From the host, the reboot target is honoured:
+
+```bash
+fastboot reboot              # Android
+fastboot reboot recovery     # recovery
+fastboot reboot bootloader   # back into Super Fastboot
+```
+
+Any other target fails rather than rebooting somewhere it was not asked to;
+this device has no userspace fastbootd, so `fastboot reboot fastboot` is
+refused instead of being answered with a bootloader reboot.
+
+Ending the export itself is still Volume Down on the device. While the export
+runs, the USB link is a mass-storage gadget and carries no fastboot channel, so
+no host command can reach BDS. A host SCSI eject does end the session on this
+hardware, but it is the vendor stack's side effect rather than a contract, and
+canoe does not rely on it.
+
 ## Modes and DeviceInfo
 
 The menu's mode selector is a session-only override for the next launch. It is
