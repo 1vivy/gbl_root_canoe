@@ -1,46 +1,63 @@
-# canoe-host — the host-side toolkit
+# canoe-host — the Python host toolkit
 
-One implementation of the PC-side tools, copied into both toolkit archives by
-their Makefiles. Same convention as `tools/canoe-device/`: the source of truth
-lives here once, and `targets/toolkit_{linux,windows}/Makefile` copy it in.
+This directory is the source of the host implementation copied into the Linux
+and Windows toolkit archives.
 
 | Path | Role |
-|---|---|
-| `canoe` | Linux launcher and interactive wizard |
-| `canoe.cmd` | Windows wrapper; uses bundled Python when available |
-| `canoelib/` | Shared implementation package |
-| `tests/` | pytest suite; never packaged |
+| --- | --- |
+| `canoe` | Linux launcher and interactive questionnaire |
+| `canoe.cmd` | Windows launcher using the bundled interpreter |
+| `canoelib/` | Python implementation |
+| `tests/` | Host-only test suite; never packaged |
 
-## Why Python
+## Design
 
-The host drivers were maintained twice, once in bash and once in cmd.exe batch.
-The batch half kept breaking on *parsing* rather than on logic — a `^` written
-inside a quoted adb argument reaches the device verbatim, so `wc -c ^< file` ran
-`wc` with a bogus operand and printed nothing at all, and the empty result was
-then reported to the user as the literal string ` =`, which is what
-`%VAR: =%` expands to for an undefined variable. Two releases shipped with that
-class of bug, and catching it needed wine plus a hand-compiled `findstr.exe`.
-One implementation, driven by real tests, removes the class.
+The host uses Python 3.11 and the standard library only. Child processes receive
+argv lists through `canoe.proc.run`; the host never invokes a shell. Linux and
+Windows therefore use the same argument handling and transaction semantics.
 
-## Constraints
+The boot-root transaction is owned by `canoelib.boottree`. It validates the
+staged `boot.efi` triplet, compares the profile signer digest with the live
+generation, snapshots the files it may replace, demotes the live triplet to
+`boot_backup.efi`, commits the new tree, writes `canoe.cfg`, and rolls back the
+snapshot on failure. `canoelib.config` is the canonical configuration model.
 
-- **Stdlib only.** The Windows archive ships an embeddable CPython under
-  `python/` with no pip and no site-packages, so a third-party import here would
-  break the shipped toolkit rather than just the build. Python 3.11 is the floor.
-- **No shell strings.** Every child process is an argv list through
-  `canoe.proc.run`, which is what retires the quoting and word-splitting class of
-  bug for good.
-- The install transaction is deliberately *not* here. It runs through the shared
-  `tools/canoe-device/canoe_device_install.sh` and `canoe_boot_entry.sh` scripts,
-  so ADB and USB Mass Storage invoke exactly the same implementation.
-- `canoe install` defaults to ADB. For a BDS `oem mass-storage:persist` export,
-  use `canoe install --via mass-storage`; for an already-mounted persist export,
-  use `canoe install --boot-root <drive>:\`. Host-run transactions require
-  `--slot a|b`, unless `canoe prep-device` recorded the source slot.
+The host reaches an unmounted boot root through the BDS
+`fastboot oem mass-storage:persist` export. It can also install against an
+already mounted `persist/efisp` path with `--boot-root`. The host transaction
+mutates only that directory; the operator separately flashes the vulnerable ABL
+and raw `BDS.efi` with fastboot.
+
+## Command surface
+
+```text
+canoe
+canoe build [--abl IMG] [--vbmeta IMG]
+canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
+              [--vendor-boot IMG] [--allow-new-signer]
+```
+
+With no arguments, `canoe` runs the interactive five-scenario questionnaire.
+`build` defaults to `images/abl.img` and `images/vbmeta.img`; explicit image
+arguments are copied into those canonical locations before derivation.
+`install` requires the slot because the BDS does not publish a current-slot
+variable. `--vendor-boot` writes a patched copy in the work area and reports its
+fastboot flash command; it does not alter the source image.
+
+The Windows archive bundles `fastboot.exe`, Ext4Windows, WinFsp, and an
+embeddable Python interpreter. Ext4Windows is read-only unless invoked with
+`--rw`:
+
+```text
+ext4windows.exe mount \\.\PhysicalDrive<N> Z: --rw
+```
+
+If automatic mounting fails, run `ext4windows.exe --scan`, mount the volume
+manually, and rerun `canoe.cmd install --boot-root <drive>:\efisp` with the
+required slot and mode.
 
 ## Development
 
-```sh
-python3 -m pytest tools/canoe-host          # from the repository root
-cd tools/canoe-host && ruff check . && ruff format --check . && basedpyright
-```
+The package is developed from the repository root. Scoped checks for this
+package are documented by the project maintainers; the release gate runs them
+after all package changes are integrated.

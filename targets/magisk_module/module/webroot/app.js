@@ -2,6 +2,10 @@ import { exec as ksuExec, moduleInfo as ksuModuleInfo, toast } from "./kernelsu.
 
 const IMAGE_NAMES = ["abl"];
 const BOOT_MODES = new Set(["0", "1", "2"]);
+const SUPPLIED_IMAGE_SPECS = [
+  { path: "/data/local/tmp/canoe/abl.img", available: "suppliedAblAvailable", checkbox: "suppliedAblCheckbox", hint: "suppliedAblHint", missing: "suppliedAblMissing" },
+  { path: "/data/local/tmp/canoe/vbmeta.img", available: "suppliedVbmetaAvailable", checkbox: "suppliedVbmetaCheckbox", hint: "suppliedVbmetaHint", missing: "suppliedVbmetaMissing" }
+];
 
 const state = {
   confirmStep: 0,
@@ -18,6 +22,8 @@ const state = {
   activeTaskId: "",
   completionNotifiedTaskId: "",
   activeTaskKind: "",
+  suppliedAblAvailable: false,
+  suppliedVbmetaAvailable: false,
   lang: "zh"
 };
 
@@ -55,8 +61,11 @@ const i18n = {
     updateEfisp: "更新 efisp（默认开启）",
     debugMode: "调试模式（仅处理不刷写，efisp 目录使用模块 tmp/efisp）",
     lblPatchVendorBoot: "修补 vendor_boot 分区",
-    lblPatchSuper: "修补 super 分区",
-    patchMutualTip: "vendor_boot 和 super 仅可选择一项",
+    patchVendorBootHint: "Mode 2 已取代原有的分区修补绕过方案。",
+    lblSuppliedAbl: "使用提供的 abl.img",
+    lblSuppliedVbmeta: "使用提供的 vbmeta.img",
+    suppliedAblMissing: "未找到非空文件 /data/local/tmp/canoe/abl.img",
+    suppliedVbmetaMissing: "未找到非空文件 /data/local/tmp/canoe/vbmeta.img",
     warning: "刷写对象是 bootloader 相关分区，风险较高。开始前请确认镜像与机型严格匹配。",
     imageMap: "镜像映射",
     partition: "分区名",
@@ -139,8 +148,11 @@ const i18n = {
     updateEfisp: "Update efisp (on by default)",
     debugMode: "Debug Mode (process only, no flash; efisp dir uses module tmp/efisp)",
     lblPatchVendorBoot: "Patch vendor_boot partition",
-    lblPatchSuper: "Patch super partition",
-    patchMutualTip: "Only one of vendor_boot / super can be selected",
+    patchVendorBootHint: "Mode 2 supersedes the former partition workaround.",
+    lblSuppliedAbl: "Use supplied abl.img",
+    lblSuppliedVbmeta: "Use supplied vbmeta.img",
+    suppliedAblMissing: "Non-empty /data/local/tmp/canoe/abl.img was not found",
+    suppliedVbmetaMissing: "Non-empty /data/local/tmp/canoe/vbmeta.img was not found",
     warning: "Flashing bootloader partitions is high risk. Verify images match your device before starting.",
     imageMap: "Image Mapping",
     partition: "Partition",
@@ -218,8 +230,10 @@ const elements = {
   updateEfispCheckbox: document.getElementById("updateEfispCheckbox"),
   debugModeCheckbox: document.getElementById("debugModeCheckbox"),
   patchVendorBootCheckbox: document.getElementById("patchVendorBootCheckbox"),
-  patchSuperCheckbox: document.getElementById("patchSuperCheckbox"),
-  patchMutualTip: document.getElementById("patchMutualTip"),
+  suppliedAblCheckbox: document.getElementById("suppliedAblCheckbox"),
+  suppliedVbmetaCheckbox: document.getElementById("suppliedVbmetaCheckbox"),
+  suppliedAblHint: document.getElementById("suppliedAblHint"),
+  suppliedVbmetaHint: document.getElementById("suppliedVbmetaHint"),
   pageTitle: document.getElementById("pageTitle")
 };
 
@@ -239,8 +253,11 @@ function applyLanguage(lang) {
   document.querySelector("#lblUpdateEfisp").textContent = t.updateEfisp;
   document.querySelector("#lblDebugMode").textContent = t.debugMode;
   document.querySelector("#lblPatchVendorBoot").textContent = t.lblPatchVendorBoot;
-  document.querySelector("#lblPatchSuper").textContent = t.lblPatchSuper;
-  elements.patchMutualTip.textContent = t.patchMutualTip;
+  document.querySelector("#lblPatchVendorBootHint").textContent = t.patchVendorBootHint;
+  document.querySelector("#lblSuppliedAbl").textContent = t.lblSuppliedAbl;
+  document.querySelector("#lblSuppliedVbmeta").textContent = t.lblSuppliedVbmeta;
+  if (!state.suppliedAblAvailable) elements.suppliedAblHint.textContent = t.suppliedAblMissing;
+  if (!state.suppliedVbmetaAvailable) elements.suppliedVbmetaHint.textContent = t.suppliedVbmetaMissing;
   document.querySelector("#lblWarning").textContent = t.warning;
   document.querySelector("#lblImageMap").textContent = t.imageMap;
   document.querySelector("#tblPartition").textContent = t.partition;
@@ -258,9 +275,6 @@ function applyLanguage(lang) {
   }
   if (elements.stateChip.textContent === "等待检测" || elements.stateChip.textContent === "Waiting") {
     elements.stateChip.textContent = t.waitingStatus;
-  }
-  if (elements.slotChip.textContent === "槽位未知" || elements.slotChip.textContent === "Slot Unknown") {
-    elements.slotChip.textContent = t.slotUnknown;
   }
   document.querySelectorAll("[data-i18n]").forEach(el => {
     const key = el.dataset.i18n;
@@ -302,6 +316,23 @@ function parseKeyValueOutput(output) {
   return info;
 }
 
+async function refreshSuppliedImages() {
+  await Promise.all(SUPPLIED_IMAGE_SPECS.map(async spec => {
+    let available = false;
+    try {
+      const result = await ksuExec(`test -s ${shellQuote(spec.path)}`);
+      available = result.errno === 0;
+    } catch {}
+    state[spec.available] = available;
+    const checkbox = elements[spec.checkbox];
+    if (!available) checkbox.checked = false;
+    checkbox.disabled = !available;
+    const hint = elements[spec.hint];
+    hint.hidden = available;
+    if (!available) hint.textContent = i18n[state.lang][spec.missing];
+  }));
+}
+
 function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -334,7 +365,8 @@ function setControlsUnavailable(message) {
   elements.updateEfispCheckbox.disabled = true;
   elements.debugModeCheckbox.disabled = true;
   elements.patchVendorBootCheckbox.disabled = true;
-  elements.patchSuperCheckbox.disabled = true;
+  elements.suppliedAblCheckbox.disabled = true;
+  elements.suppliedVbmetaCheckbox.disabled = true;
   elements.modeControl.setAttribute("aria-busy", "true");
   elements.modeStatusText.textContent = i18n[state.lang].modeUnavailable;
   elements.refreshButton.disabled = false;
@@ -349,7 +381,8 @@ function setTaskControlsBusy() {
   elements.updateEfispCheckbox.disabled = true;
   elements.debugModeCheckbox.disabled = true;
   elements.patchVendorBootCheckbox.disabled = true;
-  elements.patchSuperCheckbox.disabled = true;
+  elements.suppliedAblCheckbox.disabled = true;
+  elements.suppliedVbmetaCheckbox.disabled = true;
   elements.modeControl.setAttribute("aria-busy", "true");
 }
 
@@ -417,7 +450,8 @@ function renderStatus(status) {
   elements.updateEfispCheckbox.disabled = run;
   elements.debugModeCheckbox.disabled = run;
   elements.patchVendorBootCheckbox.disabled = run;
-  elements.patchSuperCheckbox.disabled = run;
+  elements.suppliedAblCheckbox.disabled = run || !state.suppliedAblAvailable;
+  elements.suppliedVbmetaCheckbox.disabled = run || !state.suppliedVbmetaAvailable;
   renderTable(cur, tar);
 }
 function notifyTaskFinished(stateStr, taskKind = "") {
@@ -519,15 +553,14 @@ function closeConfirmModal() {
 function getPatchArgString() {
   const parts = [];
   if (elements.patchVendorBootCheckbox.checked) parts.push("vendor_boot=1");
-  if (elements.patchSuperCheckbox.checked) parts.push("super=1");
+  if (elements.suppliedAblCheckbox.checked) parts.push("abl=supplied");
+  if (elements.suppliedVbmetaCheckbox.checked) parts.push("vbmeta=supplied");
   if (elements.debugModeCheckbox.checked) parts.push("debug=1");
   return parts.join(",");
 }
 
 function getSelectedPatchName() {
-  const t = i18n[state.lang];
   if (elements.patchVendorBootCheckbox.checked) return "vendor_boot";
-  if (elements.patchSuperCheckbox.checked) return "super";
   return "";
 }
 
@@ -725,33 +758,21 @@ async function manualRefresh() {
   state.prevStatusRaw = "";
   state.prevLogRaw = "";
   schedulePoll(null);
+  await refreshSuppliedImages();
   await poll(true);
 }
-function initPatchCheckboxMutual() {
-  elements.patchVendorBootCheckbox.addEventListener("change", () => {
-    if (elements.patchVendorBootCheckbox.checked) {
-      elements.patchSuperCheckbox.checked = false;
-    }
-  });
-  elements.patchSuperCheckbox.addEventListener("change", () => {
-    if (elements.patchSuperCheckbox.checked) {
-      elements.patchVendorBootCheckbox.checked = false;
-    }
-  });
-}
-
 async function init() {
   try {
     const info = moduleInfo();
     if(!info) return;
     state.moduleDir = info.moduleDir;
     state.scriptPath = `${state.moduleDir}/bin/bl_flasher.sh`;
-    initPatchCheckboxMutual();
     try {
       state.activeTaskId = localStorage.getItem("blFlasherPendingTaskId") || "";
       state.activeTaskKind = localStorage.getItem("blFlasherPendingTaskKind") || "";
     } catch {}
     state.taskStarted = Boolean(state.activeTaskId);
+    await refreshSuppliedImages();
     await refreshStatus();
     await refreshLog();
   } catch (e) {
@@ -766,7 +787,8 @@ async function init() {
     elements.updateEfispCheckbox.disabled = true;
     elements.debugModeCheckbox.disabled = true;
     elements.patchVendorBootCheckbox.disabled = true;
-    elements.patchSuperCheckbox.disabled = true;
+    elements.suppliedAblCheckbox.disabled = true;
+    elements.suppliedVbmetaCheckbox.disabled = true;
     elements.saveModeButton.disabled = true;
     return;
   }

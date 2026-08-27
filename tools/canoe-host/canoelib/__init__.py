@@ -1,4 +1,4 @@
-"""The canoe host-side toolkit: derive, prepare and install the boot chain.
+"""The canoe host-side toolkit: derive and install the boot chain.
 
 One implementation for both toolkits. The Linux archive runs it on the host's
 own `python3`; the Windows archive ships an embeddable CPython beside it. That

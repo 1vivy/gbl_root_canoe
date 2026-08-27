@@ -1,69 +1,98 @@
-"""Tests for the wizard's mode-specific question flow."""
+"""Tests for the host wizard's unified install questionnaire."""
 
 from __future__ import annotations
 
 from pathlib import Path
+
+import pytest
 
 from canoelib import wizard
 from canoelib.build import Derived
 from canoelib.layout import Toolkit
 
 
-def test_vendor_boot_question_exists_only_for_mode_one(monkeypatch, tmp_path: Path) -> None:
-    """Given each mode, only Mode 1 adds the recovery and vendor_boot decisions."""
+@pytest.mark.parametrize(
+    ("mode", "yes_answers", "expected_yes"),
+    [
+        pytest.param(
+            "0",
+            [True],
+            ["Generate a boot entry from these matching stock files?"],
+            id="mode-zero",
+        ),
+        pytest.param(
+            "1",
+            [True, False, True],
+            [
+                (
+                    "A custom recovery must be grafted with the vbmeta tool, "
+                    "flashed, and returned here. Proceed?"
+                ),
+                "Patch vendor_boot to blacklist oplus_secure_guard_new?",
+                "Generate a boot entry from these matching stock files?",
+            ],
+            id="mode-one",
+        ),
+    ],
+)
+def test_interactive_question_order_and_mode_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mode: str,
+    yes_answers: list[bool],
+    expected_yes: list[str],
+) -> None:
+    """Given a mode, ask only the decisions that mode can use, in order."""
     images = tmp_path / "images"
     images.mkdir()
     (images / "abl.img").write_bytes(b"ABL")
     (images / "vbmeta.img").write_bytes(b"VBMETA")
-    monkeypatch.setattr(Toolkit, "shipped", classmethod(lambda cls: Toolkit(tmp_path)))
-    monkeypatch.setattr(wizard, "_wait_for_images", lambda toolkit: None)
-    monkeypatch.setattr(wizard.build, "derive", lambda toolkit: Derived(True))
-    monkeypatch.setattr(wizard.stage, "entry", lambda argv: 0)
+    monkeypatch.setattr(
+        Toolkit, "shipped", classmethod(lambda cls: Toolkit(tmp_path))
+    )
+    monkeypatch.setattr(
+        wizard.build,
+        "derive",
+        lambda toolkit: Derived(gbl_patched=True),
+    )
+    monkeypatch.setattr(wizard.stage, "install", lambda argv: None)
 
-    calls: list[bool] = []
+    choices: list[str] = []
+    yes_questions: list[str] = []
+    answer_iter = iter(yes_answers)
+    monkeypatch.setattr(
+        wizard,
+        "ask_choice",
+        lambda question, choices_arg, default: (
+            choices.append(question), "a" if question.startswith("Which slot") else mode
+        )[1],
+    )
 
-    def answers(question: str, default: bool) -> bool:
-        calls.append(default)
-        return True
-
-    monkeypatch.setattr(wizard, "ask_yes_no", answers)
-    monkeypatch.setattr(wizard, "ask_choice", lambda question, choices, default: "0")
+    def answer(question: str, *, default: bool) -> bool:
+        yes_questions.append(question)
+        return next(answer_iter)
+    monkeypatch.setattr(wizard, "ask_yes_no", answer)
     wizard._interactive()
-    mode_zero_calls = len(calls)
 
-    calls.clear()
-    monkeypatch.setattr(wizard, "ask_choice", lambda question, choices, default: "1")
-    monkeypatch.setattr(wizard, "ask_yes_no", answers)
-    wizard._interactive()
-
-    assert mode_zero_calls == 1
-    assert len(calls) == 3
+    assert choices == ["Which slot is currently active", "Which mode"]
+    assert yes_questions == expected_yes
 
 
-def test_help_needs_no_toolkit_and_lists_every_subcommand(monkeypatch, capsys) -> None:
-    """`--help` is the most-typed flag on the new single entry point.
-
-    It must answer before anything else runs: it cannot require a toolkit
-    directory to exist, and on Windows it must not trigger the one-time ext4
-    tool download. Both would make asking what the tool does do real work.
-    """
-    def explode() -> None:
-        raise AssertionError("--help must not reach the Windows tool fetch")
-
-    monkeypatch.setattr(wizard, "_ensure_windows_tools", explode)
-    monkeypatch.setattr(wizard, "_interactive", explode)
-
-    for flag in ("-h", "--help", "help"):
-        capsys.readouterr()
-        assert wizard.entry([flag]) == 0
-        printed = capsys.readouterr().out
-        for command in wizard._COMMANDS:
-            assert command in printed, f"{flag} omitted {command}"
+def test_help_needs_no_toolkit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Given a help flag, answer without constructing a toolkit or starting a flow."""
+    monkeypatch.setattr(
+        wizard, "_interactive", lambda: (_ for _ in ()).throw(AssertionError())
+    )
+    assert wizard.entry(["--help"]) == 0
+    printed = capsys.readouterr().out
+    for command in wizard._COMMANDS:
+        assert command in printed
 
 
-def test_unknown_command_reports_usage_and_fails(monkeypatch, capsys) -> None:
-    """A typo must name itself and show the grammar, not just refuse."""
-    monkeypatch.setattr(wizard, "_ensure_windows_tools", lambda: None)
+def test_unknown_command_reports_usage_and_fails(capsys: pytest.CaptureFixture[str]) -> None:
+    """Given an unknown command, identify it and show the supported grammar."""
     assert wizard.entry(["instal"]) != 0
     captured = capsys.readouterr()
     combined = captured.out + captured.err

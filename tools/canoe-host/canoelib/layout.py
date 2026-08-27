@@ -124,20 +124,6 @@ class Toolkit:
         """Combined output of the ABL patcher."""
         return self.root / "patch_log.txt"
 
-    @property
-    def device_install(self) -> Path:
-        """The device-side transaction script staged and invoked by `canoe install`."""
-        return self.root / "canoe_device_install.sh"
-
-    @property
-    def boot_entry(self) -> Path:
-        """The shared canoe.cfg upsert script staged beside the install script."""
-        return self.root / "canoe_boot_entry.sh"
-
-    @property
-    def slot_receipt(self) -> Path:
-        """The source slot recorded by `prep-device` for host-run installs."""
-        return self.root / ".canoe-source-slot"
 
     def tool(self, name: str) -> Path:
         """The bin/ binary called `name`, with whatever extension this host uses."""

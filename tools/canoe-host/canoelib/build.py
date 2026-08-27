@@ -9,8 +9,10 @@ rather than leaving a fresh loader beside a stale sidecar.
 from __future__ import annotations
 
 import argparse
+import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 from .build_report import build_report
@@ -62,8 +64,31 @@ def _run(argv: Sequence[str]) -> None:
             "outputs rather than leaving a fresh loader beside a stale sidecar."
         ),
     )
-    parser.parse_args(argv)
+    parser.add_argument(
+        "--abl",
+        type=Path,
+        metavar="IMG",
+        help="copy IMG into images/abl.img before deriving",
+    )
+    parser.add_argument(
+        "--vbmeta",
+        type=Path,
+        metavar="IMG",
+        help="copy IMG into images/vbmeta.img before deriving",
+    )
+    parsed = parser.parse_args(argv)
     toolkit = Toolkit.shipped()
+    for source, target in ((parsed.abl, toolkit.abl_image), (parsed.vbmeta, toolkit.vbmeta_image)):
+        if source is None:
+            continue
+        if not source.is_file():
+            raise CanoeError(f"supplied image is not a file: {source}")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.resolve() != target.resolve():
+                shutil.copyfile(source, target)
+        except OSError as exc:
+            raise CanoeError(f"could not copy {source} to {target}: {exc}") from exc
     derived = derive(toolkit)
     emit(build_report(gbl_patched=derived.gbl_patched))
 

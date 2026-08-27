@@ -38,19 +38,6 @@ else
 fi
 
 if [ "$LANG" = "zh" ]; then
-  T_OPT_MENU="====================================="
-  T_OPT_ASK="是否启用额外修补功能(vendor_boot/super)?"
-  T_OPT_UP_YES="音量上 = 启用修补"
-  T_OPT_DOWN_SKIP="音量下 = 跳过修补"
-  T_OPT_CHOICE1="请选择修补类型"
-  T_OPT_VB="音量上：仅修补 vendor_boot"
-  T_OPT_SUPER="音量下：移除super分区验证"
-  T_OPT_RUN_VB="- 开始执行vendor_boot修补..."
-  T_OPT_RUN_SUPER="- 开始执行移除super验证..."
-  T_OPT_FINISH_VB="vendor_boot修补执行完成"
-  T_OPT_FINISH_SUPER="super验证移除执行完成！"
-  T_OPT_SUPER_NOTE="【重要提示】移除super验证已内置vendor_boot修补；操作后请勿修改 system、system_dlkm、vendor 分区！"
-  T_OPT_SKIP="已跳过额外修补步骤"
   T_BIN_FAIL="执行失败！"
 
   T_VERIFY="- 正在验证设备型号"
@@ -60,8 +47,10 @@ if [ "$LANG" = "zh" ]; then
   T_SOC="确保你的设备是8gen5/8elitegen5"
   T_CHECK_EXP="检测漏洞中..."
   T_INSTALL_CHOICE="请选择是否第一次安装假回锁"
-  T_MODE_ASK="请选择启动模式：音量上=Mode 1，音量下=Mode 0（Mode 2 可在 WebUI 为当前启动项设置）"
+  T_MODE_ASK="请选择启动模式：音量上=Mode 1，音量下=Mode 0"
+  T_MODE_2_ASK="请选择启动模式：音量上=保持 Mode 1，音量下=Mode 2"
   T_MODE_RECOVERY_WARN="Mode 1 需要先用 vbmeta 工具 graft 自定义 recovery；未 graft 的 recovery 无法完成数据格式化。是否继续？"
+  T_MODE_RECOVERY_NOTE="请使用：vbmetaport <官方 recovery vbmeta> <自定义 recovery.img> <output.img>；输出文件不能变大。"
   T_MODE_RECOVERY_YES="音量上 = 继续"
   T_MODE_RECOVERY_NO="音量下 = 取消"
   T_MODE_VENDOR_ASK="Mode 1 是否修补 vendor_boot？音量上=是，音量下=否"
@@ -111,21 +100,14 @@ if [ "$LANG" = "zh" ]; then
   T_DONE_YES="安装完成，请重启到recovery进行格式化，格式化后请安装一次这个模块来完成安装，这时选否"
   T_SEL_NO="选择了否，跳过启动链写入并保留模块 WebUI"
   T_DONE_NO="模块安装完成，请重启系统；OTA 后请使用 WebUI 刷写"
+  T_SUPPLIED_ABL="检测到 /data/local/tmp/canoe/abl.img,是否用它替代分区读取?音量上=是,音量下=否(读取分区)"
+  T_SUPPLIED_VBMETA="检测到 /data/local/tmp/canoe/vbmeta.img,是否用它替代分区读取?音量上=是,音量下=否(读取分区)"
+  T_FORMAT_WHY="首次安装必须格式化 data，不是可选步骤。Mode 1 会向 OS 投影锁定的 DeviceInfo，TEE 会拒绝在之前状态下写入 userdata 的 data key，所以旧 data 无论如何都不可读。
+设备上：主菜单 -> Reboot to Recovery -> FORMAT DATA。
+canoe.cfg 带有 devinfo-repair asneeded，下一次受管启动时会修复锁定状态；格式化才能让该状态一致。"
+  T_SIGNER_CHANGED="vbmeta 签名者已变化。这在切换到或离开自定义 ROM 时是预期的；此处没有任何工具能证明哪个密钥才是 OEM 的。Mode 2 profile 不会被安装。"
+  T_BIN_FAIL="执行失败！"
 else
-  T_OPT_MENU="====================================="
-  T_OPT_ASK="Enable extra patch functions?"
-  T_OPT_UP_YES="Vol+ = Enable patches"
-  T_OPT_DOWN_SKIP="Vol‑ = Skip patches"
-  T_OPT_CHOICE1="Select patch mode"
-  T_OPT_VB="Vol+ : Patch vendor_boot only"
-  T_OPT_SUPER="Vol‑ : Remove super partition verification"
-  T_OPT_RUN_VB="- Running vendor_boot patch binary..."
-  T_OPT_RUN_SUPER="- Running super verification remove binary..."
-  T_OPT_FINISH_VB="vendor_boot patch finished"
-  T_OPT_FINISH_SUPER="Super verification removal finished!"
-  T_OPT_SUPER_NOTE="【WARNING】Super patch includes vendor_boot patch. DO NOT modify system,system_dlkm,vendor partitions afterward!"
-  T_OPT_SKIP="Extra patch skipped"
-  T_BIN_FAIL="Binary execution failed!"
 
   T_VERIFY="- Verifying device model"
   T_DEVICE_OK="- Device verified:"
@@ -134,8 +116,10 @@ else
   T_SOC="Ensure device is 8gen5 / 8elitegen5"
   T_CHECK_EXP="Detecting exploit..."
   T_INSTALL_CHOICE="Is this your first time installing Fake BL EFISP?"
-  T_MODE_ASK="Select boot mode: Vol+ = Mode 1, Vol- = Mode 0 (Mode 2 can be set for this entry in the WebUI)"
+  T_MODE_ASK="Select boot mode: Vol+ = Mode 1, Vol- = Mode 0"
+  T_MODE_2_ASK="Select boot mode: Vol+ = keep Mode 1, Vol- = Mode 2"
   T_MODE_RECOVERY_WARN="Mode 1 requires grafting a custom recovery with the vbmeta tool first; without that graft data formatting cannot complete. Continue?"
+  T_MODE_RECOVERY_NOTE="Graft with: vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>; the output must not grow."
   T_MODE_RECOVERY_YES="Vol+ = continue"
   T_MODE_RECOVERY_NO="Vol- = cancel"
   T_MODE_VENDOR_ASK="Mode 1: patch vendor_boot? Vol+ = yes, Vol- = no"
@@ -185,6 +169,13 @@ else
   T_DONE_YES="Install complete. Reboot to recovery and format data, then reinstall module and choose NO"
   T_SEL_NO="Selected NO, skipping boot-chain writes and keeping the module WebUI"
   T_DONE_NO="Module install complete; reboot, then use the WebUI after each OTA"
+  T_SUPPLIED_ABL="Found /data/local/tmp/canoe/abl.img — use it instead of reading the partition? Vol+ = yes, Vol- = no (read the partition)"
+  T_SUPPLIED_VBMETA="Found /data/local/tmp/canoe/vbmeta.img — use it instead of reading the partition? Vol+ = yes, Vol- = no (read the partition)"
+  T_FORMAT_WHY="Data format is required. On a first-time installation it is not optional: Mode 1 projects a locked DeviceInfo to the OS, and the TEE will refuse the data key for userdata written under the previous state, so the old data is unreadable either way.
+On the device: main menu -> Reboot to Recovery -> FORMAT DATA.
+canoe.cfg carries devinfo-repair asneeded, so the lock-state repair happens on the next managed launch; formatting is what makes that state coherent."
+  T_SIGNER_CHANGED="The vbmeta signer changed. This is expected when moving to or from a custom ROM; no tool here can prove which key is the OEM's. The Mode 2 profile will not be installed."
+  T_BIN_FAIL="Binary execution failed!"
 fi
 
 ui_print "$T_VERIFY"
@@ -222,12 +213,12 @@ slot_letter=${current_slot_suffix#_}  # 去掉下划线前缀，得到纯字母 
 # Defer optional partition mutation until ABL/vbmeta/profile preflight and any
 # required GBL-vulnerable ABL downgrade have completed successfully.
 
-BY_NAME_DIR=/dev/block/by-name
-RUNTIME_DIR=$MODPATH/tmp
-PERSIST_MNT=/mnt/vendor/persist
-EFISP_DIR=$PERSIST_MNT/efisp
-ABLREPO_URL="https://raw.githubusercontent.com/1vivy/gbl_root_canoe/main/ablrepo"
-mkdir -p $RUNTIME_DIR
+BY_NAME_DIR=${BY_NAME_DIR:-/dev/block/by-name}
+RUNTIME_DIR=${RUNTIME_DIR:-$MODPATH/tmp}
+PERSIST_MNT=${PERSIST_MNT:-/mnt/vendor/persist}
+EFISP_DIR=${EFISP_DIR:-$PERSIST_MNT/efisp}
+ABLREPO_URL=${ABLREPO_URL:-"https://raw.githubusercontent.com/1vivy/gbl_root_canoe/main/ablrepo"}
+mkdir -p "$RUNTIME_DIR"
 
 # Verify $1 against the sha256 in $2 (first whitespace‑delimited token).
 verify_sha256() {
@@ -333,6 +324,29 @@ MODE2_PROFILE="$MODPATH/bin/mode2_profile"
 ABL_TZMAP="$MODPATH/bin/abl_tzmap"
 abl_part="$BY_NAME_DIR/abl$current_slot_suffix"
 vbmeta_part="$BY_NAME_DIR/vbmeta$current_slot_suffix"
+abl_source="$abl_part"
+vbmeta_source="$vbmeta_part"
+signer_source=partition
+export CANOE_ALLOW_NEW_SIGNER=1
+SUPPLIED_DIR=${SUPPLIED_DIR:-/data/local/tmp/canoe}
+
+select_image_sources() {
+  if [ -s "$SUPPLIED_DIR/abl.img" ]; then
+    ui_print "$T_SUPPLIED_ABL"
+    keyevent=$(read_volume_key)
+    if [ "$keyevent" = "up" ]; then
+      abl_source="$SUPPLIED_DIR/abl.img"
+    fi
+  fi
+  if [ -s "$SUPPLIED_DIR/vbmeta.img" ]; then
+    ui_print "$T_SUPPLIED_VBMETA"
+    keyevent=$(read_volume_key)
+    if [ "$keyevent" = "up" ]; then
+      vbmeta_source="$SUPPLIED_DIR/vbmeta.img"
+      signer_source=supplied
+    fi
+  fi
+}
 
 preflight_candidate_abl() {
   candidate="$1"
@@ -358,7 +372,7 @@ preflight_current_pair() {
     "$RUNTIME_DIR/patch.log" "$RUNTIME_DIR/boot.efi.gm2p" \
     "$RUNTIME_DIR/boot.efi.tzmap"
   CURRENT_PAIR_GBL_VULNERABLE=1
-  if ! "$MODPATH/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl_part" > "$RUNTIME_DIR/extract.log" 2>&1 ||
+  if ! "$MODPATH/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl_source" > "$RUNTIME_DIR/extract.log" 2>&1 ||
      ! "$MODPATH/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" > "$RUNTIME_DIR/patch.log" 2>&1 ||
      [ ! -s "$RUNTIME_DIR/patched.efi" ]; then
     ui_print "$T_PATCH_FAIL"
@@ -368,7 +382,7 @@ preflight_current_pair() {
     CURRENT_PAIR_GBL_VULNERABLE=0
   fi
   if [ ! -x "$MODE2_PROFILE" ] ||
-     ! "$MODE2_PROFILE" derive --vbmeta "$vbmeta_part" --out "$RUNTIME_DIR/boot.efi.gm2p" > "$RUNTIME_DIR/profile.log" 2>&1 ||
+     ! "$MODE2_PROFILE" derive --vbmeta "$vbmeta_source" --out "$RUNTIME_DIR/boot.efi.gm2p" > "$RUNTIME_DIR/profile.log" 2>&1 ||
      [ ! -s "$RUNTIME_DIR/boot.efi.gm2p" ] ||
      ! "$MODE2_PROFILE" validate --input "$RUNTIME_DIR/boot.efi.gm2p" >> "$RUNTIME_DIR/profile.log" 2>&1; then
     ui_print "$T_PATCH_FAIL"
@@ -536,13 +550,31 @@ install_pair() {
     rm -rf "$stage"
     return 1
   fi
-  if ! CANOE_MODE="$selected_mode" CANOE_ACTIVE_SLOT="$current_slot_suffix" \
+  transaction_log="$RUNTIME_DIR/transaction.log"
+  rm -f "$transaction_log"
+  if ! CANOE_ALLOW_NEW_SIGNER=1 CANOE_SIGNER_SOURCE="$signer_source" \
+       CANOE_MODE="$selected_mode" CANOE_ACTIVE_SLOT="$current_slot_suffix" \
        CANOE_BOOT_ENTRY="$MODPATH/canoe_boot_entry.sh" \
        sh "$MODPATH/canoe_device_install.sh" "$stage" "$target" \
        "$BY_NAME_DIR/efisp" "$RUNTIME_DIR/efisp.backup" \
-       >> "$RUNTIME_DIR/flash.log" 2>&1; then
+       > "$transaction_log" 2>&1; then
+    cat "$transaction_log" >> "$RUNTIME_DIR/flash.log"
     rm -rf "$stage"
     return 1
+  fi
+  cat "$transaction_log" >> "$RUNTIME_DIR/flash.log"
+  if grep -q 'CANOE-MARK: signer-changed' "$transaction_log"; then
+    ui_print "$T_SIGNER_CHANGED"
+    if [ "$signer_source" != "supplied" ] && [ "$selected_mode" = "2" ]; then
+      entry_id=android-${current_slot_suffix#_}
+      if ! sh "$MODPATH/canoe_boot_entry.sh" mode "$target" \
+           --id "$entry_id" --mode 1 >> "$RUNTIME_DIR/flash.log" 2>&1; then
+        rm -rf "$stage"
+        return 1
+      fi
+      printf '%s\n' 'Mode 2 downgraded to Mode 1 after signer change' \
+        >> "$RUNTIME_DIR/flash.log"
+    fi
   fi
   rm -rf "$stage"
   return 0
@@ -553,34 +585,17 @@ install_pair() {
 
 run_optional_patch() {
   if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
-    ui_print "$T_OPT_RUN_VB"
+    ui_print "$T_MODE_VENDOR_YES"
     ui_print "- 当前槽位: $slot_letter"
-    if [ ! -x "$MODPATH/bin/patch_tools" ]; then
-      ui_print "$T_BIN_FAIL: patch_tools binary not found!"
-      abort "patch_tools missing"
+    if [ ! -x "$MODPATH/bin/canoe_vendor_boot.sh" ]; then
+      ui_print "$T_BIN_FAIL: canoe_vendor_boot.sh binary not found!"
+      abort "canoe_vendor_boot.sh missing"
     fi
-    "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter"
-    ret=$?
-    if [ "$ret" -ne 0 ]; then
-      ui_print "$T_BIN_FAIL (vendor_boot ret:$ret)"
+    if ! sh "$MODPATH/bin/canoe_vendor_boot.sh" "$slot_letter"; then
+      ui_print "$T_BIN_FAIL (vendor_boot)"
       abort "vendor_boot patch failed"
     fi
-    ui_print "$T_OPT_FINISH_VB"
-  elif [ "$EXTRA_PATCH_MODE" = "super" ]; then
-    ui_print "$T_OPT_RUN_SUPER"
-    ui_print "- 当前槽位: $slot_letter"
-    if [ ! -x "$MODPATH/bin/patch_tools" ]; then
-      ui_print "$T_BIN_FAIL: patch_tools binary not found!"
-      abort "patch_tools missing"
-    fi
-    "$MODPATH/bin/patch_tools" patch_vendor "$slot_letter" super
-    ret=$?
-    if [ "$ret" -ne 0 ]; then
-      ui_print "$T_BIN_FAIL (super ret:$ret)"
-      abort "super patch failed"
-    fi
-    ui_print "$T_OPT_FINISH_SUPER"
-    ui_print "$T_OPT_SUPER_NOTE"
+    ui_print "$T_MODE_VENDOR_YES"
   fi
 }
 
@@ -613,9 +628,16 @@ while true; do
       if [ "$keyevent" = "down" ]; then
         selected_mode=0
       else
-        selected_mode=1
+        ui_print "$T_MODE_2_ASK"
+        keyevent=$(read_volume_key)
+        if [ "$keyevent" = "down" ]; then
+          selected_mode=2
+        else
+          selected_mode=1
+        fi
       fi
     fi
+    select_image_sources
 
     if ! preflight_current_pair; then
       abort "ABL/vbmeta/profile preflight failed"
@@ -680,6 +702,7 @@ while true; do
     EXTRA_PATCH_MODE=skip
     if [ "$selected_mode" = "1" ]; then
       ui_print "$T_MODE_RECOVERY_WARN"
+      ui_print "$T_MODE_RECOVERY_NOTE"
       ui_print "$T_MODE_RECOVERY_YES"
       ui_print "$T_MODE_RECOVERY_NO"
       keyevent=$(read_volume_key)
@@ -710,6 +733,8 @@ while true; do
 
     pair_inactive_abl
     ui_print "$T_DONE_YES"
+    printf '%s\n' "$T_FORMAT_WHY" |
+      while IFS= read -r format_line; do ui_print "$format_line"; done
     ui_print "$T_REBOOT_COUNTDOWN"
     countdown=5
     while [ "$countdown" -gt 0 ]; do
