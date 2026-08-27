@@ -78,19 +78,13 @@ entry_present() {
 }
 
 write_boot_entries() {
-  # The active slot always boots boot.efi; the other slot, when a loader has
-  # been derived for it, boots boot_<a|b>.efi.
+  # The active slot always boots boot.efi. The previous generation, when one
+  # exists, is exposed through boot_backup.efi.
   entry_active=android-a
   entry_active_title='Android (slot A)'
-  entry_other=android-b
-  entry_other_title='Android (slot B)'
-  entry_other_image=boot_b.efi
   if [ "$ACTIVE_SLOT" = "_b" ]; then
     entry_active=android-b
     entry_active_title='Android (slot B)'
-    entry_other=android-a
-    entry_other_title='Android (slot A)'
-    entry_other_image=boot_a.efi
   fi
   # Read before the first upsert: a boot root with no canoe.cfg is a first
   # install, and only a first install may set the file-global fallback.
@@ -104,11 +98,6 @@ write_boot_entries() {
     [ "$entry_config_existed" = no ] && set -- "$@" --global-mode "$MODE"
   fi
   sh "$BOOT_ENTRY" "$@" || return 1
-
-  if [ -s "$D/$entry_other_image" ]; then
-    sh "$BOOT_ENTRY" set "$D" --id "$entry_other" --title "$entry_other_title" \
-      --image "$entry_other_image" --role inactive || return 1
-  fi
 
   if [ -s "$D/boot_backup.efi" ]; then
     sh "$BOOT_ENTRY" set "$D" --id android-backup --title 'Android (previous)' \
@@ -130,36 +119,86 @@ if [ -n "$EFISP_DEV" ]; then
   [ -e "$EFISP_DEV" ]       || die "efisp device not found: $EFISP_DEV"
 fi
 mark "staged-set-validated gm2p=$gm2p tzmap=$tzmap"
+signer_gate() {
+  [ -e "$D/boot.efi.gm2p" ] || [ -L "$D/boot.efi.gm2p" ] || return 0
+
+  signer_tmp=$(mktemp -d "${TMPDIR:-/tmp}/canoe-signer.XXXXXX") ||
+    die "could not create temporary signer files"
+  if ! dd if="$D/boot.efi.gm2p" of="$signer_tmp/live" \
+    bs=1 skip=56 count=32 2>/dev/null; then
+    rm -rf "$signer_tmp"
+    die "could not read the installed vbmeta signer"
+  fi
+  if ! dd if="$STAGING/boot.efi.gm2p" of="$signer_tmp/staged" \
+    bs=1 skip=56 count=32 2>/dev/null; then
+    rm -rf "$signer_tmp"
+    die "could not read the staged vbmeta signer"
+  fi
+  signer_rc=0
+  cmp "$signer_tmp/live" "$signer_tmp/staged" >/dev/null 2>&1 || signer_rc=$?
+  rm -rf "$signer_tmp"
+  [ "$signer_rc" = 0 ] && return 0
+  [ "$signer_rc" = 1 ] || die "could not compare the installed and staged vbmeta signers"
+
+  # Two independent facts, and conflating them made one of the two channels
+  # wrong: CANOE_SIGNER_SOURCE says where the vbmeta came from, which is all the
+  # mark reports, and CANOE_ALLOW_NEW_SIGNER says whether a change may proceed.
+  # The host refuses a change it was not told about; the module never refuses,
+  # because a Custom ROM legitimately changes the signer and stranding the
+  # operator mid-install is worse than a Mode 2 profile it then declines to use.
+  mark "signer-changed source=${CANOE_SIGNER_SOURCE:-partition}"
+  [ "${CANOE_ALLOW_NEW_SIGNER:-}" = 1 ] ||
+    die "vbmeta signer changed. This is expected when moving to or from a custom ROM, and no tool here can prove which key is the OEM's."
+}
+
+signer_gate
 
 mkdir -p "$D" "$D/tools" || die "could not create $D"
 
 # ------------------------------------------- 2. snapshot what commit touches --
 # The boot-root menu state is part of the transaction: a rollback that restored
 # only the triplet would leave the old loader beside the new canoe.cfg and tools.
-rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* "$D/.canoe.oldmenu" \
+snapshot_file() {
+  snapshot_source=$1
+  snapshot_target=$2
+  if [ -e "$snapshot_source" ] || [ -L "$snapshot_source" ]; then
+    cp -f "$snapshot_source" "$snapshot_target" ||
+      die "could not snapshot $(basename "$snapshot_source")"
+  fi
+}
+
+rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* \
+  "$D"/.canoe.oldslot_a.* "$D"/.canoe.oldslot_b.* "$D/.canoe.oldmenu" \
   "$D/.canoe.oldgen" "$D/.canoe.oldcfg" "$D/.canoe.oldcfg.absent" \
   "$D/.canoe.foreign.moves" "$D/.canoe.gen.tmp" "$D"/.canoe.cfg.tmp.* \
   "$D"/.canoe.cfg.gen.* || :
 mkdir -p "$D/.canoe.oldmenu" || die "could not create the snapshot directory"
 
-[ -s "$D/boot.efi" ]              && cp -f "$D/boot.efi" "$D/.canoe.live.efi"
-[ -s "$D/boot.efi.gm2p" ]         && cp -f "$D/boot.efi.gm2p" "$D/.canoe.live.gm2p"
-[ -s "$D/boot.efi.tzmap" ]        && cp -f "$D/boot.efi.tzmap" "$D/.canoe.live.tzmap"
-[ -s "$D/boot_backup.efi" ]       && cp -f "$D/boot_backup.efi" "$D/.canoe.oldbak.efi"
-[ -s "$D/boot_backup.efi.gm2p" ]  && cp -f "$D/boot_backup.efi.gm2p" "$D/.canoe.oldbak.gm2p"
-[ -s "$D/boot_backup.efi.tzmap" ] && cp -f "$D/boot_backup.efi.tzmap" "$D/.canoe.oldbak.tzmap"
+snapshot_file "$D/boot.efi" "$D/.canoe.live.efi"
+snapshot_file "$D/boot.efi.gm2p" "$D/.canoe.live.gm2p"
+snapshot_file "$D/boot.efi.tzmap" "$D/.canoe.live.tzmap"
+snapshot_file "$D/boot_backup.efi" "$D/.canoe.oldbak.efi"
+snapshot_file "$D/boot_backup.efi.gm2p" "$D/.canoe.oldbak.gm2p"
+snapshot_file "$D/boot_backup.efi.tzmap" "$D/.canoe.oldbak.tzmap"
+snapshot_file "$D/boot_a.efi" "$D/.canoe.oldslot_a.efi"
+snapshot_file "$D/boot_a.efi.gm2p" "$D/.canoe.oldslot_a.gm2p"
+snapshot_file "$D/boot_a.efi.tzmap" "$D/.canoe.oldslot_a.tzmap"
+snapshot_file "$D/boot_b.efi" "$D/.canoe.oldslot_b.efi"
+snapshot_file "$D/boot_b.efi.gm2p" "$D/.canoe.oldslot_b.gm2p"
+snapshot_file "$D/boot_b.efi.tzmap" "$D/.canoe.oldslot_b.tzmap"
 if [ -e "$D/canoe.cfg" ]; then
-  cp -f "$D/canoe.cfg" "$D/.canoe.oldcfg" || die "could not snapshot canoe.cfg"
+  snapshot_file "$D/canoe.cfg" "$D/.canoe.oldcfg"
 else
   : > "$D/.canoe.oldcfg.absent" || die "could not snapshot absent canoe.cfg"
 fi
 if [ -e "$D/.canoe.gen" ]; then
-  cp -f "$D/.canoe.gen" "$D/.canoe.oldgen" || die "could not snapshot .canoe.gen"
+  snapshot_file "$D/.canoe.gen" "$D/.canoe.oldgen"
 fi
+
 if [ -d "$D/tools" ]; then
   mkdir -p "$D/.canoe.oldmenu/tools"
   for t in "$D"/tools/*; do
-    [ -e "$t" ] || continue
+    [ -e "$t" ] || [ -L "$t" ] || continue
     cp -f "$t" "$D/.canoe.oldmenu/tools/" || die "could not snapshot $(basename "$t")"
   done
 fi
@@ -171,10 +210,29 @@ else
   mark "first-install"
 fi
 
-COMMITTED=no
+COMMITTED=yes
 
 FOREIGN_EXISTED=no
 [ -d "$D/.canoe.foreign" ] && FOREIGN_EXISTED=yes
+
+migrate_passthrough() {
+  passthrough_slot=a
+  while [ "$passthrough_slot" = a ] || [ "$passthrough_slot" = b ]; do
+    passthrough_loader="$D/boot_$passthrough_slot.efi"
+    if [ -e "$passthrough_loader" ] || [ -L "$passthrough_loader" ]; then
+      passthrough_id=android-$passthrough_slot
+      if entry_present "$passthrough_id"; then
+        sh "$BOOT_ENTRY" remove "$D" --id "$passthrough_id" ||
+          fail "could not remove passthrough entry $passthrough_id"
+      fi
+      rm -f "$passthrough_loader" "$passthrough_loader.gm2p" \
+        "$passthrough_loader.tzmap" ||
+        fail "could not remove passthrough loader $passthrough_slot"
+      mark "passthrough-row-migrated id=$passthrough_id"
+    fi
+    [ "$passthrough_slot" = a ] && passthrough_slot=b || passthrough_slot=
+  done
+}
 
 set_aside_foreign() {
   foreign_entry=
@@ -182,17 +240,12 @@ set_aside_foreign() {
     [ -e "$foreign_entry" ] || [ -L "$foreign_entry" ] || continue
     foreign_name=${foreign_entry##*/}
     case "$foreign_name" in
-      # The boot root's own members. boot_a.efi / boot_b.efi are the per-slot
-      # loaders the OTA watcher derives for the slot that is not booting; they
-      # used to be quarantined here as foreign, which silently deleted the
-      # inactive entry on the next install.
+      # The boot root's own members.
       boot.efi|boot.efi.gm2p|boot.efi.tzmap) continue ;;
-      boot_a.efi|boot_a.efi.gm2p|boot_a.efi.tzmap) continue ;;
-      boot_b.efi|boot_b.efi.gm2p|boot_b.efi.tzmap) continue ;;
       boot_backup.efi|boot_backup.efi.gm2p|boot_backup.efi.tzmap) continue ;;
       canoe.cfg|tools|"$STAGING_NAME") continue ;;
       .canoe.gen|.canoe.foreign) continue ;;
-      .canoe.live.*|.canoe.oldbak.*|.canoe.oldmenu) continue ;;
+      .canoe.live.*|.canoe.oldbak.*|.canoe.oldslot_a.*|.canoe.oldslot_b.*|.canoe.oldmenu) continue ;;
       .canoe.oldgen|.canoe.oldcfg|.canoe.oldcfg.absent) continue ;;
       .canoe.foreign.moves|.canoe.gen.tmp) continue ;;
       .canoe.cfg.tmp.*|.canoe.cfg.gen.*) continue ;;
@@ -229,48 +282,45 @@ restore_foreign() {
   fi
 }
 
+restore_snapshot_file() {
+  restore_source=$1
+  restore_target=$2
+  if [ -e "$restore_source" ] || [ -L "$restore_source" ]; then
+    cp -f "$restore_source" "$restore_target" || :
+  else
+    rm -f "$restore_target"
+  fi
+}
+
 restore_pair() {
   [ "$COMMITTED" = no ] && return 0
   say "restoring the previous generation"
-  if [ -s "$D/.canoe.live.efi" ]; then
-    cp -f "$D/.canoe.live.efi" "$D/boot.efi" || :
-    if [ -s "$D/.canoe.live.gm2p" ]; then
-      cp -f "$D/.canoe.live.gm2p" "$D/boot.efi.gm2p" || :
-    else
-      rm -f "$D/boot.efi.gm2p"
-    fi
-    if [ -s "$D/.canoe.live.tzmap" ]; then
-      cp -f "$D/.canoe.live.tzmap" "$D/boot.efi.tzmap" || :
-    else
-      rm -f "$D/boot.efi.tzmap"
-    fi
+  if [ -e "$D/.canoe.live.efi" ] || [ -L "$D/.canoe.live.efi" ]; then
+    restore_snapshot_file "$D/.canoe.live.efi" "$D/boot.efi"
+    restore_snapshot_file "$D/.canoe.live.gm2p" "$D/boot.efi.gm2p"
+    restore_snapshot_file "$D/.canoe.live.tzmap" "$D/boot.efi.tzmap"
   else
-    # There was no live generation: a failed first install must not leave a
-    # partial boot.efi behind.
     rm -f "$D/boot.efi" "$D/boot.efi.gm2p" "$D/boot.efi.tzmap"
   fi
 
-  if [ -s "$D/.canoe.oldbak.efi" ]; then
-    cp -f "$D/.canoe.oldbak.efi" "$D/boot_backup.efi" || :
-  else
-    rm -f "$D/boot_backup.efi"
-  fi
-  if [ -s "$D/.canoe.oldbak.gm2p" ]; then
-    cp -f "$D/.canoe.oldbak.gm2p" "$D/boot_backup.efi.gm2p" || :
-  else
-    rm -f "$D/boot_backup.efi.gm2p"
-  fi
-  if [ -s "$D/.canoe.oldbak.tzmap" ]; then
-    cp -f "$D/.canoe.oldbak.tzmap" "$D/boot_backup.efi.tzmap" || :
-  else
-    rm -f "$D/boot_backup.efi.tzmap"
-  fi
+  for restore_slot in a b; do
+    for restore_suffix in '' .gm2p .tzmap; do
+      restore_snapshot_file \
+        "$D/.canoe.oldslot_$restore_slot.efi$restore_suffix" \
+        "$D/boot_$restore_slot.efi$restore_suffix"
+    done
+  done
+
+  for restore_suffix in '' .gm2p .tzmap; do
+    restore_snapshot_file "$D/.canoe.oldbak.efi$restore_suffix" \
+      "$D/boot_backup.efi$restore_suffix"
+  done
 
   rm -rf "$D/tools" || :
   mkdir -p "$D/tools" || :
   if [ -d "$D/.canoe.oldmenu/tools" ]; then
     for t in "$D"/.canoe.oldmenu/tools/*; do
-      [ -e "$t" ] || continue
+      [ -e "$t" ] || [ -L "$t" ] || continue
       cp -f "$t" "$D/tools/" || :
     done
   fi
@@ -285,7 +335,6 @@ restore_pair() {
   elif [ -e "$D/.canoe.oldcfg.absent" ]; then
     rm -f "$D/canoe.cfg"
   fi
-
 
   sync || :
   mark "pair-restored"
@@ -304,7 +353,8 @@ restore_efisp() {
 }
 
 cleanup() {
-  rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* "$D/.canoe.oldmenu" \
+  rm -rf "$D"/.canoe.live.* "$D"/.canoe.oldbak.* \
+    "$D"/.canoe.oldslot_a.* "$D"/.canoe.oldslot_b.* "$D/.canoe.oldmenu" \
     "$D/.canoe.oldgen" "$D/.canoe.oldcfg" "$D/.canoe.oldcfg.absent" \
     "$D/.canoe.foreign.moves" "$D/.canoe.gen.tmp" "$D"/.canoe.cfg.gen.* \
     2>/dev/null || :
@@ -319,9 +369,8 @@ fail() {
 }
 
 # ------------------------------------------------------------- 3. commit -----
+migrate_passthrough
 set_aside_foreign
-
-COMMITTED=yes
 if [ -s "$D/.canoe.live.efi" ]; then
   cp -f "$D/.canoe.live.efi" "$D/boot_backup.efi" || fail "could not write boot_backup.efi"
   # A backup without its matching sidecar is worse than no sidecar at all.

@@ -25,8 +25,10 @@
 #  10  foreign file is preserved when the destination name collides
 #  11  foreign disclosure rolls back with the transaction
 #  12  the requested mode reaches canoe.cfg, and a bad mode is refused
-#  13  a hand-added entry survives an install
+#  13  passthrough row and loader are migrated while hand-added rows survive
 #  14  a config naming a missing backup loader loses that entry
+#  15  a changed signer is refused before touching the boot root
+#  16  an explicitly supplied changed signer is accepted
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -51,12 +53,14 @@ setup() {
   printf 'NEW-BOOT-EFI-PAYLOAD' > "$ST/boot.efi"
   dd if=/dev/zero bs=1 count="$gm2p" 2>/dev/null | tr '\0' 'G' > "$ST/boot.efi.gm2p"
   dd if=/dev/zero bs=1 count="$tzmap" 2>/dev/null | tr '\0' 'T' > "$ST/boot.efi.tzmap"
+  set_signer "$ST/boot.efi.gm2p"
   printf 'NEW-BLTOOLS' > "$ST/tools/BLTools.efi"
   { printf 'MZ'; dd if=/dev/zero bs=1024 count=12 2>/dev/null; } > "$ST/BDS.efi"
   if [ "$existing" = yes ]; then
     printf 'OLD-LIVE-EFI' > "$D/boot.efi"
     dd if=/dev/zero bs=1 count=120 2>/dev/null | tr '\0' 'L' > "$D/boot.efi.gm2p"
     dd if=/dev/zero bs=1 count=256 2>/dev/null | tr '\0' 'L' > "$D/boot.efi.tzmap"
+    set_signer "$D/boot.efi.gm2p"
     printf 'OLD-BACKUP-EFI' > "$D/boot_backup.efi"
     dd if=/dev/zero bs=1 count=120 2>/dev/null | tr '\0' 'B' > "$D/boot_backup.efi.gm2p"
     dd if=/dev/zero bs=1 count=256 2>/dev/null | tr '\0' 'B' > "$D/boot_backup.efi.tzmap"
@@ -65,6 +69,12 @@ setup() {
   fi
   { printf 'MZOLDBDS'; dd if=/dev/zero bs=1024 count=2048 2>/dev/null; } > "$DEV"
 }
+
+set_signer() {
+  dd if=/dev/zero bs=1 count=32 2>/dev/null | tr '\0' S |
+    dd of="$1" bs=1 seek=56 conv=notrunc 2>/dev/null
+}
+
 
 # shadow <case> <name> <body>  -- put a failing stand-in first on PATH
 shadow() {
@@ -124,6 +134,7 @@ live=$(sha "$D/boot.efi"); back=$(sha "$D/boot_backup.efi")
 cfg=$(sha "$D/canoe.cfg")
 tool=$(sha "$D/tools/BLTools.efi"); dev=$(sha "$DEV")
 shadow c3 cmp '#!/bin/sh
+case "$*" in *canoe-signer*) exit 0 ;; esac
 exit 1'
 if run_install "$ST" "$D" "$DEV" "$BK"; then fail '3: accepted a failed verification'; fi
 grep -q 'verification' "$ERR" || fail '3: wrong failure message'
@@ -272,17 +283,28 @@ if CANOE_MODE=7 run_install "$ST" "$D"; then fail '12: accepted an invalid mode'
 pass 'the requested mode reaches canoe.cfg, and a bad mode is refused'
 
 # ----------------------------------------------------------------- case 13 --
-# An install upserts its own entries; anything the operator added stays.
+# A passthrough loader is no longer a supported row. Migration removes its
+# loader, matching sidecars and row while preserving the operator's own row.
 setup c13 yes 120 256
-printf '\nentry lineage\n  title LineageOS\n  image roms/lineage.efi\n  mode 2\n  role other\n' >> "$D/canoe.cfg"
+printf '\nentry lineage\n  title LineageOS\n  image roms/lineage.efi\n  mode 2\n  role other\n\nentry android-b\n  title Android (slot B)\n  image boot_b.efi\n  mode 0\n  role inactive\n' >> "$D/canoe.cfg"
 printf 'OTHER-SLOT-LOADER' > "$D/boot_b.efi"
+printf 'OTHER-SLOT-GM2P' > "$D/boot_b.efi.gm2p"
+printf 'OTHER-SLOT-TZMAP' > "$D/boot_b.efi.tzmap"
 OUT="$TMP/c13/out"; ERR="$TMP/c13/err"; SHADOW=""
 run_install "$ST" "$D" || fail "13: install failed: $(cat "$ERR")"
 grep -q '^entry lineage$' "$D/canoe.cfg" || fail '13: custom entry was erased'
 grep -q '^  image roms/lineage.efi$' "$D/canoe.cfg" || fail '13: custom image was rewritten'
-grep -q '^entry android-b$' "$D/canoe.cfg" || fail '13: derived other-slot entry missing'
+! grep -q '^entry android-b$' "$D/canoe.cfg" || fail '13: passthrough row survived'
+grep -q '^  title LineageOS$' "$D/canoe.cfg" || fail '13: custom title was rewritten'
+grep -q '^  mode 2$' "$D/canoe.cfg" || fail '13: custom mode was rewritten'
+grep -q '^  role other$' "$D/canoe.cfg" || fail '13: custom role was rewritten'
+[ ! -e "$D/boot_b.efi" ] || fail '13: passthrough loader survived'
+[ ! -e "$D/boot_b.efi.gm2p" ] || fail '13: passthrough gm2p survived'
+[ ! -e "$D/boot_b.efi.tzmap" ] || fail '13: passthrough tzmap survived'
+grep -q 'CANOE-MARK: passthrough-row-migrated id=android-b' "$OUT" ||
+  fail '13: passthrough migration was not reported'
 grep -q '^entry android-backup$' "$D/canoe.cfg" || fail '13: backup entry missing'
-pass 'an install preserves a hand-added entry and declares the other slot'
+pass 'a passthrough row and loader are migrated while a hand-added row survives'
 
 # ----------------------------------------------------------------- case 14 --
 # A config that names a backup loader the boot root no longer holds must lose
@@ -298,5 +320,42 @@ grep -q 'CANOE-MARK: entry-removed id=android-backup' "$OUT" ||
 grep -q '^entry android-backup$' "$D/canoe.cfg" && fail '14: unlaunchable row survived'
 grep -q '^entry android-a$' "$D/canoe.cfg" || fail '14: active entry missing'
 pass 'a config naming a missing backup loader loses that entry'
+
+# ----------------------------------------------------------------- case 15 --
+# A changed signer is an unannounced firmware change unless the caller
+# explicitly identifies the vbmeta as supplied by the operator.
+setup c15 yes 120 256
+dd if=/dev/zero bs=1 count=32 2>/dev/null | tr '\0' N |
+  dd of="$ST/boot.efi.gm2p" bs=1 seek=56 conv=notrunc 2>/dev/null
+OUT="$TMP/c15/out"; ERR="$TMP/c15/err"; SHADOW=""
+live=$(sha "$D/boot.efi"); back=$(sha "$D/boot_backup.efi")
+cfg=$(sha "$D/canoe.cfg"); tool=$(sha "$D/tools/BLTools.efi")
+if run_install "$ST" "$D"; then fail '15: accepted a changed signer'; fi
+grep -q 'CANOE-MARK: signer-changed source=partition' "$OUT" ||
+  fail '15: signer change was not reported as partition-sourced'
+grep -q 'expected when moving to or from a custom ROM' "$ERR" ||
+  fail '15: signer refusal omitted the custom-ROM explanation'
+grep -q "no tool here can prove which key is the OEM's" "$ERR" ||
+  fail '15: signer refusal omitted the authenticity limitation'
+[ "$(sha "$D/boot.efi")" = "$live" ] || fail '15: live loader changed'
+[ "$(sha "$D/boot_backup.efi")" = "$back" ] || fail '15: backup changed'
+[ "$(sha "$D/canoe.cfg")" = "$cfg" ] || fail '15: config changed'
+[ "$(sha "$D/tools/BLTools.efi")" = "$tool" ] || fail '15: tools changed'
+[ "$(temps "$D")" = 0 ] || fail '15: refusal left transaction files'
+pass 'a changed signer is refused before touching the boot root'
+
+# ----------------------------------------------------------------- case 16 --
+setup c16 yes 120 256
+dd if=/dev/zero bs=1 count=32 2>/dev/null | tr '\0' N |
+  dd of="$ST/boot.efi.gm2p" bs=1 seek=56 conv=notrunc 2>/dev/null
+OUT="$TMP/c16/out"; ERR="$TMP/c16/err"; SHADOW=""
+new=$(sha "$ST/boot.efi")
+CANOE_ALLOW_NEW_SIGNER=1 CANOE_SIGNER_SOURCE=supplied run_install "$ST" "$D" ||
+  fail "16: supplied signer install failed: $(cat "$ERR")"
+[ "$(sha "$D/boot.efi")" = "$new" ] || fail '16: new loader was not installed'
+grep -q 'CANOE-MARK: signer-changed source=supplied' "$OUT" ||
+  fail '16: supplied signer source was not reported'
+grep -q '^entry android-a$' "$D/canoe.cfg" || fail '16: active entry missing'
+pass 'an explicitly supplied changed signer is accepted'
 
 echo 'all canoe device-install fixtures passed'
