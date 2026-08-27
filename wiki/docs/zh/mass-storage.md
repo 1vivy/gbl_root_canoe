@@ -33,16 +33,17 @@ fastboot oem mass-storage:logfs       # logfs
 各固件的校准数据正是经由此进入
 [canoe-msd](https://github.com/1vivy/canoe-msd) 项目。
 
-**Linux：usb_modeswitch 会终止导出。** 设备枚举为 `05c6:f000`，发行版自带
-的 udev 规则会把它当作需要模式切换的 4G 网卡并弹出设备：`usb-storage`
-在内核扫描前被卸载，弹出操作同时结束设备端的会话。如果磁盘一直不出现
-（并且手机退回 fastboot 菜单），一次性禁用该切换：
+**Linux：usb_modeswitch，仅在回退身份上。** 没有任何规则认领
+`1209:ca0e`，因此变体导出不会被干扰。如果某个目标的驱动世代与自带变体不
+匹配，导出会回退到驻留驱动的 `05c6:f000`，而发行版自带的 udev 规则会把它
+当作需要模式切换的 4G 网卡：`usb-storage` 在内核扫描前被卸载，弹出操作同
+时结束设备端的会话。一次性禁用该切换：
 
 ```bash
 printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 ```
 
-在规则仍然生效的主机上，`canoe install` 等待磁盘超时会直接给出这一处置
+只有在超时且会话确实以原始身份枚举时，`canoe install` 才会给出这一处置
 方法。
 
 `canoe install` 通过 USB 身份（`1209:ca0e`，驻留驱动回退时为 `05c6:f000`）

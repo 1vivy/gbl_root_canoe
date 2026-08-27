@@ -39,18 +39,19 @@ menu row (and `fastboot oem mass-storage:msdimage`) exports a copy of the
 resident driver itself as a RAM disk, which is how per-firmware calibration
 data reaches the [canoe-msd](https://github.com/1vivy/canoe-msd) project.
 
-**Linux: usb_modeswitch kills the export.** The gadget enumerates as
-`05c6:f000`, which stock udev rules match to a mode-switching 4G modem whose
-packaged config ejects the device: `usb-storage` is detached before the kernel
-scan, and the eject ends the session on the device. If the disk never appears
-(and the phone drops back to the fastboot menu), disable the switch once:
+**Linux: usb_modeswitch, only on the fallback identity.** Nothing claims
+`1209:ca0e`, so a variant export is never touched. If a target's driver
+generation does not match the bundled variant, the export falls back to the
+resident driver's `05c6:f000`, and stock udev rules match that to a
+mode-switching 4G modem whose packaged config ejects the device between
+`usb-storage` binding and the kernel scan. Disable the switch once:
 
 ```bash
 printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 ```
 
-`canoe install` names this remediation when its wait for the disk times out
-on a host that still has the rule active.
+`canoe install` names this remediation when its wait times out *and* the
+session came up on the stock identity.
 
 `canoe install` finds the LUN by its USB identity (`1209:ca0e`, or `05c6:f000`
 when the resident fallback served the session) rather than by

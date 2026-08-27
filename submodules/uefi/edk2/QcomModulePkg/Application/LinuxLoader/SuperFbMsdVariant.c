@@ -46,6 +46,55 @@ STATIC CONST EFI_GUID mSfbMsdProtocolGuid = {
   { 0x9e, 0xf2, 0xfd, 0x08, 0x5b, 0xc3, 0x7b, 0xc7 }
 };
 
+/*
+ * Generation markers, read (never written) out of the target's own resident
+ * driver to decide whether the bundled variant belongs on this platform.
+ *
+ * The published corpus of 72 UsbMsdDxe blobs (Project-Silicium
+ * Device-Binaries, surveyed by canoe-msd tools/corpus_survey.py) holds 64
+ * distinct binaries in 61 distinct layouts and splits exactly in half: 36
+ * carry this INQUIRY builder quadruple next to a 05c6:f000 device
+ * descriptor - the codegen the bundled variant is built from, covering the
+ * recent generations including infiniti - and 36 older ones do not. A
+ * target that does not show both markers is a different driver generation,
+ * so the variant stays unloaded and the resident driver serves the export
+ * with its stock presentation.
+ */
+STATIC CONST UINT8 mSfbMsdRmbPattern[] = {
+  0x08, 0x10, 0x80, 0x52,   /* mov w8, #0x80  */
+  0x89, 0x00, 0x80, 0x52,   /* mov w9, #4     */
+  0x4A, 0x00, 0x80, 0x52,   /* mov w10, #2    */
+  0xEB, 0x03, 0x80, 0x52    /* mov w11, #0x1f */
+};
+STATIC CONST UINT8 mSfbMsdStockVidPid[] = { 0xC6, 0x05, 0x00, 0xF0 };
+
+/* Substring search; with RequireDescriptorHeader the hit must sit at
+ * offset 8 of an 0x12 0x01 device descriptor, which keeps random data
+ * matches out of the generation decision. */
+STATIC BOOLEAN
+SfbMsdFindBytes (IN CONST UINT8 *Hay, IN UINTN HaySize,
+                 IN CONST UINT8 *Needle, IN UINTN NeedleSize,
+                 IN BOOLEAN RequireDescriptorHeader)
+{
+  UINTN Index;
+
+  if (NeedleSize == 0 || HaySize < NeedleSize) {
+    return FALSE;
+  }
+  for (Index = 0; Index + NeedleSize <= HaySize; Index++) {
+    if (CompareMem (Hay + Index, Needle, NeedleSize) != 0) {
+      continue;
+    }
+    if (!RequireDescriptorHeader) {
+      return TRUE;
+    }
+    if (Index >= 8 && Hay[Index - 8] == 0x12 && Hay[Index - 7] == 0x01) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 typedef enum {
   SfbVariantUntried = 0,
   SfbVariantReady,
@@ -72,8 +121,10 @@ SfbMsdFnv64 (IN CONST UINT8 *Data, IN UINTN Size)
 /*
  * The resident driver registers its protocol on its own handle during the
  * XBL DXE phase, so the image that owns it is found by walking the handles
- * that carry the MSD protocol GUID and reading their LoadedImage. The same
- * walk also finds the bundled variant once it is started.
+ * that carry the MSD protocol GUID and reading their LoadedImage. Once the
+ * bundled variant is started it carries the same GUID, so its own image
+ * handle is skipped: the calibration dump and the generation check both
+ * mean the platform's driver, never our copy of one.
  */
 EFI_STATUS
 SfbMsdLocateImage (OUT SFB_MSD_IMAGE *Image)
@@ -98,11 +149,17 @@ SfbMsdLocateImage (OUT SFB_MSD_IMAGE *Image)
     return EFI_NOT_FOUND;
   }
   for (Index = 0; Index < HandleCount; Index++) {
+    if (mSfbVariantImage != NULL && Handles[Index] == mSfbVariantImage) {
+      continue;
+    }
     Status = gBS->HandleProtocol (Handles[Index],
                                   &gEfiLoadedImageProtocolGuid,
                                   (VOID **)&Loaded);
     if (EFI_ERROR (Status) || Loaded == NULL ||
         Loaded->ImageBase == NULL || Loaded->ImageSize == 0) {
+      continue;
+    }
+    if (Loaded->ImageBase == (VOID *)gCanoeMsdVariant) {
       continue;
     }
     Image->Base = Loaded->ImageBase;
@@ -117,6 +174,33 @@ SfbMsdLocateImage (OUT SFB_MSD_IMAGE *Image)
   DEBUG ((EFI_D_ERROR, "SFB: MARK msd-image base=0x%Lx size=0x%Lx fnv=0x%Lx\n",
           (UINT64)(UINTN)Image->Base, (UINT64)Image->Size, Image->Fnv));
   return EFI_SUCCESS;
+}
+
+/*
+ * Is the bundled variant the right generation for this platform? Decided
+ * from the target's own resident driver, read-only: both the INQUIRY
+ * builder quadruple and a stock 05c6:f000 device descriptor must be
+ * present, which is exactly the half of the published corpus the variant
+ * was built from. Anything else keeps the resident driver.
+ */
+STATIC BOOLEAN
+SfbMsdVariantFitsTarget (VOID)
+{
+  SFB_MSD_IMAGE Image;
+  BOOLEAN       Rmb;
+  BOOLEAN       Desc;
+
+  if (EFI_ERROR (SfbMsdLocateImage (&Image))) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe compat=0 reason=no-resident\n"));
+    return FALSE;
+  }
+  Rmb = SfbMsdFindBytes (Image.Base, Image.Size, mSfbMsdRmbPattern,
+                         sizeof (mSfbMsdRmbPattern), FALSE);
+  Desc = SfbMsdFindBytes (Image.Base, Image.Size, mSfbMsdStockVidPid,
+                          sizeof (mSfbMsdStockVidPid), TRUE);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe compat=%u rmb=%u desc=%u\n",
+          (UINT32)(Rmb && Desc), (UINT32)Rmb, (UINT32)Desc));
+  return (BOOLEAN)(Rmb && Desc);
 }
 
 /*
@@ -149,6 +233,12 @@ SfbMsdVariantProtocol (VOID)
     return NULL;
   }
   mSfbVariantState = SfbVariantFailed;
+
+  /* Wrong driver generation on this target: keep the resident driver
+   * rather than run a foreign build against its USB stack. */
+  if (!SfbMsdVariantFitsTarget ()) {
+    return NULL;
+  }
 
   (VOID)gBS->LocateHandleBuffer (ByProtocol, (EFI_GUID *)&mSfbMsdProtocolGuid,
                                  NULL, &BeforeCount, &Before);

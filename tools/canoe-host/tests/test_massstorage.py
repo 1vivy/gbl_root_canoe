@@ -193,38 +193,25 @@ def test_mount_fallback_uses_fakeroot_so_writes_can_land(
     assert issued == [["/usr/bin/fuse2fs", "-o", "rw,fakeroot", "/dev/sdb", str(tmp_path)]]
 
 
-def test_find_export_names_the_usb_modeswitch_remediation(
+def test_find_export_names_the_modeswitch_fix_when_the_stock_identity_showed_up(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Given the packaged switch config and no override, name the guard fix."""
-    database = tmp_path / "db"
-    database.mkdir()
-    (database / "05c6:f000").write_text("StandardEject=1\n", encoding="utf-8")
-    monkeypatch.setattr(massstorage, "_USB_MODESWITCH_DB", database)
-    monkeypatch.setattr(massstorage, "_USB_MODESWITCH_OVERRIDE", tmp_path / "override")
-    empty_block = tmp_path / "block"
-    empty_block.mkdir()
-    monkeypatch.setattr(massstorage, "_SYS_BLOCK", empty_block)
+    """A session that fell back to 05c6:f000 gets the guard remediation named."""
+    sys_block = _usb_scsi_tree(tmp_path, massstorage._MSC_GADGET_ID)
+    monkeypatch.setattr(massstorage, "_SYS_BLOCK", sys_block)
+    monkeypatch.setattr(massstorage, "_DEV_ROOT", tmp_path / "dev-missing")
 
     with pytest.raises(CanoeError, match="DisableSwitching=1"):
         massstorage._find_export(frozenset(), 0)
 
 
-def test_find_export_omits_the_remediation_once_guarded(
+def test_find_export_keeps_the_plain_timeout_for_the_canoe_identity(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Given a DisableSwitching override, keep the plain timeout message."""
-    database = tmp_path / "db"
-    override = tmp_path / "override"
-    database.mkdir()
-    override.mkdir()
-    (database / "05c6:f000").write_text("StandardEject=1\n", encoding="utf-8")
-    (override / "05c6:f000").write_text("DisableSwitching=1\n", encoding="utf-8")
-    monkeypatch.setattr(massstorage, "_USB_MODESWITCH_DB", database)
-    monkeypatch.setattr(massstorage, "_USB_MODESWITCH_OVERRIDE", override)
-    empty_block = tmp_path / "block"
-    empty_block.mkdir()
-    monkeypatch.setattr(massstorage, "_SYS_BLOCK", empty_block)
+    """The canoe identity has no modeswitch rule, so no remediation is offered."""
+    sys_block = _usb_scsi_tree(tmp_path, massstorage._MSC_CANOE_GADGET_ID)
+    monkeypatch.setattr(massstorage, "_SYS_BLOCK", sys_block)
+    monkeypatch.setattr(massstorage, "_DEV_ROOT", tmp_path / "dev-missing")
 
     with pytest.raises(CanoeError, match=r"never presented a LUN\.$"):
         massstorage._find_export(frozenset(), 0)
