@@ -140,10 +140,6 @@ SfbMsdVariantProtocol (VOID)
   BOOLEAN    Known;
   EFI_HANDLE NewHandle = NULL;
   VOID       *Protocol = NULL;
-  struct {
-    MEMMAP_DEVICE_PATH        MemMap;
-    EFI_DEVICE_PATH_PROTOCOL  End;
-  } Dp;
 
   if (mSfbVariantState == SfbVariantReady) {
     return mSfbVariant;
@@ -157,26 +153,28 @@ SfbMsdVariantProtocol (VOID)
   (VOID)gBS->LocateHandleBuffer (ByProtocol, (EFI_GUID *)&mSfbMsdProtocolGuid,
                                  NULL, &BeforeCount, &Before);
 
-  ZeroMem (&Dp, sizeof (Dp));
-  Dp.MemMap.Header.Type      = HARDWARE_DEVICE_PATH;
-  Dp.MemMap.Header.SubType   = HW_MEMMAP_DP;
-  SetDevicePathNodeLength (&Dp.MemMap.Header, sizeof (MEMMAP_DEVICE_PATH));
-  Dp.MemMap.MemoryType       = EfiBootServicesData;
-  Dp.MemMap.StartingAddress  = (EFI_PHYSICAL_ADDRESS)(UINTN)gCanoeMsdVariant;
-  Dp.MemMap.EndingAddress    = Dp.MemMap.StartingAddress +
-                               gCanoeMsdVariantSize - 1;
-  Dp.End.Type    = END_DEVICE_PATH_TYPE;
-  Dp.End.SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE;
-  SetDevicePathNodeLength (&Dp.End, sizeof (EFI_DEVICE_PATH_PROTOCOL));
+  /* A crash inside LoadImage/StartImage must be attributable from the marks
+   * alone, so the pre-call marks land before either runs. The magic check
+   * keeps a corrupt embed from becoming a wild jump. The load uses the PI
+   * memory form (no device path, source buffer set), which predates and
+   * outlives the MEMMAP-path form across vendor DXE cores. */
+  if (gCanoeMsdVariantSize < 0x40 ||
+      gCanoeMsdVariant[0] != 'M' || gCanoeMsdVariant[1] != 'Z') {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe status=%r reason=bad-embed\n",
+            EFI_LOAD_ERROR));
+    goto Out;
+  }
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe step=pre-load size=0x%Lx\n",
+          (UINT64)gCanoeMsdVariantSize));
 
-  Status = gBS->LoadImage (FALSE, gImageHandle,
-                           (EFI_DEVICE_PATH_PROTOCOL *)&Dp, NULL, 0,
-                           &mSfbVariantImage);
+  Status = gBS->LoadImage (FALSE, gImageHandle, NULL, gCanoeMsdVariant,
+                           (UINTN)gCanoeMsdVariantSize, &mSfbVariantImage);
   DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe load status=%r size=0x%Lx\n",
           Status, (UINT64)gCanoeMsdVariantSize));
   if (EFI_ERROR (Status)) {
     goto Out;
   }
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe step=pre-start\n"));
   Status = gBS->StartImage (mSfbVariantImage, 0, NULL);
   DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe start status=%r\n", Status));
   if (EFI_ERROR (Status)) {
