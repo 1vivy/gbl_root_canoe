@@ -24,6 +24,25 @@ fastboot oem mass-storage:logfs       # logfs
 较旧的 BDS 构建会在没有界面的情况下启动 oem 导出，并静默吞掉按键。如果
 界面没有变化，正在运行的 BDS 就早于此修复。
 
+**Linux：usb_modeswitch 会终止导出。** 设备枚举为 `05c6:f000`，发行版自带
+的 udev 规则会把它当作需要模式切换的 4G 网卡并弹出设备：`usb-storage`
+在内核扫描前被卸载，弹出操作同时结束设备端的会话。如果磁盘一直不出现
+（并且手机退回 fastboot 菜单），一次性禁用该切换：
+
+```bash
+printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
+```
+
+在规则仍然生效的主机上，`canoe install` 等待磁盘超时会直接给出这一处置
+方法。
+
+`canoe install` 通过 `05c6:f000` 这一 USB 身份识别 LUN，而不是等待新的磁盘
+名出现；因此超时或中断过的运行可以直接对同一个仍在进行的会话重试：它会接管
+总线上已经存在的磁盘，而不是再次请求导出——BDS 处于导出循环中时并不会响应
+fastboot。它还会卸载桌面自动挂载程序抢占的那一份挂载（GNOME 与 KDE 会在
+LUN 枚举时立即把它挂载到 `/run/media` 下），因为按音量下之前必须完成的刷新
+与卸载由安装器负责。
+
 ## 通过导出执行电脑端安装
 
 在 Linux 上，可以让 `canoe install` 执行导出与挂载，或传入已经挂载的启动
