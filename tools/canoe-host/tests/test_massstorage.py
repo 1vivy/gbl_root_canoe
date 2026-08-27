@@ -4,23 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from canoelib import massstorage
 from canoelib.errors import CanoeError
 from canoelib.proc import Completed
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-INSTALL_SCRIPT = REPO_ROOT / "tools" / "canoe-device" / "canoe_device_install.sh"
-BOOT_ENTRY_SCRIPT = REPO_ROOT / "tools" / "canoe-device" / "canoe_boot_entry.sh"
-
-
-def _stage(staging: Path, *, gm2p_size: int = 120) -> None:
-    staging.mkdir()
-    (staging / "boot.efi").write_bytes(b"NEW-BOOT-EFI-PAYLOAD")
-    (staging / "boot.efi.gm2p").write_bytes(b"G" * gm2p_size)
-    (staging / "boot.efi.tzmap").write_bytes(b"T" * 256)
 
 
 def test_local_boot_root_accepts_mount_and_efisp_directory(tmp_path: Path) -> None:
@@ -29,7 +19,7 @@ def test_local_boot_root_accepts_mount_and_efisp_directory(tmp_path: Path) -> No
     mount.mkdir()
 
     from_mount = massstorage.local_boot_root(mount)
-    from_efisp = massstorage.local_boot_root(from_mount.boot_root)
+    from_efisp = massstorage.local_boot_root(Path(from_mount.boot_root))
 
     assert from_mount == massstorage.Export(
         boot_root=from_mount.boot_root, mount=mount, node=None, owned=False
@@ -38,7 +28,6 @@ def test_local_boot_root_accepts_mount_and_efisp_directory(tmp_path: Path) -> No
     assert from_efisp.mount == mount
     assert from_efisp.node is None
     assert from_efisp.owned is False
-
 
 
 def test_usb_scsi_snapshot_filters_sysfs_by_subsystem(
@@ -65,6 +54,7 @@ def test_usb_scsi_snapshot_filters_sysfs_by_subsystem(
 
     assert massstorage._usb_scsi_snapshot() == {"sdb"}
 
+
 def test_local_boot_root_rejects_file_and_non_directory_efisp(tmp_path: Path) -> None:
     """Given a file at either boundary, refuse it with an operator-facing error."""
     persist_file = tmp_path / "persist-file"
@@ -79,57 +69,94 @@ def test_local_boot_root_rejects_file_and_non_directory_efisp(tmp_path: Path) ->
         massstorage.local_boot_root(mount)
 
 
-def test_transaction_runs_real_device_install_and_forwards_done(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def _windows_toolkit(tmp_path: Path) -> Path:
+    toolkit = tmp_path / "toolkit"
+    (toolkit / "Platform-Tools").mkdir(parents=True)
+    (toolkit / "Platform-Tools" / "fastboot.exe").write_bytes(b"fastboot")
+    (toolkit / "ext4").mkdir()
+    (toolkit / "ext4" / "ext4windows.exe").write_bytes(b"ext4")
+    return toolkit
+
+
+def test_windows_export_mounts_the_new_disk_read_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Given valid staged files, run the real shell transaction and forward its marks."""
-    staging = tmp_path / "staging"
-    _stage(staging)
-    boot_root = tmp_path / "persist" / "efisp"
-    handle = massstorage.Export(boot_root, boot_root.parent, None, owned=False)
+    """Given a newly exported USB disk, mount it with the bundled RW command."""
+    toolkit = _windows_toolkit(tmp_path)
+    disk_queries = iter(("", "7\n"))
+    mount_calls: list[list[str]] = []
 
-    massstorage.transaction(
-        handle,
-        staging,
-        INSTALL_SCRIPT,
-        mode=0,
-        active_slot="_a",
-        boot_entry=BOOT_ENTRY_SCRIPT,
-    )
+    def powershell(command: Sequence[str | Path], **_: bool) -> SimpleNamespace:
+        assert list(command[:3]) == ["powershell", "-NoProfile", "-Command"]
+        return SimpleNamespace(returncode=0, stdout=next(disk_queries), stderr="")
 
-    output = capsys.readouterr().out
-    assert "CANOE-MARK: done" in output
-    assert (boot_root / "canoe.cfg").is_file()
-    assert "mode 0" in (boot_root / "canoe.cfg").read_text(encoding="ascii")
+    class FakeProcess:
+        def poll(self) -> int:
+            return 0
 
+    def tool_run(command: Sequence[str | Path]) -> Completed:
+        mount_calls.append([str(part) for part in command])
+        if str(command[1]) == "status":
+            return Completed(0, "", "")
+        return Completed(0, "", "")
 
-def test_transaction_rejects_real_install_without_done_mark(tmp_path: Path) -> None:
-    """Given invalid staged data, the real transaction exits before its done mark."""
-    staging = tmp_path / "staging"
-    _stage(staging, gm2p_size=119)
-    boot_root = tmp_path / "persist" / "efisp"
-    handle = massstorage.Export(boot_root, boot_root.parent, None, owned=False)
-
-    with pytest.raises(CanoeError, match="did not sign off"):
-        massstorage.transaction(
-            handle,
-            staging,
-            INSTALL_SCRIPT,
-            mode=1,
-            active_slot="_b",
-            boot_entry=BOOT_ENTRY_SCRIPT,
-        )
-
-
-def test_export_refuses_windows_with_manual_mount_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Given Windows, refuse discovery and identify the supported manual route."""
     monkeypatch.setattr(massstorage.os, "name", "nt")
+    monkeypatch.setattr(massstorage.subprocess, "run", powershell)
+    monkeypatch.setattr(massstorage.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(massstorage.proc, "run", tool_run)
+    handle = massstorage.export(toolkit, timeout=1)
 
-    with pytest.raises(CanoeError, match=r"local_boot_root\(\).*WinFsp\+lklfuse"):
-        massstorage.export(Path("fastboot"))
+    assert mount_calls == [
+        [str(toolkit / "ext4" / "ext4windows.exe"), "status"],
+        [
+            str(toolkit / "ext4" / "ext4windows.exe"),
+            "mount",
+            r"\\.\PhysicalDrive7",
+            "Z:",
+            "--rw",
+        ],
+    ]
+    assert str(handle.boot_root) == r"Z:\efisp"
+    assert handle.kind == "windows"
 
 
-def test_release_flushes_and_unmounts_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_windows_mount_failure_names_the_manual_scan_recovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given an ext4windows failure, give the exact scan and manual-mount recovery."""
+    toolkit = _windows_toolkit(tmp_path)
+    disk_queries = iter(("", "9\n"))
+
+    def powershell(command: Sequence[str | Path], **_: bool) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout=next(disk_queries), stderr="")
+
+    class FakeProcess:
+        def poll(self) -> int:
+            return 0
+
+    def tool_run(command: Sequence[str | Path]) -> Completed:
+        if str(command[1]) == "status":
+            return Completed(0, "", "")
+        return Completed(1, "", "cannot mount")
+
+    monkeypatch.setattr(massstorage.os, "name", "nt")
+    monkeypatch.setattr(massstorage.subprocess, "run", powershell)
+    monkeypatch.setattr(
+        massstorage.subprocess, "Popen", lambda *args, **kwargs: FakeProcess()
+    )
+    monkeypatch.setattr(massstorage.proc, "run", tool_run)
+    error = (
+        r"run ext4windows\.exe --scan.*re-run canoe install "
+        r"--boot-root <drive>:\\efisp"
+    )
+    with pytest.raises(CanoeError, match=error):
+        massstorage.export(toolkit, timeout=1)
+
+
+
+def test_release_flushes_and_unmounts_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Given an owned mount, release it once and make a second release harmless."""
     calls: list[list[str]] = []
 

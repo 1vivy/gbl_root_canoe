@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Sequence
+from pathlib import Path
 
-from . import build, prep, prep_device, stage
+from . import build, stage
 from .errors import CanoeError
 from .layout import Toolkit
-from .oneshot import entry as oneshot_entry
 from .ui import ask_choice, ask_yes_no, emit, note, run_entry, step
-from .windows_ext4 import ensure as ensure_windows_ext4
 
-_COMMANDS = ("build", "prep", "prep-device", "install", "oneshot")
+_COMMANDS = ("build", "install")
 
 _USAGE = """canoe - the Canoe host tool.
 
@@ -22,14 +20,13 @@ for a person. The subcommands below are the same work without the questions,
 for scripts and CI; each takes the flags its own --help lists.
 
   canoe                              interactive wizard
-  canoe build                        patch the ABL and derive both sidecars
-  canoe prep         [flags]         prepare alongside a firmware package
-  canoe prep-device  [flags]         derive from the device's own abl/vbmeta
-  canoe install      [flags]         install the boot root over ADB or Mass Storage
-  canoe oneshot --abl IMG --mode 0|1 temp-root a locked device; writes nothing
+  canoe build [--abl IMG] [--vbmeta IMG]
+                                     patch the ABL and derive both sidecars
+  canoe install [flags]              install the boot root over USB Mass Storage
 
   canoe <command> --help             flags for one command
 """
+
 
 
 def entry(argv: Sequence[str]) -> int:
@@ -41,25 +38,13 @@ def _dispatch(command: str, argv: Sequence[str]) -> None:
     match command:
         case "build":
             result = build.entry(argv)
-        case "prep":
-            result = prep.entry(argv)
-        case "prep-device":
-            result = prep_device.entry(argv)
         case "install":
             result = stage.entry(argv)
-        case "oneshot":
-            result = oneshot_entry(argv)
         case _:
             raise CanoeError(f"unknown canoe command: {command}")
     if result != 0:
         raise CanoeError(f"canoe {command} failed")
 
-
-def _ensure_windows_tools() -> None:
-    """Fetch and verify the ext4 bridge before a Windows operation."""
-    if os.name == "nt":
-        step("Checking the Windows ext4 bridge")
-        ensure_windows_ext4()
 
 
 def _wait_for_images(toolkit: Toolkit) -> None:
@@ -77,50 +62,70 @@ def _wait_for_images(toolkit: Toolkit) -> None:
             return
         time.sleep(1)
 
-
 def _interactive() -> None:
     toolkit = Toolkit.shipped()
-    phase = ask_choice("Is this the first time or an update", ("first", "update"), "update")
-    note("0 honest unlocked: hook-free passthrough")
-    note("1 ABL fake locked: present a locked projection to Android")
-    note("2 KM-SPSS profile: use the derived KeyMint and TrustZone profile")
+    _wait_for_images(toolkit)
+    slot = ask_choice("Which slot is currently active", ("a", "b"), "a")
+    note("This labels the menu rows; if it is wrong, re-run the install with the correct slot.")
     mode = int(ask_choice("Which mode", ("0", "1", "2"), "1"))
+    vendor_boot: Path | None = None
     if mode == 1:
+        note("Graft with: vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>")
+        note("The grafted output must not grow.")
         if not ask_yes_no(
-            "A custom recovery must be grafted with the vbmeta tool, flashed, and returned here. Proceed?",
-            True,
+            "A custom recovery must be grafted with the vbmeta tool, flashed, and returned here. "
+            "Proceed?",
+            default=True,
         ):
             note("No files were changed.")
             return
-        if ask_yes_no("Patch vendor_boot to blacklist oplus_secure_guard_new?", False):
-            note("vendor_boot patch selected; prepare it before installing the entry.")
-    _wait_for_images(toolkit)
-    if not ask_yes_no("Generate a boot entry from these matching stock files?", True):
+        while ask_yes_no("Patch vendor_boot to blacklist oplus_secure_guard_new?", default=False):
+            candidate = toolkit.images / "vendor_boot.img"
+            if candidate.is_file():
+                vendor_boot = candidate
+                break
+            note("images/vendor_boot.img is absent; add it or answer no.")
+    if not ask_yes_no("Generate a boot entry from these matching stock files?", default=True):
         note("No files were changed.")
         return
-    step(f"Deriving the {phase} boot entry")
-    derived = build.derive(toolkit)
+    step("Deriving the boot entry")
+    build.derive(toolkit)
     note(f"Derived boot.efi and sidecars from {toolkit.abl_image} and {toolkit.vbmeta_image}")
-    if stage.entry(("--mode", str(mode))) != 0:
-        raise CanoeError("canoe install failed")
+    arguments = ["--slot", slot, "--mode", str(mode)]
+    if vendor_boot is not None:
+        arguments.extend(("--vendor-boot", str(vendor_boot)))
+    try:
+        stage.install(arguments)
+    except CanoeError as exc:
+        if "vbmeta signer changed" not in str(exc):
+            raise
+        emit(str(exc))
+        if not ask_yes_no(
+            "The supplied vbmeta has a different signer than the installed generation. "
+            "This is expected when moving to or from a custom ROM. Continue?",
+            default=False,
+        ):
+            note("No files were changed.")
+            return
+        stage.install([*arguments, "--allow-new-signer"])
     emit(
-        "Result:\n"
-        f"  Installed boot.efi, sidecars, canoe.cfg, and tools/ under {toolkit.efisp}.\n"
-        f"  Mode {mode} is selected for the {phase} entry; next boot launches the configured menu.\n"
-        "  Flash the host bootloader bundle separately with fastboot (ABL only when needed).\n"
-        f"  GBL vulnerability patched: {'yes' if derived.gbl_patched else 'no'}"
+        "Data format is required. On a first-time installation it is not optional:\n"
+        "Mode 1 projects a locked DeviceInfo to the OS, and the TEE will refuse the\n"
+        "data key for userdata written under the previous state, so the old data is\n"
+        "unreadable either way.\n"
+        "\n"
+        "On the device: main menu -> Reboot to Recovery -> FORMAT DATA.\n"
+        "canoe.cfg carries devinfo-repair asneeded, so the lock-state repair happens\n"
+        "on the next managed launch; formatting is what makes that state coherent."
     )
 
 
 def _run(argv: Sequence[str]) -> None:
     """Choose interactive mode by default and dispatch explicit commands."""
     arguments = list(argv)
-    # Answered before anything else runs: --help must not depend on a toolkit
-    # being present, and on Windows it must not trigger the ext4 tool fetch.
     if arguments and arguments[0] in ("-h", "--help", "help"):
         emit(_USAGE)
         return
-    _ensure_windows_tools()
     if not arguments:
         _interactive()
         return

@@ -14,20 +14,11 @@ Patched. Outputs:
   efisp/boot.efi       - patched ABL loader (use with the matching GM2P profile)
   efisp/boot.efi.gm2p  - locked/green KeyMint profile for images/vbmeta.img
   efisp/boot.efi.tzmap - ABL-derived TrustZone interface map
-  efisp/tools/         - EFI tools (Reboot / BL / ARB tools), available from the built-in EFI Tools menu row
+  efisp/tools/         - EFI tools (Reboot / BL / ARB tools), available from the built-in
+                          EFI Tools menu row
   BDS.efi              - superfastboot BDS (flash to efisp with fastboot)
   ABL_original.efi     - original unpatched loader (for analysis; do NOT flash)
 
----- Install the boot root over ADB or USB Mass Storage ----
-Standalone, no firmware package:
-     ./canoe prep-device    # derive from the device's own abl/vbmeta
-     ./canoe install        # install the shared persist tree and canoe.cfg
-Alongside a Super Flasher / RegionalHybrid package:
-     ./canoe prep --pkg <dir> --recovery <custom>.img \\
-                  --abl <vulnerable>.img --in-place
-     # run the package's own flasher, then:
-     ./canoe install
-See README.canoe.md for the full contract and guarantees.
 """
 
 
