@@ -1,6 +1,6 @@
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
-	submodule_vbmetafixer canoe_device_script canoe_host build
+	submodule_vbmetafixer canoe_host build
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -49,8 +49,8 @@ submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build
 	cp ../../submodules/ablfvextractor/build/extractfv ./build/toolkit/bin/extractfv
 submodule_vbmetafixer: copy_resources
-	# vbmetaport grafts an official vbmeta onto a third-party image; vbmetabackup
-	# -f lifts that vbmeta out of a local firmware image. `canoe prep` needs both.
+	# vbmetaport grafts an official vbmeta onto a third-party image;
+	# vbmetabackup lifts that vbmeta out of a local firmware image.
 	# Guarded like submodule_uefi: the vbmetafixer `build` target is not phony, so
 	# a stale build/ directory would otherwise make a plain `make build` a no-op.
 	cd ../../tools/vbmetafixer && \
@@ -58,20 +58,11 @@ submodule_vbmetafixer: copy_resources
 		   [ ! -f build/toolkit/bin/vbmetabackup ]; then $(MAKE) clean build; fi
 	cp ../../tools/vbmetafixer/build/toolkit/bin/vbmetaport ./build/toolkit/bin/vbmetaport
 	cp ../../tools/vbmetafixer/build/toolkit/bin/vbmetabackup ./build/toolkit/bin/vbmetabackup
-canoe_device_script: copy_resources
-	# The device-side install transaction is shared by the Linux and Windows
-	# drivers, so it lives in tools/canoe-device and is copied into each toolkit
-	# rather than duplicated per target.
-	cp ../../tools/canoe-device/canoe_device_install.sh ./build/toolkit/canoe_device_install.sh
-	chmod +x ./build/toolkit/canoe_device_install.sh
-	cp ../../tools/canoe-device/canoe_boot_entry.sh ./build/toolkit/canoe_boot_entry.sh
-	chmod +x ./build/toolkit/canoe_boot_entry.sh
-	cp ../../tools/canoe-device/README.canoe.md ./build/toolkit/README.canoe.md
 canoe_host: copy_resources
 	cp -r ../../tools/canoe-host/canoelib ./build/toolkit/canoelib
 	find ./build/toolkit/canoelib -type d -name __pycache__ -prune -exec rm -rf {} +
 	cp ../../tools/canoe-host/canoe ./build/toolkit/canoe
 	chmod +x ./build/toolkit/canoe
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_device_script canoe_host
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_host
 	# zip
 	cd build/toolkit && zip -r ../toolkit_linux.zip ./
