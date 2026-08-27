@@ -36,48 +36,8 @@
  */
 #define SFB_MSC_MAX_CONSECUTIVE_ERRORS  100000u
 
-/* EFI_USB_MSD_PROTOCOL, mirrored from the public Mu-Silicium EFIUsbMsd.h. */
-typedef struct _SFB_USB_MSD_PROTOCOL SFB_USB_MSD_PROTOCOL;
-
-typedef
-EFI_STATUS
-(EFIAPI *SFB_USB_MSD_ASSIGN_BLK_IO) (
-  IN SFB_USB_MSD_PROTOCOL  *This,
-  IN EFI_BLOCK_IO_PROTOCOL *BlkIo,
-  IN UINT32                Lun
-  );
-
-typedef
-EFI_STATUS
-(EFIAPI *SFB_USB_MSD_QUERY_MAX_LUN) (
-  IN SFB_USB_MSD_PROTOCOL *This,
-  OUT UINT8               *Count
-  );
-
-typedef
-EFI_STATUS
-(EFIAPI *SFB_USB_MSD_EVENT_HANDLER) (IN SFB_USB_MSD_PROTOCOL *This);
-
-typedef
-EFI_STATUS
-(EFIAPI *SFB_USB_MSD_START_DEVICE) (IN SFB_USB_MSD_PROTOCOL *This);
-
-typedef
-EFI_STATUS
-(EFIAPI *SFB_USB_MSD_STOP_DEVICE) (IN SFB_USB_MSD_PROTOCOL *This);
-
-struct _SFB_USB_MSD_PROTOCOL {
-  UINT32                     Revision;
-  SFB_USB_MSD_ASSIGN_BLK_IO  AssignBlkIoHandle;
-  SFB_USB_MSD_QUERY_MAX_LUN  QueryMaxLun;
-  SFB_USB_MSD_EVENT_HANDLER  EventHandler;
-  SFB_USB_MSD_START_DEVICE   StartDevice;
-  SFB_USB_MSD_STOP_DEVICE    StopDevice;
-  VOID                       *GetDeviceSpeed;
-  VOID                       *UnmountHandle;
-  VOID                       *MountHandle;
-  VOID                       *FindPartitions;
-};
+/* The protocol mirror lives in SuperFbMassStorage.h, shared with the
+ * variant-DXE loader. */
 
 /*
  * UsbfnIo and UsbDevice are declared in QcomModulePkg.dec. The MSD protocol
@@ -241,31 +201,34 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
   if (BlockIo == NULL) {
     return EFI_INVALID_PARAMETER;
   }
-  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdProtocolGuid, NULL,
-                                (VOID **)&Msd);
-  if (EFI_ERROR (Status) || Msd == NULL) {
-    SfbUsbCensus ();
-    DEBUG ((EFI_D_ERROR,
-            "SFB: MARK msc-run target=%a status=%r reason=protocol\n",
-            (Tag != NULL) ? Tag : "?", Status));
-    return EFI_NOT_FOUND;
+  /*
+   * The bundled canoe variant is preferred: its identity (1209:ca0e, fixed
+   * disk) matches no host-side rule that would tear the session down. The
+   * resident driver (05c6:f000) is the fallback when this build carries no
+   * variant or it could not start.
+   */
+  Msd = SfbMsdVariantProtocol ();
+  if (Msd == NULL) {
+    Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdProtocolGuid, NULL,
+                                  (VOID **)&Msd);
+    if (EFI_ERROR (Status) || Msd == NULL) {
+      SfbUsbCensus ();
+      DEBUG ((EFI_D_ERROR,
+              "SFB: MARK msc-run target=%a status=%r reason=protocol\n",
+              (Tag != NULL) ? Tag : "?", Status));
+      return EFI_NOT_FOUND;
+    }
   }
 
   Status = Msd->QueryMaxLun (Msd, &MaxLun);
   if (EFI_ERROR (Status)) {
     MaxLun = 0;
   }
-  DEBUG ((EFI_D_INFO, "SFB: MARK msc-export target=%a maxlun=%u revision=0x%x\n",
-          (Tag != NULL) ? Tag : "?", (UINT32)MaxLun, Msd->Revision));
-
-  /*
-   * The canoe presentation variant is applied to the resident driver before
-   * the first real export of the boot. msdimage is skipped on purpose: the
-   * calibration dump must hand the host the bytes exactly as they are.
-   */
-  if (Tag == NULL || AsciiStrCmp (Tag, "msdimage") != 0) {
-    SfbMsdApplyVariant ();
-  }
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK msc-export target=%a driver=%a maxlun=%u revision=0x%x\n",
+          (Tag != NULL) ? Tag : "?",
+          (Msd == SfbMsdVariantProtocol ()) ? "variant" : "resident",
+          (UINT32)MaxLun, Msd->Revision));
 
   Status = Msd->AssignBlkIoHandle (Msd, BlockIo, 0);
   if (EFI_ERROR (Status)) {

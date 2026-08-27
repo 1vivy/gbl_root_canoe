@@ -11,6 +11,52 @@
 #include <Uefi.h>
 #include <Protocol/BlockIo.h>
 
+/* EFI_USB_MSD_PROTOCOL, mirrored from the public Mu-Silicium EFIUsbMsd.h and
+ * verified field-for-field against the driver's own EFIUsbMsdPeripheral.h
+ * (revision 0x00010003). Shared by the resident instance and the bundled
+ * canoe variant DXE, which implements the same interface. */
+typedef struct _SFB_USB_MSD_PROTOCOL SFB_USB_MSD_PROTOCOL;
+
+typedef
+EFI_STATUS
+(EFIAPI *SFB_USB_MSD_ASSIGN_BLK_IO) (
+  IN SFB_USB_MSD_PROTOCOL  *This,
+  IN EFI_BLOCK_IO_PROTOCOL *BlkIo,
+  IN UINT32                Lun
+  );
+
+typedef
+EFI_STATUS
+(EFIAPI *SFB_USB_MSD_QUERY_MAX_LUN) (
+  IN SFB_USB_MSD_PROTOCOL *This,
+  OUT UINT8               *Count
+  );
+
+typedef
+EFI_STATUS
+(EFIAPI *SFB_USB_MSD_EVENT_HANDLER) (IN SFB_USB_MSD_PROTOCOL *This);
+
+typedef
+EFI_STATUS
+(EFIAPI *SFB_USB_MSD_START_DEVICE) (IN SFB_USB_MSD_PROTOCOL *This);
+
+typedef
+EFI_STATUS
+(EFIAPI *SFB_USB_MSD_STOP_DEVICE) (IN SFB_USB_MSD_PROTOCOL *This);
+
+struct _SFB_USB_MSD_PROTOCOL {
+  UINT32                     Revision;
+  SFB_USB_MSD_ASSIGN_BLK_IO  AssignBlkIoHandle;
+  SFB_USB_MSD_QUERY_MAX_LUN  QueryMaxLun;
+  SFB_USB_MSD_EVENT_HANDLER  EventHandler;
+  SFB_USB_MSD_START_DEVICE   StartDevice;
+  SFB_USB_MSD_STOP_DEVICE    StopDevice;
+  VOID                       *GetDeviceSpeed;
+  VOID                       *UnmountHandle;
+  VOID                       *MountHandle;
+  VOID                       *FindPartitions;
+};
+
 /*
  * Export one disk to the connected PC as USB mass-storage LUN 0.
  *
@@ -45,14 +91,14 @@ EFI_STATUS
 SfbMsdLocateImage (OUT SFB_MSD_IMAGE *Image);
 
 /*
- * Rewrite the resident driver's mass-storage presentation to the canoe
- * identity (fixed-disk INQUIRY, VID 0x1209 PID 0xCA0E, canoe INQUIRY
- * strings) before the session starts. Idempotent and best-effort: an
- * unfamiliar firmware layout leaves the stock presentation, which keeps the
- * export working the way it always has.
+ * The bundled canoe variant of the platform UsbMsdDxe: loaded and started
+ * on first use, presenting the export as 1209:ca0e / fixed disk / canoe
+ * strings. Returns NULL when this build carries no variant or it could not
+ * start; callers fall back to the resident driver. Tried at most once per
+ * boot.
  */
-VOID
-SfbMsdApplyVariant (VOID);
+SFB_USB_MSD_PROTOCOL *
+SfbMsdVariantProtocol (VOID);
 
 /*
  * Export a copy of the resident driver's loaded image as a read-only

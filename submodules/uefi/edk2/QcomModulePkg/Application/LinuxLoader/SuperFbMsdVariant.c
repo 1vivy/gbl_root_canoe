@@ -1,92 +1,66 @@
 /*
- * Resident UsbMsdDxe variant work: locate the loaded driver image, patch its
- * mass-storage presentation to the canoe identity, and export the image
- * itself as a RAM-disk LUN for calibration.
+ * The bundled canoe UsbMsd variant: a byte-patched copy of the platform's
+ * closed-source UsbMsdDxe, built offline in the canoe-msd project, carried
+ * in this image and started on demand.
  *
- * Why this exists: the platform's resident UsbMsdDxe reports every export as
- * VID:PID 05c6:f000 with the SCSI removable-media bit set. That identity is
- * shared with mode-switching 4G modems, so stock Linux desktops tear the
- * session down on sight (usb_modeswitch), and "removable" invites host eject
- * behaviour the session cannot survive. The driver is a signed-firmware
- * blob, so the variant is produced at runtime: before StartDevice, the
- * loaded image's INQUIRY RMB instruction and its two device descriptors are
- * rewritten in memory. The BOT/SCSI engine underneath is untouched.
+ * Why bundled instead of patched in place: writing the resident driver's
+ * loaded image at runtime risks a data abort that the oplus XBL turns into
+ * a QUSB_BULK dump-mode reset (observed on the OnePlus 15). Loading our own
+ * instance writes only fresh pool memory allocated for us; the resident
+ * driver stays byte-identical, and every failure mode degrades to it.
  *
- * The canoe identity (VID 0x1209, the pid.codes community range, product
- * string "efisp boot root") matches no modeswitch rule and no Qualcomm host
- * tool, so a patched export is discovered by identity alone on Linux,
- * Windows, and macOS with zero host-side ceremony. The unpatched identity
- * remains the fallback when a firmware build's layout defeats the scan.
+ * The variant presents the export as VID:PID 1209:ca0e (pid.codes community
+ * VID) with INQUIRY strings "canoe" / "efisp boot root" and the removable
+ * bit clear: no usb_modeswitch rule or Qualcomm host tool claims the
+ * identity, so enumeration needs zero host ceremony on Linux, Windows and
+ * macOS. The resident driver (05c6:f000, removable) remains the fallback
+ * when the variant is absent or cannot start.
  *
- * Patch anchors, all verified against the driver's own source
- * (BOOT.MXF.2.5.1 QcomPkg/Drivers/UsbMsdDxe) and the corpus of 46 patched
- * variants in Project-Silicium/Device-Binaries:
- *
- *  - RMB: in handle_inquiry the response byte is built by
- *    `mov w8, #0x80` next to `mov w9, #4; mov w10, #2; mov w11, #0x1f`.
- *    The upstream corpus patches the same word to `mov w8, #0`.
- *  - Descriptors: DeviceDescriptor and SSDeviceDescriptor are CONST tables
- *    with idVendor=0x05C6 idProduct=0xF000 (UsbMsdDesc.c); the muyu variant
- *    in the corpus patches the same two words.
- *  - Strings: the INQUIRY vendor/product literals sit concatenated in .data
- *    as "QualcommMMC Storage     " (8 + 16 fixed-width fields).
+ * This file also owns the calibration instrument: SfbExportMsdImage serves
+ * a copy of the resident driver's loaded image as a read-only RAM-disk LUN,
+ * which is how a new target hands its exact blob to the host without any
+ * filesystem write support on the device.
  *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "SuperFbMassStorage.h"
-#include <PiDxe.h>
 #include <Library/BaseLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
-#include <Library/DxeServicesTableLib.h>
-#include <Library/CacheMaintenanceLib.h>
+#include <Library/DevicePathLib.h>
 #include <Protocol/LoadedImage.h>
 
-/* The canoe presentation identity. 0x1209 is the pid.codes community VID;
- * 0xCA0E carries no registration and collides with nothing in the
- * usb_modeswitch database or the Qualcomm host tooling. */
-#define SFB_MSD_CANOE_VID  0x1209
-#define SFB_MSD_CANOE_PID  0xCA0E
-
-#define SFB_MSD_STOCK_VID  0x05C6
-#define SFB_MSD_STOCK_PID  0xF000
-
-/* Fixed-width INQUIRY fields: 8 vendor + 16 product. */
-#define SFB_MSD_STOCK_VENDOR   "Qualcomm"
-#define SFB_MSD_CANOE_VENDOR   "canoe   "
-#define SFB_MSD_STOCK_PRODUCT  "MMC Storage     "
-#define SFB_MSD_CANOE_PRODUCT  "efisp boot root "
-
-/*
- * The INQUIRY builder on the modern codegen: mov w8,#0x80 ; mov w9,#4 ;
- * mov w10,#2 ; mov w11,#0x1f. Only the first word is patched, exactly like
- * the upstream corpus: the immediate 0x80 becomes 0x00.
- */
-STATIC CONST UINT8 mSfbMsdRmbPattern[] = {
-  0x08, 0x10, 0x80, 0x52,   /* mov w8, #0x80  */
-  0x89, 0x00, 0x80, 0x52,   /* mov w9, #4     */
-  0x4A, 0x00, 0x80, 0x52,   /* mov w10, #2    */
-  0xEB, 0x03, 0x80, 0x52    /* mov w11, #0x1f */
-};
-STATIC CONST UINT8 mSfbMsdRmbPatch[] = {
-  0x08, 0x00, 0x80, 0x52    /* mov w8, #0     */
-};
+/* Generated at build time by submodules/uefi/embed_variant.py from the
+ * canoe-msd submodule's blob; size 0 means this build carries no variant
+ * and every export falls back to the resident driver. */
+extern UINT8 gCanoeMsdVariant[];
+extern UINTN gCanoeMsdVariantSize;
 
 STATIC CONST EFI_GUID mSfbMsdProtocolGuid = {
   0xc8591faf, 0xdbcc, 0x479e,
   { 0x9e, 0xf2, 0xfd, 0x08, 0x5b, 0xc3, 0x7b, 0xc7 }
 };
 
+typedef enum {
+  SfbVariantUntried = 0,
+  SfbVariantReady,
+  SfbVariantFailed
+} SFB_VARIANT_STATE;
+
+STATIC SFB_USB_MSD_PROTOCOL *mSfbVariant = NULL;
+STATIC SFB_VARIANT_STATE     mSfbVariantState = SfbVariantUntried;
+STATIC EFI_HANDLE            mSfbVariantImage = NULL;
+
 STATIC UINT64
 SfbMsdFnv64 (IN CONST UINT8 *Data, IN UINTN Size)
 {
   UINT64 Hash = 14695981039346656037ULL;
-  UINTN Index;
+  UINTN  Index;
 
   for (Index = 0; Index < Size; Index++) {
     Hash ^= Data[Index];
@@ -98,7 +72,8 @@ SfbMsdFnv64 (IN CONST UINT8 *Data, IN UINTN Size)
 /*
  * The resident driver registers its protocol on its own handle during the
  * XBL DXE phase, so the image that owns it is found by walking the handles
- * that carry the MSD protocol GUID and reading their LoadedImage.
+ * that carry the MSD protocol GUID and reading their LoadedImage. The same
+ * walk also finds the bundled variant once it is started.
  */
 EFI_STATUS
 SfbMsdLocateImage (OUT SFB_MSD_IMAGE *Image)
@@ -145,203 +120,110 @@ SfbMsdLocateImage (OUT SFB_MSD_IMAGE *Image)
 }
 
 /*
- * Bounded scan for NEEDLE inside HAY. Returns the hit offset or MAX_UINTN.
- * Only the first hit matters for every anchor here: the patterns are either
- * unique by construction (the instruction quadruple) or validated at each
- * hit (the descriptor header two bytes before the VID word).
+ * Start the bundled variant and hand back its protocol instance. The
+ * variant and the resident driver install the same protocol GUID, so the
+ * instance is identified by handle diff: snapshot the handles carrying the
+ * GUID, start the image, and take the handle that appears. Tried once per
+ * boot; a failure latches so the export falls back to the resident driver
+ * without re-paying the load.
  */
-STATIC UINTN
-SfbMsdFind (IN CONST UINT8 *Hay, IN UINTN HaySize,
-            IN CONST UINT8 *Needle, IN UINTN NeedleSize,
-            IN UINTN From)
+SFB_USB_MSD_PROTOCOL *
+SfbMsdVariantProtocol (VOID)
 {
-  UINTN Index;
+  EFI_STATUS Status;
+  EFI_HANDLE *Before = NULL;
+  UINTN      BeforeCount = 0;
+  EFI_HANDLE *After = NULL;
+  UINTN      AfterCount = 0;
+  UINTN      Outer;
+  UINTN      Inner;
+  BOOLEAN    Known;
+  EFI_HANDLE NewHandle = NULL;
+  VOID       *Protocol = NULL;
+  struct {
+    MEMMAP_DEVICE_PATH        MemMap;
+    EFI_DEVICE_PATH_PROTOCOL  End;
+  } Dp;
 
-  if (NeedleSize == 0 || HaySize < NeedleSize || From > HaySize - NeedleSize) {
-    return MAX_UINTN;
+  if (mSfbVariantState == SfbVariantReady) {
+    return mSfbVariant;
   }
-  for (Index = From; Index + NeedleSize <= HaySize; Index++) {
-    if (CompareMem (Hay + Index, Needle, NeedleSize) == 0) {
-      return Index;
-    }
+  if (mSfbVariantState == SfbVariantFailed ||
+      gCanoeMsdVariantSize == 0) {
+    return NULL;
   }
-  return MAX_UINTN;
-}
+  mSfbVariantState = SfbVariantFailed;
 
-/*
- * Writes to the resident image must never take the device down: if a
- * platform marks the region read-only/read-protect in the GCD map the write
- * would raise a data abort and the oplus XBL turns that into a QUSB_BULK
- * dump-mode reset. Check the map first and skip instead. The map says
- * nothing about XPUs, so every step is also bracketed by marks: a reset
- * between step=… marks names the faulting write in the next session's log.
- */
-STATIC BOOLEAN
-SfbMsdRangeWritable (IN UINTN Address, IN UINTN Length)
-{
-  EFI_STATUS                       Status;
-  EFI_GCD_MEMORY_SPACE_DESCRIPTOR  *Map = NULL;
-  UINTN                            Count = 0;
-  UINTN                            Index;
-  UINT64                           Start = Address;
-  UINT64                           End = (UINT64)Address + Length - 1;
+  (VOID)gBS->LocateHandleBuffer (ByProtocol, (EFI_GUID *)&mSfbMsdProtocolGuid,
+                                 NULL, &BeforeCount, &Before);
 
-  Status = gDS->GetMemorySpaceMap (&Count, &Map);
-  if (EFI_ERROR (Status) || Map == NULL) {
-    return FALSE;
-  }
-  for (Index = 0; Index < Count; Index++) {
-    UINT64 Base = Map[Index].BaseAddress;
-    UINT64 Last = Base + Map[Index].Length - 1;
+  ZeroMem (&Dp, sizeof (Dp));
+  Dp.MemMap.Header.Type      = HARDWARE_DEVICE_PATH;
+  Dp.MemMap.Header.SubType   = HW_MEMMAP_DP;
+  SetDevicePathNodeLength (&Dp.MemMap.Header, sizeof (MEMMAP_DEVICE_PATH));
+  Dp.MemMap.MemoryType       = EfiBootServicesData;
+  Dp.MemMap.StartingAddress  = (EFI_PHYSICAL_ADDRESS)(UINTN)gCanoeMsdVariant;
+  Dp.MemMap.EndingAddress    = Dp.MemMap.StartingAddress +
+                               gCanoeMsdVariantSize - 1;
+  Dp.End.Type    = END_DEVICE_PATH_TYPE;
+  Dp.End.SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE;
+  SetDevicePathNodeLength (&Dp.End, sizeof (EFI_DEVICE_PATH_PROTOCOL));
 
-    if (Map[Index].Length == 0 || Last < Start || Base > End) {
-      continue;
-    }
-    if ((Map[Index].Attributes & (EFI_MEMORY_RO | EFI_MEMORY_RP)) != 0) {
-      FreePool (Map);
-      return FALSE;
-    }
-  }
-  FreePool (Map);
-  return TRUE;
-}
-
-STATIC UINT32
-SfbMsdPatchRmb (IN OUT UINT8 *Image, IN UINTN Size)
-{
-  UINTN Off;
-
-  Off = SfbMsdFind (Image, Size, mSfbMsdRmbPattern, sizeof (mSfbMsdRmbPattern),
-                    0);
-  if (Off == MAX_UINTN) {
-    return 0;
-  }
-  if (Image[Off + 1] == 0x00) {
-    return 2;   /* already the canoe form */
-  }
-  if (!SfbMsdRangeWritable ((UINTN)(Image + Off), sizeof (mSfbMsdRmbPatch))) {
-    return 3;   /* map says read-only: skipping beats a dump-mode reset */
-  }
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=rmb write\n"));
-  CopyMem (Image + Off, mSfbMsdRmbPatch, sizeof (mSfbMsdRmbPatch));
-  /*
-   * The patched word is an instruction: push the write out of the data
-   * cache and pull the instruction cache down before the INQUIRY handler
-   * can fetch the line.
-   */
-  WriteBackDataCacheRange (Image + Off, sizeof (mSfbMsdRmbPatch));
-  InvalidateInstructionCacheRange (Image + Off, sizeof (mSfbMsdRmbPatch));
-  return (Image[Off] == mSfbMsdRmbPatch[0] && Image[Off + 1] == 0x00) ? 1 : 0;
-}
-
-STATIC UINT32
-SfbMsdPatchDescriptors (IN OUT UINT8 *Image, IN UINTN Size)
-{
-  STATIC CONST UINT8 Stock[] = {
-    (UINT8)(SFB_MSD_STOCK_VID & 0xFF), (UINT8)(SFB_MSD_STOCK_VID >> 8),
-    (UINT8)(SFB_MSD_STOCK_PID & 0xFF), (UINT8)(SFB_MSD_STOCK_PID >> 8)
-  };
-  STATIC CONST UINT8 Canoe[] = {
-    (UINT8)(SFB_MSD_CANOE_VID & 0xFF), (UINT8)(SFB_MSD_CANOE_VID >> 8),
-    (UINT8)(SFB_MSD_CANOE_PID & 0xFF), (UINT8)(SFB_MSD_CANOE_PID >> 8)
-  };
-  UINTN  From = 0;
-  UINTN  Off;
-  UINT32 Patched = 0;
-  UINT32 Already = 0;
-
-  while (TRUE) {
-    Off = SfbMsdFind (Image, Size, Stock, sizeof (Stock), From);
-    if (Off == MAX_UINTN) {
-      break;
-    }
-    From = Off + sizeof (Stock);
-    /* A device descriptor is 0x12 0x01 ... <bcdUSB> ... with the VID word at
-     * offset 8. Requiring the header keeps random data matches out. */
-    if (Off < 8 || Image[Off - 8] != 0x12 || Image[Off - 7] != 0x01) {
-      continue;
-    }
-    if (!SfbMsdRangeWritable ((UINTN)(Image + Off), sizeof (Canoe))) {
-      continue;   /* map says read-only: skipping beats a dump-mode reset */
-    }
-    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=desc write off=0x%Lx\n",
-            (UINT64)Off));
-    CopyMem (Image + Off, Canoe, sizeof (Canoe));
-    if (CompareMem (Image + Off, Canoe, sizeof (Canoe)) == 0) {
-      Patched++;
-    }
-  }
-
-  From = 0;
-  while (TRUE) {
-    Off = SfbMsdFind (Image, Size, Canoe, sizeof (Canoe), From);
-    if (Off == MAX_UINTN) {
-      break;
-    }
-    From = Off + sizeof (Canoe);
-    Already++;
-  }
-  if (Patched == 0 && Already > 0) {
-    return 2;   /* already the canoe form from an earlier session */
-  }
-  return (Patched > 0) ? 1 : 0;
-}
-
-STATIC UINT32
-SfbMsdPatchStrings (IN OUT UINT8 *Image, IN UINTN Size)
-{
-  STATIC CONST CHAR8 Stock[] =
-    SFB_MSD_STOCK_VENDOR SFB_MSD_STOCK_PRODUCT;   /* 24 bytes, no NUL */
-  STATIC CONST CHAR8 Canoe[] =
-    SFB_MSD_CANOE_VENDOR SFB_MSD_CANOE_PRODUCT;   /* 24 bytes, no NUL */
-  UINTN Off;
-
-  Off = SfbMsdFind (Image, Size, (CONST UINT8 *)Stock, 24, 0);
-  if (Off == MAX_UINTN) {
-    Off = SfbMsdFind (Image, Size, (CONST UINT8 *)Canoe, 24, 0);
-    return (Off == MAX_UINTN) ? 0 : 2;
-  }
-  if (!SfbMsdRangeWritable ((UINTN)(Image + Off), 24)) {
-    return 3;   /* map says read-only: skipping beats a dump-mode reset */
-  }
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=str write\n"));
-  CopyMem (Image + Off, Canoe, 24);
-  return (CompareMem (Image + Off, Canoe, 24) == 0) ? 1 : 0;
-}
-
-/*
- * Produce the canoe variant of the resident driver in memory. Idempotent:
- * each anchor reports patched(1)/already(2)/miss(0), so a second export in
- * the same boot is a no-op and an unfamiliar firmware layout degrades to the
- * stock presentation instead of failing the export.
- */
-VOID
-SfbMsdApplyVariant (VOID)
-{
-  EFI_STATUS      Status;
-  SFB_MSD_IMAGE Image;
-  UINT32          Rmb;
-  UINT32          Desc;
-  UINT32          Str;
-
-  Status = SfbMsdLocateImage (&Image);
+  Status = gBS->LoadImage (FALSE, gImageHandle,
+                           (EFI_DEVICE_PATH_PROTOCOL *)&Dp, NULL, 0,
+                           &mSfbVariantImage);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe load status=%r size=0x%Lx\n",
+          Status, (UINT64)gCanoeMsdVariantSize));
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR,
-            "SFB: MARK msc-variant status=%r reason=no-image\n", Status));
-    return;
+    goto Out;
+  }
+  Status = gBS->StartImage (mSfbVariantImage, 0, NULL);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe start status=%r\n", Status));
+  if (EFI_ERROR (Status)) {
+    goto Out;
   }
 
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=rmb scan\n"));
-  Rmb = SfbMsdPatchRmb (Image.Base, Image.Size);
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=desc scan\n"));
-  Desc = SfbMsdPatchDescriptors (Image.Base, Image.Size);
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-variant step=str scan\n"));
-  Str = SfbMsdPatchStrings (Image.Base, Image.Size);
+  Status = gBS->LocateHandleBuffer (ByProtocol, (EFI_GUID *)&mSfbMsdProtocolGuid,
+                                    NULL, &AfterCount, &After);
+  if (EFI_ERROR (Status)) {
+    goto Out;
+  }
+  for (Outer = 0; Outer < AfterCount; Outer++) {
+    Known = FALSE;
+    for (Inner = 0; Inner < BeforeCount; Inner++) {
+      if (After[Outer] == Before[Inner]) {
+        Known = TRUE;
+        break;
+      }
+    }
+    if (!Known) {
+      NewHandle = After[Outer];
+      break;
+    }
+  }
+  if (NewHandle == NULL) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe status=%r reason=no-new-handle\n",
+            EFI_NOT_FOUND));
+    goto Out;
+  }
+  Status = gBS->HandleProtocol (NewHandle, (EFI_GUID *)&mSfbMsdProtocolGuid,
+                                &Protocol);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe proto status=%r\n", Status));
+  if (EFI_ERROR (Status) || Protocol == NULL) {
+    goto Out;
+  }
 
-  /* 0 = anchor absent, 1 = patched now, 2 = already canoe, 3 = read-only. */
-  DEBUG ((EFI_D_ERROR,
-          "SFB: MARK msc-variant fnv=0x%Lx rmb=%u desc=%u str=%u step=done\n",
-          Image.Fnv, Rmb, Desc, Str));
+  mSfbVariant      = (SFB_USB_MSD_PROTOCOL *)Protocol;
+  mSfbVariantState = SfbVariantReady;
+
+Out:
+  if (Before != NULL) {
+    FreePool (Before);
+  }
+  if (After != NULL) {
+    FreePool (After);
+  }
+  return mSfbVariant;
 }
 
 /*

@@ -1,0 +1,3 @@
+[submodule "submodules/canoe-msd"]
+	path = submodules/canoe-msd
+	url = ../canoe-msd

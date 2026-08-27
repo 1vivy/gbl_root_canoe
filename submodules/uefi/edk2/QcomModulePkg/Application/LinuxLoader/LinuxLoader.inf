@@ -83,6 +83,7 @@
 	SuperFbMassStorage.h
 	SuperFbMassStorage.c
 	SuperFbMsdVariant.c
+	Generated/CanoeMsdVariantData.c
 	SuperFbLaunchPolicy.h
 	SuperFbLaunchPolicy.c
 	Hook/SuperFbManagedPath.h
@@ -111,7 +112,6 @@
 
 [LibraryClasses]
 	DxeServicesTableLib
-	CacheMaintenanceLib
 	UefiLib
 	UefiApplicationEntryPoint
 	ArmLib
