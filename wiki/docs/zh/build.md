@@ -14,6 +14,20 @@ make target_magisk_module
 Android 工具包和模块构建要求 `NDK_PATH` 指向 Android NDK。归档位于各
 `targets/toolkit_*/build/` 目录，模块归档位于 `targets/magisk_module/build/`。
 
+## 单一来源的版本管理
+
+仓库根目录的 `version.mk` 是版本的唯一来源，并且只包含以下变量：
+
+```make
+CANOE_VERSION = 7.0.0-b1
+CANOE_VERSION_CODE = 14
+```
+
+运行 `make bump VERSION=x.y.z` 会重新生成所有派生文件。运行
+`make version-check` 会在版本发生漂移时失败。UEFI 构建会将相同的
+`CANOE_VERSION` 值写入 `SFB_BDS_VERSION`，BDS 再将其发布为
+`canoe-bds` fastboot 变量。
+
 ## 电脑端命令界面
 
 电脑端工具包是 Python 3.11 程序。Linux 使用 `./canoe`；Windows 压缩包内附带

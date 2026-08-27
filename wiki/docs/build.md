@@ -15,6 +15,21 @@ Android and module builds require `NDK_PATH` to point to an Android NDK. Archive
 are written below each `targets/toolkit_*/build/` directory and
 `targets/magisk_module/build/`.
 
+## Single-source versioning
+
+The repository-root `version.mk` is the single source of truth and contains
+exactly:
+
+```make
+CANOE_VERSION = 7.0.0-b1
+CANOE_VERSION_CODE = 14
+```
+
+Run `make bump VERSION=x.y.z` to regenerate every derived file. Run
+`make version-check` to fail on version drift. The UEFI build stamps the same
+`CANOE_VERSION` value into `SFB_BDS_VERSION`, which is published by the BDS as
+the `canoe-bds` fastboot variable.
+
 ## Host command surface
 
 The host toolkit is a Python 3.11 package. Linux uses `./canoe`; the Windows

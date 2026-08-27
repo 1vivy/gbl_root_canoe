@@ -14,11 +14,15 @@ fastboot oem mass-storage:persist     # persist
 fastboot oem mass-storage:logfs       # logfs
 ```
 
-每次会话只作为一个 USB LUN 导出一个分区。结束会话前，必须完成所有写入并
-卸载文件系统。
+无论是设备菜单路径还是 `fastboot oem mass-storage:persist` 路径，都会显示
+导出界面。每次会话只作为一个 USB LUN 导出一个分区。结束会话前，必须完成
+所有写入并卸载文件系统。
 
-**结束 BDS Mass Storage 会话的唯一方式是设备上的音量下。**断开或失去 USB
-连接不会取消会话；重新连接并完成卸载后，再在设备上按音量下。
+**两条路径都必须在设备上按音量下结束会话，包括 fastboot oem 路径。**断开或
+失去 USB 连接不会取消会话；重新连接并完成卸载后，再在设备上按音量下。
+
+较旧的 BDS 构建会在没有界面的情况下启动 oem 导出，并静默吞掉按键。如果
+界面没有变化，正在运行的 BDS 就早于此修复。
 
 ## 通过导出执行电脑端安装
 

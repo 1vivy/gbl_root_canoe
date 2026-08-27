@@ -15,12 +15,18 @@ fastboot oem mass-storage:persist     # persist
 fastboot oem mass-storage:logfs       # logfs
 ```
 
-Only one partition is exported per session as one USB LUN. Finish every write
-and unmount the filesystem before ending the session.
+The export screen is shown for both the on-device menu path and the
+`fastboot oem mass-storage:persist` path. Only one partition is exported per
+session as one USB LUN. Finish every write and unmount the filesystem before
+ending the session.
 
-**Volume Down on the device is the only way to end a BDS mass-storage session.**
-Disconnecting or losing the USB link does not cancel it; reconnect and finish
-the unmount, then press Volume Down on the device.
+**Volume Down on the device ends the session for both paths, including the
+fastboot oem path.** Disconnecting or losing the USB link does not cancel it;
+reconnect and finish the unmount, then press Volume Down on the device.
+
+Older BDS builds started the oem export without drawing a screen and silently
+swallowed keypresses. If the screen does not change, the running BDS predates
+this fix.
 
 ## Host install through the export
 

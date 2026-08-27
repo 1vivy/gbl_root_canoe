@@ -33,20 +33,32 @@ fastboot flash efisp BDS.efi
 `boot.efi`、`.gm2p` 和 `.tzmap` 必须描述同一套匹配的原厂固件。分区中保留
 的漏洞 ABL 可以比这套固件更旧。
 
+在 Linux 上，导出的 ext4 文件系统使用内核驱动 `sudo mount -t ext4` 挂载，
+因为它会遵循 ext4 日志。该挂载点归 root 所有，因此必须以 root 运行 `canoe`。
+只有在无法使用 `sudo` 时才会退回 `fuse2fs`：它明确声明"不支持使用日志"
+（does not support using the journal），一旦未正常卸载就可能损坏 `persist`，
+并且它写入的新文件属于当前调用用户而非 root。因此安装 `fuse2fs` 并不能替代
+以 root 运行；而且普通的 `fuse2fs -o rw` 挂载根本无法写入归 root 所有的启动根目录。
+
 ## 五种支持的场景
 
 ### 1. 电脑端首次安装
 
-这是从 Linux 或 Windows 电脑执行首次安装的流程。操作员先完成上面的两条
-fastboot 命令，进入 BDS 的 Super Fastboot，再运行交互式 Python 程序：
+这是从 Linux 或 Windows 电脑执行首次安装的流程。运行交互式 Python 程序前，
+设备必须已经处于 Super Fastboot：
 
 ```text
 Linux：   ./canoe
 Windows： canoe.cmd
 ```
 
-交互流程等待 `images/abl.img` 与 `images/vbmeta.img`，询问当前活动槽位和
-模式，然后只通过以下通道访问启动根目录：
+`canoe` 通过读取 `canoe-bds` fastboot 变量检测 Super Fastboot。如果该变量
+缺失，程序会警告 `fastboot oem mass-storage:persist` 在 BDS 之外不存在，
+并在继续前请求确认。
+
+交互流程等待 `images/abl.img` 与 `images/vbmeta.img`；BDS 发布
+`current-slot` 时，程序从设备读取活动槽位。只有较旧、未发布该变量的 BDS
+才会询问当前活动槽位，然后通过以下通道访问启动根目录：
 
 ```text
 fastboot oem mass-storage:persist
@@ -63,6 +75,15 @@ canoe install --boot-root <persist-mount>/efisp --slot a --mode 1
 
 电脑需要自行导出并挂载时可省略 `--boot-root`。电脑端程序使用 Python，
 不会调用 shell。
+
+### Super Fastboot fastboot 变量
+
+Super Fastboot 发布以下 fastboot 变量：
+
+| 变量 | 值与含义 |
+| --- | --- |
+| `canoe-bds` | 项目版本。该变量存在即是设备运行 Super Fastboot 的确定信号。 |
+| `current-slot` | `a` 或 `b`。当 GPT 未标记任何槽位或同时标记两个槽位时，不发布该变量。 |
 
 ### 2. 电脑端更新
 
@@ -161,10 +182,12 @@ canoe.cmd install --boot-root <drive>:\efisp --slot a --mode 1
 
 ### 7. 首次运行行为
 
-如果启动根目录中既没有 `canoe.cfg` 也没有 `boot.efi`，BDS 会显示首次运行
-界面并进入 Super Fastboot。此时还没有可启动的启动项。BDS 菜单提供
-**Reboot to Recovery** 与 **USB Mass Storage**；后者每次只导出一个分区，
-`persist` 是包含 `efisp` 的分区。
+启动根目录为空、缺失或无法访问时，都会计为首次运行。BDS 会显示首次运行
+界面并自动进入 Super Fastboot。此时还没有可启动的启动项。早期 BDS 构建将
+无法访问的启动根目录误判为已填充，因此不会自动进入 fastboot；新刷写的设备
+会被困住，直到操作员手动导航菜单。
+BDS 菜单提供 **Reboot to Recovery** 与 **USB Mass Storage**；后者每次只导出
+一个分区，`persist` 是包含 `efisp` 的分区。
 
 命令见 [`usage.md`](./usage.md)，完整导出流程见
 [`mass-storage.md`](./mass-storage.md)。

@@ -34,22 +34,36 @@ fastboot flash efisp BDS.efi
 The `boot.efi`, `.gm2p`, and `.tzmap` files must describe one matching stock
 firmware pair. The vulnerable ABL left in the partition may be older than that
 pair.
+On Linux the exported ext4 filesystem is mounted with `sudo mount -t ext4`, the
+kernel driver, because it honours the ext4 journal. That mount is root-owned,
+so `canoe` must be run as root. `fuse2fs` is used only when `sudo` is
+unavailable: it reports that it "does not support using the journal", so an
+ungraceful unmount can corrupt `persist`, and it writes new files under the
+calling user instead of root. Installing `fuse2fs` is therefore not a way to
+avoid running as root, and a plain `fuse2fs -o rw` mount cannot write a
+root-owned boot root at all.
+
 
 ## The five supported scenarios
 
 ### 1. Host install
 
-This is the first installation from a Linux or Windows computer. The operator
-completes the two fastboot flashes above, boots the BDS into Super Fastboot,
-and runs the interactive Python program:
+This is the first installation from a Linux or Windows computer. The device
+must already be in Super Fastboot before the interactive Python program runs:
 
 ```text
 Linux:   ./canoe
 Windows: canoe.cmd
 ```
 
-The interactive flow waits for `images/abl.img` and `images/vbmeta.img`, asks
-for the active slot and mode, and then reaches the boot root through only:
+`canoe` detects Super Fastboot by reading the `canoe-bds` fastboot variable. If
+that variable is absent, it warns that `fastboot oem mass-storage:persist` does
+not exist outside the BDS and asks for confirmation before continuing.
+
+The interactive flow waits for `images/abl.img` and `images/vbmeta.img`, reads
+the active slot from `current-slot` when the BDS publishes it, and asks which
+slot is active only with an older BDS that does not publish that variable. It
+then reaches the boot root through:
 
 ```text
 fastboot oem mass-storage:persist
@@ -58,7 +72,7 @@ fastboot oem mass-storage:persist
 It mounts the exported `persist` filesystem, derives the triplet, commits the
 boot root transaction, and writes the active row in `canoe.cfg`. A mode-1
 installation also asks about recovery grafting and the optional `vendor_boot`
-patch. To script the same work, build the artifacts first and then install them:
+patch. To script the same work, build the artifacts first and then install:
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
@@ -67,6 +81,15 @@ canoe install --boot-root <persist-mount>/efisp --slot a --mode 1
 
 `--boot-root` is optional when the computer should perform the BDS mass-storage
 export itself. The host program is Python and does not invoke a shell.
+
+### Super Fastboot fastboot variables
+
+Super Fastboot publishes these fastboot variables:
+
+| Variable | Value and meaning |
+| --- | --- |
+| `canoe-bds` | The project version. Its presence is the definitive signal that the device is running Super Fastboot. |
+| `current-slot` | `a` or `b`. It is absent when the GPT marks neither slot or both slots. |
 
 ### 2. Host update
 
@@ -176,8 +199,11 @@ canoe.cmd install --boot-root <drive>:\efisp --slot a --mode 1
 
 ### 7. First-run behavior
 
-If the boot root has neither `canoe.cfg` nor `boot.efi`, the BDS displays its
-first-run screen and enters Super Fastboot. There is no entry to launch yet.
+An empty, absent, or unreachable boot root counts as first-run. The BDS displays
+its first-run screen and enters Super Fastboot automatically. There is no entry
+to launch yet. Earlier builds treated an unreachable boot root as populated, so
+they did not auto-enter fastboot and stranded a freshly flashed device until the
+operator navigated the menu by hand.
 The BDS menu provides **Reboot to Recovery** and **USB Mass Storage**. The
 latter exports one partition at a time; `persist` is the partition containing
 `efisp`.
