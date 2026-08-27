@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from canoelib import wizard
+from canoelib import sfb, wizard
 from canoelib.build import Derived
+from canoelib.errors import CanoeError
 from canoelib.layout import Toolkit
 
 
@@ -25,8 +26,9 @@ from canoelib.layout import Toolkit
             [True, False, True],
             [
                 (
-                    "A custom recovery must be grafted with the vbmeta tool, "
-                    "flashed, and returned here. Proceed?"
+                    "Mode 1 requires grafting a custom recovery with the vbmeta tool, "
+                    "flashing it, and returning here. Declining cancels the installation. "
+                    "Proceed?"
                 ),
                 "Patch vendor_boot to blacklist oplus_secure_guard_new?",
                 "Generate a boot entry from these matching stock files?",
@@ -46,9 +48,15 @@ def test_interactive_question_order_and_mode_gate(
     images = tmp_path / "images"
     images.mkdir()
     (images / "abl.img").write_bytes(b"ABL")
+    (images / "vendor_boot.img").write_bytes(b"VENDOR_BOOT")
     (images / "vbmeta.img").write_bytes(b"VBMETA")
     monkeypatch.setattr(
         Toolkit, "shipped", classmethod(lambda cls: Toolkit(tmp_path))
+    )
+    monkeypatch.setattr(
+        wizard.sfb,
+        "identify",
+        lambda toolkit_root: sfb.Identity("7.0.0-b1", None),
     )
     monkeypatch.setattr(
         wizard.build,
@@ -76,6 +84,121 @@ def test_interactive_question_order_and_mode_gate(
 
     assert choices == ["Which slot is currently active", "Which mode"]
     assert yes_questions == expected_yes
+
+
+def test_interactive_not_sfb_decline_aborts_before_questionnaire(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given a non-Super-Fastboot device, declining the warning changes no files."""
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / "abl.img").write_bytes(b"ABL")
+    (images / "vbmeta.img").write_bytes(b"VBMETA")
+    monkeypatch.setattr(Toolkit, "shipped", classmethod(lambda cls: Toolkit(tmp_path)))
+    monkeypatch.setattr(
+        wizard.sfb,
+        "identify",
+        lambda toolkit_root: sfb.Identity(None, None),
+    )
+    choices: list[str] = []
+    monkeypatch.setattr(
+        wizard,
+        "ask_choice",
+        lambda question, choices_arg, default: choices.append(question),
+    )
+    answers: list[tuple[str, bool]] = []
+
+    def decline(question: str, *, default: bool) -> bool:
+        answers.append((question, default))
+        return False
+
+    monkeypatch.setattr(wizard, "ask_yes_no", decline)
+    warnings: list[str] = []
+    notes: list[str] = []
+    monkeypatch.setattr(wizard, "warn", warnings.append)
+    monkeypatch.setattr(wizard, "note", notes.append)
+
+    wizard._interactive()
+
+    assert choices == []
+    assert answers == [("Continue without Super Fastboot detection?", False)]
+    assert len(warnings) == 1
+    assert "mass-storage:persist" in warnings[0]
+    assert notes == ["No files were changed."]
+
+
+def test_interactive_uses_device_slot_without_asking(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given a device slot, omit the manual slot guess from the questionnaire."""
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / "abl.img").write_bytes(b"ABL")
+    (images / "vbmeta.img").write_bytes(b"VBMETA")
+    monkeypatch.setattr(Toolkit, "shipped", classmethod(lambda cls: Toolkit(tmp_path)))
+    monkeypatch.setattr(
+        wizard.sfb,
+        "identify",
+        lambda toolkit_root: sfb.Identity("7.0.0-b1", "b"),
+    )
+    monkeypatch.setattr(wizard.build, "derive", lambda toolkit: Derived(gbl_patched=True))
+    monkeypatch.setattr(wizard.stage, "install", lambda argv: None)
+    choices: list[str] = []
+    monkeypatch.setattr(
+        wizard,
+        "ask_choice",
+        lambda question, choices_arg, default: (
+            choices.append(question),
+            "0",
+        )[1],
+    )
+    yes_questions: list[str] = []
+    monkeypatch.setattr(
+        wizard,
+        "ask_yes_no",
+        lambda question, *, default: (yes_questions.append(question), True)[1],
+    )
+    notes: list[str] = []
+    monkeypatch.setattr(wizard, "note", notes.append)
+
+    wizard._interactive()
+
+    assert choices == ["Which mode"]
+    assert yes_questions == ["Generate a boot entry from these matching stock files?"]
+    assert any("slot b" in message and "device" in message for message in notes)
+
+
+def test_interactive_missing_fastboot_decline_aborts_with_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given no fastboot binary, show the cause before asking whether to continue."""
+    images = tmp_path / "images"
+    images.mkdir()
+    (images / "abl.img").write_bytes(b"ABL")
+    (images / "vbmeta.img").write_bytes(b"VBMETA")
+    monkeypatch.setattr(Toolkit, "shipped", classmethod(lambda cls: Toolkit(tmp_path)))
+    cause = "fastboot binary not found; expected bundled fastboot or fastboot on PATH"
+
+    def missing_fastboot(toolkit_root: Path) -> sfb.Identity:
+        raise CanoeError(cause)
+
+    monkeypatch.setattr(wizard.sfb, "identify", missing_fastboot)
+    monkeypatch.setattr(
+        wizard,
+        "ask_choice",
+        lambda question, choices_arg, default: pytest.fail("questionnaire should not start"),
+    )
+    monkeypatch.setattr(wizard, "ask_yes_no", lambda question, *, default: False)
+    warnings: list[str] = []
+    notes: list[str] = []
+    monkeypatch.setattr(wizard, "warn", warnings.append)
+    monkeypatch.setattr(wizard, "note", notes.append)
+
+    wizard._interactive()
+
+    assert len(warnings) == 1
+    assert cause in warnings[0]
+    assert notes == ["No files were changed."]
 
 
 def test_help_needs_no_toolkit(

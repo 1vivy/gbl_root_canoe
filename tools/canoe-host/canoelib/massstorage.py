@@ -16,10 +16,12 @@ from . import proc
 from .errors import CanoeError
 from .layout import platform_names
 from .massstorage_windows import export as export_windows
+from .ui import warn
 
-__all__: Final = ("Export", "export", "local_boot_root", "release")
+__all__: Final = ("Export", "export", "fastboot_binary", "local_boot_root", "release")
 
 MountKind = Literal["fuse", "system", "windows"]
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,15 +123,35 @@ def _run_mount(command: list[str | Path], node: Path, mount: Path, kind: MountKi
 
 
 def _mount(node: Path, mount: Path) -> MountKind:
-    fuse2fs = shutil.which("fuse2fs")
-    if fuse2fs is not None:
-        _run_mount([fuse2fs, "-o", "rw", node, mount], node, mount, "fuse")
-        return "fuse"
+    """Mount the exported persist, preferring the journaled kernel driver.
+
+    Order matters for data integrity, not convenience. `persist` is a live
+    vendor filesystem, and fuse2fs announces that it "does not support using
+    the journal. There may be file system corruption or data loss if the file
+    system is not gracefully unmounted." Writing a boot root through a
+    journal-unaware driver risks the very tree the BDS depends on, so the
+    kernel mount wins whenever sudo can provide it.
+
+    The fuse2fs fallback needs `fakeroot`: measured on a root-owned `efisp/`,
+    a plain `-o rw` mount refuses every write with EACCES because fuse2fs
+    enforces the on-disk owner against the calling uid. `fakeroot` makes the
+    fallback usable, at the cost of files landing under the caller's uid
+    rather than root.
+    """
     mount_binary, sudo = shutil.which("mount"), shutil.which("sudo")
-    if mount_binary is None or sudo is None:
+    if mount_binary is not None and sudo is not None:
+        _run_mount([sudo, mount_binary, "-t", "ext4", node, mount], node, mount, "system")
+        return "system"
+    fuse2fs = shutil.which("fuse2fs")
+    if fuse2fs is None:
         raise CanoeError("no ext4 mounter available: install fuse2fs or sudo mount")
-    _run_mount([sudo, mount_binary, "-t", "ext4", node, mount], node, mount, "system")
-    return "system"
+    warn(
+        "Falling back to fuse2fs: it ignores the ext4 journal, so an ungraceful "
+        "unmount can corrupt persist, and new files will be owned by this user "
+        "rather than root."
+    )
+    _run_mount([fuse2fs, "-o", "rw,fakeroot", node, mount], node, mount, "fuse")
+    return "fuse"
 
 
 def _mount_export(node: Path) -> Export:
@@ -137,13 +159,21 @@ def _mount_export(node: Path) -> Export:
         mount = Path(tempfile.mkdtemp(prefix="canoe-persist-"))
     except OSError as exc:
         raise CanoeError(f"could not create a mount directory: {exc}") from exc
+    kind: MountKind | None = None
     try:
         kind = _mount(node, mount)
-    except CanoeError:
+        boot_root = _ensure_boot_root(mount)
+    except CanoeError as exc:
         shutil.rmtree(mount, ignore_errors=True)
+        if kind == "system" and os.geteuid() != 0:
+            raise CanoeError(
+                "could not prepare boot root on a root-owned ext4 mount for a non-root writer: "
+                f"{exc}; re-run canoe as root. Installing fuse2fs is not a substitute: it "
+                "ignores the ext4 journal and would write the boot root under your own uid"
+            ) from exc
         raise
     return Export(
-        boot_root=mount / "efisp",
+        boot_root=boot_root,
         mount=mount,
         node=node,
         owned=True,
@@ -166,7 +196,7 @@ def _find_export(before: set[str], timeout: float) -> Export:
         time.sleep(min(0.1, remaining))
 
 
-def _fastboot_binary(toolkit_root: Path | None = None) -> Path:
+def fastboot_binary(toolkit_root: Path | None = None) -> Path:
     """Resolve the bundled fastboot first, then the operator's PATH copy."""
     root = toolkit_root or Path()
     bundled = tuple(root / "Platform-Tools" / name for name in platform_names("fastboot"))
@@ -178,6 +208,7 @@ def _fastboot_binary(toolkit_root: Path | None = None) -> Path:
         return Path(found)
     names = " or ".join(str(path) for path in bundled)
     raise CanoeError(f"fastboot binary not found; expected bundled {names} or fastboot on PATH")
+
 
 
 
@@ -199,7 +230,7 @@ def export(toolkit_root: Path, *, target: str = "persist", timeout: float = 60.0
         raise CanoeError(
             f"mass-storage discovery timeout must be finite and non-negative: {timeout}"
         )
-    fastboot = _fastboot_binary(toolkit_root)
+    fastboot = fastboot_binary(toolkit_root)
     if os.name == "nt":
         return _windows_export(toolkit_root, target, timeout, fastboot)
     before = _usb_scsi_snapshot()

@@ -69,6 +69,91 @@ def test_local_boot_root_rejects_file_and_non_directory_efisp(tmp_path: Path) ->
         massstorage.local_boot_root(mount)
 
 
+
+
+def test_mount_export_creates_and_probes_a_missing_boot_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given a mounted persist without efisp, create and probe the boot root first."""
+    mount = tmp_path / "mount"
+    mount.mkdir()
+    monkeypatch.setattr(massstorage.tempfile, "mkdtemp", lambda **_: str(mount))
+    monkeypatch.setattr(massstorage, "_mount", lambda *_: "fuse")
+
+    handle = massstorage._mount_export(Path("/dev/sdb"))
+
+    assert handle.boot_root == mount / "efisp"
+    assert Path(handle.boot_root).is_dir()
+    assert handle.kind == "fuse"
+
+
+def test_mount_export_names_root_writer_remedies_on_eacces(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given a sudo-mounted root that rejects writes, name the real remedy."""
+    mount = tmp_path / "mount"
+    mount.mkdir()
+    monkeypatch.setattr(massstorage.tempfile, "mkdtemp", lambda **_: str(mount))
+    monkeypatch.setattr(massstorage, "_mount", lambda *_: "system")
+    monkeypatch.setattr(
+        massstorage,
+        "_ensure_boot_root",
+        lambda *_: (_ for _ in ()).throw(
+            CanoeError("boot root is not writable: [Errno 13] Permission denied")
+        ),
+    )
+    monkeypatch.setattr(massstorage.os, "geteuid", lambda: 1000)
+
+    with pytest.raises(
+        CanoeError,
+        match=(
+            r"root-owned ext4 mount.*non-root writer.*Permission denied.*"
+            r"re-run canoe as root.*fuse2fs is not a substitute.*journal"
+        ),
+    ):
+        massstorage._mount_export(Path("/dev/sdb"))
+
+
+def _record_mount(monkeypatch: pytest.MonkeyPatch, available: Sequence[str]) -> list[list[str]]:
+    """Stub tool discovery and capture the mount command actually issued."""
+    issued: list[list[str]] = []
+
+    def which(name: str) -> str | None:
+        return f"/usr/bin/{name}" if name in available else None
+
+    def run(command: Sequence[object]) -> Completed:
+        issued.append([str(part) for part in command])
+        return Completed(code=0, out="", err="")
+
+    monkeypatch.setattr(massstorage.shutil, "which", which)
+    monkeypatch.setattr(massstorage.proc, "run", run)
+    return issued
+
+
+def test_mount_prefers_the_journaled_kernel_driver(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given both mounters, use the kernel one: fuse2fs ignores the ext4 journal."""
+    issued = _record_mount(monkeypatch, ("mount", "sudo", "fuse2fs"))
+
+    kind = massstorage._mount(Path("/dev/sdb"), tmp_path)
+
+    assert kind == "system"
+    assert issued == [["/usr/bin/sudo", "/usr/bin/mount", "-t", "ext4", "/dev/sdb", str(tmp_path)]]
+
+
+def test_mount_fallback_uses_fakeroot_so_writes_can_land(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given no sudo, fall back to fuse2fs with fakeroot; plain rw cannot write."""
+    issued = _record_mount(monkeypatch, ("fuse2fs",))
+
+    kind = massstorage._mount(Path("/dev/sdb"), tmp_path)
+
+    assert kind == "fuse"
+    assert issued == [["/usr/bin/fuse2fs", "-o", "rw,fakeroot", "/dev/sdb", str(tmp_path)]]
+
+
 def _windows_toolkit(tmp_path: Path) -> Path:
     toolkit = tmp_path / "toolkit"
     (toolkit / "Platform-Tools").mkdir(parents=True)

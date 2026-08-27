@@ -10,13 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from . import boottree, massstorage, vendorboot
+from . import boottree, massstorage, sfb, vendorboot
 from .config import Config, ConfigError, verify_config
 from .errors import CanoeError
 from .layout import GM2P_BYTES, TZMAP_BYTES, Toolkit, require_exact, require_nonempty
 from .proc import Completed, run
 from .stage_report import stage_report
-from .ui import emit, note, run_entry, step
+from .ui import emit, note, run_entry, step, warn
 
 PROG: Final = "canoe install"
 
@@ -198,6 +198,16 @@ def _run(argv: Sequence[str]) -> None:
             patched_vendor = toolkit.root / "work" / "vendor_boot_patched.img"
             vendorboot.patch_cmdline(options.vendor_boot, patched_vendor)
         if options.boot_root is None:
+            try:
+                identity = sfb.identify(toolkit.root)
+            except CanoeError as exc:
+                warn(f"Could not identify the device with fastboot: {exc}")
+            else:
+                if identity.bds_version is None:
+                    warn(
+                        "The device does not look like Super Fastboot; "
+                        "fastboot oem mass-storage:persist does not exist outside the BDS."
+                    )
             step("Exporting persist over USB Mass Storage")
         boot_root, receipt = _install_mounted(toolkit, staging, options)
 
