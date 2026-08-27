@@ -2288,13 +2288,43 @@ FastbootRegister (IN CONST CHAR8 *prefix,
   }
 }
 
+/*
+ * Reboot, honouring the target the host asked for.
+ *
+ * AcceptCmd dispatches on a prefix, so the "reboot" entry also catches
+ * fastboot's reboot-recovery, reboot-bootloader and anything else beginning
+ * that way; the remainder arrives here as arg. Ignoring it meant
+ * `fastboot reboot recovery` answered OKAY and booted Android instead, which
+ * is a large part of why leaving a mass-storage export needed the device's own
+ * buttons: the host could ask for recovery and be silently sent elsewhere.
+ *
+ * An unrecognised target fails rather than rebooting somewhere the host did not
+ * name. This device has no userspace fastbootd, so `reboot fastboot` is not
+ * quietly answered with a bootloader reboot either.
+ */
 STATIC VOID
 CmdReboot (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 {
-  DEBUG ((EFI_D_INFO, "rebooting the device\n"));
+  UINT8 Reason = NORMAL_MODE;
+
+  if (arg != NULL && *arg != '\0') {
+    if (AsciiStrCmp (arg, "-recovery") == 0) {
+      Reason = RECOVERY_MODE;
+    } else if (AsciiStrCmp (arg, "-bootloader") == 0) {
+      Reason = FASTBOOT_MODE;
+    } else {
+      DEBUG ((EFI_D_ERROR, "SFB: MARK reboot target=%a status=unsupported\n",
+              arg));
+      FastbootFail ("unsupported reboot target");
+      return;
+    }
+  }
+
+  DEBUG ((EFI_D_ERROR, "SFB: MARK reboot target=%a reason=%u\n",
+          (arg != NULL && *arg != '\0') ? arg : "-", (UINT32)Reason));
   FastbootOkay ("");
 
-  RebootDevice (NORMAL_MODE);
+  RebootDevice (Reason);
 
   // Shouldn't get here
   FastbootFail ("Failed to reboot");

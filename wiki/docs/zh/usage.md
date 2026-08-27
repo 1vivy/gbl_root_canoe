@@ -40,6 +40,36 @@ fastboot oem mass-storage:logfs       # logfs
 每次会话只导出一个分区。**结束 Mass Storage 会话的唯一方式是设备上的音量下**。
 断开数据线不会结束会话。
 
+## Fastboot 模式界面
+
+Super Fastboot 等待主机时会显示自己的选项，用音量上/下移动，电源键选择：
+
+- **Stay in Fastboot**——空操作，仅重绘；光标默认停在这一行，因此误触不会
+  产生任何后果；
+- **Reboot to Recovery**；
+- **Power Off**；
+- **Restart**。
+
+这里提供 Recovery 是因为启动菜单中的同名项在 fastboot 中无法到达：菜单在
+fastboot 循环启动之前运行，而启动根目录为空的设备根本不会显示菜单。导出会话
+结束、安装完成后要进入 recovery，就用这一行。
+
+电脑端的重启目标现在会被遵守：
+
+```bash
+fastboot reboot              # Android
+fastboot reboot recovery     # recovery
+fastboot reboot bootloader   # 回到 Super Fastboot
+```
+
+其他目标会直接失败，而不是重启到未被指定的位置；本设备没有用户空间
+fastbootd，因此 `fastboot reboot fastboot` 会被拒绝，而不会被当作重启到
+bootloader。
+
+结束导出本身仍然要在设备上按音量下。导出进行时 USB 链路是 mass storage
+gadget，不承载 fastboot 通道，任何主机命令都到不了 BDS。主机发出的 SCSI
+eject 在本硬件上确实会结束会话，但那是厂商栈的副作用而非契约，canoe 不依赖它。
+
 ## 模式与 DeviceInfo
 
 菜单中的模式选择是下一次启动的临时覆盖，绝不会保存。启动项自身的模式优先，
