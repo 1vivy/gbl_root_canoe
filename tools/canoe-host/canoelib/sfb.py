@@ -8,6 +8,7 @@ a device is even reachable.
 from __future__ import annotations
 
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -15,6 +16,8 @@ from typing import Final
 from .massstorage import fastboot_binary
 
 __all__: Final = ("Identity", "identify")
+
+_RETRY_DELAY: Final = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,12 +37,17 @@ def _parse_getvar(stderr: str, name: str) -> str | None:
     return None
 
 
-def identify(toolkit_root: Path, *, timeout: float = 10.0) -> Identity:
-    """Read the BDS identity variables without requiring a connected device."""
-    fastboot = fastboot_binary(toolkit_root)
-    try:
-        results = tuple(
-            subprocess.run(  # noqa: S603
+def _getvar(fastboot: Path, name: str, timeout: float) -> str | None:
+    """Read one fastboot variable, retrying a single miss.
+
+    Measured against the OnePlus 15 BDS: the first fastboot command issued
+    after the gadget re-enumerates answers "waiting for any device" while the
+    very next one succeeds. One miss must not be reported as "not Super
+    Fastboot", because the wizard's warning for that defaults to aborting.
+    """
+    for attempt in range(2):
+        try:
+            result = subprocess.run(  # noqa: S603
                 [str(fastboot), "getvar", name],
                 capture_output=True,
                 text=True,
@@ -48,14 +56,22 @@ def identify(toolkit_root: Path, *, timeout: float = 10.0) -> Identity:
                 timeout=timeout,
                 check=False,
             )
-            for name in ("canoe-bds", "current-slot")
-        )
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return Identity(None, None)
-    if any(result.returncode != 0 for result in results):
-        return Identity(None, None)
-    bds_version = _parse_getvar(results[0].stderr, "canoe-bds")
-    current_slot = _parse_getvar(results[1].stderr, "current-slot")
-    if current_slot not in ("a", "b"):
-        current_slot = None
-    return Identity(bds_version, current_slot)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode == 0:
+            value = _parse_getvar(result.stderr, name)
+            if value is not None:
+                return value
+        if attempt == 0:
+            time.sleep(_RETRY_DELAY)
+    return None
+
+
+def identify(toolkit_root: Path, *, timeout: float = 10.0) -> Identity:
+    """Read the BDS identity variables without requiring a connected device."""
+    fastboot = fastboot_binary(toolkit_root)
+    slot = _getvar(fastboot, "current-slot", timeout)
+    return Identity(
+        bds_version=_getvar(fastboot, "canoe-bds", timeout),
+        current_slot=slot if slot in ("a", "b") else None,
+    )
