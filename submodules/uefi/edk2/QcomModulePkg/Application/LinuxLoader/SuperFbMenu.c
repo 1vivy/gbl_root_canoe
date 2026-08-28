@@ -10,6 +10,7 @@
 
 #include "SuperFbMenu.h"
 #include "SuperFbLaunchPolicy.h"
+#include "SuperFbUsbHost.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -37,6 +38,9 @@ CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
 #define SFB_MENU_CREDIT  L"gbl_root_canoe " SFB_WIDEN (SFB_BDS_VERSION) L" by 1vivy"
 #define SFB_ATTR_SELECTED  EFI_TEXT_ATTR (EFI_BLACK, EFI_LIGHTGRAY)
 #define SFB_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
+
+/* Room for the "[E] " removable-media prefix in a formatted row. */
+#define SFB_ROW_PREFIX_CHARS  4
 
 /*
  * The one key wait in the loader.
@@ -258,6 +262,27 @@ SfbMoveCursor (IN OUT UINTN *Cursor, IN UINTN Count, IN SFB_KEY Key)
   }
 }
 
+/*
+ * Print a boot-progress stage to the console, then dwell.
+ *
+ * The platform only flushes its log when boot continues into an OS stage, so
+ * a fault before the menu takes every DEBUG mark with it. These land on the
+ * display instead, and the first screen the menu draws clears them - so they
+ * cost nothing on a boot that works and name the last stage reached on one
+ * that does not.
+ *
+ * The dwell is load-bearing, not politeness. Without it a fault microseconds
+ * after the Print can leave the previous screen contents intact and the mark
+ * invisible, which is exactly the "no change on screen, then dies" symptom
+ * that made a crash unlocalisable.
+ */
+VOID
+SfbBootMark (IN CONST CHAR16 *Stage)
+{
+  Print (L"[%s]\r\n", Stage);
+  gBS->Stall (120 * 1000);
+}
+
 /* Report a failure and hold the screen until the user acknowledges it. */
 VOID
 SfbReportStatus (IN CONST CHAR16 *What, IN EFI_STATUS Status)
@@ -405,6 +430,9 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
   for (Index = Start; Index < Last; Index++) {
     CONST SFB_BOOT_ENTRY  *Entry = &Menu->Entry[Index];
     CONST CHAR16          *Marker = (Index == Menu->DefaultIndex) ? L"*" : L" ";
+    /* Removable boot media is obvious at a glance, because a row read off a
+     * stick means something very different from a row on the boot root. */
+    CONST CHAR16          *Prefix = Entry->IsUsb ? L"[E] " : L"";
 
     /* Mode is the session fallback; an entry carrying its own configured mode
      * is deliberately unaffected by this selector. */
@@ -419,8 +447,8 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
       CONST CHAR8 *AsciiSuffix = SfbConfigRoleSuffix (Entry->Role);
       CHAR16 Suffix[16];
       CHAR16 Passthrough[16];
-      CHAR16 Text[SFB_DESC_CHARS + ARRAY_SIZE (Suffix) +
-                  ARRAY_SIZE (Passthrough)];
+      CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS +
+                  ARRAY_SIZE (Suffix) + ARRAY_SIZE (Passthrough)];
       UINTN SuffixIndex;
 
       for (SuffixIndex = 0;
@@ -434,8 +462,13 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
        * than letting the user infer a policy that was never applied. */
       StrCpyS (Passthrough, ARRAY_SIZE (Passthrough),
                Entry->Passthrough ? L" (passthrough)" : L"");
-      UnicodeSPrint (Text, sizeof (Text), L"%s%s%s", Entry->Desc, Suffix,
-                     Passthrough);
+      UnicodeSPrint (Text, sizeof (Text), L"%s%s%s%s", Prefix, Entry->Desc,
+                     Suffix, Passthrough);
+      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
+    } else if (Entry->IsUsb) {
+      CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS];
+
+      UnicodeSPrint (Text, sizeof (Text), L"%s%s", Prefix, Entry->Desc);
       SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
     } else {
       SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Entry->Desc);
@@ -447,6 +480,106 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
   }
 
   SfbEndScreen (L"Vol Up/Down: move   Power: select");
+}
+
+/*
+ * Report the resident USB protocol population to the boot log, from the menu,
+ * without touching controller state.
+ *
+ * The census exists as a row rather than as a boot-time DEBUG line because the
+ * answer differs by entry path - a fastboot-entered session and a flashed
+ * normal boot do not present the same handle set - so an operator has to be
+ * able to produce it from whichever path is in question, without a rebuild.
+ */
+STATIC
+VOID
+SfbRunUsbCensusScreen (VOID)
+{
+  SFB_USB_HOST_COUNTS  Counts;
+
+  /* Count first, then draw: the screen is the reliable channel here, because
+   * the platform only flushes its log when boot continues into an OS stage. */
+  SfbUsbHostCounts (&Counts);
+
+  SfbBeginScreen (L"USB Diagnostics",
+                  L"Counts only. No controller state is changed.");
+  Print (L"USB core role: %a\r\n", SfbUsbModeText (SfbUsbCurrent ()));
+  Print (L"UsbConfig rev 0x%Lx   cores %u\r\n",
+         Counts.Revision, Counts.CoreCount);
+  Print (L"\r\n");
+  Print (L"UsbConfig %u   Usb2Hc %u   PciIo %u\r\n",
+         Counts.Cfg, Counts.Usb2Hc, Counts.PciIo);
+  Print (L"UsbIo     %u   BlockIo %u   FileSys %u\r\n",
+         Counts.UsbIo, Counts.BlockIo, Counts.SimpleFs);
+  Print (L"DriverBinding %u\r\n", Counts.DriverBinding);
+
+  /*
+   * Per-core host capability. This is the question the handle counts cannot
+   * answer: the vendor's own mode table marks a core other than 0 as the host
+   * core on this family, so "which core says host" decides whether host mode
+   * is reachable at all or merely unimplemented above the role switch.
+   */
+  Print (L"\r\nHost-capable cores:");
+  {
+    UINTN    Index;
+    BOOLEAN  Any = FALSE;
+
+    for (Index = 0; Index < SFB_USB_CORE_MAX_NUM; Index++) {
+      UINT32  Modes = Counts.CoreModes[Index];
+
+      if (Modes == SFB_USB_INVALID_MODE) {
+        continue;
+      }
+      if ((Modes & (SFB_USB_HOST_MODE | SFB_USB_DUAL_ROLE_MODE)) != 0) {
+        Print (L" %u(0x%x)", (UINT32)Index, Modes);
+        Any = TRUE;
+      }
+    }
+    Print (Any ? L"\r\n" : L" none reported\r\n");
+  }
+
+  Print (L"\r\nUsbIo 0 with Usb2Hc >0 means the stick never enumerated.\r\n");
+  Print (L"Usb2Hc 0 with a host-capable core means no XHCI driver.\r\n");
+
+  /*
+   * Taking the core is offered here and nowhere else. It is the only action
+   * on this screen that writes to a controller the vendor owns, so it is an
+   * explicit keypress rather than something a normal boot does on the
+   * operator's behalf - three boots died doing it automatically. Refused
+   * outright when no core reports capability, because the attempt would be
+   * exactly the useless write that faulted the machine.
+   */
+  if (SfbUsbCurrent () != SfbUsbModeHost) {
+    Print (L"\r\nVolume Down: attempt USB host mode (writes to the core)\r\n");
+  }
+  SfbEndScreen (L"Power: back");
+
+  SfbUsbHostCensus ();
+
+  {
+    SFB_KEY  Key = SfbWaitForKey (0);
+
+    /* Report the key before acting on it. "Pressed Volume Down, nothing
+     * happened" has two very different causes - the key was not recognised,
+     * or it was and the work behind it faulted - and they are
+     * indistinguishable without this line. */
+    gST->ConOut->ClearScreen (gST->ConOut);
+    Print (L"[key=%u down=%u]\r\n", (UINT32)Key, (UINT32)SfbKeyDown);
+    gBS->Stall (400 * 1000);
+
+    if (Key != SfbKeyDown || SfbUsbCurrent () == SfbUsbModeHost) {
+      return;
+    }
+
+    SfbBootMark (L"host:begin");
+    {
+      EFI_STATUS  Status = SfbUsbRequest (SfbUsbModeHost);
+
+      SfbBootMark (L"host:done");
+      SfbReportStatus (L"USB host mode", Status);
+    }
+    return;
+  }
 }
 /*
  * Select a session-only mode override. Nothing is written: canoe.cfg remains
@@ -549,6 +682,9 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
     switch (Menu.Entry[Chosen].Kind) {
     case SfbEntryFastboot:
       SfbFreeMenu (&Menu);
+      /* Fastboot needs the core in device mode; hand it back before the
+       * gadget stack tries to claim it. */
+      SfbUsbRequest (SfbUsbModeDevice);
       return TRUE;
 
     case SfbEntryMode:
@@ -568,6 +704,11 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
 
     case SfbEntryMassStorage:
       SfbRunMassStorageMenu ();
+      Rebuild = TRUE;
+      break;
+
+    case SfbEntryUsbCensus:
+      SfbRunUsbCensusScreen ();
       Rebuild = TRUE;
       break;
 

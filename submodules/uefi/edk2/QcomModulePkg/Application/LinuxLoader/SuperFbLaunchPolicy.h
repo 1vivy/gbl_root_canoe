@@ -46,14 +46,21 @@ SfbSetLaunchLockPolicy (IN SFB_CONFIG_LOCK_POLICY Policy);
 
 /* Run the real managed-image lifecycle. The caller has already preloaded
  * drivers; this function performs prepare, LoadImage, StartImage, and the
- * required restore/disarm boundaries using gBS directly. */
+ * required restore/disarm boundaries using gBS directly.
+ *
+ * LoadOptions is published on the loaded image's EFI_LOADED_IMAGE_PROTOCOL
+ * before StartImage. NULL reproduces the pre-existing behaviour exactly, so
+ * the managed ABL path is untouched; a non-NULL string is what carries a
+ * kernel command line to a Linux EFI stub and arguments to a payload loader.
+ */
 EFI_STATUS
 SfbLaunchImage (
   IN EFI_DEVICE_PATH_PROTOCOL       *DevicePath,
   IN BOOLEAN                         Managed,
   IN SFB_BOOT_MODE                   EffectiveMode,
   IN CONST SFB_MODE2_PROFILE        *Profile,
-  IN CONST SFB_TZ_MAP               *TzMap
+  IN CONST SFB_TZ_MAP               *TzMap,
+  IN CONST CHAR16                   *LoadOptions
   );
 
 #endif

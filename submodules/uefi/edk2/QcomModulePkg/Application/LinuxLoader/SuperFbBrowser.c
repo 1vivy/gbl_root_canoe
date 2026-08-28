@@ -21,15 +21,8 @@
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbBrowserModuleTag = "SuperFbBrowser";
 
-/* Longest single file name we will read out of a directory. */
-#define SFB_NAME_CHARS  128
-
-typedef struct {
-  CHAR16   Name[SFB_NAME_CHARS];
-  BOOLEAN  IsDir;
-  /* The synthetic ".." row: leaves the directory, or the volume when at root. */
-  BOOLEAN  IsParent;
-} SFB_DIR_ENTRY;
+/* SFB_NAME_CHARS and SFB_DIR_ENTRY moved to SuperFbMenu.h when the boot-spec
+ * scan in SuperFbEntries.c became a second reader of directories. */
 
 /* ---- path helpers ------------------------------------------------------- */
 
@@ -180,7 +173,6 @@ SfbSortDirEntries (IN OUT SFB_DIR_ENTRY *List, IN UINTN Count)
  * Truncated is set when the directory holds more than SFB_MAX_DIR_ENTRIES
  * items, so the caller can say so rather than silently hiding them.
  */
-STATIC
 EFI_STATUS
 SfbReadDirectory (IN EFI_FILE_PROTOCOL  *Dir,
                   OUT SFB_DIR_ENTRY     *List,

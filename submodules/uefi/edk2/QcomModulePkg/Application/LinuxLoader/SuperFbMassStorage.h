@@ -58,7 +58,13 @@ struct _SFB_USB_MSD_PROTOCOL {
 };
 
 /*
- * Export one disk to the connected PC as USB mass-storage LUN 0.
+ * Export one disk to the connected PC as USB mass-storage LUN 0. Name is the
+ * GPT partition name ("persist", "logfs"); the Block I/O is resolved here
+ * rather than by the caller, and deliberately so. Starting an export first
+ * releases USB host mode, which disconnects controllers and destroys their
+ * child partition handles, so any EFI_BLOCK_IO_PROTOCOL obtained before that
+ * point is dangling by the time it would be used. Taking the name makes the
+ * stale pointer unrepresentable instead of merely unlikely.
  *
  * Returns EFI_ABORTED when the operator stopped the session with Volume Down,
  * which is the ordinary ending: an unplug or link loss no longer ends it, so
@@ -68,12 +74,8 @@ struct _SFB_USB_MSD_PROTOCOL {
  * session that could not be started at all.
  */
 EFI_STATUS
-SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
-                          IN CONST CHAR8           *Tag);
-
-VOID
-SfbUsbCensus (VOID);
-
+SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
+                          IN CONST CHAR8  *Tag);
 /*
  * The bundled mass-storage driver: loaded and started on first use,
  * presenting the export as 1209:ca0e / fixed disk / canoe strings. Returns

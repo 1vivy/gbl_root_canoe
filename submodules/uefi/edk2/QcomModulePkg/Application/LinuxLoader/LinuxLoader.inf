@@ -83,6 +83,12 @@
 	SuperFbMassStorage.h
 	SuperFbMassStorage.c
 	SuperFbMsdVariant.c
+	SuperFbUsbHost.h
+	SuperFbUsbHost.c
+	SuperFbBls.h
+	SuperFbBls.c
+	SuperFbLinuxBoot.h
+	SuperFbLinuxBoot.c
 	SuperFbOemWatchdog.h
 	SuperFbOemWatchdog.c
 	Generated/CanoeMsdVariantData.c
@@ -186,6 +192,12 @@
 	# USB host controllers connected at menu start and released before fastboot.
 	gEfiUsb2HcProtocolGuid
 	gEfiPciIoProtocolGuid
+	# Proxy for "the resident host drivers were dispatched at all", counted by
+	# the USB census.
+	gEfiDriverBindingProtocolGuid
+	# The arm64 EFI stub takes its initrd from a LoadFile2 handle carrying the
+	# Linux initrd media GUID; the older LoadFile above is a different GUID.
+	gEfiLoadFile2ProtocolGuid
 	gEfiPlatformInfoProtocolGuid
 	gEfiQcomVerifiedBootProtocolGuid
 	gQcomQseecomProtocolGuid

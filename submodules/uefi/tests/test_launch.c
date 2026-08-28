@@ -14,10 +14,12 @@
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Protocol/LoadedImage.h>
 #include <Protocol/Security.h>
 #include <Protocol/Security2.h>
 
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.h"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbUsbHost.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlots.h"
 
@@ -25,6 +27,7 @@ EFI_BOOT_SERVICES *gBS;
 EFI_HANDLE gImageHandle;
 EFI_GUID gEfiSecurityArchProtocolGuid;
 EFI_GUID gEfiSecurity2ArchProtocolGuid;
+EFI_GUID gEfiLoadedImageProtocolGuid;
 
 static EFI_FILE_PROTOCOL mRoot;
 static EFI_HANDLE mVolume = (EFI_HANDLE)(UINTN)0x1234;
@@ -260,6 +263,18 @@ VOID EFIAPI
 FreePool(IN VOID *Buffer)
 {
   (void)Buffer;
+}
+
+VOID * EFIAPI
+AllocateCopyPool(IN UINTN AllocationSize, IN CONST VOID *Buffer)
+{
+  static UINT8 mCopyPool[1024];
+
+  if (AllocationSize == 0 || AllocationSize > sizeof (mCopyPool)) {
+    return NULL;
+  }
+  memcpy (mCopyPool, Buffer, AllocationSize);
+  return mCopyPool;
 }
 
 EFI_DEVICE_PATH_PROTOCOL *
@@ -534,6 +549,36 @@ FakeLoadImage(IN BOOLEAN BootPolicy, IN EFI_HANDLE ParentImageHandle,
   return EFI_SUCCESS;
 }
 
+/*
+ * The command line is published on the loaded image, so the test has to be
+ * able to see what was written there. mLoadedImage is what the launch path
+ * gets back from HandleProtocol.
+ */
+static EFI_LOADED_IMAGE_PROTOCOL mLoadedImage;
+
+/*
+ * Counters for the USB-ownership and Linux-publication stubs further down.
+ * Defined here because ResetLaunchBackend clears them.
+ */
+static UINTN      mUsbReleaseCount;
+static UINTN      mUsbRescanCount;
+static UINTN      mInitrdInstallCount;
+static UINTN      mDtbInstallCount;
+static EFI_STATUS mInitrdInstallStatus;
+static EFI_STATUS mDtbInstallStatus;
+static UINTN                     mHandleProtocolCount;
+
+static EFI_STATUS EFIAPI
+FakeHandleProtocol(IN EFI_HANDLE Handle, IN EFI_GUID *Protocol,
+                   OUT VOID **Interface)
+{
+  ++mHandleProtocolCount;
+  assert(Handle == mLoadedHandle);
+  assert(Protocol == &gEfiLoadedImageProtocolGuid);
+  *Interface = &mLoadedImage;
+  return EFI_SUCCESS;
+}
+
 
 static EFI_STATUS EFIAPI
 FakeStartImage(IN EFI_HANDLE ImageHandle, IN OUT UINTN *ExitDataSize,
@@ -693,6 +738,7 @@ ResetLaunchBackend(void)
   BootServices.LoadImage = FakeLoadImage;
   BootServices.StartImage = FakeStartImage;
   BootServices.SetWatchdogTimer = FakeSetWatchdogTimer;
+  BootServices.HandleProtocol = FakeHandleProtocol;
   gBS = &BootServices;
   mPrepareStatus = EFI_SUCCESS;
   mPrepareCount = 0;
@@ -718,6 +764,69 @@ ResetLaunchBackend(void)
   mDemotedMarkerCount = 0;
   mPrepareDenyFirst = FALSE;
   mLastPrepareProfile = NULL;
+  mHandleProtocolCount = 0;
+  memset (&mLoadedImage, 0, sizeof (mLoadedImage));
+  mUsbReleaseCount = 0;
+  mUsbRescanCount = 0;
+  mInitrdInstallCount = 0;
+  mDtbInstallCount = 0;
+  mInitrdInstallStatus = EFI_SUCCESS;
+  mDtbInstallStatus = EFI_SUCCESS;
+}
+
+/*
+ * The command line channel. It is the only thing that makes a Linux kernel or
+ * either payload loader reachable, and it is also the one change that could
+ * silently alter the managed ABL launch, so both directions are asserted.
+ */
+static void
+TestLaunchOptions(void)
+{
+  EFI_DEVICE_PATH_PROTOCOL Path;
+  STATIC CONST CHAR16      Options[] = L"root=/dev/sda2 rw";
+
+  memset (&Path, 0, sizeof (Path));
+
+  /* NULL must reproduce the pre-existing behaviour byte for byte: the loaded
+   * image is never even looked up, so the managed path cannot change. */
+  ResetLaunchBackend ();
+  SfbBypassSecurity ();
+  assert(SfbLaunchImage (&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL,
+                         NULL) == EFI_SUCCESS);
+  assert(mHandleProtocolCount == 0);
+  assert(mLoadedImage.LoadOptions == NULL);
+  assert(mLoadedImage.LoadOptionsSize == 0);
+
+  /* An empty string is the same as none: publishing a lone NUL would give the
+   * stub a zero-length command line rather than no command line. */
+  ResetLaunchBackend ();
+  SfbBypassSecurity ();
+  assert(SfbLaunchImage (&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL,
+                         L"") == EFI_SUCCESS);
+  assert(mHandleProtocolCount == 0);
+  assert(mLoadedImage.LoadOptions == NULL);
+
+  /* A real command line is published before StartImage, and the size counts
+   * the terminating NUL - without it the stub drops the last option. */
+  ResetLaunchBackend ();
+  SfbBypassSecurity ();
+  assert(SfbLaunchImage (&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL,
+                         Options) == EFI_SUCCESS);
+  assert(mHandleProtocolCount == 1);
+  assert(mLoadedImage.LoadOptions != NULL);
+  assert(mLoadedImage.LoadOptionsSize ==
+         (StrLen (Options) + 1) * sizeof (CHAR16));
+  assert(StrCmp ((CHAR16 *)mLoadedImage.LoadOptions, Options) == 0);
+  assert(mStartCount == 1);
+
+  /* A failed load never reaches the publication step. */
+  ResetLaunchBackend ();
+  SfbBypassSecurity ();
+  mLoadStatus = EFI_LOAD_ERROR;
+  assert(SfbLaunchImage (&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL,
+                         Options) == EFI_LOAD_ERROR);
+  assert(mHandleProtocolCount == 0);
+  assert(mStartCount == 0);
 }
 
 static void
@@ -735,7 +844,8 @@ TestLaunchLifecycle(void)
 
   ResetLaunchBackend ();
   SfbBypassSecurity ();
-  assert(SfbLaunchImage (NULL, TRUE, SfbBootModeKmProfile, &Profile, NULL) ==
+  assert(SfbLaunchImage (NULL, TRUE, SfbBootModeKmProfile, &Profile, NULL,
+                         NULL) ==
          EFI_INVALID_PARAMETER);
   assert(mLoadCount == 0 && mStartCount == 0);
   assert(mDisarmCount == 1);
@@ -750,7 +860,8 @@ TestLaunchLifecycle(void)
   ResetLaunchBackend ();
   SfbBypassSecurity ();
   mPrepareStatus = EFI_DEVICE_ERROR;
-  assert(SfbLaunchImage (&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL) ==
+  assert(SfbLaunchImage (&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL,
+                         NULL) ==
          EFI_DEVICE_ERROR);
   assert(mLoadCount == 0);
   assert(mDisarmCount == 1);
@@ -764,7 +875,8 @@ TestLaunchLifecycle(void)
   ResetLaunchBackend ();
   SfbBypassSecurity ();
   mLoadStatus = EFI_LOAD_ERROR;
-  assert(SfbLaunchImage (&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL) ==
+  assert(SfbLaunchImage (&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL,
+                         NULL) ==
          EFI_LOAD_ERROR);
   assert(mLoadCount == 1 && mStartCount == 0);
   assert(mDisarmCount == 1);
@@ -779,7 +891,8 @@ TestLaunchLifecycle(void)
   ResetLaunchBackend ();
   SfbBypassSecurity ();
   mStartStatus = EFI_ABORTED;
-  assert(SfbLaunchImage (&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL) ==
+  assert(SfbLaunchImage (&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL,
+                         NULL) ==
          EFI_ABORTED);
   assert(mLoadCount == 1 && mStartCount == 1);
   assert(mSecurityRestoredAtStart);
@@ -799,7 +912,8 @@ TestLaunchLifecycle(void)
   ImageLoadBefore = mImageLoadMarkerCount;
   WatchdogBefore = mWatchdogDisableCount;
   mStartStatus = EFI_SUCCESS;
-  assert(SfbLaunchImage (&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL) ==
+  assert(SfbLaunchImage (&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL,
+                         NULL) ==
          EFI_SUCCESS);
   assert(mPrepareCount == PrepareBefore);
   assert(mDisarmCount == PriorDisarms + 1);
@@ -1388,6 +1502,7 @@ main(void)
 {
   TestProfileSelection ();
   TestLaunchLifecycle ();
+  TestLaunchOptions ();
   TestLaunchModePrecedence ();
   TestBootRootEmpty ();
   TestConfigEntries ();
@@ -1541,6 +1656,74 @@ SfbConnectAll(VOID)
 {
 }
 
+/*
+ * USB host ownership and the Linux publication helpers live in translation
+ * units this test does not link: they are all EDK2 protocol plumbing with no
+ * decision in them. What the test does care about is that the launch path
+ * calls them in the right places, so the stubs count.
+ */
+
+BOOLEAN
+SfbIsUsbVolume(IN EFI_HANDLE Volume)
+{
+  (void)Volume;
+  return FALSE;
+}
+
+EFI_STATUS
+SfbUsbRequest(IN SFB_USB_MODE Want)
+{
+  (void)Want;
+  mUsbReleaseCount++;
+  return EFI_SUCCESS;
+}
+
+VOID
+SfbUsbHostRescan(VOID)
+{
+  mUsbRescanCount++;
+}
+
+VOID
+SfbBootMark(IN CONST CHAR16 *Stage)
+{
+  (void)Stage;
+}
+
+EFI_STATUS
+SfbInitrdInstall(IN EFI_HANDLE Volume, IN CONST CHAR16 *Path)
+{
+  (void)Volume;
+  (void)Path;
+  mInitrdInstallCount++;
+  return mInitrdInstallStatus;
+}
+
+VOID
+SfbInitrdUninstall(VOID)
+{
+  if (mInitrdInstallCount != 0) {
+    mInitrdInstallCount--;
+  }
+}
+
+EFI_STATUS
+SfbDtbInstall(IN EFI_HANDLE Volume, IN CONST CHAR16 *Path)
+{
+  (void)Volume;
+  (void)Path;
+  mDtbInstallCount++;
+  return mDtbInstallStatus;
+}
+
+VOID
+SfbDtbUninstall(VOID)
+{
+  if (mDtbInstallCount != 0) {
+    mDtbInstallCount--;
+  }
+}
+
 VOID
 SfbReadAnsiDescription(IN EFI_FILE_PROTOCOL *Root,
                        IN CONST CHAR16 *Path,
@@ -1648,3 +1831,4 @@ SfbShowBootingScreen(IN CONST CHAR16 *Name,
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBrowser.c"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.c"
