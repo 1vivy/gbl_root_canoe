@@ -83,6 +83,8 @@
 	SuperFbMassStorage.h
 	SuperFbMassStorage.c
 	SuperFbMsdVariant.c
+	SuperFbOemWatchdog.h
+	SuperFbOemWatchdog.c
 	Generated/CanoeMsdVariantData.c
 	SuperFbLaunchPolicy.h
 	SuperFbLaunchPolicy.c

@@ -78,6 +78,7 @@
 #include <Protocol/EFICardInfo.h>
 #include <Protocol/SimpleTextIn.h>
 #include "SuperFbMenu.h"
+#include "SuperFbOemWatchdog.h"
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -115,8 +116,10 @@ WaitForVolumeUpKey (IN UINT32 TimeoutMs)
                  SfbKeyUp);
 }
 
-/* The Phoenix 60 s arm can be re-applied after our one-shot disable; the
- * periodic guard re-asserts it for the whole interactive run. */
+/* The UEFI architectural watchdog is re-armed by later firmware phases, so the
+ * periodic guard re-asserts the disable for the whole interactive run. This
+ * says nothing about an OEM applet's private timer - see SuperFbOemWatchdog.c,
+ * which is a one-shot protocol call and must not be repeated. */
 STATIC VOID EFIAPI
 SfbWatchdogGuardNotify (IN EFI_EVENT Event, IN VOID *Context)
 {
@@ -190,18 +193,25 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     /*
      * Everything below is interactive: the menu, the fastboot screen and any
      * mass-storage export all wait on the operator or the host for as long as
-     * they take. The platform watchdog (oplus sets 60 s via Phoenix, UEFI
-     * default five minutes) has no business resetting a device that is sitting
-     * at a prompt; measured on the OnePlus 15 it resets an idle fastboot
-     * session right out from under a host mid-conversation.
+     * they take. Nothing that sits at a prompt should be reset underneath it;
+     * measured on the OnePlus 15, an idle fastboot session was reset out from
+     * under a host mid-conversation.
      *
-     * Disable it once now, and keep disabling it: Phoenix's 60 s arm can be
-     * re-applied by later firmware phases, so a slow periodic event re-asserts
-     * the disable for as long as the BDS owns the machine. The event leaks by
-     * design - its job ends when the BDS exits.
+     * Two independent timers can do that, and they need different treatment:
+     *
+     *   - An OEM applet's private reset timer (60 s on the measured target).
+     *     gBS->SetWatchdogTimer () cannot reach it; it is cancelled through the
+     *     applet's own protocol, exactly once, and devices without the applet
+     *     skip it. See SuperFbOemWatchdog.c.
+     *   - The UEFI architectural watchdog (five minutes by default), disabled
+     *     here and re-asserted by a slow periodic event, because later firmware
+     *     phases re-arm it. That event leaks by design: its job ends when the
+     *     BDS exits.
      */
     {
       EFI_EVENT GuardEvent;
+
+      SfbOemWatchdogDisable ();
 
       gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
       if (!EFI_ERROR (gBS->CreateEvent (EVT_TIMER | EVT_NOTIFY_SIGNAL,
