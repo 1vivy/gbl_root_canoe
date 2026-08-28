@@ -161,22 +161,25 @@ DummyNotify (IN EFI_EVENT Event, IN VOID *Context)
 {
 }
 
-STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
+/*
+ * Initialise the platform USB controller.
+ *
+ * Signalling this event group is the vendor's own bring-up; both gadget
+ * starts below opened with an inline copy of it. It is one function now
+ * because a third caller needs it: a mass-storage export on a normal boot,
+ * where nothing has entered fastboot and so nothing has brought USB up.
+ * EFI_USBFN_IO_PROTOCOL, which the mass-storage driver locates, is installed
+ * by this bring-up and by nothing the BDS connect pass can reach.
+ *
+ * It claims no gadget and installs no descriptors, so any caller may re-run
+ * it; the callers that do want a gadget follow it with StartEx.
+ */
+EFI_STATUS
+SfbUsbControllerInit (VOID)
 {
   EFI_STATUS Status;
-  EFI_USB_BUS_SPEED UsbMaxSupportSpeed;
-  UINTN UsbSpeedDataSize;
-  USB_DEVICE_DESCRIPTOR *DevDesc;
-  USB_DEVICE_DESCRIPTOR *SSDevDesc;
-  VOID *Descriptors;
-  VOID *SSDescriptors;
-  EFI_EVENT UsbConfigEvt;
-  EFI_GUID UsbDeviceProtolGuid = {
-      0xd9d9ce48,
-      0x44b8,
-      0x4f49,
-      {0x8e, 0x3e, 0x2a, 0x3b, 0x92, 0x7d, 0xc6, 0xc1}};
-  EFI_GUID InitUsbControllerGuid = {
+  EFI_EVENT  UsbConfigEvt;
+  EFI_GUID   InitUsbControllerGuid = {
       0x1c0cffce,
       0xfc8d,
       0x4e44,
@@ -188,9 +191,30 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
     DEBUG (
         (EFI_D_ERROR, "Usb controller init event not signaled: %r\n", Status));
     return Status;
-  } else {
-    gBS->SignalEvent (UsbConfigEvt);
-    gBS->CloseEvent (UsbConfigEvt);
+  }
+  gBS->SignalEvent (UsbConfigEvt);
+  gBS->CloseEvent (UsbConfigEvt);
+  return EFI_SUCCESS;
+}
+
+STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
+{
+  EFI_STATUS Status;
+  EFI_USB_BUS_SPEED UsbMaxSupportSpeed;
+  UINTN UsbSpeedDataSize;
+  USB_DEVICE_DESCRIPTOR *DevDesc;
+  USB_DEVICE_DESCRIPTOR *SSDevDesc;
+  VOID *Descriptors;
+  VOID *SSDescriptors;
+  EFI_GUID UsbDeviceProtolGuid = {
+      0xd9d9ce48,
+      0x44b8,
+      0x4f49,
+      {0x8e, 0x3e, 0x2a, 0x3b, 0x92, 0x7d, 0xc6, 0xc1}};
+
+  Status = SfbUsbControllerInit ();
+  if (EFI_ERROR (Status)) {
+    return Status;
   }
 
   /* Locate the USBFastboot  Protocol from DXE */
@@ -295,23 +319,12 @@ EFI_STATUS
 FastbootUsbReconnect (VOID)
 {
   EFI_STATUS Status;
-  EFI_EVENT  UsbConfigEvt;
-  EFI_GUID   InitUsbControllerGuid = {
-      0x1c0cffce,
-      0xfc8d,
-      0x4e44,
-      {0x8c, 0x78, 0x9c, 0x9e, 0x5b, 0x53, 0xd, 0x36}};
 
   if (Fbd.UsbDeviceProtocol == NULL) {
     return EFI_NOT_STARTED;
   }
 
-  Status = gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK, DummyNotify,
-                               NULL, &InitUsbControllerGuid, &UsbConfigEvt);
-  if (!EFI_ERROR (Status)) {
-    gBS->SignalEvent (UsbConfigEvt);
-    gBS->CloseEvent (UsbConfigEvt);
-  }
+  SfbUsbControllerInit ();
 
   Status = Fbd.UsbDeviceProtocol->StartEx (&DescSet);
   DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-reconnect status=%r\n", Status));

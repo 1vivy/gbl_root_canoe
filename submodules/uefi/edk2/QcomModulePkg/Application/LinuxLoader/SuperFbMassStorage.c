@@ -19,6 +19,7 @@
 #include "SuperFbMassStorage.h"
 #include "SuperFbMenu.h"
 
+#include <FastbootLib/FastbootMain.h>
 #include <Library/BaseLib.h>
 #include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
@@ -105,6 +106,45 @@ SfbUsbCensus (VOID)
   if (Handles != NULL) {
     FreePool (Handles);
   }
+}
+
+/*
+ * The driver's StartDevice locates EFI_USBFN_IO_PROTOCOL, which does not
+ * exist until the platform USB controller has been initialised. Fastboot does
+ * that on entry, so an `oem mass-storage` export inherits a live stack; a
+ * menu export on a normal boot does not, and StartDevice fails with
+ * EFI_NOT_FOUND.
+ *
+ * Measured on the OnePlus 15: a fastboot-entered session censuses usbfn=1
+ * over 367 handles, a flashed efisp boot usbfn=0 over 363. Every USB export
+ * this tree ever proved was reached through fastboot, which is why this went
+ * unnoticed until efisp carried the loader.
+ *
+ * The bring-up claims no gadget and installs no descriptors, so this is a
+ * no-op wherever USB is already up, and it needs no matching release when the
+ * export ends.
+ */
+STATIC
+VOID
+SfbMassStorageEnsureUsbStack (VOID)
+{
+  EFI_STATUS Status;
+  VOID       *Protocol = NULL;
+  BOOLEAN    Present;
+
+  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbfnIoProtocolGuid, NULL,
+                                &Protocol);
+  if (!EFI_ERROR (Status)) {
+    return;
+  }
+
+  Status = SfbUsbControllerInit ();
+  Protocol = NULL;
+  Present = (BOOLEAN)!EFI_ERROR (
+      gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbfnIoProtocolGuid, NULL,
+                           &Protocol));
+  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-usb-init status=%r usbfn=%u\n",
+          Status, (UINT32)Present));
 }
 
 /*
@@ -198,6 +238,12 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
   if (BlockIo == NULL) {
     return EFI_INVALID_PARAMETER;
   }
+
+  /*
+   * The USB stack is this session's one external prerequisite; settle it
+   * before any driver state is touched.
+   */
+  SfbMassStorageEnsureUsbStack ();
   /*
    * The bundled driver is preferred: its identity (1209:ca0e, fixed disk)
    * matches no host-side rule that would tear the session down. The platform
