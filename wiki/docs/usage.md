@@ -25,6 +25,19 @@ The menu includes:
   rows when their managed files exist;
 - **EFI Tools** for files in the boot root's `tools/` directory.
 
+The shipped `SurfaceTools.efi` inventory opens from **EFI Tools**. Its default
+views only enumerate UEFI protocol GUIDs, configuration-table GUIDs, loaded
+image classes, memory descriptors, and known Qualcomm policy protocol presence;
+they do not print raw addresses or call vendor methods. **Dump Passive Inventory
+to logfs** explicitly overwrites `\SurfaceTools.log` on the already-mounted
+`logfs` volume, flushes it, and closes every file handle before returning to
+BDS. **Run Read-only Active Probes** requires a separate Volume Up confirmation
+(Power cancels, so a held menu-select key cannot authorize the calls) before
+calling exactly five documented getters for the maximum CPU index, TrustZone
+version, verified-boot state, and Keymaster status. A successful call is
+reported as `authorized`; the tool does not infer that an observed policy is
+effective, and the active getters write no persistent state.
+
 USB Mass Storage exports one partition as one USB disk. `persist` contains the
 boot root at `/efisp`; `logfs` is offered only when it exists. BDS warns before
 exporting the live `persist` filesystem. See [`mass-storage.md`](./mass-storage.md)

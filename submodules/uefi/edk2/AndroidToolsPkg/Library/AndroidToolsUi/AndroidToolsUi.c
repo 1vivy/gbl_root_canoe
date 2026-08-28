@@ -27,6 +27,22 @@
 #define AT_ATTR_SELECTED  EFI_TEXT_ATTR (EFI_BLACK, EFI_LIGHTGRAY)
 #define AT_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
 
+/*
+ * Qualcomm's keypad can queue several carriage returns for one physical power
+ * press. Hold the result until those duplicates have arrived, then drain them
+ * before the caller changes screens. Volume navigation remains unthrottled.
+ */
+#define AT_SELECT_DEBOUNCE_US  500000
+
+STATIC AT_KEY mAtPendingVolumeKey = AtKeyTimeout;
+
+VOID
+AtUiResetInput (VOID)
+{
+  mAtPendingVolumeKey = AtKeyTimeout;
+  gST->ConIn->Reset (gST->ConIn, FALSE);
+}
+
 /* Seconds to wait for the key that launched us to be released before the
  * input queue is drained. Mirrors SFB_ENTER_MENU_DELAY_S in SuperFbMenu.c:
  * without it a power press held through LoadImage/StartImage is read back at
@@ -45,6 +61,12 @@ AtUiWaitForKey (
   UINTN          EventIndex;
   EFI_INPUT_KEY  Key;
   AT_KEY         Result = AtKeyTimeout;
+
+  if (mAtPendingVolumeKey != AtKeyTimeout) {
+    Result = mAtPendingVolumeKey;
+    mAtPendingVolumeKey = AtKeyTimeout;
+    return Result;
+  }
 
   if (TimeoutMs != 0) {
     Status = gBS->CreateEvent (EVT_TIMER, TPL_CALLBACK, NULL, NULL, &TimerEvent);
@@ -99,6 +121,24 @@ AtUiWaitForKey (
     break;
   }
 
+  if (Result == AtKeySelect) {
+    /*
+     * Keep the first volume action queued during the debounce interval while
+     * discarding duplicate select events from the same physical Power press.
+     */
+    gBS->Stall (AT_SELECT_DEBOUNCE_US);
+    while (!EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
+      if (mAtPendingVolumeKey != AtKeyTimeout) {
+        continue;
+      }
+      if (Key.ScanCode == SCAN_UP) {
+        mAtPendingVolumeKey = AtKeyUp;
+      } else if (Key.ScanCode == SCAN_DOWN) {
+        mAtPendingVolumeKey = AtKeyDown;
+      }
+    }
+  }
+
   if (TimerEvent != NULL) {
     gBS->CloseEvent (TimerEvent);
   }
@@ -128,7 +168,7 @@ AtUiEnterMenu (
 
   /* ...then drop anything typed or held during the wait so it does not leak
    * into the menu as a spurious confirm. */
-  gST->ConIn->Reset (gST->ConIn, FALSE);
+  AtUiResetInput ();
 }
 
 /* ---- drawing ------------------------------------------------------------ */
@@ -256,8 +296,6 @@ AtUiRunMenu (
     return EFI_INVALID_PARAMETER;
   }
 
-  /* Drop anything held since launch so it does not move the cursor at once. */
-  gST->ConIn->Reset (gST->ConIn, FALSE);
 
   Visible = (Count < AT_VISIBLE_ROWS) ? Count : AT_VISIBLE_ROWS;
 

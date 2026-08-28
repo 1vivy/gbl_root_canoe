@@ -3,7 +3,7 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
 .PHONY: test clean
 
-test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config
+test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_surface
 	./test_profile
 	./test_deviceinfo
 	./test_tzmap
@@ -11,6 +11,7 @@ test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch te
 	./test_hooks
 	./test_launch
 	./test_config
+	./test_surface
 
 test_profile: test_profile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbProfile.c \
@@ -63,5 +64,10 @@ test_launch: test_launch.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
+test_surface: test_surface.c \
+	../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.c \
+	../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.h
+	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
+
 clean:
-	rm -f test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config
+	rm -f test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_surface

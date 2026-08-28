@@ -39,6 +39,15 @@ CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
 #define SFB_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
 
 /*
+ * One physical Power press may arrive as several carriage returns. Delay only
+ * completed select actions, then discard their queued duplicates before the
+ * next BDS screen can interpret them as another action.
+ */
+#define SFB_SELECT_DEBOUNCE_US  500000
+
+STATIC SFB_KEY mSfbPendingVolumeKey = SfbKeyTimeout;
+
+/*
  * The one key wait in the loader.
  *
  * There used to be two: this, and a near-identical timer-event loop in
@@ -73,7 +82,15 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
   SFB_KEY        Result = SfbKeyTimeout;
 
   if (FlushFirst) {
+    mSfbPendingVolumeKey = SfbKeyTimeout;
     gST->ConIn->Reset (gST->ConIn, FALSE);
+  } else if (mSfbPendingVolumeKey != SfbKeyTimeout) {
+    Result = mSfbPendingVolumeKey;
+    mSfbPendingVolumeKey = SfbKeyTimeout;
+    if (Policy == SfbKeyPolicyConfirm || Result == SfbKeyUp) {
+      return Result;
+    }
+    Result = SfbKeyTimeout;
   }
 
   if (TimeoutMs != 0) {
@@ -136,6 +153,24 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
       Result = SfbKeySelect;
     }
     break;
+  }
+
+  if (Result == SfbKeySelect) {
+    /*
+     * Retain the first volume action that arrives during the debounce interval
+     * while consuming duplicate select events from the same Power press.
+     */
+    gBS->Stall (SFB_SELECT_DEBOUNCE_US);
+    while (!EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
+      if (mSfbPendingVolumeKey != SfbKeyTimeout) {
+        continue;
+      }
+      if (Key.ScanCode == SCAN_UP) {
+        mSfbPendingVolumeKey = SfbKeyUp;
+      } else if (Key.ScanCode == SCAN_DOWN) {
+        mSfbPendingVolumeKey = SfbKeyDown;
+      }
+    }
   }
 
   if (TimerEvent != NULL) {

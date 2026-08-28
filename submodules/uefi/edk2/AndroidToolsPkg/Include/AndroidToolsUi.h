@@ -34,13 +34,19 @@ AtUiEnterMenu (
   );
 
 /**
-  Wait for a key. TimeoutMs of 0 waits indefinitely. Returns AtKeyTimeout when
-  the timer elapses.
+  Wait for one logical key action. TimeoutMs of 0 waits indefinitely. Returns
+  AtKeyTimeout when the timer elapses. Power/select waits briefly and drains
+  duplicate carriage returns from the same physical press; volume keys remain
+  immediate.
 **/
 AT_KEY
 AtUiWaitForKey (
   IN UINT32 TimeoutMs
   );
+
+/** Drop both raw console events and a retained transition-time volume key. **/
+VOID
+AtUiResetInput (VOID);
 
 /** Clear the screen and print a title (and optional subtitle). **/
 VOID

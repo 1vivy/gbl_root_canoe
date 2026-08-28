@@ -481,7 +481,8 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
                  IN BOOLEAN         FlushFirst,
                  IN SFB_KEY_POLICY  Policy);
 
-/* The interactive form: no flush, non-volume keys confirm. */
+/* The interactive form: no pre-wait flush, non-volume keys confirm. Completed
+ * confirms discard duplicate Power events and retain one queued volume action. */
 SFB_KEY
 SfbWaitForKey (IN UINT32 TimeoutMs);
 
