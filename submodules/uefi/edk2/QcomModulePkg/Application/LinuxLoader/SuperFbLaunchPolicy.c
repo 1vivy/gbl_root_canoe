@@ -337,6 +337,13 @@ SfbLaunchImage (
   DEBUG ((EFI_D_WARN,
           "SFB: MARK image-return managed=%u mode=%a status=%r\n",
           (UINT32)Managed, SfbLaunchModeText (Managed, LaunchMode), Status));
+  /*
+   * A child that returns instead of booting may have armed the architectural
+   * watchdog for its own run and cannot un-arm it on the way out. The loader
+   * goes back to a prompt from here, so re-assert the disable at the one point
+   * every launch returns through, rather than polling for it.
+   */
+  gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
   SfbDisarmManagedAblHooks ();
   if (ExitData != NULL) {
     FreePool (ExitData);

@@ -251,13 +251,12 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
 
   /*
    * An export can legitimately sit idle for as long as the operator leaves it
-   * up, and the UEFI default watchdog is five minutes. Both the Mu-Silicium
-   * reference client and this tree's own fastboot path disable it before
-   * taking the link (FastbootCmds.c), and neither restores it: a bootloader
-   * menu that waits at a prompt has no business being reset by a watchdog.
+   * up. The architectural watchdog is already off on both routes here: the
+   * loader disables it before the first prompt, and the vendor's fastboot path
+   * disables it again on entry (FastbootCmds.c), which covers `oem
+   * mass-storage`. Nothing between those points arms it, so there is no third
+   * disable in this function.
    */
-  gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
-
   Status = Msd->StartDevice (Msd);
   if (EFI_ERROR (Status)) {
     SfbUsbCensus ();

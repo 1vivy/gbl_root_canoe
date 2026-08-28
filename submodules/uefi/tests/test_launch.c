@@ -51,6 +51,7 @@ static EFI_STATUS mLoadStatus;
 static EFI_STATUS mStartStatus;
 static UINTN mLoadCount;
 static UINTN mStartCount;
+static UINTN mWatchdogDisableCount;
 static EFI_HANDLE mLoadedHandle = (EFI_HANDLE)(UINTN)0x5678;
 static BOOLEAN mFileDevicePathAvailable;
 static EFI_DEVICE_PATH_PROTOCOL mDevicePath;
@@ -548,6 +549,23 @@ FakeStartImage(IN EFI_HANDLE ImageHandle, IN OUT UINTN *ExitDataSize,
   return mStartStatus;
 }
 
+/*
+ * A child that returns may have armed the architectural watchdog for its own
+ * run, so the launch path re-asserts the disable at the single point every
+ * launch returns through. Only a disable (Timeout 0) is ever expected here.
+ */
+static EFI_STATUS EFIAPI
+FakeSetWatchdogTimer(IN UINTN Timeout, IN UINT64 WatchdogCode,
+                     IN UINTN DataSize, IN CHAR16 *WatchdogData)
+{
+  (void)WatchdogCode;
+  (void)DataSize;
+  (void)WatchdogData;
+  assert(Timeout == 0);
+  ++mWatchdogDisableCount;
+  return EFI_SUCCESS;
+}
+
 static EFI_STATUS EFIAPI
 OriginalSecurityState(IN CONST EFI_SECURITY_ARCH_PROTOCOL *This,
                       IN UINT32 AuthenticationStatus,
@@ -674,6 +692,7 @@ ResetLaunchBackend(void)
   mLastPreparePolicy = SfbConfigLockAsNeeded;
   BootServices.LoadImage = FakeLoadImage;
   BootServices.StartImage = FakeStartImage;
+  BootServices.SetWatchdogTimer = FakeSetWatchdogTimer;
   gBS = &BootServices;
   mPrepareStatus = EFI_SUCCESS;
   mPrepareCount = 0;
@@ -683,6 +702,7 @@ ResetLaunchBackend(void)
   mStartStatus = EFI_SUCCESS;
   mLoadCount = 0;
   mStartCount = 0;
+  mWatchdogDisableCount = 0;
   mOpenStatus = EFI_SUCCESS;
   mReadStatus = EFI_SUCCESS;
   mEntriesFixtureEnabled = FALSE;
@@ -711,6 +731,7 @@ TestLaunchLifecycle(void)
   UINTN ImageStartBefore;
   UINTN ImageReturnBefore;
   UINTN ImageLoadBefore;
+  UINTN WatchdogBefore;
 
   ResetLaunchBackend ();
   SfbBypassSecurity ();
@@ -724,6 +745,7 @@ TestLaunchLifecycle(void)
   assert(mImageStartMarkerCount == 0);
   assert(mImageReturnMarkerCount == 0);
   assert(mImageLoadMarkerCount == 0);
+  assert(mWatchdogDisableCount == 0);
 
   ResetLaunchBackend ();
   SfbBypassSecurity ();
@@ -752,6 +774,7 @@ TestLaunchLifecycle(void)
   assert(mImageLoadedMarkerCount == 0);
   assert(mImageStartMarkerCount == 0);
   assert(mImageReturnMarkerCount == 0);
+  assert(mWatchdogDisableCount == 0);
 
   ResetLaunchBackend ();
   SfbBypassSecurity ();
@@ -766,6 +789,7 @@ TestLaunchLifecycle(void)
   assert(mImageLoadedMarkerCount == 1);
   assert(mImageStartMarkerCount == 1);
   assert(mImageReturnMarkerCount == 1);
+  assert(mWatchdogDisableCount == 1);
 
   PriorDisarms = mDisarmCount;
   PrepareBefore = mPrepareCount;
@@ -773,6 +797,7 @@ TestLaunchLifecycle(void)
   ImageStartBefore = mImageStartMarkerCount;
   ImageReturnBefore = mImageReturnMarkerCount;
   ImageLoadBefore = mImageLoadMarkerCount;
+  WatchdogBefore = mWatchdogDisableCount;
   mStartStatus = EFI_SUCCESS;
   assert(SfbLaunchImage (&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL) ==
          EFI_SUCCESS);
@@ -782,6 +807,7 @@ TestLaunchLifecycle(void)
   assert(mImageStartMarkerCount == ImageStartBefore + 1);
   assert(mImageReturnMarkerCount == ImageReturnBefore + 1);
   assert(mImageLoadMarkerCount == ImageLoadBefore);
+  assert(mWatchdogDisableCount == WatchdogBefore + 1);
 }
 
 static void

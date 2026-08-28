@@ -116,16 +116,6 @@ WaitForVolumeUpKey (IN UINT32 TimeoutMs)
                  SfbKeyUp);
 }
 
-/* The UEFI architectural watchdog is re-armed by later firmware phases, so the
- * periodic guard re-asserts the disable for the whole interactive run. This
- * says nothing about an OEM applet's private timer - see SuperFbOemWatchdog.c,
- * which is a one-shot protocol call and must not be repeated. */
-STATIC VOID EFIAPI
-SfbWatchdogGuardNotify (IN EFI_EVENT Event, IN VOID *Context)
-{
-  gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
-}
-
 EFI_STATUS EFIAPI  __attribute__ ( (no_sanitize ("safe-stack")))
 LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
@@ -197,29 +187,24 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
      * measured on the OnePlus 15, an idle fastboot session was reset out from
      * under a host mid-conversation.
      *
-     * Two independent timers can do that, and they need different treatment:
+     * Two unrelated timers can do that, so both are handled once, here, before
+     * the first prompt:
      *
      *   - An OEM applet's private reset timer (60 s on the measured target).
-     *     gBS->SetWatchdogTimer () cannot reach it; it is cancelled through the
-     *     applet's own protocol, exactly once, and devices without the applet
-     *     skip it. See SuperFbOemWatchdog.c.
-     *   - The UEFI architectural watchdog (five minutes by default), disabled
-     *     here and re-asserted by a slow periodic event, because later firmware
-     *     phases re-arm it. That event leaks by design: its job ends when the
-     *     BDS exits.
+     *     gBS->SetWatchdogTimer () cannot reach it at all; it is cancelled
+     *     through the applet's own protocol, and a device without the applet
+     *     skips it. See SuperFbOemWatchdog.c.
+     *   - The UEFI architectural watchdog, which the caller that started this
+     *     image armed with the five-minute default.
+     *
+     * Neither needs re-asserting on a timer. Nothing in this loader arms a
+     * watchdog, and the one thing that can - a launched child that returns to
+     * us - re-asserts the disable at its own return point in
+     * SuperFbLaunchPolicy.c. The vendor's fastboot path disables it again on
+     * entry (FastbootCmds.c), which is where upstream does this and only this.
      */
-    {
-      EFI_EVENT GuardEvent;
-
-      SfbOemWatchdogDisable ();
-
-      gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
-      if (!EFI_ERROR (gBS->CreateEvent (EVT_TIMER | EVT_NOTIFY_SIGNAL,
-                                        TPL_CALLBACK, SfbWatchdogGuardNotify,
-                                        NULL, &GuardEvent))) {
-        gBS->SetTimer (GuardEvent, TimerPeriodic, EFI_TIMER_PERIOD_SECONDS (30));
-      }
-    }
+    SfbOemWatchdogDisable ();
+    gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
 
     Status = SfbLoadBootConfig (&Config, &ConfigVolume);
     (VOID)ConfigVolume;
