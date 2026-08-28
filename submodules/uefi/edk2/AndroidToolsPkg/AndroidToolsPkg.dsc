@@ -106,3 +106,4 @@
   AndroidToolsPkg/Application/FdLoader/FdLoader.inf
   AndroidToolsPkg/Application/AbootLoader/AbootLoader.inf
   AndroidToolsPkg/Application/SurfaceTools/SurfaceTools.inf
+  AndroidToolsPkg/Application/UsbTools/UsbTools.inf

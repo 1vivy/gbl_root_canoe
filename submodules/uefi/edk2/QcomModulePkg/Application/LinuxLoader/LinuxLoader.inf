@@ -178,6 +178,7 @@
 	gEfiPartTypeSystemPartGuid
 
 [Protocols]
+	gQcomUsbConfigProtocolGuid
 	gEfiSimpleTextInputExProtocolGuid
 	gEfiBlockIoProtocolGuid
 	gEfiLoadedImageProtocolGuid

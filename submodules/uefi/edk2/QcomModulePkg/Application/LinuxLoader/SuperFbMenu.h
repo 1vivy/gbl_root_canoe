@@ -102,10 +102,6 @@ typedef enum {
   SfbEntryMode,
   /* Export one partition to a host as USB mass storage. */
   SfbEntryMassStorage,
-  /* Report the resident USB protocol population without changing any
-   * controller state. What the firmware actually dispatched is the only thing
-   * that decides whether a USB host stack is reachable. */
-  SfbEntryUsbCensus,
   /* Boot Loader Specification Type #1 entries discovered on removable media.
    * The Linux kind additionally publishes an initrd and a DTB; the EFI kind is
    * an ordinary LoadImage with a command line. */

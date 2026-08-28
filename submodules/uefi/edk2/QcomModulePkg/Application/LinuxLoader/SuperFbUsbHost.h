@@ -16,111 +16,10 @@
 
 #include <Uefi.h>
 
-/*
- * QCOM_USB_CONFIG_PROTOCOL, mirrored locally rather than pulled in from a
- * vendor include path, exactly as SuperFbMassStorage.h mirrors the MSD
- * protocol. GUID e722b03f-b250-42ce-8ebd-5bd51812d037.
- *
- * Members this loader calls are typed; the rest are VOID * so the vtable
- * offsets stay exact. Member order is load-bearing - the struct is only ever
- * read through a pointer the platform handed us, so a reordered field is a
- * call to the wrong function, not a compile error.
- *
- * The two enum-typed fields are UINT32 and AlwaysConnected is UINT8; the
- * vendor declares them as two enums plus UINT8, and both enums fit in int, so
- * the widths agree on AArch64 LP64.
- */
-#define SFB_USB_CORE_0            0u
-#define SFB_USB_CORE_1            1u
-#define SFB_USB_CORE_2            2u
-#define SFB_USB_CORE_MAX_NUM      6u
-
-/*
- * QCOM_USB_MODE_TYPE carries two disjoint value sets in one enum, and mixing
- * them is a silent wrong answer rather than a type error.
- *
- * Controller-interface values are what StartController/StopController/ConfigUsb
- * take. Client-selection values are what GetSupUsbMode reports. A capability
- * test against GetSupUsbMode must use SFB_USB_HOST_MODE, never
- * SFB_USB_HOST_MODE_XHCI.
- */
-#define SFB_USB_HOST_MODE_XHCI    0x00000001u  /* interface: pass to Start */
-#define SFB_USB_DEVICE_MODE_SS    0x00000004u  /* interface: pass to Start */
-#define SFB_USB_HOST_MODE         0x00000008u  /* capability: from GetSupUsbMode */
-#define SFB_USB_DEVICE_MODE       0x00000010u  /* capability: from GetSupUsbMode */
-#define SFB_USB_DUAL_ROLE_MODE    0x00000020u  /* capability: from GetSupUsbMode */
-#define SFB_USB_INVALID_MODE      0x00010000u
-#define SFB_VBUS_STATUS_DISABLED  0u
-
-/* Vendor protocol revisions. A member added in revision N is only present
- * when Revision >= that value; reading further is a read past the end. */
-#define SFB_USB_CFG_REVISION_1    0x0000000000010006ULL
-#define SFB_USB_CFG_REVISION_2    0x0000000000020001ULL
-#define SFB_USB_CFG_REVISION_3    0x0000000000030001ULL
-
-typedef struct _SFB_USB_CONFIG_PROTOCOL SFB_USB_CONFIG_PROTOCOL;
-
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_START_CONTROLLER)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreNum, IN UINT32 ModeType);
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_STOP_CONTROLLER)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreNum, IN UINT32 ModeType);
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_CONFIG_USB)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, IN UINT32 ModeType, IN UINT32 CoreNum);
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_GET_VBUS_STATUS)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreNum, OUT UINT32 *VbusStatus);
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_ENABLE_VBUS)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreNum);
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_GET_SUPPORTED_MODE)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreNum, OUT UINT32 *ModeType);
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_GET_CORE_COUNT)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, OUT UINT32 *CoreCount);
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_GET_MAX_HOST_CORE)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, OUT UINT32 *MaxHostCoreNum);
-typedef EFI_STATUS (EFIAPI *SFB_USB_CFG_SET_USB_CORE_MODE)(
-  IN SFB_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreIdx, IN UINT32 NewMode);
-
-struct _SFB_USB_CONFIG_PROTOCOL {
-  UINT64                        Revision;
-  VOID                         *GetCoreBaseAddr;
-  SFB_USB_CFG_CONFIG_USB        ConfigUsb;
-  VOID                         *ResetUsb;
-  VOID                         *GetUsbFnConfig;
-  VOID                         *GetSSUsbFnConfig;
-  VOID                         *GetUsbFnConnStatus;
-  VOID                         *GetUsbHostConfig;
-  SFB_USB_CFG_GET_MAX_HOST_CORE GetUsbMaxHostCoreNum;
-  VOID                         *ExitUsbLibServices;
-  SFB_USB_CFG_START_CONTROLLER  StartController;
-  SFB_USB_CFG_STOP_CONTROLLER   StopController;
-  VOID                         *EnterLPM;
-  VOID                         *ExitLPM;
-  VOID                         *ToggleUsbMode;
-  SFB_USB_CFG_GET_CORE_COUNT    GetCoreCount;
-  SFB_USB_CFG_GET_SUPPORTED_MODE GetSupUsbMode;
-  UINT32                        CoreNum;
-  UINT32                        ModeType;
-  UINT8                         AlwaysConnected;
-  SFB_USB_CFG_GET_VBUS_STATUS   GetUsbVbusStatus;
-  SFB_USB_CFG_ENABLE_VBUS       UsbEnableVbus;
-  /*
-   * Tail through revision 3. Offsets verified against the vendor header by
-   * canoe-usb/tools/offsets_probe.c: PollSSPhyTraining 0xa8 .. SetUsbCoreMode
-   * 0xf0, sizeof 0xf8. Members are only present when Revision reaches the
-   * value that introduced them, and the vendor ships NULL members even when
-   * present (ExitUsbLibServices is NULL on the 2.5.1 build), so every call
-   * site must check both Revision and the pointer.
-   */
-  VOID                         *PollSSPhyTraining;
-  VOID                         *AdvanceSSCmplPattern;
-  VOID                         *GetWoLState;      /* revision 2 */
-  VOID                         *SetWoLState;      /* revision 2 */
-  VOID                         *GetVariable;      /* revision 3 */
-  VOID                         *SetVariable;      /* revision 3 */
-  VOID                         *IsEudEnable;      /* revision 3 */
-  VOID                         *SetUsbLoopback;   /* revision 3 */
-  VOID                         *GetUsbCoreInfo;   /* revision 3 */
-  SFB_USB_CFG_SET_USB_CORE_MODE SetUsbCoreMode;   /* revision 3 */
-};
+/* The vendor protocol mirror lives in QcomModulePkg/Include/Protocol so the
+ * standalone diagnostics tool (AndroidToolsPkg UsbTools) compiles against
+ * the same definition this file drives. */
+#include <Protocol/QcomUsbConfig.h>
 
 /*
  * Report every USB-relevant protocol instance and its mode without changing
@@ -161,8 +60,8 @@ typedef struct {
   UINT64  Revision;
   UINT32  CoreCount;
   /* GetSupUsbMode per core, in the client-selection vocabulary. Entries past
-   * CoreCount, and cores the query failed for, are SFB_USB_INVALID_MODE. */
-  UINT32  CoreModes[SFB_USB_CORE_MAX_NUM];
+   * CoreCount, and cores the query failed for, are QCOM_USB_INVALID_MODE. */
+  UINT32  CoreModes[QCOM_USB_CORE_MAX_NUM];
 } SFB_USB_HOST_COUNTS;
 
 VOID

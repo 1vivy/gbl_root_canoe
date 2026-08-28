@@ -36,16 +36,6 @@
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbUsbHostModuleTag = "SuperFbUsbHost";
 
-/*
- * QCOM_USB_CONFIG_PROTOCOL. Not declared in QcomModulePkg.dec, so it lives
- * here as a file-static constant the same way SuperFbMassStorage.c carries the
- * peripheral-side GUIDs.
- */
-STATIC CONST EFI_GUID mSfbUsbConfigProtocolGuid = {
-  0xe722b03f, 0xb250, 0x42ce,
-  { 0x8e, 0xbd, 0x5b, 0xd5, 0x18, 0x12, 0xd0, 0x37 }
-};
-
 /* TRUE only between a successful acquire and its release. */
 STATIC BOOLEAN mSfbUsbHostOwned = FALSE;
 
@@ -67,7 +57,7 @@ STATIC BOOLEAN mSfbUsbHostConnectFresh = FALSE;
 
 /* The core the acquire actually won. Release must name the same one, and the
  * ladder below may settle on core 1. */
-STATIC UINT32 mSfbUsbHostCore = SFB_USB_CORE_0;
+STATIC UINT32 mSfbUsbHostCore = QCOM_USB_CORE_0;
 
 /* Wall time the enumeration poll is allowed to spend waiting for a stick. */
 #define SFB_USB_HOST_ENUM_STEP_US    (250u * 1000u)
@@ -90,18 +80,18 @@ SfbUsbHostCountByProtocol (IN CONST EFI_GUID *Protocol)
 }
 
 /* Defined below; the census needs it before the file gets there. */
-STATIC SFB_USB_CONFIG_PROTOCOL *SfbUsbHostConfig (VOID);
+STATIC QCOM_USB_CONFIG_PROTOCOL *SfbUsbHostConfig (VOID);
 
 VOID
 SfbUsbHostCounts (OUT SFB_USB_HOST_COUNTS *Counts)
 {
-  SFB_USB_CONFIG_PROTOCOL  *Cfg;
+  QCOM_USB_CONFIG_PROTOCOL  *Cfg;
   UINT32                    Index;
 
   if (Counts == NULL) {
     return;
   }
-  Counts->Cfg     = (UINT32)SfbUsbHostCountByProtocol (&mSfbUsbConfigProtocolGuid);
+  Counts->Cfg     = (UINT32)SfbUsbHostCountByProtocol (&gQcomUsbConfigProtocolGuid);
   Counts->Usb2Hc  = (UINT32)SfbUsbHostCountByProtocol (&gEfiUsb2HcProtocolGuid);
   Counts->PciIo   = (UINT32)SfbUsbHostCountByProtocol (&gEfiPciIoProtocolGuid);
   Counts->UsbIo   = (UINT32)SfbUsbHostCountByProtocol (&gEfiUsbIoProtocolGuid);
@@ -119,8 +109,8 @@ SfbUsbHostCounts (OUT SFB_USB_HOST_COUNTS *Counts)
 
   Counts->Revision  = 0;
   Counts->CoreCount = 0;
-  for (Index = 0; Index < SFB_USB_CORE_MAX_NUM; Index++) {
-    Counts->CoreModes[Index] = SFB_USB_INVALID_MODE;
+  for (Index = 0; Index < QCOM_USB_CORE_MAX_NUM; Index++) {
+    Counts->CoreModes[Index] = QCOM_USB_INVALID_MODE;
   }
 
   /*
@@ -138,14 +128,14 @@ SfbUsbHostCounts (OUT SFB_USB_HOST_COUNTS *Counts)
     UINT32  Reported = 0;
 
     if (!EFI_ERROR (Cfg->GetCoreCount (Cfg, &Reported)) &&
-        Reported <= SFB_USB_CORE_MAX_NUM) {
+        Reported <= QCOM_USB_CORE_MAX_NUM) {
       Counts->CoreCount = Reported;
     }
   }
 
   if (Cfg->GetSupUsbMode != NULL) {
     UINT32  Limit = (Counts->CoreCount != 0) ? Counts->CoreCount
-                                             : SFB_USB_CORE_MAX_NUM;
+                                             : QCOM_USB_CORE_MAX_NUM;
 
     for (Index = 0; Index < Limit; Index++) {
       UINT32  Modes = 0;
@@ -173,17 +163,17 @@ SfbUsbHostCensus (VOID)
           Counts.BlockIo, Counts.SimpleFs, Counts.DriverBinding));
 
   if (EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol,
-                                          (EFI_GUID *)&mSfbUsbConfigProtocolGuid,
+                                          (EFI_GUID *)&gQcomUsbConfigProtocolGuid,
                                           NULL, &CfgCount, &Handles)) ||
       Handles == NULL) {
     return;
   }
 
   for (Index = 0; Index < CfgCount; Index++) {
-    SFB_USB_CONFIG_PROTOCOL  *Cfg = NULL;
+    QCOM_USB_CONFIG_PROTOCOL  *Cfg = NULL;
 
     if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
-                                        (EFI_GUID *)&mSfbUsbConfigProtocolGuid,
+                                        (EFI_GUID *)&gQcomUsbConfigProtocolGuid,
                                         (VOID **)&Cfg)) ||
         Cfg == NULL) {
       continue;
@@ -201,12 +191,12 @@ SfbUsbHostCensus (VOID)
 /* Locate the sentinel UsbConfig instance, or NULL when the resident firmware
  * carries no UsbConfig at all. */
 STATIC
-SFB_USB_CONFIG_PROTOCOL *
+QCOM_USB_CONFIG_PROTOCOL *
 SfbUsbHostConfig (VOID)
 {
-  SFB_USB_CONFIG_PROTOCOL  *Cfg = NULL;
+  QCOM_USB_CONFIG_PROTOCOL  *Cfg = NULL;
 
-  if (EFI_ERROR (gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbConfigProtocolGuid,
+  if (EFI_ERROR (gBS->LocateProtocol ((EFI_GUID *)&gQcomUsbConfigProtocolGuid,
                                       NULL, (VOID **)&Cfg))) {
     return NULL;
   }
@@ -227,26 +217,26 @@ SfbUsbHostConfig (VOID)
  * the crash observed at the host:start mark.
  */
 STATIC
-SFB_USB_CONFIG_PROTOCOL *
+QCOM_USB_CONFIG_PROTOCOL *
 SfbUsbHostConfigForCore (IN UINT32 Core)
 {
   EFI_HANDLE               *Handles = NULL;
   UINTN                    Count    = 0;
   UINTN                    Index;
-  SFB_USB_CONFIG_PROTOCOL  *Found   = NULL;
+  QCOM_USB_CONFIG_PROTOCOL  *Found   = NULL;
 
   if (EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol,
-                                          (EFI_GUID *)&mSfbUsbConfigProtocolGuid,
+                                          (EFI_GUID *)&gQcomUsbConfigProtocolGuid,
                                           NULL, &Count, &Handles)) ||
       Handles == NULL) {
     return NULL;
   }
 
   for (Index = 0; Index < Count && Found == NULL; Index++) {
-    SFB_USB_CONFIG_PROTOCOL  *Cfg = NULL;
+    QCOM_USB_CONFIG_PROTOCOL  *Cfg = NULL;
 
     if (!EFI_ERROR (gBS->HandleProtocol (Handles[Index],
-                                         (EFI_GUID *)&mSfbUsbConfigProtocolGuid,
+                                         (EFI_GUID *)&gQcomUsbConfigProtocolGuid,
                                          (VOID **)&Cfg)) &&
         Cfg != NULL && Cfg->CoreNum == Core) {
       Found = Cfg;
@@ -269,22 +259,22 @@ SfbUsbHostAlreadyHost (OUT UINT32 *Core)
   BOOLEAN     Found = FALSE;
 
   if (EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol,
-                                          (EFI_GUID *)&mSfbUsbConfigProtocolGuid,
+                                          (EFI_GUID *)&gQcomUsbConfigProtocolGuid,
                                           NULL, &Count, &Handles)) ||
       Handles == NULL) {
     return FALSE;
   }
 
   for (Index = 0; Index < Count && !Found; Index++) {
-    SFB_USB_CONFIG_PROTOCOL  *Cfg = NULL;
+    QCOM_USB_CONFIG_PROTOCOL  *Cfg = NULL;
 
     if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
-                                        (EFI_GUID *)&mSfbUsbConfigProtocolGuid,
+                                        (EFI_GUID *)&gQcomUsbConfigProtocolGuid,
                                         (VOID **)&Cfg)) ||
         Cfg == NULL) {
       continue;
     }
-    if (Cfg->ModeType == SFB_USB_HOST_MODE_XHCI) {
+    if (Cfg->ModeType == QCOM_USB_HOST_MODE_XHCI) {
       *Core = Cfg->CoreNum;
       Found = TRUE;
     }
@@ -303,7 +293,7 @@ SfbUsbHostConfigHandles (OUT EFI_HANDLE **Handles)
 
   *Handles = NULL;
   if (EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol,
-                                          (EFI_GUID *)&mSfbUsbConfigProtocolGuid,
+                                          (EFI_GUID *)&gQcomUsbConfigProtocolGuid,
                                           NULL, &Count, Handles))) {
     *Handles = NULL;
     return 0;
@@ -342,23 +332,6 @@ SfbUsbHostBindNewHandles (IN EFI_HANDLE *Before, IN UINTN BeforeCount)
       }
     }
     if (!Known) {
-      SFB_USB_CONFIG_PROTOCOL  *Cfg = NULL;
-      CHAR16                   Mark[40];
-
-      /* Print exactly what the shim's Supported() is about to test on this
-       * handle: coreNum < USB_CORE_MAX_NUM and modeType == XHCI. If mode is
-       * not 1 here, the vendor start never marked the handle XHCI and the
-       * silent reject is explained. */
-      if (!EFI_ERROR (gBS->HandleProtocol (After[Outer],
-                                           (EFI_GUID *)&mSfbUsbConfigProtocolGuid,
-                                           (VOID **)&Cfg)) &&
-          Cfg != NULL) {
-        UnicodeSPrint (Mark, sizeof (Mark), L"host:new core=%u mode=%x",
-                       Cfg->CoreNum, Cfg->ModeType);
-      } else {
-        UnicodeSPrint (Mark, sizeof (Mark), L"host:new core=? mode=?");
-      }
-      SfbBootMark (Mark);
       gBS->ConnectController (After[Outer], NULL, NULL, TRUE);
     }
   }
@@ -436,7 +409,6 @@ SfbUsbHostLoadStack (VOID)
   }
   FreePool (Config);
 
-  SfbBootMark (L"host:load");
   for (Index = 0; Index < ARRAY_SIZE (Stack); Index++) {
     CHAR16      Path[SFB_PATH_CHARS];
     EFI_STATUS  Status;
@@ -446,15 +418,6 @@ SfbUsbHostLoadStack (VOID)
     Status = SfbLoadDriver (Volume, Path);
     DEBUG ((EFI_D_ERROR, "SFB: MARK usbhost-driver name=%s status=%r\n",
             Stack[Index], Status));
-    {
-      CHAR16  Mark[32];
-
-      /* The load results are the one fact the whole host path stands on,
-       * and the log that carries them never survives a fault. Screen. */
-      UnicodeSPrint (Mark, sizeof (Mark), L"host:drv%u=%x",
-                     (UINT32)Index, (UINT32)(Status & 0xFFFFFFFF));
-      SfbBootMark (Mark);
-    }
     if (!EFI_ERROR (Status)) {
       Loaded++;
     }
@@ -474,17 +437,17 @@ SfbUsbHostLoadStack (VOID)
  * not start, and this loader faulted the machine twice by doing exactly that.
  *
  * Answers in the client-selection vocabulary, so the test is against
- * SFB_USB_HOST_MODE / SFB_USB_DUAL_ROLE_MODE, never SFB_USB_HOST_MODE_XHCI.
+ * QCOM_USB_HOST_MODE / QCOM_USB_DUAL_ROLE_MODE, never QCOM_USB_HOST_MODE_XHCI.
  */
 STATIC
 BOOLEAN
-SfbUsbHostAnyCapableCore (IN SFB_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *First)
+SfbUsbHostAnyCapableCore (IN QCOM_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *First)
 {
-  UINT32  Limit = SFB_USB_CORE_MAX_NUM;
+  UINT32  Limit = QCOM_USB_CORE_MAX_NUM;
   UINT32  Reported = 0;
   UINT32  Index;
 
-  *First = SFB_USB_CORE_0;
+  *First = QCOM_USB_CORE_0;
 
   if (Cfg->GetSupUsbMode == NULL) {
     /* No way to ask. Refuse rather than probe blindly: an unanswerable
@@ -494,7 +457,7 @@ SfbUsbHostAnyCapableCore (IN SFB_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *First)
   }
   if (Cfg->GetCoreCount != NULL &&
       !EFI_ERROR (Cfg->GetCoreCount (Cfg, &Reported)) &&
-      Reported > 0 && Reported <= SFB_USB_CORE_MAX_NUM) {
+      Reported > 0 && Reported <= QCOM_USB_CORE_MAX_NUM) {
     Limit = Reported;
   }
 
@@ -505,7 +468,7 @@ SfbUsbHostAnyCapableCore (IN SFB_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *First)
     DEBUG ((EFI_D_ERROR, "SFB: MARK usbhost-cap core=%u status=%r modes=0x%x\n",
             Index, Query, Modes));
     if (!EFI_ERROR (Query) &&
-        (Modes & (SFB_USB_HOST_MODE | SFB_USB_DUAL_ROLE_MODE)) != 0) {
+        (Modes & (QCOM_USB_HOST_MODE | QCOM_USB_DUAL_ROLE_MODE)) != 0) {
       *First = Index;
       return TRUE;
     }
@@ -515,14 +478,14 @@ SfbUsbHostAnyCapableCore (IN SFB_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *First)
 
 STATIC
 EFI_STATUS
-SfbUsbHostStart (IN SFB_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *Core)
+SfbUsbHostStart (IN QCOM_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *Core)
 {
   EFI_STATUS  Status;
   EFI_HANDLE  *Before      = NULL;
   UINTN       BeforeCount = 0;
-  UINT32      Capable     = SFB_USB_CORE_0;
+  UINT32      Capable     = QCOM_USB_CORE_0;
 
-  *Core = SFB_USB_CORE_0;
+  *Core = QCOM_USB_CORE_0;
 
   /*
    * Nothing below this point is read-only, so the capability gate comes
@@ -561,12 +524,10 @@ SfbUsbHostStart (IN SFB_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *Core)
   BeforeCount = SfbUsbHostConfigHandles (&Before);
 
   *Core = Capable;
-  SfbBootMark (L"host:start");
-  Status = Cfg->StartController (Cfg, Capable, SFB_USB_HOST_MODE_XHCI);
+  Status = Cfg->StartController (Cfg, Capable, QCOM_USB_HOST_MODE_XHCI);
   DEBUG ((EFI_D_ERROR, "SFB: MARK usbhost-start status=%r core=%u try=1\n",
           Status, Capable));
   if (!EFI_ERROR (Status)) {
-    SfbBootMark (L"host:started");
     SfbUsbHostBindNewHandles (Before, BeforeCount);
     if (Before != NULL) {
       FreePool (Before);
@@ -582,11 +543,10 @@ SfbUsbHostStart (IN SFB_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *Core)
    * callback. The cost when it was not needed is one device-mode blip.
    */
   SfbUsbControllerInit ();
-  Status = Cfg->StartController (Cfg, Capable, SFB_USB_HOST_MODE_XHCI);
+  Status = Cfg->StartController (Cfg, Capable, QCOM_USB_HOST_MODE_XHCI);
   DEBUG ((EFI_D_ERROR, "SFB: MARK usbhost-start status=%r core=%u try=2\n",
           Status, Capable));
   if (!EFI_ERROR (Status)) {
-    SfbBootMark (L"host:started");
     SfbUsbHostBindNewHandles (Before, BeforeCount);
   }
   if (Before != NULL) {
@@ -616,16 +576,16 @@ SfbUsbHostStart (IN SFB_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *Core)
  */
 STATIC
 VOID
-SfbUsbHostEnableVbus (IN SFB_USB_CONFIG_PROTOCOL *Cfg, IN UINT32 Core)
+SfbUsbHostEnableVbus (IN QCOM_USB_CONFIG_PROTOCOL *Cfg, IN UINT32 Core)
 {
   EFI_STATUS  Status;
-  UINT32      Vbus = SFB_VBUS_STATUS_DISABLED;
+  UINT32      Vbus = QCOM_USB_VBUS_DISABLED;
 
   if (Cfg->GetUsbVbusStatus == NULL || Cfg->UsbEnableVbus == NULL) {
     return;
   }
   if (EFI_ERROR (Cfg->GetUsbVbusStatus (Cfg, Core, &Vbus)) ||
-      Vbus != SFB_VBUS_STATUS_DISABLED) {
+      Vbus != QCOM_USB_VBUS_DISABLED) {
     return;
   }
   Status = Cfg->UsbEnableVbus (Cfg, Core);
@@ -667,8 +627,8 @@ EFI_STATUS
 SfbUsbHostAcquire (VOID)
 {
   EFI_STATUS               Status;
-  SFB_USB_CONFIG_PROTOCOL  *Cfg;
-  UINT32                   Core = SFB_USB_CORE_0;
+  QCOM_USB_CONFIG_PROTOCOL  *Cfg;
+  UINT32                   Core = QCOM_USB_CORE_0;
   BOOLEAN                  Switched = FALSE;
   UINTN                    Controllers;
 
@@ -707,35 +667,19 @@ SfbUsbHostAcquire (VOID)
     return EFI_NOT_FOUND;
   }
   if (Switched) {
-    SfbBootMark (L"host:vbus");
     SfbUsbHostEnableVbus (Cfg, Core);
   }
 
   /* SfbStartFatStack's connect pass is what binds the new UsbIo children down
    * through mass storage, BlockIo and DiskIo to the linked FAT driver. */
-  SfbBootMark (L"host:fat");
   SfbStartFatStack ();
   /* The handle set just changed and the volume classification cache is keyed
    * on handles, so a stale entry would misclassify a recycled handle. */
   SfbResetVolumeClassCache ();
 
-  SfbBootMark (L"host:wait");
   SfbUsbHostAwaitVolumes ();
 
   Controllers = SfbUsbHostCountByProtocol (&gEfiUsb2HcProtocolGuid);
-  {
-    CHAR16  Mark[32];
-
-    /* The host-controller count is the verdict of the whole acquire and the
-     * branch selector for the abandon path. The PciIo count forks the
-     * failure: nonzero means the shim bound and XhciDxe is the failing
-     * layer; zero means the vendor start never got the shim bound at all.
-     * Taken before the restore, whose internal stop uninstalls PciIo. */
-    UnicodeSPrint (Mark, sizeof (Mark), L"host:hc=%u pci=%u",
-                   (UINT32)Controllers,
-                   (UINT32)SfbUsbHostCountByProtocol (&gEfiPciIoProtocolGuid));
-    SfbBootMark (Mark);
-  }
 
   /*
    * Ownership means a host stack actually exists, not that StartController
@@ -761,11 +705,9 @@ SfbUsbHostAcquire (VOID)
        * the order its state machine expects. A naked StopController here
        * faulted the device at the host:stop mark.
        */
-      SfbBootMark (L"host:restore");
       Start = Cfg->StartController (Cfg, mSfbUsbHostCore,
-                                    SFB_USB_DEVICE_MODE_SS);
+                                    QCOM_USB_DEVICE_MODE_SS);
       SfbResetVolumeClassCache ();
-      SfbBootMark (L"host:abandoned");
     }
 
     mSfbUsbHostOwned = FALSE;
@@ -833,7 +775,7 @@ STATIC
 VOID
 SfbUsbHostRelease (VOID)
 {
-  SFB_USB_CONFIG_PROTOCOL  *Cfg;
+  QCOM_USB_CONFIG_PROTOCOL  *Cfg;
   EFI_STATUS               Start;
 
   /*
@@ -874,7 +816,7 @@ SfbUsbHostRelease (VOID)
    * mode-switch flows are built that way, and a naked StopController on this
    * device faulted the machine from the abandon path.
    */
-  Start = Cfg->StartController (Cfg, mSfbUsbHostCore, SFB_USB_DEVICE_MODE_SS);
+  Start = Cfg->StartController (Cfg, mSfbUsbHostCore, QCOM_USB_DEVICE_MODE_SS);
 
   SfbResetVolumeClassCache ();
   mSfbUsbHostOwned = FALSE;

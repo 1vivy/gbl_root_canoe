@@ -1052,10 +1052,10 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   EFI_STATUS Status;
   EFI_HANDLE ConfigVolume = NULL;
   SFB_CONFIG Config;
-  /* Fastboot, Selector, Tools, Mass Storage, USB Diagnostics, Recovery,
-   * Power Off, Restart: the rows appended after truncation, whose space the
-   * discovered entries must not eat. */
-  UINTN MandatoryRows = 8;
+  /* Fastboot, Selector, Tools, Mass Storage, Recovery, Power Off, Restart:
+   * the rows appended after truncation, whose space the discovered entries
+   * must not eat. */
+  UINTN MandatoryRows = 7;
   UINTN ReservedRows;
   UINTN Unconfigured;
   UINTN Index;
@@ -1135,7 +1135,6 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   SfbAppendBuiltIn (Menu, SfbEntrySelector, L"Enter EFI Program Selector");
   SfbAppendBuiltIn (Menu, SfbEntryTools, L"EFI Tools");
   SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");
-  SfbAppendBuiltIn (Menu, SfbEntryUsbCensus, L"USB Diagnostics");
   SfbAppendBuiltIn (Menu, SfbEntryRecovery, L"Reboot to Recovery");
   SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power Off");
   SfbAppendBuiltIn (Menu, SfbEntryRestart, L"Restart");

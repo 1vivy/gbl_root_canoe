@@ -188,7 +188,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
      * host stack and its restore faults the machine - three separate boots
      * died here. A boot menu that cannot be reached is worth less than USB
      * boot, so the core is left exactly as inherited and host mode is an
-     * explicit operator action from the USB Diagnostics screen instead.
+     * explicit operator action from the UsbTools EFI tool instead.
      *
      * The census below is pure query: it reads protocol counts and asks
      * GetSupUsbMode, and changes nothing. If it reports a host-capable core
