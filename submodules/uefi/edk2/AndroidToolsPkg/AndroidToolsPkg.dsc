@@ -45,8 +45,11 @@
   DebugPrintErrorLevelLib|MdePkg/Library/BaseDebugPrintErrorLevelLib/BaseDebugPrintErrorLevelLib.inf
   PrintLib|MdePkg/Library/BasePrintLib/BasePrintLib.inf
   DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
+  CacheMaintenanceLib|MdePkg/Library/BaseCacheMaintenanceLib/BaseCacheMaintenanceLib.inf
   PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
   AndroidToolsUi|AndroidToolsPkg/Library/AndroidToolsUi/AndroidToolsUi.inf
+  # Raw payload handoff shared by the two non-PE payload loaders.
+  AtRawBoot|AndroidToolsPkg/Library/AtRawBoot/AtRawBoot.inf
   # Clang may enable stack protection heuristically; satisfy its guard symbols.
   NULL|MdePkg/Library/BaseStackCheckLib/BaseStackCheckLib.inf
 
@@ -96,3 +99,8 @@
   AndroidToolsPkg/Application/RebootTools/RebootTools.inf
   AndroidToolsPkg/Application/ArbTools/ArbTools.inf
   AndroidToolsPkg/Application/BLTools/BLTools.inf
+  # Non-PE payload loaders: a raw firmware volume and an Android boot image.
+  # Both are launched as ordinary EFI applications with arguments in
+  # LoadOptions, which is what keeps the BDS a plain PE launcher.
+  AndroidToolsPkg/Application/FdLoader/FdLoader.inf
+  AndroidToolsPkg/Application/AbootLoader/AbootLoader.inf
