@@ -32,8 +32,40 @@
 
 #include "SurfaceInventory.h"
 
+CONST AT_REPORT_SOURCE gStPassiveReports[ST_PASSIVE_REPORT_COUNT] = {
+  { L"Execution Summary",     StBuildSummaryReport },
+  { L"Known Policy Surfaces", StBuildPolicyReport },
+  { L"Protocol GUID Census",  StBuildProtocolReport },
+  { L"Configuration Tables",  StBuildTableReport },
+  { L"Loaded Images",         StBuildImageReport },
+  { L"Memory Map",            StBuildMemoryReport },
+};
+
 #define ST_MAX_PROTOCOLS  512u
 #define ST_MAX_TABLES     128u
+
+VOID
+StFormatGuid (
+  IN  CONST EFI_GUID *Guid,
+  OUT CHAR16         *Buffer,
+  IN  UINTN          BufferChars
+  )
+{
+  if (Buffer == NULL || BufferChars == 0) {
+    return;
+  }
+  Buffer[0] = L'\0';
+  if (Guid == NULL || BufferChars < 37) {
+    return;
+  }
+
+  UnicodeSPrint (
+      Buffer, BufferChars * sizeof (CHAR16),
+      L"%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+      Guid->Data1, Guid->Data2, Guid->Data3,
+      Guid->Data4[0], Guid->Data4[1], Guid->Data4[2], Guid->Data4[3],
+      Guid->Data4[4], Guid->Data4[5], Guid->Data4[6], Guid->Data4[7]);
+}
 
 typedef BOOLEAN (*ST_METHOD_CHECK)(IN VOID *Interface);
 
@@ -133,18 +165,18 @@ SortGuidCounts (ST_GUID_COUNT *Items, UINTN Count)
 }
 
 EFI_STATUS
-StBuildPolicyReport (OUT ST_REPORT *Report)
+StBuildPolicyReport (OUT AT_REPORT *Report)
 {
   UINTN Index;
   VOID *Interface;
   EFI_STATUS Status;
   ST_PROBE_OBSERVATION Observation;
 
-  Status = StReportInit (Report, sizeof (mKnown) / sizeof (mKnown[0]) + 1);
+  Status = AtReportInit (Report, sizeof (mKnown) / sizeof (mKnown[0]) + 1);
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  StReportAdd (Report, L"EUD: no known UEFI GUID; use external USB/SWD probe");
+  AtReportAdd (Report, L"EUD: no known UEFI GUID; use external USB/SWD probe");
 
   for (Index = 0; Index < sizeof (mKnown) / sizeof (mKnown[0]); Index++) {
     Interface = NULL;
@@ -155,7 +187,7 @@ StBuildPolicyReport (OUT ST_REPORT *Report)
     Observation.Invoked = FALSE;
     Observation.Status = EFI_NOT_READY;
     Observation.EffectObserved = FALSE;
-    StReportAdd (Report, L"%s: %s [%s]", mKnown[Index].Name,
+    AtReportAdd (Report, L"%s: %s [%s]", mKnown[Index].Name,
                  StProbeStateName (StClassifyProbe (&Observation)),
                  mKnown[Index].Class);
   }
@@ -163,7 +195,7 @@ StBuildPolicyReport (OUT ST_REPORT *Report)
 }
 
 EFI_STATUS
-StBuildProtocolReport (OUT ST_REPORT *Report)
+StBuildProtocolReport (OUT AT_REPORT *Report)
 {
   EFI_HANDLE *Handles;
   EFI_GUID **Guids;
@@ -177,13 +209,13 @@ StBuildProtocolReport (OUT ST_REPORT *Report)
   UINTN I;
   CHAR16 GuidText[37];
 
-  Status = StReportInit (Report, ST_MAX_PROTOCOLS);
+  Status = AtReportInit (Report, ST_MAX_PROTOCOLS);
   if (EFI_ERROR (Status)) {
     return Status;
   }
   Items = AllocateZeroPool (ST_MAX_PROTOCOLS * sizeof (*Items));
   if (Items == NULL) {
-    StReportFree (Report);
+    AtReportFree (Report);
     return EFI_OUT_OF_RESOURCES;
   }
 
@@ -193,7 +225,7 @@ StBuildProtocolReport (OUT ST_REPORT *Report)
   Status = gBS->LocateHandleBuffer (AllHandles, NULL, NULL,
                                     &HandleCount, &Handles);
   if (EFI_ERROR (Status)) {
-    StReportAdd (Report, L"Handle census failed: %r", Status);
+    AtReportAdd (Report, L"Handle census failed: %r", Status);
     FreePool (Items);
     return EFI_SUCCESS;
   }
@@ -233,7 +265,7 @@ StBuildProtocolReport (OUT ST_REPORT *Report)
   for (I = 0; I < Count; I++) {
     StFormatGuid (&Items[I].Guid, GuidText,
                   sizeof (GuidText) / sizeof (GuidText[0]));
-    StReportAdd (Report, L"%s  h=%Lu %s", GuidText,
+    AtReportAdd (Report, L"%s  h=%Lu %s", GuidText,
                  (UINT64)Items[I].Handles, KnownGuidName (&Items[I].Guid));
   }
   FreePool (Items);
@@ -254,7 +286,7 @@ TableName (CONST EFI_GUID *Guid)
 }
 
 EFI_STATUS
-StBuildTableReport (OUT ST_REPORT *Report)
+StBuildTableReport (OUT AT_REPORT *Report)
 {
   ST_TABLE *Tables;
   ST_TABLE Swap;
@@ -265,13 +297,13 @@ StBuildTableReport (OUT ST_REPORT *Report)
   CHAR16 GuidText[37];
 
   Count = gST->NumberOfTableEntries;
-  Status = StReportInit (Report, (Count == 0) ? 1 :
+  Status = AtReportInit (Report, (Count == 0) ? 1 :
                         ((Count < ST_MAX_TABLES) ? Count : ST_MAX_TABLES));
   if (EFI_ERROR (Status)) {
     return Status;
   }
   if (Count == 0) {
-    StReportAdd (Report, L"No configuration tables");
+    AtReportAdd (Report, L"No configuration tables");
     return EFI_SUCCESS;
   }
   if (Count > ST_MAX_TABLES) {
@@ -281,7 +313,7 @@ StBuildTableReport (OUT ST_REPORT *Report)
 
   Tables = AllocateZeroPool (Count * sizeof (*Tables));
   if (Tables == NULL) {
-    StReportFree (Report);
+    AtReportFree (Report);
     return EFI_OUT_OF_RESOURCES;
   }
   for (I = 0; I < Count; I++) {
@@ -298,7 +330,7 @@ StBuildTableReport (OUT ST_REPORT *Report)
   for (I = 0; I < Count; I++) {
     StFormatGuid (&Tables[I].Guid, GuidText,
                   sizeof (GuidText) / sizeof (GuidText[0]));
-    StReportAdd (Report, L"%s  %s", GuidText, TableName (&Tables[I].Guid));
+    AtReportAdd (Report, L"%s  %s", GuidText, TableName (&Tables[I].Guid));
   }
   FreePool (Tables);
   return EFI_SUCCESS;

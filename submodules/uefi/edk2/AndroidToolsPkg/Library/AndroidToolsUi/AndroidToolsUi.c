@@ -318,3 +318,129 @@ AtUiRunMenu (
     }
   }
 }
+
+EFI_STATUS
+AtReportInit (
+  OUT AT_REPORT *Report,
+  IN  UINTN     Capacity
+  )
+{
+  if (Report == NULL || Capacity == 0 ||
+      Capacity > MAX_UINTN / sizeof (AT_ROW)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  ZeroMem (Report, sizeof (*Report));
+  Report->Rows = AllocateZeroPool (Capacity * sizeof (AT_ROW));
+  if (Report->Rows == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  Report->Capacity = Capacity;
+  return EFI_SUCCESS;
+}
+
+VOID
+AtReportFree (
+  IN OUT AT_REPORT *Report
+  )
+{
+  if (Report == NULL) {
+    return;
+  }
+  if (Report->Rows != NULL) {
+    FreePool (Report->Rows);
+  }
+  ZeroMem (Report, sizeof (*Report));
+}
+
+CHAR16 *
+AtReportNextRow (
+  IN OUT AT_REPORT *Report
+  )
+{
+  if (Report == NULL || Report->Rows == NULL) {
+    return NULL;
+  }
+  if (Report->Count >= Report->Capacity) {
+    Report->Truncated = TRUE;
+    return NULL;
+  }
+
+  return Report->Rows[Report->Count++].Text;
+}
+
+#define AT_REPORT_PAGE_ROWS  10u
+
+/* Same semantics as the host-tested StMovePage in SurfaceTools: stale offsets
+ * clamp to the final real page, and the view never wraps. */
+STATIC
+UINTN
+AtMovePage (
+  IN UINTN    Start,
+  IN UINTN    Count,
+  IN UINTN    Rows,
+  IN BOOLEAN  Forward
+  )
+{
+  if (Count == 0 || Rows == 0) {
+    return 0;
+  }
+  if (Start >= Count) {
+    Start = ((Count - 1) / Rows) * Rows;
+  }
+  if (!Forward) {
+    return (Start >= Rows) ? Start - Rows : 0;
+  }
+  if (Rows < Count - Start) {
+    return Start + Rows;
+  }
+  return Start;
+}
+
+VOID
+AtUiShowReport (
+  IN CONST AT_REPORT_SOURCE *Source
+  )
+{
+  AT_REPORT   Report;
+  EFI_STATUS  Status;
+  UINTN       Start;
+  UINTN       End;
+  UINTN       Index;
+  AT_KEY      Key;
+  CHAR16      Subtitle[64];
+
+  Status = Source->Builder (&Report);
+  if (EFI_ERROR (Status)) {
+    AtUiReportStatus (Source->Title, Status);
+    return;
+  }
+
+  Start = 0;
+  while (TRUE) {
+    End = Start + AT_REPORT_PAGE_ROWS;
+    if (End > Report.Count) {
+      End = Report.Count;
+    }
+    UnicodeSPrint (Subtitle, sizeof (Subtitle), L"Rows %Lu-%Lu of %Lu%s",
+                   (UINT64)((Report.Count == 0) ? 0 : Start + 1),
+                   (UINT64)End, (UINT64)Report.Count,
+                   Report.Truncated ? L" (truncated)" : L"");
+    AtUiBeginScreen (Source->Title, Subtitle);
+    for (Index = Start; Index < End; Index++) {
+      Print (L"%s\r\n", Report.Rows[Index].Text);
+    }
+    AtUiEndScreen (L"Vol+/- page, power back");
+
+    Key = AtUiWaitForKey (0);
+    if (Key == AtKeySelect) {
+      break;
+    }
+    if (Key == AtKeyUp) {
+      Start = AtMovePage (Start, Report.Count, AT_REPORT_PAGE_ROWS, FALSE);
+    } else if (Key == AtKeyDown) {
+      Start = AtMovePage (Start, Report.Count, AT_REPORT_PAGE_ROWS, TRUE);
+    }
+  }
+  AtReportFree (&Report);
+}

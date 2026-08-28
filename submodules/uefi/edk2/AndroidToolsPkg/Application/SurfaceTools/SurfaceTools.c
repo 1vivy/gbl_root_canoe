@@ -17,57 +17,6 @@
 #include "SurfaceInventory.h"
 #include "SurfaceDump.h"
 
-#define ST_PAGE_ROWS  10u
-
-
-STATIC VOID
-ShowReport (
-  IN CONST ST_REPORT_SOURCE *Source
-  )
-{
-  ST_REPORT Report;
-  EFI_STATUS Status;
-  UINTN Start;
-  UINTN End;
-  UINTN Index;
-  AT_KEY Key;
-  CHAR16 Subtitle[64];
-
-  Status = Source->Builder (&Report);
-  if (EFI_ERROR (Status)) {
-    AtUiReportStatus (Source->Title, Status);
-    return;
-  }
-
-  Start = 0;
-  while (TRUE) {
-    End = Start + ST_PAGE_ROWS;
-    if (End > Report.Count) {
-      End = Report.Count;
-    }
-    UnicodeSPrint (Subtitle, sizeof (Subtitle), L"Rows %Lu-%Lu of %Lu%s",
-                   (UINT64)((Report.Count == 0) ? 0 : Start + 1),
-                   (UINT64)End, (UINT64)Report.Count,
-                   Report.Truncated ? L" (truncated)" : L"");
-    AtUiBeginScreen (Source->Title, Subtitle);
-    for (Index = Start; Index < End; Index++) {
-      Print (L"%s\r\n", Report.Rows[Index].Text);
-    }
-    AtUiEndScreen (L"Vol+/- page, power back");
-
-    Key = AtUiWaitForKey (0);
-    if (Key == AtKeySelect) {
-      break;
-    }
-    if (Key == AtKeyUp) {
-      Start = StMovePage (Start, Report.Count, ST_PAGE_ROWS, FALSE);
-    } else if (Key == AtKeyDown) {
-      Start = StMovePage (Start, Report.Count, ST_PAGE_ROWS, TRUE);
-    }
-  }
-  StReportFree (&Report);
-}
-
 STATIC VOID
 DumpPassiveInventory (VOID)
 {
@@ -106,7 +55,7 @@ ConfirmActiveProbes (VOID)
   return (BOOLEAN)(Key == AtKeyUp);
 }
 
-STATIC CONST ST_REPORT_SOURCE mActiveReport = {
+STATIC CONST AT_REPORT_SOURCE mActiveReport = {
   L"Active Probe Results",
   StBuildProbeReport
 };
@@ -143,7 +92,7 @@ SurfaceToolsEntry (
     }
 
     if (Selected < ST_PASSIVE_REPORT_COUNT) {
-      ShowReport (&gStPassiveReports[Selected]);
+      AtUiShowReport (&gStPassiveReports[Selected]);
       continue;
     }
     if (Selected == ST_PASSIVE_REPORT_COUNT) {
@@ -152,7 +101,7 @@ SurfaceToolsEntry (
     }
     if (Selected == ST_PASSIVE_REPORT_COUNT + 1) {
       if (ConfirmActiveProbes ()) {
-        ShowReport (&mActiveReport);
+        AtUiShowReport (&mActiveReport);
       }
       continue;
     }

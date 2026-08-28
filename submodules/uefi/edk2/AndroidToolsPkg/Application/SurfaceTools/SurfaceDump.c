@@ -65,17 +65,17 @@ StWriteUnicodeLine (
   IN CONST CHAR16      *Text
   )
 {
-  CHAR8 Buffer[ST_ROW_CHARS + 2];
+  CHAR8 Buffer[AT_ROW_CHARS + 2];
   UINTN Index;
 
   if (Text == NULL) {
     return EFI_INVALID_PARAMETER;
   }
 
-  for (Index = 0; Index < ST_ROW_CHARS && Text[Index] != L'\0'; Index++) {
+  for (Index = 0; Index < AT_ROW_CHARS && Text[Index] != L'\0'; Index++) {
     Buffer[Index] = (Text[Index] <= 0x7f) ? (CHAR8)Text[Index] : '?';
   }
-  if (Index == ST_ROW_CHARS) {
+  if (Index == AT_ROW_CHARS) {
     return EFI_BAD_BUFFER_SIZE;
   }
   Buffer[Index++] = '\r';
@@ -193,13 +193,13 @@ STATIC
 EFI_STATUS
 StWriteSection (
   IN EFI_FILE_PROTOCOL       *File,
-  IN CONST ST_REPORT_SOURCE  *Source
+  IN CONST AT_REPORT_SOURCE  *Source
   )
 {
-  ST_REPORT Report;
+  AT_REPORT Report;
   EFI_STATUS Status;
   UINTN Index;
-  CHAR16 Header[ST_ROW_CHARS];
+  CHAR16 Header[AT_ROW_CHARS];
 
   ZeroMem (&Report, sizeof (Report));
   UnicodeSPrint (Header, sizeof (Header), L"[%s]", Source->Title);
@@ -211,7 +211,7 @@ StWriteSection (
     Status = Source->Builder (&Report);
   }
   if (Status != EFI_SUCCESS) {
-    StReportFree (&Report);
+    AtReportFree (&Report);
     return Status;
   }
 
@@ -221,7 +221,7 @@ StWriteSection (
   if (Status == EFI_SUCCESS && Report.Truncated) {
     Status = StWriteAscii (File, "<truncated>\r\n");
   }
-  StReportFree (&Report);
+  AtReportFree (&Report);
   return Status;
 }
 

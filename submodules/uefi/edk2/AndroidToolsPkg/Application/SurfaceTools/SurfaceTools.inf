@@ -24,7 +24,6 @@
   SurfaceProbes.c
   SurfaceModel.h
   SurfaceModel.c
-  SurfaceReport.c
 
 [Packages]
   ArmPkg/ArmPkg.dec

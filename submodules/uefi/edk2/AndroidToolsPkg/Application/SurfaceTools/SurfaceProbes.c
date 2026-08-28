@@ -20,7 +20,7 @@
 
 STATIC VOID
 AddUnavailable (
-  IN OUT ST_REPORT   *Report,
+  IN OUT AT_REPORT   *Report,
   IN     CONST CHAR16 *Name,
   IN     BOOLEAN      Present,
   IN     BOOLEAN      MethodPresent
@@ -32,13 +32,13 @@ AddUnavailable (
   Observation.Invoked = FALSE;
   Observation.Status = EFI_NOT_READY;
   Observation.EffectObserved = FALSE;
-  StReportAdd (Report, L"%s: %s", Name,
+  AtReportAdd (Report, L"%s: %s", Name,
                StProbeStateName (StClassifyProbe (&Observation)));
 }
 
 STATIC VOID
 AddResult (
-  IN OUT ST_REPORT    *Report,
+  IN OUT AT_REPORT    *Report,
   IN     CONST CHAR16 *Name,
   IN     EFI_STATUS    Status,
   IN     CONST CHAR16 *Value
@@ -50,7 +50,7 @@ AddResult (
   Observation.Invoked = TRUE;
   Observation.Status = Status;
   Observation.EffectObserved = FALSE;
-  StReportAdd (Report, L"%s: %s (%r)%s%s", Name,
+  AtReportAdd (Report, L"%s: %s (%r)%s%s", Name,
                StProbeStateName (StClassifyProbe (&Observation)), Status,
                (Status == EFI_SUCCESS && Value != NULL) ? L" value=" : L"",
                (Status == EFI_SUCCESS && Value != NULL) ? Value : L"");
@@ -58,17 +58,17 @@ AddResult (
 
 STATIC VOID
 AddUnsupportedRevision (
-  IN OUT ST_REPORT    *Report,
+  IN OUT AT_REPORT    *Report,
   IN     CONST CHAR16 *Name,
   IN     UINT64        Revision
   )
 {
-  StReportAdd (Report, L"%s: present; unsupported ABI rev=%lx",
+  AtReportAdd (Report, L"%s: present; unsupported ABI rev=%lx",
                Name, Revision);
 }
 
 EFI_STATUS
-StBuildProbeReport (OUT ST_REPORT *Report)
+StBuildProbeReport (OUT AT_REPORT *Report)
 {
   EFI_DEBUG_SUPPORT_PROTOCOL *Debug;
   QCOM_SCM_PROTOCOL *Scm;
@@ -80,11 +80,11 @@ StBuildProbeReport (OUT ST_REPORT *Report)
   boot_state_t BootState;
   CHAR16 Value[32];
 
-  Status = StReportInit (Report, 8);
+  Status = AtReportInit (Report, 8);
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  StReportAdd (Report, L"authorized=EFI_SUCCESS; effectiveness not inferred");
+  AtReportAdd (Report, L"authorized=EFI_SUCCESS; effectiveness not inferred");
 
   Debug = NULL;
   Status = gBS->LocateProtocol (&gEfiDebugSupportProtocolGuid, NULL,

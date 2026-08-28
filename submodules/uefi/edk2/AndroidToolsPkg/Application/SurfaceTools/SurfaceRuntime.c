@@ -94,7 +94,7 @@ CountHandles (EFI_GUID *Guid)
 }
 
 EFI_STATUS
-StBuildSummaryReport (OUT ST_REPORT *Report)
+StBuildSummaryReport (OUT AT_REPORT *Report)
 {
   EFI_MEMORY_DESCRIPTOR *Map;
   EFI_STATUS Status;
@@ -102,7 +102,7 @@ StBuildSummaryReport (OUT ST_REPORT *Report)
   UINTN DescriptorSize;
   UINTN MemoryCount;
 
-  Status = StReportInit (Report, 12);
+  Status = AtReportInit (Report, 12);
   if (EFI_ERROR (Status)) {
     return Status;
   }
@@ -116,30 +116,30 @@ StBuildSummaryReport (OUT ST_REPORT *Report)
     FreePool (Map);
   }
 
-  StReportAdd (Report, L"Mode: passive; no vendor methods invoked");
-  StReportAdd (Report, L"Firmware: %s", (gST->FirmwareVendor != NULL) ?
+  AtReportAdd (Report, L"Mode: passive; no vendor methods invoked");
+  AtReportAdd (Report, L"Firmware: %s", (gST->FirmwareVendor != NULL) ?
                gST->FirmwareVendor : L"<unknown>");
-  StReportAdd (Report, L"UEFI revision: %u.%u",
+  AtReportAdd (Report, L"UEFI revision: %u.%u",
                gST->Hdr.Revision >> 16, gST->Hdr.Revision & 0xffff);
 #if defined (MDE_CPU_AARCH64)
-  StReportAdd (Report, L"CurrentEL: EL%u", (UINT32)(ArmReadCurrentEL () >> 2));
-  StReportAdd (Report, L"VBAR configured: %s",
+  AtReportAdd (Report, L"CurrentEL: EL%u", (UINT32)(ArmReadCurrentEL () >> 2));
+  AtReportAdd (Report, L"VBAR configured: %s",
                (ArmReadVBar () != 0) ? L"yes" : L"no");
-  StReportAdd (Report, L"SCTLR: 0x%08x", ArmReadSctlr ());
+  AtReportAdd (Report, L"SCTLR: 0x%08x", ArmReadSctlr ());
 #else
-  StReportAdd (Report, L"Architecture: non-AArch64 smoke target");
-  StReportAdd (Report, L"VBAR configured: n/a");
-  StReportAdd (Report, L"SCTLR: n/a");
+  AtReportAdd (Report, L"Architecture: non-AArch64 smoke target");
+  AtReportAdd (Report, L"VBAR configured: n/a");
+  AtReportAdd (Report, L"SCTLR: n/a");
 #endif
-  StReportAdd (Report, L"Handles: %Lu", (UINT64)CountHandles (NULL));
-  StReportAdd (Report, L"Configuration tables: %Lu",
+  AtReportAdd (Report, L"Handles: %Lu", (UINT64)CountHandles (NULL));
+  AtReportAdd (Report, L"Configuration tables: %Lu",
                (UINT64)gST->NumberOfTableEntries);
-  StReportAdd (Report, L"Loaded images: %Lu",
+  AtReportAdd (Report, L"Loaded images: %Lu",
                (UINT64)CountHandles (&gEfiLoadedImageProtocolGuid));
-  StReportAdd (Report, L"Memory descriptors: %Lu", (UINT64)MemoryCount);
-  StReportAdd (Report, L"Security2 handles: %Lu",
+  AtReportAdd (Report, L"Memory descriptors: %Lu", (UINT64)MemoryCount);
+  AtReportAdd (Report, L"Security2 handles: %Lu",
                (UINT64)CountHandles (&gEfiSecurity2ArchProtocolGuid));
-  StReportAdd (Report, L"DebugSupport handles: %Lu",
+  AtReportAdd (Report, L"DebugSupport handles: %Lu",
                (UINT64)CountHandles (&gEfiDebugSupportProtocolGuid));
   return EFI_SUCCESS;
 }
@@ -160,7 +160,7 @@ SortImages (ST_IMAGE *Images, UINTN Count)
 }
 
 EFI_STATUS
-StBuildImageReport (OUT ST_REPORT *Report)
+StBuildImageReport (OUT AT_REPORT *Report)
 {
   EFI_HANDLE *Handles;
   EFI_LOADED_IMAGE_PROTOCOL *Loaded;
@@ -175,14 +175,14 @@ StBuildImageReport (OUT ST_REPORT *Report)
   Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiLoadedImageProtocolGuid,
                                     NULL, &HandleCount, &Handles);
   if (EFI_ERROR (Status) || HandleCount == 0) {
-    Status = StReportInit (Report, 1);
+    Status = AtReportInit (Report, 1);
     if (!EFI_ERROR (Status)) {
-      StReportAdd (Report, L"No loaded-image handles");
+      AtReportAdd (Report, L"No loaded-image handles");
     }
     return Status;
   }
   Count = (HandleCount < ST_MAX_IMAGE_ROWS) ? HandleCount : ST_MAX_IMAGE_ROWS;
-  Status = StReportInit (Report, Count);
+  Status = AtReportInit (Report, Count);
   if (EFI_ERROR (Status)) {
     FreePool (Handles);
     return Status;
@@ -193,7 +193,7 @@ StBuildImageReport (OUT ST_REPORT *Report)
   Images = AllocateZeroPool (Count * sizeof (*Images));
   if (Images == NULL) {
     FreePool (Handles);
-    StReportFree (Report);
+    AtReportFree (Report);
     return EFI_OUT_OF_RESOURCES;
   }
 
@@ -215,7 +215,7 @@ StBuildImageReport (OUT ST_REPORT *Report)
 
   SortImages (Images, Count);
   for (I = 0; I < Count; I++) {
-    StReportAdd (Report, L"%03Lu size=%lx code=%u data=%u", (UINT64)I,
+    AtReportAdd (Report, L"%03Lu size=%lx code=%u data=%u", (UINT64)I,
                  Images[I].Size, Images[I].CodeType, Images[I].DataType);
   }
   FreePool (Images);
@@ -245,7 +245,7 @@ MemoryTypeName (EFI_MEMORY_TYPE Type)
 }
 
 EFI_STATUS
-StBuildMemoryReport (OUT ST_REPORT *Report)
+StBuildMemoryReport (OUT AT_REPORT *Report)
 {
   EFI_MEMORY_DESCRIPTOR *Map;
   EFI_MEMORY_DESCRIPTOR *Descriptor;
@@ -264,7 +264,7 @@ StBuildMemoryReport (OUT ST_REPORT *Report)
     return Status;
   }
   Count = MapSize / DescriptorSize;
-  Status = StReportInit (Report, (Count == 0) ? 1 :
+  Status = AtReportInit (Report, (Count == 0) ? 1 :
                         ((Count < ST_MAX_MEMORY_ROWS) ? Count : ST_MAX_MEMORY_ROWS));
   if (EFI_ERROR (Status)) {
     FreePool (Map);
@@ -275,11 +275,11 @@ StBuildMemoryReport (OUT ST_REPORT *Report)
     Report->Truncated = TRUE;
   }
   if (Count == 0) {
-    StReportAdd (Report, L"Memory map is empty");
+    AtReportAdd (Report, L"Memory map is empty");
   }
   for (I = 0; I < Count; I++) {
     Descriptor = (EFI_MEMORY_DESCRIPTOR *)((UINT8 *)Map + I * DescriptorSize);
-    StReportAdd (Report, L"%03Lu %-12s pages=%lx attr=%lx", (UINT64)I,
+    AtReportAdd (Report, L"%03Lu %-12s pages=%lx attr=%lx", (UINT64)I,
                  MemoryTypeName (Descriptor->Type),
                  Descriptor->NumberOfPages, Descriptor->Attribute);
   }
