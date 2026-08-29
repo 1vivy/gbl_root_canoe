@@ -193,6 +193,41 @@ SfbStartFatStack (VOID)
   return EFI_SUCCESS;
 }
 
+/*
+ * TRUE when the volume handle's device path passes through a USB messaging
+ * node. FAT partitions on a USB drive hang off such a path
+ * (...USB()/HD(...)/...); internal UFS partitions do not.
+ *
+ * This is the loader's only notion of "removable". Everything that must treat
+ * a stick differently from the on-device boot root - the managed-ABL
+ * predicate, the default-entry fallback, the boot-spec discovery, the menu
+ * row prefix - asks this one question.
+ */
+BOOLEAN
+SfbIsUsbVolume (IN EFI_HANDLE Volume)
+{
+  EFI_STATUS                Status;
+  EFI_DEVICE_PATH_PROTOCOL  *Node = NULL;
+
+  Status = gBS->HandleProtocol (Volume, &gEfiDevicePathProtocolGuid,
+                                (VOID **)&Node);
+  if (EFI_ERROR (Status) || Node == NULL) {
+    return FALSE;
+  }
+
+  while (!IsDevicePathEnd (Node)) {
+    if (DevicePathType (Node) == MESSAGING_DEVICE_PATH &&
+        (DevicePathSubType (Node) == MSG_USB_DP ||
+         DevicePathSubType (Node) == MSG_USB_CLASS_DP ||
+         DevicePathSubType (Node) == MSG_USB_WWID_DP)) {
+      return TRUE;
+    }
+    Node = NextDevicePathNode (Node);
+  }
+
+  return FALSE;
+}
+
 /* ---- GPT partitions by name --------------------------------------------- */
 
 extern EFI_GUID gEfiPartitionRecordGuid;
@@ -457,7 +492,6 @@ typedef struct {
 STATIC SFB_VOLUME_CLASS  mSfbVolumeClassCache[SFB_VOLUME_CLASS_CACHE_MAX];
 STATIC UINTN             mSfbVolumeClassCount;
 
-STATIC
 VOID
 SfbResetVolumeClassCache (VOID)
 {

@@ -1,0 +1,72 @@
+#/** @file
+#  SurfaceTools UEFI application - passive surface inventory plus explicitly
+#  confirmed, allowlisted read-only policy probes.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = SurfaceTools
+  FILE_GUID                      = 8347084D-122A-4EC1-8F60-902A94859197
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = SurfaceToolsEntry
+
+[Sources]
+  SurfaceTools.c
+  SurfaceDump.h
+  SurfaceDump.c
+  SurfaceInventory.h
+  SurfaceInventory.c
+  SurfaceRuntime.c
+  SurfaceProbes.c
+  SurfaceModel.h
+  SurfaceModel.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+
+[LibraryClasses]
+  AndroidToolsUi
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  MemoryAllocationLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+
+[LibraryClasses.AARCH64]
+  ArmLib
+
+[Guids]
+  gEfiAcpi10TableGuid
+  gEfiAcpi20TableGuid
+  gEfiDebugImageInfoTableGuid
+  gEfiDxeServicesTableGuid
+  gEfiHobListGuid
+  gEfiSmbios3TableGuid
+  gEfiSmbiosTableGuid
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiCpuArchProtocolGuid
+  gEfiDebugSupportProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiQcomVerifiedBootProtocolGuid
+  gEfiSPSSProtocolGuid
+  gEfiSecurity2ArchProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+  gEfiPartitionRecordGuid
+  gEfiSecurityArchProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiUsbDeviceProtocolGuid
+  gEfiUsbfnIoProtocolGuid
+  gQcomQseecomProtocolGuid
+  gQcomScmProtocolGuid

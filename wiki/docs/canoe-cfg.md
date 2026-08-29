@@ -36,9 +36,38 @@ Global keys must appear before the first `entry`:
 | `mode` | `0`, `1`, `2` | `1` | Fallback mode for entries without their own mode |
 | `devinfo-repair` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo` |
 
-Inside an entry block, `title`, `image`, `mode`, and `role` are valid. A
-per-entry `mode` overrides the global fallback. File-global keys appearing in
-an entry are rejected rather than retroactively applied.
+Inside an entry block, `title`, `image`, `options`, `mode`, and `role` are
+valid. A per-entry `mode` overrides the global fallback. File-global keys
+appearing in an entry are rejected rather than retroactively applied.
+
+`options` is the command line handed to the image as UEFI LoadOptions. It is
+at most 383 characters and is passed through byte for byte: unlike `image` it
+is not a path, so `/` is never folded to `\` and a value that looks like a
+path is left exactly as written. An empty `options` is a rejected line rather
+than a silent no-op.
+
+This is what lets a row hold a payload the BDS does not itself parse. The
+image is one of the loaders shipped in the boot root's `tools` directory, and
+the payload it should boot is named in `options`:
+
+```text
+entry mu
+  title Mu-Silicium
+  image tools/FdLoader.efi
+  options \mu\SM8850.fd 0x9FC00000 0x00300000
+
+entry android-usb
+  title Android from images
+  image tools/AbootLoader.efi
+  options --boot \img\boot.img --vendor-boot \img\vendor_boot.img
+```
+
+`FdLoader.efi` takes an FD image path, a hexadecimal load base and a
+hexadecimal window size, and chainloads a raw Mu-Silicium or Project-Aloha
+firmware descriptor. `AbootLoader.efi` takes `--boot` and `--vendor-boot`,
+optionally `--init-boot`, `--dtb-index` and `--cmdline`, and boots an Android
+boot image with header version 3 or 4. Both paths are relative to the volume
+the loader itself was launched from.
 
 ## The two managed rows
 

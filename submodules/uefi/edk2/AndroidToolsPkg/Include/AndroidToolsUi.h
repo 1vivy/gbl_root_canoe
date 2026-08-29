@@ -11,6 +11,7 @@
 #define __ANDROID_TOOLS_UI_H__
 
 #include <Uefi.h>
+#include <Library/PrintLib.h>
 
 typedef enum {
   AtKeyTimeout = 0,
@@ -34,13 +35,19 @@ AtUiEnterMenu (
   );
 
 /**
-  Wait for a key. TimeoutMs of 0 waits indefinitely. Returns AtKeyTimeout when
-  the timer elapses.
+  Wait for one logical key action. TimeoutMs of 0 waits indefinitely. Returns
+  AtKeyTimeout when the timer elapses. Power/select waits briefly and drains
+  duplicate carriage returns from the same physical press; volume keys remain
+  immediate.
 **/
 AT_KEY
 AtUiWaitForKey (
   IN UINT32 TimeoutMs
   );
+
+/** Drop both raw console events and a retained transition-time volume key. **/
+VOID
+AtUiResetInput (VOID);
 
 /** Clear the screen and print a title (and optional subtitle). **/
 VOID
@@ -108,6 +115,71 @@ AtUiRunMenu (
   IN  UINTN          Count,
   OUT UINTN         *Selected,
   IN  CONST CHAR16  *Footer OPTIONAL
+  );
+
+/*
+ * Bounded text report: a fixed-capacity array of rows a collector fills and
+ * the UI pages or a dump writes. Shared by every tool in this package; a
+ * report that overflows its capacity truncates and says so, rather than
+ * overrunning.
+ */
+#define AT_ROW_CHARS  96u
+
+typedef struct {
+  CHAR16 Text[AT_ROW_CHARS];
+} AT_ROW;
+
+typedef struct {
+  AT_ROW  *Rows;
+  UINTN   Count;
+  UINTN   Capacity;
+  BOOLEAN Truncated;
+} AT_REPORT;
+
+typedef EFI_STATUS (*AT_REPORT_BUILDER)(OUT AT_REPORT *Report);
+
+typedef struct {
+  CONST CHAR16     *Title;
+  AT_REPORT_BUILDER Builder;
+} AT_REPORT_SOURCE;
+
+EFI_STATUS
+AtReportInit (
+  OUT AT_REPORT *Report,
+  IN  UINTN     Capacity
+  );
+
+VOID
+AtReportFree (
+  IN OUT AT_REPORT *Report
+  );
+
+/* Next writable row, or NULL (setting Truncated) when the report is full. */
+CHAR16 *
+AtReportNextRow (
+  IN OUT AT_REPORT *Report
+  );
+
+#define AtReportAdd(Report, Format, ...) do {                              \
+  AT_REPORT *AtReport__ = (Report);                                        \
+  CHAR16 *AtReportRow__ = AtReportNextRow (AtReport__);                    \
+  if (AtReportRow__ != NULL) {                                             \
+    UINTN AtReportLength__ = UnicodeSPrint (                               \
+      AtReportRow__, AT_ROW_CHARS * sizeof (CHAR16),                       \
+      (Format), ##__VA_ARGS__);                                            \
+    if (AtReportLength__ >= AT_ROW_CHARS - 1) {                            \
+      AtReport__->Truncated = TRUE;                                        \
+    }                                                                      \
+  }                                                                        \
+} while (FALSE)
+
+/**
+  Build Source's report, page it on the console (volume keys page, power
+  returns), and free it. Reports the build status instead when it fails.
+**/
+VOID
+AtUiShowReport (
+  IN CONST AT_REPORT_SOURCE *Source
   );
 
 #endif /* __ANDROID_TOOLS_UI_H__ */

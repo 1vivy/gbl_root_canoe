@@ -40,73 +40,17 @@
  * driver loader. */
 
 /*
- * UsbfnIo and UsbDevice are declared in QcomModulePkg.dec. The MSD protocol
- * GUID is the one the census finds installed on device; the module GUID and
- * candidate B remain unconfirmed, kept so the census can report them.
+ * UsbfnIo is declared in QcomModulePkg.dec. The MSD protocol GUID is the one
+ * the census finds installed on device.
  */
 STATIC CONST EFI_GUID mSfbUsbfnIoProtocolGuid = {
   0x32d2963a, 0xfe5d, 0x4f30,
   { 0xb6, 0x33, 0x6e, 0x5d, 0xc5, 0x58, 0x03, 0xcc }
 };
-STATIC CONST EFI_GUID mSfbUsbDeviceProtocolGuid = {
-  0xd9d9ce48, 0x44b8, 0x4f49,
-  { 0x8e, 0x3e, 0x2a, 0x3b, 0x92, 0x7d, 0xc6, 0xc1 }
-};
-STATIC CONST EFI_GUID mSfbUsbMsdModuleGuid = {
-  0x5af77f10, 0x90df, 0x4e7e,
-  { 0x83, 0x25, 0xa1, 0x7e, 0xc0, 0x9d, 0x54, 0x43 }
-};
 STATIC CONST EFI_GUID mSfbUsbMsdProtocolGuid = {
   0xc8591faf, 0xdbcc, 0x479e,
   { 0x9e, 0xf2, 0xfd, 0x08, 0x5b, 0xc3, 0x7b, 0xc7 }
 };
-STATIC CONST EFI_GUID mSfbUsbMsdCandidateBGuid = {
-  0x88e71196, 0x80d3, 0x4548,
-  { 0x93, 0x6e, 0x57, 0x09, 0x3f, 0x6d, 0xd2, 0x11 }
-};
-
-VOID
-SfbUsbCensus (VOID)
-{
-  EFI_STATUS Status;
-  EFI_HANDLE *Handles = NULL;
-  UINTN      HandleCount = 0;
-  VOID       *Protocol = NULL;
-  UINTN      Usbfn = 0;
-  UINTN      UsbDevice = 0;
-  UINTN      MsdModule = 0;
-  UINTN      MsdProtocol = 0;
-  UINTN      MsdCandidateB = 0;
-
-  Status = gBS->LocateHandleBuffer (AllHandles, NULL, NULL, &HandleCount,
-                                    &Handles);
-  if (EFI_ERROR (Status)) {
-    HandleCount = 0;
-  }
-  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbfnIoProtocolGuid, NULL,
-                                &Protocol);
-  Usbfn = (UINTN)!EFI_ERROR (Status);
-  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbDeviceProtocolGuid, NULL,
-                                &Protocol);
-  UsbDevice = (UINTN)!EFI_ERROR (Status);
-  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdModuleGuid, NULL,
-                                &Protocol);
-  MsdModule = (UINTN)!EFI_ERROR (Status);
-  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdProtocolGuid, NULL,
-                                &Protocol);
-  MsdProtocol = (UINTN)!EFI_ERROR (Status);
-  Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdCandidateBGuid, NULL,
-                                &Protocol);
-  MsdCandidateB = (UINTN)!EFI_ERROR (Status);
-
-  DEBUG ((EFI_D_INFO,
-          "SFB: MARK usb-census handles=%u usbfn=%u usbdev=%u msdmod=%u msda=%u msdb=%u\n",
-          (UINT32)HandleCount, (UINT32)Usbfn, (UINT32)UsbDevice,
-          (UINT32)MsdModule, (UINT32)MsdProtocol, (UINT32)MsdCandidateB));
-  if (Handles != NULL) {
-    FreePool (Handles);
-  }
-}
 
 /*
  * The driver's StartDevice locates EFI_USBFN_IO_PROTOCOL, which does not
@@ -222,10 +166,11 @@ SfbMassStoragePartitionBytes (IN EFI_BLOCK_IO_PROTOCOL *BlockIo)
 }
 
 EFI_STATUS
-SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
-                          IN CONST CHAR8           *Tag)
+SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
+                          IN CONST CHAR8  *Tag)
 {
   EFI_STATUS            Status;
+  EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
   SFB_USB_MSD_PROTOCOL *Msd = NULL;
   UINT8                 MaxLun = 0;
   BOOLEAN               Cancelled = FALSE;
@@ -235,7 +180,7 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
   UINT32                Errors = 0;
   UINT32                Consecutive = 0;
 
-  if (BlockIo == NULL) {
+  if (Name == NULL) {
     return EFI_INVALID_PARAMETER;
   }
 
@@ -244,6 +189,20 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
    * before any driver state is touched.
    */
   SfbMassStorageEnsureUsbStack ();
+
+  /*
+   * Only now is a partition handle worth resolving. The release above ran
+   * DisconnectController over the host controllers, which tears down every
+   * child handle hanging off them, and the ensure reconnected the tree; a
+   * Block I/O looked up before either step would be a freed interface.
+   */
+  Status = SfbFindPartitionByName (Name, &BlockIo);
+  if (EFI_ERROR (Status) || BlockIo == NULL) {
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK msc-run target=%a status=%r reason=partition\n",
+            (Tag != NULL) ? Tag : "?", Status));
+    return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+  }
   /*
    * The bundled driver is preferred: its identity (1209:ca0e, fixed disk)
    * matches no host-side rule that would tear the session down. The platform
@@ -255,7 +214,6 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
     Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdProtocolGuid, NULL,
                                   (VOID **)&Msd);
     if (EFI_ERROR (Status) || Msd == NULL) {
-      SfbUsbCensus ();
       DEBUG ((EFI_D_ERROR,
               "SFB: MARK msc-run target=%a status=%r reason=protocol\n",
               (Tag != NULL) ? Tag : "?", Status));
@@ -275,7 +233,6 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
 
   Status = Msd->AssignBlkIoHandle (Msd, BlockIo, 0);
   if (EFI_ERROR (Status)) {
-    SfbUsbCensus ();
     DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run target=%a status=%r reason=assign\n",
             (Tag != NULL) ? Tag : "?", Status));
     return Status;
@@ -305,7 +262,6 @@ SfbMassStorageExportDisk (IN EFI_BLOCK_IO_PROTOCOL *BlockIo,
    */
   Status = Msd->StartDevice (Msd);
   if (EFI_ERROR (Status)) {
-    SfbUsbCensus ();
     DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run target=%a status=%r reason=start\n",
             (Tag != NULL) ? Tag : "?", Status));
     /*
@@ -450,38 +406,37 @@ SfbMassStorageConfirmPersist (VOID)
 VOID
 SfbRunMassStorageMenu (VOID)
 {
-  SFB_MASS_STORAGE_TARGET Targets[2];
+  STATIC CONST SFB_MASS_STORAGE_TARGET Probe[] = {
+    { L"persist", "persist", NULL },
+    { L"logfs",   "logfs",   NULL }
+  };
+  SFB_MASS_STORAGE_TARGET Targets[ARRAY_SIZE (Probe)];
   UINTN                   Count = 0;
   UINTN                   Cursor = 0;
   UINTN                   Index;
 
-  Targets[0].Name = L"persist";
-  Targets[0].Tag = "persist";
-  Targets[0].BlockIo = NULL;
-  Targets[1].Name = L"logfs";
-  Targets[1].Tag = "logfs";
-  Targets[1].BlockIo = NULL;
-
-
-  /*
-   * Resolve each target at draw time. logfs is optional, and hiding an absent
-   * partition is less misleading than offering a row that can never start.
-   */
-  for (Index = 0; Index < ARRAY_SIZE (Targets); Index++) {
-    EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
-    EFI_STATUS             Status;
-
-    Status = SfbFindPartitionByName (Targets[Index].Name, &BlockIo);
-    if (EFI_ERROR (Status) || BlockIo == NULL) {
-      continue;
-    }
-    Targets[Count] = Targets[Index];
-    Targets[Count].BlockIo = BlockIo;
-    Count++;
-  }
-
   while (TRUE) {
     SFB_KEY Key;
+
+    /*
+     * Resolve on every redraw, not once on entry. logfs is optional, and
+     * hiding an absent partition is less misleading than offering a row that
+     * can never start - but the size shown below dereferences this handle,
+     * and an export that has since returned tore the partition tree down and
+     * rebuilt it. A pointer cached before that is freed memory.
+     */
+    Count = 0;
+    for (Index = 0; Index < ARRAY_SIZE (Probe); Index++) {
+      EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
+
+      if (EFI_ERROR (SfbFindPartitionByName (Probe[Index].Name, &BlockIo)) ||
+          BlockIo == NULL) {
+        continue;
+      }
+      Targets[Count] = Probe[Index];
+      Targets[Count].BlockIo = BlockIo;
+      Count++;
+    }
 
     if (Count == 0) {
       Cursor = 0;
@@ -512,12 +467,10 @@ SfbRunMassStorageMenu (VOID)
       continue;
     }
 
-
-
     {
       EFI_STATUS Status;
 
-      Status = SfbMassStorageExportDisk (Targets[Cursor].BlockIo,
+      Status = SfbMassStorageExportDisk (Targets[Cursor].Name,
                                          Targets[Cursor].Tag);
       if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
         SfbReportStatus (L"Could not start mass storage", Status);
@@ -536,9 +489,7 @@ SfbRunMassStorageMenu (VOID)
 EFI_STATUS
 SfbExportPartitionByName (IN CONST CHAR16 *Target)
 {
-  EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
-  CONST CHAR8           *Tag;
-  EFI_STATUS             Status;
+  CONST CHAR8 *Tag;
 
   if (Target == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -552,12 +503,7 @@ SfbExportPartitionByName (IN CONST CHAR16 *Target)
     return EFI_INVALID_PARAMETER;
   }
 
-  Status = SfbFindPartitionByName (Target, &BlockIo);
-  if (EFI_ERROR (Status)) {
-    return Status;
-  }
-  if (BlockIo == NULL) {
-    return EFI_DEVICE_ERROR;
-  }
-  return SfbMassStorageExportDisk (BlockIo, Tag);
+  /* The partition is resolved inside the export, after it has released host
+   * mode; looking it up here would hand over a handle that release frees. */
+  return SfbMassStorageExportDisk (Target, Tag);
 }

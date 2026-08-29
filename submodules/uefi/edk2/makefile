@@ -354,7 +354,7 @@ cleanall:
 	rm -rf $(WORKSPACE)/QcomModulePkg/Bin64
 	rm -rf $(TARGET_EDK_TOOLS_BIN)
 
-# Standalone AndroidToolsPkg applications (RebootTools, ArbTools). These are
+# Standalone AndroidToolsPkg applications. These are
 # independent UEFI applications built from their own DSC; they do not touch the
 # main ABL firmware image. The output goes to Build/AndroidToolsPkg so it never
 # collides with the main QcomModulePkg output tree. Depends on the BaseTools

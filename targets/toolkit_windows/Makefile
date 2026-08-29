@@ -48,13 +48,16 @@ submodule_uefi: copy_resources
 	# with different bytes and breaks the byte-identical BDS.efi invariant.
 	cd ../../submodules/uefi && \
 		if [ ! -f build/BDS.efi ]; then make build; fi && \
-		if [ ! -f build/ArbTools.efi ] || \
-		   [ ! -f build/BLTools.efi ] || [ ! -f build/RebootTools.efi ]; then make tools; fi
+		if [ ! -f build/ArbTools.efi ] || [ ! -f build/BLTools.efi ] || \
+		   [ ! -f build/RebootTools.efi ] || [ ! -f build/SurfaceTools.efi ] || \
+		   [ ! -f build/UsbTools.efi ]; then make tools; fi
 	cp ../../submodules/uefi/build/BDS.efi ./build/toolkit/BDS.efi
 	mkdir -p build/toolkit/efisp/tools
 	cp ../../submodules/uefi/build/ArbTools.efi ./build/toolkit/efisp/tools/ArbTools.efi
 	cp ../../submodules/uefi/build/BLTools.efi ./build/toolkit/efisp/tools/BLTools.efi
 	cp ../../submodules/uefi/build/RebootTools.efi ./build/toolkit/efisp/tools/RebootTools.efi
+	cp ../../submodules/uefi/build/SurfaceTools.efi ./build/toolkit/efisp/tools/SurfaceTools.efi
+	cp ../../submodules/uefi/build/UsbTools.efi ./build/toolkit/efisp/tools/UsbTools.efi
 submodule_patcher: copy_resources
 	cd ../../submodules/patcher && make build_windows
 	cp ../../submodules/patcher/build/patch_abl.exe ./build/toolkit/bin/patch_abl.exe
