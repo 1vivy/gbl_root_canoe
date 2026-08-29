@@ -407,6 +407,8 @@ UtProbePmicCharger (IN BOOLEAN WithOtg)
   UINT32                      Value    = 0;
   BOOLEAN                     UsbinLive = TRUE;
   BOOLEAN                     Found;
+  UINT32                      Preferred = UT_PMIC_NONE;
+  UINTN                       Try;
 
   Status = gBS->LocateProtocol (&SchgGuid, NULL, (VOID **)&Schg);
   if (EFI_ERROR (Status) || Schg == NULL) {
@@ -417,6 +419,30 @@ UtProbePmicCharger (IN BOOLEAN WithOtg)
           Schg->Revision,
           (Schg->EnableOtg != NULL) ? L'Y' : L'-',
           (Schg->SetTypeCPortRole != NULL) ? L'Y' : L'-');
+  /* Index-free and read-only: these two separate "we asked with the wrong
+   * device index" from "the charger backend is not answering at all", and
+   * the first one names the valid indices outright. */
+  if (Schg->SchgGetPmicInfo != NULL) {
+    UT_SCHG_PMIC_INFO  Info;
+
+    ZeroMem (&Info, sizeof (Info));
+    Status = Schg->SchgGetPmicInfo (&Info);
+    UtStep (L"  pmic info: %r count=%u idx=[%u %u %u %u]", Status,
+            Info.ChargerCount, Info.PmicIndex[0], Info.PmicIndex[1],
+            Info.PmicIndex[2], Info.PmicIndex[3]);
+    if (!EFI_ERROR (Status) && Info.ChargerCount != 0 &&
+        Info.PmicIndex[0] < 8) {
+      Preferred = Info.PmicIndex[0];
+    }
+  }
+  if (Schg->SchgGetChargerPmicIndex != NULL) {
+    Status = Schg->SchgGetChargerPmicIndex (&Active);
+    UtStep (L"  charger pmic index: %r value=%u", Status, (UINT32)Active);
+    if (!EFI_ERROR (Status) && Active < 8) {
+      Preferred = Active;
+    }
+  }
+
 
   /* PmicDeviceIndex is 0:Primary / 1:Secondary per the header. GetActivePort
    * is NOT that index - it returns an SDAM slot enum (SDAM_PORT_0..7), and
@@ -429,10 +455,21 @@ UtProbePmicCharger (IN BOOLEAN WithOtg)
             (UINT32)Active);
   }
 
+  /* Candidate order: whatever the charger named for itself, then the two
+   * documented indices. UsbinValid is the probe because it is read-only and
+   * every revision carries it. */
   Found = FALSE;
-  for (Pmic = 0; Pmic < 2; Pmic++) {
-    if (Schg->UsbinValid == NULL) {
-      break;
+  for (Try = 0; Try < 3 && Schg->UsbinValid != NULL; Try++) {
+    if (Try == 0) {
+      if (Preferred == UT_PMIC_NONE) {
+        continue;
+      }
+      Pmic = Preferred;
+    } else {
+      Pmic = (UINT32)(Try - 1);
+      if (Pmic == Preferred) {
+        continue;
+      }
     }
     Status = Schg->UsbinValid (Pmic, &UsbinLive);
     UtStep (L"  pmic %u usbin valid: %r value=%u", Pmic, Status,
@@ -445,7 +482,7 @@ UtProbePmicCharger (IN BOOLEAN WithOtg)
   if (!Found) {
     UsbinLive = TRUE;
     Pmic      = 0;
-    UtStep (L"  no pmic index answered; assuming usb input live");
+    UtStep (L"  no pmic index answered; charger backend is not responding");
   } else {
     UtStep (L"  pmic index=%u", Pmic);
   }

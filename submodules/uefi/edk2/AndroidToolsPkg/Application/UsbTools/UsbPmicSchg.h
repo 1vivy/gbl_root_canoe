@@ -25,6 +25,9 @@
 #include <Uefi.h>
 
 #define UT_SCHG_REVISION_1  0x000000000001001Full
+
+/* No PMIC device index established yet. */
+#define UT_PMIC_NONE  0xFFFFFFFFu
 #define UT_SCHG_REVISION_9  0x0000000000010027ull
 
 /* EFIPmicSchg.h:349-357 */
@@ -62,6 +65,17 @@ typedef enum {
   UT_SCHG_CONNECT_MODE_UFP,
   UT_SCHG_CONNECT_MODE_INVALID
 } UT_SCHG_CONNECT_MODE;
+
+/* EFIPmicSchg.h:91 */
+#define UT_SCHG_MAX_CHARGING_PORT  4
+
+/* EFIPmicSchg.h:385-390. Names the valid PMIC indices outright, so the
+ * device index never has to be guessed. */
+typedef struct {
+  UINT32  PmicIndex[UT_SCHG_MAX_CHARGING_PORT];
+  UINT32  SlaveIndex[UT_SCHG_MAX_CHARGING_PORT];
+  UINT32  ChargerCount;
+} UT_SCHG_PMIC_INFO;
 
 /* EFIPmicSchg.h:437-447. Field order is load-bearing; the three enums ahead
  * of the booleans are plain ints. */
@@ -110,7 +124,7 @@ typedef struct {
   VOID    *ToggleWipowerSDLatch;
   VOID    *SetDcinCurrent;
   VOID    *SetChargeCmdBit;
-  VOID    *SchgGetPmicInfo;
+  EFI_STATUS (EFIAPI *SchgGetPmicInfo) (OUT UT_SCHG_PMIC_INFO *Info);
   VOID    *ConfigApsd;
   VOID    *ConfigHvDcp;
   VOID    *GetIclStatus;
@@ -127,7 +141,7 @@ typedef struct {
   EFI_STATUS (EFIAPI *GetActivePort) (OUT UINT8 *ActivePmicIndex);
   VOID    *SetTestModeDischarging;
   VOID    *GetLogCategoriesFromSdam;
-  VOID    *SchgGetChargerPmicIndex;
+  EFI_STATUS (EFIAPI *SchgGetChargerPmicIndex) (OUT UINT8 *ChargerPmicIndex);
   VOID    *SetShipMode;
   VOID    *GetValidPonReasons;
   VOID    *SetOffModeSrc;
