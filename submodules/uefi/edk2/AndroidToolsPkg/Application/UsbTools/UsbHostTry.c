@@ -127,6 +127,29 @@ AT_REPORT  mUtAttemptReport;
 BOOLEAN    mUtAttemptRan = FALSE;
 
 /*
+ * The PMIC/charger stack, loaded only when the operator asked to source
+ * VBUS. The charger protocol is published on this device but answers
+ * ChargerCount=0 and rejects every PMIC index, because nothing on the ABL
+ * path ever brings charging up - ABL has no reason to. These are the DXEs
+ * that populate it, in the order Mu-Silicium's own APRIORI dispatches them,
+ * and all four are byte-exact extractions from this handset's uefi_a.
+ *
+ * Their depex requirements were checked against the device's live protocol
+ * census before wiring: GlinkDxe wants 52858AD7-8B16-4137-9C64-DFE04D942E80,
+ * which is present; the other three declare none.
+ *
+ * They stay off the passive attempt. QcomChargerDxeLA in particular is a
+ * full charging application, and it has no business running when nobody
+ * asked for power.
+ */
+STATIC CONST CHAR16 *CONST mUtPowerStack[] = {
+  L"GlinkDxe.efi",
+  L"PmicGlinkDxe.efi",
+  L"QcomChargerDxeLA.efi",
+  L"ChargerExDxe.efi"
+};
+
+/*
  * Load order is dependency order. UsbPwrCtrlDxe comes first because it
  * publishes EFI_USB_PWR_CTRL_PROTOCOL, the only thing that can raise VBUS:
  * the vendor's host init asks for VBUS *off*, and XhciDxe's automatic
@@ -832,6 +855,16 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle, IN BOOLEAN WithOtg)
     goto Out;
   }
   UtStep (L"core %u via its own instance (rev 0x%lx)", Capable, Cfg->Revision);
+
+  /* Charging first, and only when asked: UsbPwrCtrlDxe runs Detect_Hw at
+   * its entry, so anything that populates the PMIC tables has to be up
+   * before it, not after. */
+  if (WithOtg) {
+    for (Index = 0; Index < ARRAY_SIZE (mUtPowerStack); Index++) {
+      Status = UtLoadDriver (ImageHandle, mUtPowerStack[Index]);
+      UtStep (L"power %s: %r", mUtPowerStack[Index], Status);
+    }
+  }
 
   /* Driver stack from the boot root, in dependency order. */
   for (Index = 0; Index < ARRAY_SIZE (mUtDriverStack); Index++) {
