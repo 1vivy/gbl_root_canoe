@@ -498,6 +498,19 @@ SfbConfigParse (
         }
         continue;
       }
+      if (SfbCfgKeyIs (Begin, KeyEnd, "options")) {
+        /* Copied verbatim: no path folding, no separator rewriting. The
+         * value is an argument string whose grammar belongs to the image
+         * being launched, and rewriting a slash inside it would corrupt a
+         * kernel command line. An empty value is a rejected line rather
+         * than a silent no-op, so a typo is visible. */
+        if (ValueLength == 0 ||
+            !SfbCfgCopy (Current->Options, SFB_CONFIG_OPTIONS_CHARS, Value,
+                         ValueLength)) {
+          Config->RejectedLines++;
+        }
+        continue;
+      }
       if (SfbCfgKeyIs (Begin, KeyEnd, "mode")) {
         if (!SfbCfgParseMode (Value, End, &Current->Mode)) {
           Current->Mode = Config->Mode;

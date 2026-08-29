@@ -997,6 +997,106 @@ TestLockRefusalDemotes(void)
 }
 
 /*
+ * A config row that names a loader as its image and a payload in `options`
+ * must reach StartImage with that string as its LoadOptions. This is the
+ * whole mechanism behind holding a Mu-Silicium/Aloha or Android boot entry:
+ * the image is a loader shipped in tools/, and the payload it should boot is
+ * named by the row. Without publication the loader gets an empty command
+ * line and can only print its usage.
+ */
+static void
+TestConfigOptionsBecomeLoadOptions(void)
+{
+  static const CHAR8 ConfigText[] =
+    "version 1\n"
+    "entry mu\n"
+    "title Mu-Silicium\n"
+    "image tools/FdLoader.efi\n"
+    "options \\mu\\SM8850.fd 0x9FC00000 0x00300000\n";
+  static CONST CHAR16 Expected[] =
+    L"\\mu\\SM8850.fd 0x9FC00000 0x00300000";
+  SFB_MENU_STATE Menu;
+  UINTN Index;
+  UINTN Found = SFB_NO_INDEX;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfigText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootConfigPresent = TRUE;
+
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
+      Found = Index;
+      break;
+    }
+  }
+  assert(Found != SFB_NO_INDEX);
+  /* It stays a plain application row - carrying arguments does not make it a
+   * boot-spec entry - but it now points at an out-of-line payload. */
+  assert(Menu.Entry[Found].Kind == SfbEntryEfiFile);
+  assert(Menu.Entry[Found].BlsIndex != SFB_NO_BLS);
+
+  ResetLaunchBackend ();
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeHonestUnlocked) == EFI_SUCCESS);
+  assert(mLoadCount == 1 && mStartCount == 1);
+  assert(mLoadedImage.LoadOptions != NULL);
+  assert(StrCmp ((CHAR16 *)mLoadedImage.LoadOptions, Expected) == 0);
+  /* Counting the terminating NUL; without it the loader loses its last
+   * argument, which for FdLoader is the load window size. */
+  assert(mLoadedImage.LoadOptionsSize ==
+         (StrLen (Expected) + 1) * sizeof (CHAR16));
+  SfbFreeMenu (&Menu);
+}
+
+/*
+ * The same row without `options` must still launch with no command line at
+ * all, rather than an empty one.
+ */
+static void
+TestConfigWithoutOptionsPublishesNone(void)
+{
+  static const CHAR8 ConfigText[] =
+    "version 1\n"
+    "entry plain\n"
+    "image myown.efi\n";
+  SFB_MENU_STATE Menu;
+  UINTN Index;
+  UINTN Found = SFB_NO_INDEX;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfigText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootConfigPresent = TRUE;
+
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
+      Found = Index;
+      break;
+    }
+  }
+  assert(Found != SFB_NO_INDEX);
+  assert(Menu.Entry[Found].BlsIndex == SFB_NO_BLS);
+
+  ResetLaunchBackend ();
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeHonestUnlocked) == EFI_SUCCESS);
+  assert(mLoadedImage.LoadOptions == NULL);
+  assert(mLoadedImage.LoadOptionsSize == 0);
+  SfbFreeMenu (&Menu);
+}
+
+/*
  * A `mode` written against an image the loader never wraps decides nothing.
  * The entry must launch unmanaged whatever it declares, arm nothing at all,
  * and be marked so the menu can say the declaration does not apply.
@@ -1505,6 +1605,8 @@ main(void)
   TestLockRefusalDemotes ();
   TestBootRootProbe ();
   TestUnmanagedPassthrough ();
+  TestConfigOptionsBecomeLoadOptions ();
+  TestConfigWithoutOptionsPublishesNone ();
   TestAdditiveDiscovery ();
   TestStaleSlotRole ();
   return 0;

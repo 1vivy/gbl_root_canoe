@@ -1164,6 +1164,7 @@ FdtSetBootargs (
   RootEnded = FALSE;
   EndTokenSeen = FALSE;
   ChosenOpen = FALSE;
+  ChosenFound = FALSE;
 
   while (Cursor < StructureSize) {
     if (StructureSize - Cursor < sizeof (UINT32)) {

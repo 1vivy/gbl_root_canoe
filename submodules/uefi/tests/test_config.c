@@ -351,6 +351,54 @@ TestNullAndEmpty (void)
   assert (!Parse ("version 1\ntimeout 3\n"));
 }
 
+static void
+TestOptionsArePassedThroughVerbatim (void)
+{
+  /* The reason this key exists: a row names a loader as its image and the
+   * payload it should boot as its options. */
+  assert (Parse ("version 1\nentry mu\n"
+                 "  image tools/FdLoader.efi\n"
+                 "  options \\mu\\SM8850.fd 0x9FC00000 0x00300000\n"));
+  assert (gConfig.Count == 1);
+  assert (strcmp (gConfig.Entry[0].Image, "\\tools\\FdLoader.efi") == 0);
+  assert (strcmp (gConfig.Entry[0].Options,
+                  "\\mu\\SM8850.fd 0x9FC00000 0x00300000") == 0);
+  assert (gConfig.RejectedLines == 0);
+
+  /* Forward slashes inside an options value are data, not path separators.
+   * Folding them the way `image` is folded would corrupt a kernel command
+   * line, so the value is stored byte for byte. */
+  assert (Parse ("version 1\nentry a\n  image tools/AbootLoader.efi\n"
+                 "  options --boot /a/boot.img --cmdline \"root=/dev/sda1 ro\"\n"));
+  assert (strcmp (gConfig.Entry[0].Options,
+                  "--boot /a/boot.img --cmdline \"root=/dev/sda1 ro\"") == 0);
+  assert (gConfig.RejectedLines == 0);
+
+  /* Absent by default, so an ordinary row still launches with no arguments. */
+  assert (Parse ("version 1\nentry a\n  image boot.efi\n"));
+  assert (gConfig.Entry[0].Options[0] == '\0');
+
+  /* An empty value is a typo, not a request for no arguments: counted so it
+   * is visible rather than silently dropping the payload. */
+  assert (Parse ("version 1\nentry a\n  image boot.efi\n  options\n"));
+  assert (gConfig.Entry[0].Options[0] == '\0');
+  assert (gConfig.RejectedLines == 1);
+
+  /* Over-long is refused outright rather than stored as a prefix: half a
+   * command line would boot something other than what was asked for. */
+  {
+    char  Text[SFB_CONFIG_OPTIONS_CHARS + 128];
+    char  Long[SFB_CONFIG_OPTIONS_CHARS + 16];
+
+    memset (Long, 'x', sizeof (Long) - 1);
+    Long[sizeof (Long) - 1] = '\0';
+    sprintf (Text, "version 1\nentry a\n  image boot.efi\n  options %s\n", Long);
+    assert (Parse (Text));
+    assert (gConfig.Entry[0].Options[0] == '\0');
+    assert (gConfig.RejectedLines == 1);
+  }
+}
+
 int
 main (void)
 {
@@ -369,6 +417,7 @@ main (void)
   TestLexerMatchesBootentries ();
   TestNoTrailingNewlineAndUnterminatedBuffer ();
   TestNullAndEmpty ();
+  TestOptionsArePassedThroughVerbatim ();
   printf ("test_config: ok\n");
   return 0;
 }

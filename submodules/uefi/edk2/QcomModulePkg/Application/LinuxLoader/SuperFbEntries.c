@@ -559,7 +559,15 @@ SfbAppendBootRootEntries (IN OUT SFB_MENU_STATE *Menu)
  * about 1.2 KB and SFB_MENU_STATE embeds SFB_MAX_ENTRIES of them by value, so
  * another ~900 bytes each would add tens of kilobytes to a stack-allocated
  * menu. The entry carries one byte of index instead.
+ *
+ * A canoe.cfg row with `options` borrows the same table for its LoadOptions,
+ * keyed the same way. It stays an SfbEntryEfiFile - a plain application
+ * launch that carries arguments, not a boot-spec row - so the launch path
+ * distinguishes the two by Kind and reads the payload by BlsIndex.
  */
+#if SFB_CONFIG_OPTIONS_CHARS > SFB_BLS_CMDLINE_CHARS
+#error "canoe.cfg options must fit the boot-spec payload it is stored in"
+#endif
 STATIC SFB_BLS_ENTRY  mSfbBlsPayload[SFB_MAX_ENTRIES];
 
 STATIC
@@ -876,6 +884,25 @@ SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
                                   Config, &Config->Entry[ConfigIndex]);
     Slot->ModeFromConfig = TRUE;
     Slot->Role = Config->Entry[ConfigIndex].Role;
+    /*
+     * An `options` value rides in the same out-of-line payload table the
+     * boot-spec rows use, rather than growing SFB_BOOT_ENTRY: the menu
+     * embeds 32 of those by value. Kind stays SfbEntryEfiFile - this is a
+     * plain application launch that happens to carry arguments, not a
+     * boot-spec entry - so the launch path keys off BlsIndex alone.
+     */
+    if (Config->Entry[ConfigIndex].Options[0] != '\0') {
+      SFB_BLS_ENTRY *Payload = &mSfbBlsPayload[Menu->Count];
+
+      /* The payload was just zeroed and Options is NUL-terminated by the
+       * parser, which refuses an over-long value rather than truncating, so
+       * copying the whole fixed-size source is bounded and leaves the tail
+       * of the wider destination zero. */
+      ZeroMem (Payload, sizeof (*Payload));
+      CopyMem (Payload->Cmdline, Config->Entry[ConfigIndex].Options,
+               SFB_CONFIG_OPTIONS_CHARS);
+      Slot->BlsIndex = (UINT8)Menu->Count;
+    }
     if (Config->DefaultIndex == ConfigIndex) {
       Menu->DefaultIndex = Menu->Count;
     }
@@ -1536,6 +1563,24 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
   if (Entry->Kind == SfbEntryBlsLinux || Entry->Kind == SfbEntryBlsEfi) {
     Status = SfbLaunchBlsEntry (Entry, EffectiveMode);
   } else {
+    /*
+     * A plain application launch, with arguments when the config row asked
+     * for them. This is what makes a loader row work: the image is
+     * \tools\FdLoader.efi or \tools\AbootLoader.efi and the payload it
+     * should boot is named in `options`. Without this the loaders receive
+     * an empty command line and can only print their usage.
+     */
+    CONST SFB_BLS_ENTRY  *Payload = (Entry->BlsIndex != SFB_NO_BLS)
+                                      ? SfbBlsPayload (Entry->BlsIndex)
+                                      : NULL;
+    CHAR16               Options[SFB_BLS_CMDLINE_CHARS];
+    CONST CHAR16         *OptionsPtr = NULL;
+
+    if (Payload != NULL && Payload->Cmdline[0] != '\0') {
+      SfbAsciiToUnicode (Payload->Cmdline, Options, ARRAY_SIZE (Options));
+      OptionsPtr = Options;
+    }
+
     SfbBypassSecurity ();
     Status = SfbLaunchImage (
                Entry->DevicePath,
@@ -1543,7 +1588,7 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
                EffectiveMode,
                EffectiveMode == SfbBootModeKmProfile ? &Profile : NULL,
                TzMapPtr,
-               NULL);
+               OptionsPtr);
   }
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "SFB: '%s' failed or returned: %r\n",
