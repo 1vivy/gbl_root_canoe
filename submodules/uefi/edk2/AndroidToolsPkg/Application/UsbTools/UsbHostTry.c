@@ -487,6 +487,17 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
       Toggled = TRUE;
       UtSignalUsbInit ();
       UtWaitForHost ();
+      /*
+       * Second trigger, evidence-backed: under the XHCI pin any vendor
+       * start call lands in host mode - a restore attempt that asked for
+       * DEVICE_SS returned Success with the state reading XHCI. If the
+       * init event alone did not finish the job, ask directly.
+       */
+      if (!UtHostIsUp ()) {
+        Status = Cfg->StartController (Cfg, Capable, QCOM_USB_DEVICE_MODE_SS);
+        UtStep (L"pinned start (asks DEVICE, pin says XHCI): %r", Status);
+        UtWaitForHost ();
+      }
       UtBindNewHandles (Before, BeforeCount);
     }
   } else {
