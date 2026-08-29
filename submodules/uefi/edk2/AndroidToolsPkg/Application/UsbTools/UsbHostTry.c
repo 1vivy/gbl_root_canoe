@@ -190,6 +190,67 @@ UtConfigHandles (OUT EFI_HANDLE **Handles)
   return Count;
 }
 
+/*
+ * The vendor's on-demand USB start: signal gInitUsbControllerGuid and the
+ * UsbConfigDxe callback brings the core up in whatever mode the static
+ * config is pinned to. The toggle pins the mode; this completes it. The
+ * pairing is the whole mode-switch protocol on this device - neither half
+ * works alone.
+ */
+STATIC
+VOID
+UtInitEventNotify (IN EFI_EVENT Event, IN VOID *Context)
+{
+  (VOID)Event;
+  (VOID)Context;
+}
+
+STATIC
+VOID
+UtSignalUsbInit (VOID)
+{
+  EFI_EVENT   Event;
+  EFI_STATUS  Status;
+  EFI_GUID    InitUsbControllerGuid = {
+    0x1c0cffce, 0xfc8d, 0x4e44,
+    { 0x8c, 0x78, 0x9c, 0x9e, 0x5b, 0x53, 0xd, 0x36 }
+  };
+
+  Status = gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK,
+                               UtInitEventNotify, NULL,
+                               &InitUsbControllerGuid, &Event);
+  if (EFI_ERROR (Status)) {
+    UtStep (L"init-event create failed: %r", Status);
+    return;
+  }
+  gBS->SignalEvent (Event);
+  gBS->CloseEvent (Event);
+}
+
+/* TRUE once the vendor's deferred host start has materialised: a real
+ * EFI_USB2_HC_PROTOCOL, not a mode field that may be a stale copy. */
+STATIC
+BOOLEAN
+UtHostIsUp (VOID)
+{
+  return UtCountByProtocol (&gEfiUsb2HcProtocolGuid) != 0;
+}
+
+STATIC
+VOID
+UtWaitForHost (VOID)
+{
+  UINTN  Step;
+
+  for (Step = 0; Step < 16 && !UtHostIsUp (); Step++) {
+    gBS->Stall (UT_ENUM_STEP_US);
+  }
+  UtStep (L"host settle: usb2hc=%u pciio=%u after %Lu ms",
+          (UINT32)UtCountByProtocol (&gEfiUsb2HcProtocolGuid),
+          (UINT32)UtCountByProtocol (&gEfiPciIoProtocolGuid),
+          (UINT64)(Step * (UT_ENUM_STEP_US / 1000u)));
+}
+
 STATIC
 QCOM_USB_CONFIG_PROTOCOL *
 UtConfigForCore (IN UINT32 Core)
@@ -410,13 +471,12 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
   }
 
   /*
-   * The vendor's own mode switch is the primary rung. Measured on this
-   * device: the direct StartController(XHCI) returns Success and still
-   * leaves the new handle in DEVICE mode (the static-config override), while
-   * ToggleUsbMode stops the core, pins the static config to XHCI and lets
-   * the vendor complete the host start ASYNCHRONOUSLY - Usb2Hc and PciIo
-   * appeared seconds later, not at return. So the toggle is followed by a
-   * settle poll, not an immediate bind.
+   * The vendor mode-switch protocol, measured on this device:
+   * ToggleUsbMode stops the current mode and pins the static config to the
+   * other one; the core then reads INVALID and the toggle refuses to run
+   * from there. The completion trigger is the on-demand init event - the
+   * UsbConfigDxe callback starts the core in the pinned mode. Neither half
+   * works alone, and a bare StartController is overridden by the pin.
    */
   BeforeCount = UtConfigHandles (&Before);
   if (Cfg->ToggleUsbMode != NULL) {
@@ -425,16 +485,8 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
     UtStep (L"ToggleUsbMode(core %u): %r", Capable, Status);
     if (!EFI_ERROR (Status)) {
       Toggled = TRUE;
-      for (Step = 0;
-           Step < 16 &&
-           UtCountByProtocol (&gEfiUsb2HcProtocolGuid) == 0;
-           Step++) {
-        gBS->Stall (UT_ENUM_STEP_US);
-      }
-      UtStep (L"host settle: usb2hc=%u pciio=%u after %Lu ms",
-              (UINT32)UtCountByProtocol (&gEfiUsb2HcProtocolGuid),
-              (UINT32)UtCountByProtocol (&gEfiPciIoProtocolGuid),
-              (UINT64)(Step * (UT_ENUM_STEP_US / 1000u)));
+      UtSignalUsbInit ();
+      UtWaitForHost ();
       UtBindNewHandles (Before, BeforeCount);
     }
   } else {
@@ -485,32 +537,39 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
           (UINT32)UtCountByProtocol (&gEfiSimpleFileSystemProtocolGuid));
 
   /*
-   * Always hand the core back; "nothing to do" is never an acceptable end
-   * state. A stopped (INVALID) core is just as broken for the gadget stack
-   * as a host-mode one - the mass-storage export failed exactly that way.
-   * The toggle-back is asynchronous too, so it gets its own settle poll,
-   * and a direct device-mode start covers whatever the toggle left behind.
+   * Hand the core back to the gadget stack, through the same two-step
+   * protocol the acquire used. The toggle-back only runs from a live host
+   * mode (the vendor refuses from INVALID), so a core that never came up is
+   * first started - per the pin, that lands it in XHCI - and then toggled.
+   * "Device is back" means the USB function protocol did, not a mode field.
    */
-  if (Toggled) {
-    Restore = Cfg->ToggleUsbMode (Cfg, Capable);
-    UtStep (L"restore via ToggleUsbMode: %r", Restore);
-    for (Step = 0;
-         Step < 16 &&
-         UtCountByProtocol (&gEfiUsb2HcProtocolGuid) != 0;
-         Step++) {
-      gBS->Stall (UT_ENUM_STEP_US);
+  if (Toggled || Started) {
+    UINTN  Pass;
+
+    for (Pass = 0; Pass < 3; Pass++) {
+      if (UtCountByProtocol (&gEfiUsbfnIoProtocolGuid) != 0) {
+        break;
+      }
+      if (UtHostIsUp ()) {
+        Restore = Cfg->ToggleUsbMode (Cfg, Capable);
+        UtStep (L"restore toggle-back: %r", Restore);
+      }
+      UtSignalUsbInit ();
+      for (Step = 0; Step < 8; Step++) {
+        gBS->Stall (UT_ENUM_STEP_US);
+        if (UtCountByProtocol (&gEfiUsbfnIoProtocolGuid) != 0) {
+          break;
+        }
+      }
+      UtStep (L"restore settle pass %u: usbfn=%u usb2hc=%u mode=0x%x",
+              (UINT32)Pass,
+              (UINT32)UtCountByProtocol (&gEfiUsbfnIoProtocolGuid),
+              (UINT32)UtCountByProtocol (&gEfiUsb2HcProtocolGuid),
+              Cfg->ModeType);
     }
-    UtStep (L"restore settle: usb2hc=%u after %Lu ms",
-            (UINT32)UtCountByProtocol (&gEfiUsb2HcProtocolGuid),
-            (UINT64)(Step * (UT_ENUM_STEP_US / 1000u)));
-  }
-  if (UtCountByProtocol (&gEfiUsb2HcProtocolGuid) != 0 ||
-      Cfg->ModeType != QCOM_USB_DEVICE_MODE_SS) {
-    Restore = Cfg->StartController (Cfg, Capable, QCOM_USB_DEVICE_MODE_SS);
-    UtStep (L"device-mode start: %r (state now mode=0x%x)",
-            Restore, Cfg->ModeType);
-  } else {
-    UtStep (L"restore complete: mode=0x%x", Cfg->ModeType);
+    if (UtCountByProtocol (&gEfiUsbfnIoProtocolGuid) == 0) {
+      UtStep (L"restore FAILED: no USB function after 3 passes");
+    }
   }
 
 Out:
