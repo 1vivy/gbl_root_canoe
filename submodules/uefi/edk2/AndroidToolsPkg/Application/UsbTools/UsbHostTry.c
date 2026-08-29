@@ -236,6 +236,32 @@ UtHostIsUp (VOID)
   return UtCountByProtocol (&gEfiUsb2HcProtocolGuid) != 0;
 }
 
+/*
+ * Offer every host-controller handle to the driver bindings. UsbBusDxe
+ * binds EFI_USB2_HC_PROTOCOL, which XhciDxe installs partway through the
+ * connect pass that started it - so the handle that exists at the end of
+ * that pass has never been offered to the bus driver.
+ */
+STATIC
+VOID
+UtConnectHostControllers (VOID)
+{
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       Count    = 0;
+  UINTN       Index;
+
+  if (EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol,
+                                          &gEfiUsb2HcProtocolGuid, NULL,
+                                          &Count, &Handles)) ||
+      Handles == NULL) {
+    return;
+  }
+  for (Index = 0; Index < Count; Index++) {
+    gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
+  }
+  FreePool (Handles);
+}
+
 STATIC
 VOID
 UtWaitForHost (VOID)
@@ -513,29 +539,55 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
     UtBindNewHandles (Before, BeforeCount);
   }
 
-  /* Bus power. A stick with no VBUS never enumerates. */
-  if (Cfg->GetUsbVbusStatus != NULL && Cfg->UsbEnableVbus != NULL) {
-    if (!EFI_ERROR (Cfg->GetUsbVbusStatus (Cfg, Capable, &Vbus))) {
-      UtStep (L"vbus before: %u", Vbus);
-      if (Vbus == QCOM_USB_VBUS_DISABLED) {
-        Status = Cfg->UsbEnableVbus (Cfg, Capable);
-        UtStep (L"UsbEnableVbus: %r", Status);
-        if (!EFI_ERROR (Cfg->GetUsbVbusStatus (Cfg, Capable, &Vbus))) {
-          UtStep (L"vbus after: %u", Vbus);
-        }
-      }
+  /*
+   * Bus power. A stick with no VBUS never enumerates, and the query itself
+   * failing is a finding - the previous run printed no vbus row at all
+   * because GetUsbVbusStatus errored and the raise was skipped with it. Ask
+   * for power regardless of what the query says.
+   */
+  if (Cfg->GetUsbVbusStatus != NULL) {
+    Vbus = 0xFFFFFFFF;
+    Status = Cfg->GetUsbVbusStatus (Cfg, Capable, &Vbus);
+    UtStep (L"vbus query: %r value=%u", Status, Vbus);
+  } else {
+    UtStep (L"vbus query: member absent");
+  }
+  if (Cfg->UsbEnableVbus != NULL) {
+    Status = Cfg->UsbEnableVbus (Cfg, Capable);
+    UtStep (L"UsbEnableVbus: %r", Status);
+    if (Cfg->GetUsbVbusStatus != NULL) {
+      Vbus = 0xFFFFFFFF;
+      Status = Cfg->GetUsbVbusStatus (Cfg, Capable, &Vbus);
+      UtStep (L"vbus after: %r value=%u", Status, Vbus);
     }
   }
 
-  /* Enumeration settle: SCSI capacity behind BlockIo is not instant. */
+  /*
+   * UsbBusDxe binds the host controller handle, not the UsbConfig handle
+   * the mode switch created - and Usb2Hc only appeared partway through that
+   * earlier connect pass, so nothing has offered it to the bus driver yet.
+   */
+  UtConnectHostControllers ();
+
+  /*
+   * Watch the bus, not just the filesystem: UsbIo is the first evidence a
+   * device answered at all, and it separates "no device on the wire" from
+   * "device present, storage stack did not finish".
+   */
   SfsBefore = UtCountByProtocol (&gEfiSimpleFileSystemProtocolGuid);
   for (Step = 0; Step < UT_ENUM_STEPS; Step++) {
     gBS->Stall (UT_ENUM_STEP_US);
-    if (UtCountByProtocol (&gEfiSimpleFileSystemProtocolGuid) > SfsBefore) {
+    if (UtCountByProtocol (&gEfiUsbIoProtocolGuid) != 0 &&
+        UtCountByProtocol (&gEfiSimpleFileSystemProtocolGuid) > SfsBefore) {
       break;
     }
+    if ((Step % 4) == 3) {
+      UtConnectHostControllers ();
+    }
   }
-  UtStep (L"enum wait: sfs %Lu -> %Lu after %Lu ms",
+  UtStep (L"bus scan: usbio=%u blkio=%u sfs %Lu -> %Lu after %Lu ms",
+          (UINT32)UtCountByProtocol (&gEfiUsbIoProtocolGuid),
+          (UINT32)UtCountByProtocol (&gEfiBlockIoProtocolGuid),
           (UINT64)SfsBefore,
           (UINT64)UtCountByProtocol (&gEfiSimpleFileSystemProtocolGuid),
           (UINT64)(Step * (UT_ENUM_STEP_US / 1000u)));
