@@ -406,6 +406,7 @@ UtProbePmicCharger (IN BOOLEAN WithOtg)
   UINT32                      Pmic     = 0;
   UINT32                      Value    = 0;
   BOOLEAN                     UsbinLive = TRUE;
+  BOOLEAN                     Found;
 
   Status = gBS->LocateProtocol (&SchgGuid, NULL, (VOID **)&Schg);
   if (EFI_ERROR (Status) || Schg == NULL) {
@@ -417,11 +418,37 @@ UtProbePmicCharger (IN BOOLEAN WithOtg)
           (Schg->EnableOtg != NULL) ? L'Y' : L'-',
           (Schg->SetTypeCPortRole != NULL) ? L'Y' : L'-');
 
-  if (Schg->GetActivePort != NULL &&
-      !EFI_ERROR (Schg->GetActivePort (&Active))) {
-    Pmic = Active;
+  /* PmicDeviceIndex is 0:Primary / 1:Secondary per the header. GetActivePort
+   * is NOT that index - it returns an SDAM slot enum (SDAM_PORT_0..7), and
+   * feeding its answer back in made every call return Device Error. Probe
+   * the two real indices instead and keep whichever one the charger
+   * actually answers on. */
+  if (Schg->GetActivePort != NULL) {
+    Status = Schg->GetActivePort (&Active);
+    UtStep (L"  sdam active port: %r slot=%u (informational)", Status,
+            (UINT32)Active);
   }
-  UtStep (L"  pmic index=%u", Pmic);
+
+  Found = FALSE;
+  for (Pmic = 0; Pmic < 2; Pmic++) {
+    if (Schg->UsbinValid == NULL) {
+      break;
+    }
+    Status = Schg->UsbinValid (Pmic, &UsbinLive);
+    UtStep (L"  pmic %u usbin valid: %r value=%u", Pmic, Status,
+            (UINT32)UsbinLive);
+    if (!EFI_ERROR (Status)) {
+      Found = TRUE;
+      break;
+    }
+  }
+  if (!Found) {
+    UsbinLive = TRUE;
+    Pmic      = 0;
+    UtStep (L"  no pmic index answered; assuming usb input live");
+  } else {
+    UtStep (L"  pmic index=%u", Pmic);
+  }
 
   if (Schg->GetConnectState != NULL) {
     Value  = UT_SCHG_CONNECT_MODE_INVALID;
@@ -439,13 +466,6 @@ UtProbePmicCharger (IN BOOLEAN WithOtg)
     Value  = UT_SCHG_OTG_STATUS_INVALID;
     Status = Schg->GetOtgStatus (Pmic, &Value);
     UtStep (L"  otg status: %r value=%u", Status, Value);
-  }
-  if (Schg->UsbinValid != NULL) {
-    Status = Schg->UsbinValid (Pmic, &UsbinLive);
-    UtStep (L"  usbin valid: %r value=%u", Status, (UINT32)UsbinLive);
-    if (EFI_ERROR (Status)) {
-      UsbinLive = TRUE;
-    }
   }
 
   if (!WithOtg) {
