@@ -127,27 +127,24 @@ AT_REPORT  mUtAttemptReport;
 BOOLEAN    mUtAttemptRan = FALSE;
 
 /*
- * The PMIC/charger stack, loaded only when the operator asked to source
- * VBUS. The charger protocol is published on this device but answers
- * ChargerCount=0 and rejects every PMIC index, because nothing on the ABL
- * path ever brings charging up - ABL has no reason to. These are the DXEs
- * that populate it, in the order Mu-Silicium's own APRIORI dispatches them,
- * and all four are byte-exact extractions from this handset's uefi_a.
+ * The charger route is closed, recorded here so it is not retried.
  *
- * Their depex requirements were checked against the device's live protocol
- * census before wiring: GlinkDxe wants 52858AD7-8B16-4137-9C64-DFE04D942E80,
- * which is present; the other three declare none.
+ * GlinkDxe, PmicGlinkDxe and ChargerExDxe all started and ChargerCount did
+ * move 0 -> 1, but QcomChargerDxeLA - the one that runs SchgInit and fills
+ * the port table - answered Device Error. Its INF locates five protocols at
+ * entry under a TRUE depex; measured against the device's live census four
+ * are present and gEfiDppProtocolGuid
+ * (42D430C0-AE55-4A6C-A795-C63E687A1549) is absent. DppDxe is not in this
+ * handset's uefi_a and nothing on the ABL path publishes it, so that driver
+ * cannot start here in any load order.
  *
- * They stay off the passive attempt. QcomChargerDxeLA in particular is a
- * full charging application, and it has no business running when nobody
- * asked for power.
+ * That run also left the USB gadget wedged past a reboot, needing a hard
+ * power cycle to recover. Loading the stack is therefore removed: it costs
+ * a device recovery and cannot reach a working port. Getting further would
+ * need a stub DPP provider - which lets a charging application configure a
+ * battery from defaults, a hardware risk rather than a software one - or
+ * direct SPMI register writes.
  */
-STATIC CONST CHAR16 *CONST mUtPowerStack[] = {
-  L"GlinkDxe.efi",
-  L"PmicGlinkDxe.efi",
-  L"QcomChargerDxeLA.efi",
-  L"ChargerExDxe.efi"
-};
 
 /*
  * Load order is dependency order. UsbPwrCtrlDxe comes first because it
@@ -394,14 +391,9 @@ UtProbeUsbPowerControl (VOID)
  * empty. Calling it directly is the only path to VBUS that does not run
  * through the validation that answers Invalid Parameter for every index.
  *
- * WithOtg actually sources 5V on the connector, so it is gated twice: the
- * operator picks the row that asks for it, and UsbinValid must say no
- * external supply is feeding us. Sourcing into a live charger or host port
- * is the one way this can do damage.
+ * Read-only throughout: every entry point here is a query. The write side
+ * was removed once VBUS proved unreachable on this target.
  */
-STATIC UT_PMIC_SCHG_PROTOCOL  *mUtSchg       = NULL;
-STATIC UINT32                  mUtSchgPmic   = 0;
-STATIC BOOLEAN                 mUtOtgEnabled = FALSE;
 
 STATIC CONST CHAR16 *
 UtSchgModeText (IN UINT32 Mode)
@@ -416,7 +408,7 @@ UtSchgModeText (IN UINT32 Mode)
 
 STATIC
 VOID
-UtProbePmicCharger (IN BOOLEAN WithOtg)
+UtProbePmicCharger (VOID)
 {
   EFI_GUID  SchgGuid = {
     0xae6ae96e, 0x483f, 0x42ae,
@@ -528,78 +520,17 @@ UtProbePmicCharger (IN BOOLEAN WithOtg)
     UtStep (L"  otg status: %r value=%u", Status, Value);
   }
 
-  if (!WithOtg) {
-    return;
-  }
-  /* The interlock. An external supply on VBUS and our own boost are two
-   * sources on one rail; refuse rather than arbitrate. */
+  /*
+   * No writes from here. Sourcing VBUS was tried and is not reachable on
+   * this target: every SetVbusSourceEn is rejected by an empty port table,
+   * and the charger that would fill it cannot start without DPP. What
+   * remains is worth keeping as a read-only census of the power layer, so
+   * the same ground can be re-measured on another target in one run without
+   * touching a single control register.
+   */
   if (UsbinLive) {
-    UtStep (L"  otg skipped: usb input is live - unplug the host cable");
-    return;
+    UtStep (L"  usb input live; nothing on this screen writes anyway");
   }
-  if (Schg->EnableOtg == NULL) {
-    UtStep (L"  otg skipped: no EnableOtg at this revision");
-    return;
-  }
-
-  mUtSchg     = Schg;
-  mUtSchgPmic = Pmic;
-
-  if (Schg->SetTypeCPortRole != NULL) {
-    Status = Schg->SetTypeCPortRole (Pmic, UT_SCHG_PORT_ROLE_SRC);
-    UtStep (L"  set port role SRC: %r", Status);
-  }
-  if (Schg->ConfigOtg != NULL) {
-    /* Arm the boost from the command register: the Type-C/RID source never
-     * fires here, which is the whole reason we are down at this layer. */
-    Status = Schg->ConfigOtg (Pmic, UT_SCHG_OTG_CFG_EN_SRC_CFG, FALSE);
-    UtStep (L"  config otg cmd-source: %r", Status);
-  }
-  if (Schg->SetOtgILimit != NULL) {
-    Status = Schg->SetOtgILimit (Pmic, 500);
-    UtStep (L"  otg current limit 500mA: %r", Status);
-  }
-
-  Status        = Schg->EnableOtg (Pmic, TRUE);
-  mUtOtgEnabled = (BOOLEAN)!EFI_ERROR (Status);
-  UtStep (L"  ENABLE OTG: %r", Status);
-
-  gBS->Stall (200 * 1000);
-
-  if (Schg->GetOtgStatus != NULL) {
-    Value  = UT_SCHG_OTG_STATUS_INVALID;
-    Status = Schg->GetOtgStatus (Pmic, &Value);
-    UtStep (L"  otg status after: %r value=%u", Status, Value);
-  }
-  if (Schg->GetPortState != NULL) {
-    ZeroMem (&Port, sizeof (Port));
-    Status = Schg->GetPortState (Pmic, &Port);
-    UtStep (L"  port state after: %r cc=%u ufp=%u vbus=%u", Status,
-            Port.CcOutSts, Port.UfpConnType, (UINT32)Port.VbusSts);
-  }
-}
-
-/*
- * Always paired with the probe above. Leaving the boost on would keep the
- * connector sourcing after we hand the machine back.
- */
-STATIC
-VOID
-UtReleasePmicOtg (VOID)
-{
-  EFI_STATUS  Status;
-
-  if (!mUtOtgEnabled || mUtSchg == NULL) {
-    return;
-  }
-  Status = mUtSchg->EnableOtg (mUtSchgPmic, FALSE);
-  UtStep (L"otg disabled: %r", Status);
-
-  if (mUtSchg->SetTypeCPortRole != NULL) {
-    Status = mUtSchg->SetTypeCPortRole (mUtSchgPmic, UT_SCHG_PORT_ROLE_SNK);
-    UtStep (L"port role restored to SNK: %r", Status);
-  }
-  mUtOtgEnabled = FALSE;
 }
 
 /*
@@ -777,7 +708,7 @@ UtBindNewHandles (IN EFI_HANDLE *Before, IN UINTN BeforeCount)
 }
 
 EFI_STATUS
-UtRunHostAttempt (IN EFI_HANDLE ImageHandle, IN BOOLEAN WithOtg)
+UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
 {
   QCOM_USB_CONFIG_PROTOCOL  *Cfg;
   EFI_HANDLE                *Before   = NULL;
@@ -856,15 +787,6 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle, IN BOOLEAN WithOtg)
   }
   UtStep (L"core %u via its own instance (rev 0x%lx)", Capable, Cfg->Revision);
 
-  /* Charging first, and only when asked: UsbPwrCtrlDxe runs Detect_Hw at
-   * its entry, so anything that populates the PMIC tables has to be up
-   * before it, not after. */
-  if (WithOtg) {
-    for (Index = 0; Index < ARRAY_SIZE (mUtPowerStack); Index++) {
-      Status = UtLoadDriver (ImageHandle, mUtPowerStack[Index]);
-      UtStep (L"power %s: %r", mUtPowerStack[Index], Status);
-    }
-  }
 
   /* Driver stack from the boot root, in dependency order. */
   for (Index = 0; Index < ARRAY_SIZE (mUtDriverStack); Index++) {
@@ -944,7 +866,7 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle, IN BOOLEAN WithOtg)
    * earlier connect pass, so nothing has offered it to the bus driver yet.
    */
   UtProbeUsbPowerControl ();
-  UtProbePmicCharger (WithOtg);
+  UtProbePmicCharger ();
   UtReportXhciPorts (Cfg, Capable);
   UtConnectHostControllers ();
 
@@ -985,11 +907,6 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle, IN BOOLEAN WithOtg)
    * first started - per the pin, that lands it in XHCI - and then toggled.
    * "Device is back" means the USB function protocol did, not a mode field.
    */
-  /* Stop sourcing before the core goes back to device mode: a gadget on a
-   * connector we are still powering is a contradiction. Guarded, so the
-   * duplicate call on the early-exit path below is a no-op. */
-  UtReleasePmicOtg ();
-
   if (Toggled || Started) {
     UINTN  Pass;
 
@@ -1020,7 +937,6 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle, IN BOOLEAN WithOtg)
   }
 
 Out:
-  UtReleasePmicOtg ();
   if (Before != NULL) {
     FreePool (Before);
   }

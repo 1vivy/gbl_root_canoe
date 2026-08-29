@@ -72,7 +72,6 @@ UsbToolsEntry (
   STATIC CONST CHAR16 *Items[] = {
     L"USB Census (read-only)",
     L"Attempt USB Host Mode",
-    L"Attempt Host + source VBUS (unplug cable first)",
     L"Dump Report to logfs",
     L"Back"
   };
@@ -96,17 +95,10 @@ UsbToolsEntry (
         break;
       case 1:
         if (UtConfirmHostAttempt ()) {
-          UtRunHostAttempt (ImageHandle, FALSE);
+          UtRunHostAttempt (ImageHandle);
         }
         break;
       case 2:
-        /* This row is the authorisation to source 5V on the connector. The
-         * charger's UsbinValid check still refuses if a supply is present. */
-        if (UtConfirmHostAttempt ()) {
-          UtRunHostAttempt (ImageHandle, TRUE);
-        }
-        break;
-      case 3:
         UtDumpScreen ();
         break;
       default:

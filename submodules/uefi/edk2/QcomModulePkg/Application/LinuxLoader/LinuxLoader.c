@@ -79,7 +79,6 @@
 #include <Protocol/SimpleTextIn.h>
 #include "SuperFbMenu.h"
 #include "SuperFbOemWatchdog.h"
-#include "SuperFbUsbHost.h"
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -183,21 +182,16 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     SfbBootMark (L"logfs");
     SfbMountLogfs ();
     /*
-     * Deliberately does NOT take the USB core. Acquiring host mode writes to
-     * a controller the vendor owns, and on this target that write produces no
-     * host stack and its restore faults the machine - three separate boots
-     * died here. A boot menu that cannot be reached is worth less than USB
-     * boot, so the core is left exactly as inherited and host mode is an
-     * explicit operator action from the UsbTools EFI tool instead.
-     *
-     * The census below is pure query: it reads protocol counts and asks
-     * GetSupUsbMode, and changes nothing. If it reports a host-capable core
-     * on some target, enabling the acquire here again is a one-line change.
+     * The USB core is left exactly as inherited. Host mode was investigated
+     * on this target and abandoned: the vendor mode switch works and XHCI
+     * comes up, but nothing sources VBUS, because the Type-C/PMIC layer is
+     * never initialised on the ABL path and the charger DXE that would
+     * initialise it cannot start without a DPP provider this firmware does
+     * not carry. Probing that stack cost several unbootable devices. The
+     * census and the host attempt live in the UsbTools EFI tool, where they
+     * are an explicit operator action and a fault costs one tool run rather
+     * than the boot menu.
      */
-    SfbBootMark (L"usb-census");
-    SfbUsbHostCensus ();
-    SfbBootMark (L"usb-done");
-
     /*
      * Everything below is interactive: the menu, the fastboot screen and any
      * mass-storage export all wait on the operator or the host for as long as
@@ -276,12 +270,6 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
   DEBUG ((EFI_D_INFO, "Rebooting the device.\n"));
   RebootDevice (NORMAL_MODE);
 #endif
-  /*
-   * Fastboot owns the USB core in device mode. The menu's Fastboot row already
-   * releases on its way out; this covers the first-run path and the menu exit
-   * that never pass through that row.
-   */
-  SfbUsbRequest (SfbUsbModeDevice);
   DEBUG ((EFI_D_INFO, "Launching fastboot\n"));
   Status = FastbootInitialize ();
   if (EFI_ERROR (Status)) {

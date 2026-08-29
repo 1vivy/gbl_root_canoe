@@ -10,7 +10,6 @@
 
 #include "SuperFbMenu.h"
 #include "SuperFbLaunchPolicy.h"
-#include "SuperFbUsbHost.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -620,9 +619,6 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
     switch (Menu.Entry[Chosen].Kind) {
     case SfbEntryFastboot:
       SfbFreeMenu (&Menu);
-      /* Fastboot needs the core in device mode; hand it back before the
-       * gadget stack tries to claim it. */
-      SfbUsbRequest (SfbUsbModeDevice);
       return TRUE;
 
     case SfbEntryMode:

@@ -48,7 +48,7 @@ UtBuildCensusReport (OUT AT_REPORT *Report);
  * name on the display.
  */
 EFI_STATUS
-UtRunHostAttempt (IN EFI_HANDLE ImageHandle, IN BOOLEAN WithOtg);
+UtRunHostAttempt (IN EFI_HANDLE ImageHandle);
 
 /* Write the census and the last attempt transcript to logfs. */
 EFI_STATUS

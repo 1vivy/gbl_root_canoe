@@ -19,7 +19,6 @@
 #include <Protocol/Security2.h>
 
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.h"
-#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbUsbHost.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlots.h"
 
@@ -560,8 +559,6 @@ static EFI_LOADED_IMAGE_PROTOCOL mLoadedImage;
  * Counters for the USB-ownership and Linux-publication stubs further down.
  * Defined here because ResetLaunchBackend clears them.
  */
-static UINTN      mUsbReleaseCount;
-static UINTN      mUsbRescanCount;
 static UINTN      mInitrdInstallCount;
 static UINTN      mDtbInstallCount;
 static EFI_STATUS mInitrdInstallStatus;
@@ -766,8 +763,6 @@ ResetLaunchBackend(void)
   mLastPrepareProfile = NULL;
   mHandleProtocolCount = 0;
   memset (&mLoadedImage, 0, sizeof (mLoadedImage));
-  mUsbReleaseCount = 0;
-  mUsbRescanCount = 0;
   mInitrdInstallCount = 0;
   mDtbInstallCount = 0;
   mInitrdInstallStatus = EFI_SUCCESS;
@@ -1668,20 +1663,6 @@ SfbIsUsbVolume(IN EFI_HANDLE Volume)
 {
   (void)Volume;
   return FALSE;
-}
-
-EFI_STATUS
-SfbUsbRequest(IN SFB_USB_MODE Want)
-{
-  (void)Want;
-  mUsbReleaseCount++;
-  return EFI_SUCCESS;
-}
-
-VOID
-SfbUsbHostRescan(VOID)
-{
-  mUsbRescanCount++;
 }
 
 VOID

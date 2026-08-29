@@ -18,7 +18,6 @@
 
 #include "SuperFbMassStorage.h"
 #include "SuperFbMenu.h"
-#include "SuperFbUsbHost.h"
 
 #include <FastbootLib/FastbootMain.h>
 #include <Library/BaseLib.h>
@@ -186,15 +185,6 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
   }
 
   /*
-   * The peripheral gadget and the host stack are two owners of one USB core
-   * and cannot share it: an export started with host mode still up fails
-   * inside the gadget's endpoint configuration. Release first, then ensure -
-   * the release restarts device mode, and the ensure below confirms the
-   * function protocol actually came back. The reverse order would tear down
-   * the very stack the ensure had just brought up.
-   */
-  SfbUsbRequest (SfbUsbModeDevice);
-  /*
    * The USB stack is this session's one external prerequisite; settle it
    * before any driver state is touched.
    */
@@ -224,7 +214,6 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
     Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdProtocolGuid, NULL,
                                   (VOID **)&Msd);
     if (EFI_ERROR (Status) || Msd == NULL) {
-      SfbUsbHostCensus ();
       DEBUG ((EFI_D_ERROR,
               "SFB: MARK msc-run target=%a status=%r reason=protocol\n",
               (Tag != NULL) ? Tag : "?", Status));
@@ -244,7 +233,6 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
 
   Status = Msd->AssignBlkIoHandle (Msd, BlockIo, 0);
   if (EFI_ERROR (Status)) {
-    SfbUsbHostCensus ();
     DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run target=%a status=%r reason=assign\n",
             (Tag != NULL) ? Tag : "?", Status));
     return Status;
@@ -274,7 +262,6 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    */
   Status = Msd->StartDevice (Msd);
   if (EFI_ERROR (Status)) {
-    SfbUsbHostCensus ();
     DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run target=%a status=%r reason=start\n",
             (Tag != NULL) ? Tag : "?", Status));
     /*

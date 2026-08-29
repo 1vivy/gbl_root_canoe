@@ -83,8 +83,6 @@
 	SuperFbMassStorage.h
 	SuperFbMassStorage.c
 	SuperFbMsdVariant.c
-	SuperFbUsbHost.h
-	SuperFbUsbHost.c
 	SuperFbBls.h
 	SuperFbBls.c
 	SuperFbLinuxBoot.h

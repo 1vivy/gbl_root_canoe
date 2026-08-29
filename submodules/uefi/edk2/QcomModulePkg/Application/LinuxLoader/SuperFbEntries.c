@@ -24,7 +24,6 @@
 #include "SuperFbLaunchPolicy.h"
 #include "SuperFbBls.h"
 #include "SuperFbLinuxBoot.h"
-#include "SuperFbUsbHost.h"
 #include "SuperFbSlots.h"
 
 /* Keeps the translation unit legal when the feature is compiled out. */
@@ -750,16 +749,7 @@ SfbScanRemovableVolumes (IN OUT SFB_MENU_STATE *Menu)
   UINTN       Index;
   UINT32      NoName = 0;
 
-  /*
-   * Bind anything inserted since the last pass before looking. This scan only
-   * walks handles that already exist, so without this a stick plugged in
-   * after boot is enumerated by XHCI and then never bound up to a filesystem
-   * - the menu would keep reporting no removable media with the core sitting
-   * in host mode. No-op unless this loader owns host mode.
-   */
-  SfbUsbHostRescan ();
   SfbBootMark (L"scan:locate");
-
   Status = SfbLocateVolumes (&Volumes, &VolumeCount);
   if (EFI_ERROR (Status) || Volumes == NULL) {
     DEBUG ((EFI_D_INFO, "SFB: no boot volumes: %r\n", Status));
@@ -1507,13 +1497,6 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
   Managed = SfbIsManagedAblEntry (Entry);
 
   if (Managed) {
-    /*
-     * A managed ABL child brings USB up itself and expects the core in the
-     * state it inherited, so host mode goes back before the handoff. Every
-     * other launch keeps it: a child reading the stick it was loaded from is
-     * the normal case.
-     */
-    SfbUsbRequest (SfbUsbModeDevice);
     Status = SfbLoadTzMap (Entry, &TzMap);
     if (EFI_ERROR (Status)) {
       SfbTzMapBuiltinDefault (&TzMap);
