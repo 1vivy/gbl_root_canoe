@@ -24,6 +24,7 @@
 #include <Uefi.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/DevicePathLib.h>
+#include <Library/IoLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -234,6 +235,69 @@ BOOLEAN
 UtHostIsUp (VOID)
 {
   return UtCountByProtocol (&gEfiUsb2HcProtocolGuid) != 0;
+}
+
+/*
+ * Read the XHCI root-port registers directly and report them.
+ *
+ * This is the one fact no protocol count can give and this firmware's
+ * XhciDxe will not print: whether the controller sees anything on the wire.
+ * PORTSC.CCS says a device is electrically present, PORTSC.PP says the port
+ * is powered. CCS=0 with a stick attached means the gap is power or role,
+ * not software - which is exactly the question the vendor's own
+ * "UsbPwrCtrlLib_ValidateRequest Invalid Port Index" leaves open.
+ *
+ * Register layout is the xHCI spec: CAPLENGTH at byte 0, HCSPARAMS1 at +4
+ * (MaxPorts in bits 24-31), and the port register set at
+ * operational base + 0x400 + 0x10 * port. Read-only throughout.
+ */
+STATIC
+VOID
+UtReportXhciPorts (IN QCOM_USB_CONFIG_PROTOCOL *Cfg, IN UINT32 Core)
+{
+  EFI_STATUS  Status;
+  UINT32      CoreType = 0;
+  UINTN       Base     = 0;
+  UINT32      HcsParams1;
+  UINT32      Ports;
+  UINT32      Index;
+  UINT8       CapLength;
+
+  if (Cfg->GetUsbHostConfig == NULL || Cfg->GetCoreBaseAddr == NULL) {
+    UtStep (L"xhci ports: base lookup members absent");
+    return;
+  }
+
+  Status = Cfg->GetUsbHostConfig (Cfg, QCOM_USB_HOST_MODE_XHCI, Core,
+                                  &CoreType);
+  if (EFI_ERROR (Status)) {
+    UtStep (L"xhci ports: GetUsbHostConfig %r", Status);
+    return;
+  }
+  Status = Cfg->GetCoreBaseAddr (Cfg, CoreType, &Base);
+  if (EFI_ERROR (Status) || Base == 0) {
+    UtStep (L"xhci ports: GetCoreBaseAddr %r base=0x%Lx", Status,
+            (UINT64)Base);
+    return;
+  }
+
+  CapLength  = MmioRead8 (Base);
+  HcsParams1 = MmioRead32 (Base + 0x4);
+  Ports      = (HcsParams1 >> 24) & 0xFF;
+  UtStep (L"xhci base=0x%Lx caplen=0x%x ports=%u", (UINT64)Base,
+          (UINT32)CapLength, Ports);
+
+  if (Ports > 8) {
+    Ports = 8;
+  }
+  for (Index = 0; Index < Ports; Index++) {
+    UINT32  Portsc = MmioRead32 (Base + CapLength + 0x400 + (0x10 * Index));
+
+    UtStep (L"  port %u: portsc=0x%08x ccs=%u ped=%u pp=%u pls=%u speed=%u",
+            Index, Portsc,
+            Portsc & 0x1, (Portsc >> 1) & 0x1, (Portsc >> 9) & 0x1,
+            (Portsc >> 5) & 0xF, (Portsc >> 10) & 0xF);
+  }
 }
 
 /*
@@ -567,6 +631,7 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
    * the mode switch created - and Usb2Hc only appeared partway through that
    * earlier connect pass, so nothing has offered it to the bus driver yet.
    */
+  UtReportXhciPorts (Cfg, Capable);
   UtConnectHostControllers ();
 
   /*

@@ -76,16 +76,25 @@ typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_GET_MAX_HOST_CORE)(
   IN QCOM_USB_CONFIG_PROTOCOL *This, OUT UINT32 *MaxHostCoreNum);
 typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_SET_USB_CORE_MODE)(
   IN QCOM_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreIdx, IN UINT32 NewMode);
+/* Vendor header: CoreType is the enum GetUsbHostConfig hands back and the
+ * base address is UINTN. XhciPciEmulation uses exactly this pair to find
+ * the controller it wraps, so the same pair locates the XHCI register
+ * block for a read-only port inspection. */
+typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_GET_CORE_BASE_ADDR)(
+  IN QCOM_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreType, OUT UINTN *BaseAddr);
+typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_GET_USBHOST_CONFIG)(
+  IN QCOM_USB_CONFIG_PROTOCOL *This, IN UINT32 Mode, IN UINT32 CoreNum,
+  OUT UINT32 *CoreType);
 
 struct _QCOM_USB_CONFIG_PROTOCOL {
   UINT64                         Revision;
-  VOID                          *GetCoreBaseAddr;
+  QCOM_USB_CFG_GET_CORE_BASE_ADDR GetCoreBaseAddr;
   QCOM_USB_CFG_CONFIG_USB        ConfigUsb;
   VOID                          *ResetUsb;
   VOID                          *GetUsbFnConfig;
   VOID                          *GetSSUsbFnConfig;
   VOID                          *GetUsbFnConnStatus;
-  VOID                          *GetUsbHostConfig;
+  QCOM_USB_CFG_GET_USBHOST_CONFIG GetUsbHostConfig;
   QCOM_USB_CFG_GET_MAX_HOST_CORE GetUsbMaxHostCoreNum;
   VOID                          *ExitUsbLibServices;
   QCOM_USB_CFG_START_CONTROLLER  StartController;

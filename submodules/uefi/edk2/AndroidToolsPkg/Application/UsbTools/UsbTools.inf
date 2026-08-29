@@ -33,6 +33,7 @@
   BaseMemoryLib
   DebugLib
   DevicePathLib
+  IoLib
   MemoryAllocationLib
   PrintLib
   UefiApplicationEntryPoint
