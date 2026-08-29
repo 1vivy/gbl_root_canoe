@@ -46,6 +46,8 @@
   gEfiPartitionInfoProtocolGuid
   gEfiPartitionRecordGuid
   gEfiPciIoProtocolGuid
+  gEfiSecurity2ArchProtocolGuid
+  gEfiSecurityArchProtocolGuid
   gEfiSimpleFileSystemProtocolGuid
   gEfiUsb2HcProtocolGuid
   gEfiUsbfnIoProtocolGuid

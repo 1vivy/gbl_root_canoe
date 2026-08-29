@@ -35,8 +35,91 @@
 #include <Protocol/Usb2HostController.h>
 #include <Protocol/UsbIo.h>
 
+#include <Protocol/Security.h>
+#include <Protocol/Security2.h>
+
 #include <Protocol/QcomUsbConfig.h>
 #include "UsbTools.h"
+
+/*
+ * The four drivers are device-extracted and unsigned, so LoadImage answers
+ * Access Denied unless the security-arch authentication hooks are held open
+ * for the call - the same bypass the BDS applies around SfbLoadDriver.
+ * Restored immediately after, success or failure.
+ */
+STATIC EFI_SECURITY_ARCH_PROTOCOL             *mUtSec;
+STATIC EFI_SECURITY2_ARCH_PROTOCOL            *mUtSec2;
+STATIC EFI_SECURITY_FILE_AUTHENTICATION_STATE  mUtOrigSecState;
+STATIC EFI_SECURITY2_FILE_AUTHENTICATION       mUtOrigSec2Auth;
+
+STATIC
+EFI_STATUS
+EFIAPI
+UtAllowState (
+  IN CONST EFI_SECURITY_ARCH_PROTOCOL *This,
+  IN UINT32                           AuthenticationStatus,
+  IN CONST EFI_DEVICE_PATH_PROTOCOL   *File
+  )
+{
+  (VOID)This;
+  (VOID)AuthenticationStatus;
+  (VOID)File;
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+UtAllowAuth (
+  IN CONST EFI_SECURITY2_ARCH_PROTOCOL *This,
+  IN CONST EFI_DEVICE_PATH_PROTOCOL    *DevicePath,
+  IN VOID                              *FileBuffer,
+  IN UINTN                             FileSize,
+  IN BOOLEAN                           BootPolicy
+  )
+{
+  (VOID)This;
+  (VOID)DevicePath;
+  (VOID)FileBuffer;
+  (VOID)FileSize;
+  (VOID)BootPolicy;
+  return EFI_SUCCESS;
+}
+
+STATIC
+VOID
+UtRestoreSecurity (VOID)
+{
+  if (mUtSec != NULL &&
+      mUtSec->FileAuthenticationState == UtAllowState) {
+    mUtSec->FileAuthenticationState = mUtOrigSecState;
+  }
+  if (mUtSec2 != NULL &&
+      mUtSec2->FileAuthentication == UtAllowAuth) {
+    mUtSec2->FileAuthentication = mUtOrigSec2Auth;
+  }
+  mUtSec = NULL;
+  mUtSec2 = NULL;
+  mUtOrigSecState = NULL;
+  mUtOrigSec2Auth = NULL;
+}
+
+STATIC
+VOID
+UtBypassSecurity (VOID)
+{
+  UtRestoreSecurity ();
+  if (!EFI_ERROR (gBS->LocateProtocol (&gEfiSecurityArchProtocolGuid, NULL,
+                                       (VOID **)&mUtSec)) && mUtSec != NULL) {
+    mUtOrigSecState = mUtSec->FileAuthenticationState;
+    mUtSec->FileAuthenticationState = UtAllowState;
+  }
+  if (!EFI_ERROR (gBS->LocateProtocol (&gEfiSecurity2ArchProtocolGuid, NULL,
+                                       (VOID **)&mUtSec2)) && mUtSec2 != NULL) {
+    mUtOrigSec2Auth = mUtSec2->FileAuthentication;
+    mUtSec2->FileAuthentication = UtAllowAuth;
+  }
+}
 
 AT_REPORT  mUtAttemptReport;
 BOOLEAN    mUtAttemptRan = FALSE;
@@ -159,7 +242,9 @@ UtLoadDriver (IN EFI_HANDLE ImageHandle, IN CONST CHAR16 *Name)
   if (Path == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
+  UtBypassSecurity ();
   Status = gBS->LoadImage (FALSE, ImageHandle, Path, NULL, 0, &Driver);
+  UtRestoreSecurity ();
   FreePool (Path);
   if (Status == EFI_NOT_FOUND) {
     UnicodeSPrint (Full, sizeof (Full), L"\\usbhost\\%s", Name);
@@ -167,7 +252,9 @@ UtLoadDriver (IN EFI_HANDLE ImageHandle, IN CONST CHAR16 *Name)
     if (Path == NULL) {
       return EFI_OUT_OF_RESOURCES;
     }
+    UtBypassSecurity ();
     Status = gBS->LoadImage (FALSE, ImageHandle, Path, NULL, 0, &Driver);
+    UtRestoreSecurity ();
     FreePool (Path);
   }
   if (EFI_ERROR (Status)) {
@@ -191,6 +278,14 @@ UtBindNewHandles (IN EFI_HANDLE *Before, IN UINTN BeforeCount)
   UINTN       Outer;
   UINTN       Inner;
   BOOLEAN     Known;
+
+  /* An empty before-set would mark every existing handle as new and offer
+   * the stale peripheral handle to the shim - the double-bind this whole
+   * function exists to prevent. */
+  if (Before == NULL && BeforeCount == 0) {
+    UtStep (L"bind skipped: handle snapshot failed");
+    return;
+  }
 
   AfterCount = UtConfigHandles (&After);
   for (Outer = 0; Outer < AfterCount; Outer++) {
@@ -245,6 +340,8 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
   EFI_STATUS                Status;
   EFI_STATUS                Restore  = EFI_SUCCESS;
   BOOLEAN                   Found     = FALSE;
+  BOOLEAN                   Started   = FALSE;
+  BOOLEAN                   Toggled   = FALSE;
 
   AtReportFree (&mUtAttemptReport);
   Status = AtReportInit (&mUtAttemptReport, UT_ATTEMPT_ROWS);
@@ -273,10 +370,14 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
    * froze the census on a stopped core. Only core 0 is BDS-proven, so a
    * missing count reads as "core 0 only", never as "all six".
    */
-  if (Cfg->GetCoreCount != NULL &&
-      !EFI_ERROR (Cfg->GetCoreCount (Cfg, &Index)) &&
-      Index > 0 && Index <= QCOM_USB_CORE_MAX_NUM) {
-    Limit = Index;
+  {
+    UINT8  Reported = 0;
+
+    if (Cfg->GetCoreCount != NULL &&
+        !EFI_ERROR (Cfg->GetCoreCount (Cfg, &Reported)) &&
+        Reported > 0 && Reported <= QCOM_USB_CORE_MAX_NUM) {
+      Limit = Reported;
+    }
   }
   for (Index = 0; Index < Limit && !Found; Index++) {
     UINT32      Modes = 0;
@@ -312,11 +413,39 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
   BeforeCount = UtConfigHandles (&Before);
   Status = Cfg->StartController (Cfg, Capable, QCOM_USB_HOST_MODE_XHCI);
   UtStep (L"StartController(core %u, XHCI): %r", Capable, Status);
-  if (EFI_ERROR (Status)) {
+  Started = !EFI_ERROR (Status);
+  if (!Started) {
     goto Out;
   }
   UtStep (L"started; offering only the new handle(s) to bindings");
   UtBindNewHandles (Before, BeforeCount);
+
+  /*
+   * On this device the start returns Success, runs PHY bring-up, and still
+   * leaves modeType=DEVICE on the handle it created - so the shim's gate
+   * never passes. The vendor's own mode-switch entry point is ToggleUsbMode
+   * (UsbToggleControllerMode: stop current, pin the static config, start the
+   * next), which the direct start evidently is not equivalent to. Run it
+   * when the start produced nothing, and read the state first so the
+   * transcript shows which direction the toggle went.
+   */
+  if (UtCountByProtocol (&gEfiUsb2HcProtocolGuid) == 0 &&
+      UtCountByProtocol (&gEfiPciIoProtocolGuid) == 0) {
+    if (Cfg->ToggleUsbMode != NULL) {
+      UtStep (L"shim unbound; state before toggle: mode=0x%x", Cfg->ModeType);
+      FreePool (Before);
+      BeforeCount = UtConfigHandles (&Before);
+      Status = Cfg->ToggleUsbMode (Cfg, Capable);
+      UtStep (L"ToggleUsbMode(core %u): %r", Capable, Status);
+      if (!EFI_ERROR (Status)) {
+        Toggled = TRUE;
+        UtStep (L"state after toggle: mode=0x%x", Cfg->ModeType);
+        UtBindNewHandles (Before, BeforeCount);
+      }
+    } else {
+      UtStep (L"shim unbound and ToggleUsbMode is absent; out of levers");
+    }
+  }
 
   /* Bus power. A stick with no VBUS never enumerates. */
   if (Cfg->GetUsbVbusStatus != NULL && Cfg->UsbEnableVbus != NULL) {
@@ -352,9 +481,22 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
           (UINT32)UtCountByProtocol (&gEfiBlockIoProtocolGuid),
           (UINT32)UtCountByProtocol (&gEfiSimpleFileSystemProtocolGuid));
 
-  /* Always hand the core back, in the vendor's order. */
-  Restore = Cfg->StartController (Cfg, Capable, QCOM_USB_DEVICE_MODE_SS);
-  UtStep (L"restore device mode: %r", Restore);
+  /*
+   * Hand the core back through the lever that matches the state the vendor
+   * is actually in. A toggle acquisition flips back by toggling; a bare
+   * start is unwound by starting device mode, which stops XHCI internally.
+   * If the state already reads device there is nothing to unwind.
+   */
+  if (Cfg->ModeType == QCOM_USB_HOST_MODE_XHCI && Toggled) {
+    Restore = Cfg->ToggleUsbMode (Cfg, Capable);
+    UtStep (L"restore via ToggleUsbMode: %r", Restore);
+  } else if (Started && !Toggled) {
+    Restore = Cfg->StartController (Cfg, Capable, QCOM_USB_DEVICE_MODE_SS);
+    UtStep (L"restore device mode: %r", Restore);
+  } else {
+    UtStep (L"restore: state already reads mode=0x%x, nothing to do",
+            Cfg->ModeType);
+  }
 
 Out:
   if (Before != NULL) {

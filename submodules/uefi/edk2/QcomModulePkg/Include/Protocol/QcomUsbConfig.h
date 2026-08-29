@@ -65,8 +65,13 @@ typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_ENABLE_VBUS)(
   IN QCOM_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreNum);
 typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_GET_SUPPORTED_MODE)(
   IN QCOM_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreNum, OUT UINT32 *ModeType);
+/* Vendor source (UsbConfigDxe.c): the count is a single byte. A wider
+ * out-pointer leaves stack garbage in the upper bytes - and a bound check
+ * against it reads as random. */
 typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_GET_CORE_COUNT)(
-  IN QCOM_USB_CONFIG_PROTOCOL *This, OUT UINT32 *CoreCount);
+  IN QCOM_USB_CONFIG_PROTOCOL *This, OUT UINT8 *CoreCount);
+typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_TOGGLE_MODE)(
+  IN QCOM_USB_CONFIG_PROTOCOL *This, IN UINT32 CoreNum);
 typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_GET_MAX_HOST_CORE)(
   IN QCOM_USB_CONFIG_PROTOCOL *This, OUT UINT32 *MaxHostCoreNum);
 typedef EFI_STATUS (EFIAPI *QCOM_USB_CFG_SET_USB_CORE_MODE)(
@@ -87,7 +92,7 @@ struct _QCOM_USB_CONFIG_PROTOCOL {
   QCOM_USB_CFG_STOP_CONTROLLER   StopController;
   VOID                          *EnterLPM;
   VOID                          *ExitLPM;
-  VOID                          *ToggleUsbMode;
+  QCOM_USB_CFG_TOGGLE_MODE       ToggleUsbMode;
   QCOM_USB_CFG_GET_CORE_COUNT    GetCoreCount;
   QCOM_USB_CFG_GET_SUPPORTED_MODE GetSupUsbMode;
   UINT32                         CoreNum;

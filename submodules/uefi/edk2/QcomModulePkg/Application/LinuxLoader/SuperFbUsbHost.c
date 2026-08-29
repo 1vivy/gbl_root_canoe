@@ -125,7 +125,7 @@ SfbUsbHostCounts (OUT SFB_USB_HOST_COUNTS *Counts)
   Counts->Revision = Cfg->Revision;
 
   if (Cfg->GetCoreCount != NULL) {
-    UINT32  Reported = 0;
+    UINT8  Reported = 0;
 
     if (!EFI_ERROR (Cfg->GetCoreCount (Cfg, &Reported)) &&
         Reported <= QCOM_USB_CORE_MAX_NUM) {
@@ -444,7 +444,7 @@ BOOLEAN
 SfbUsbHostAnyCapableCore (IN QCOM_USB_CONFIG_PROTOCOL *Cfg, OUT UINT32 *First)
 {
   UINT32  Limit = QCOM_USB_CORE_MAX_NUM;
-  UINT32  Reported = 0;
+  UINT8   Reported = 0;
   UINT32  Index;
 
   *First = QCOM_USB_CORE_0;

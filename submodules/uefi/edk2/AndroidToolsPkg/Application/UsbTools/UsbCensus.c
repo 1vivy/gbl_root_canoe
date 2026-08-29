@@ -48,17 +48,19 @@ UtCensusInstance (
   )
 {
   UINT32  Modes;
-  UINT32  Count;
+  UINT8   Count;
 
   AtReportAdd (Report, L"instance %u: rev=0x%lx core=%u mode=0x%x always=%u",
                (UINT32)Index, Cfg->Revision, Cfg->CoreNum, Cfg->ModeType,
                (UINT32)Cfg->AlwaysConnected);
 
   AtReportAdd (Report,
-               L"  vtable: start=%c stop=%c cfgusb=%c corecount=%c supmode=%c",
+               L"  vtable: start=%c stop=%c cfgusb=%c toggle=%c "
+               L"corecount=%c supmode=%c",
                (Cfg->StartController != NULL) ? L'Y' : L'-',
                (Cfg->StopController != NULL) ? L'Y' : L'-',
                (Cfg->ConfigUsb != NULL) ? L'Y' : L'-',
+               (Cfg->ToggleUsbMode != NULL) ? L'Y' : L'-',
                (Cfg->GetCoreCount != NULL) ? L'Y' : L'-',
                (Cfg->GetSupUsbMode != NULL) ? L'Y' : L'-');
   AtReportAdd (Report,
