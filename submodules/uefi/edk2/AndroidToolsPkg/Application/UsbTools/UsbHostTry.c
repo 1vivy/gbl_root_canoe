@@ -42,6 +42,7 @@
 #include <Protocol/QcomUsbConfig.h>
 #include "UsbTools.h"
 #include "UsbPwrCtrl.h"
+#include "UsbPmicSchg.h"
 /*
  * The four drivers are device-extracted and unsigned, so LoadImage answers
  * Access Denied unless the security-arch authentication hooks are held open
@@ -365,6 +366,163 @@ UtProbeUsbPowerControl (VOID)
 }
 
 /*
+ * The charger protocol is the backend UsbPwrCtrlLib dispatches to, and it is
+ * published on this device even though the port table in front of it is
+ * empty. Calling it directly is the only path to VBUS that does not run
+ * through the validation that answers Invalid Parameter for every index.
+ *
+ * WithOtg actually sources 5V on the connector, so it is gated twice: the
+ * operator picks the row that asks for it, and UsbinValid must say no
+ * external supply is feeding us. Sourcing into a live charger or host port
+ * is the one way this can do damage.
+ */
+STATIC UT_PMIC_SCHG_PROTOCOL  *mUtSchg       = NULL;
+STATIC UINT32                  mUtSchgPmic   = 0;
+STATIC BOOLEAN                 mUtOtgEnabled = FALSE;
+
+STATIC CONST CHAR16 *
+UtSchgModeText (IN UINT32 Mode)
+{
+  switch (Mode) {
+    case UT_SCHG_CONNECT_MODE_NONE: return L"none";
+    case UT_SCHG_CONNECT_MODE_DFP:  return L"DFP";
+    case UT_SCHG_CONNECT_MODE_UFP:  return L"UFP";
+    default:                        return L"invalid";
+  }
+}
+
+STATIC
+VOID
+UtProbePmicCharger (IN BOOLEAN WithOtg)
+{
+  EFI_GUID  SchgGuid = {
+    0xae6ae96e, 0x483f, 0x42ae,
+    { 0x9c, 0xc1, 0x9f, 0xac, 0x1b, 0x58, 0x47, 0x28 }
+  };
+  UT_PMIC_SCHG_PROTOCOL      *Schg = NULL;
+  UT_SCHG_TYPEC_PORT_STATUS   Port;
+  EFI_STATUS                  Status;
+  UINT8                       Active   = 0;
+  UINT32                      Pmic     = 0;
+  UINT32                      Value    = 0;
+  BOOLEAN                     UsbinLive = TRUE;
+
+  Status = gBS->LocateProtocol (&SchgGuid, NULL, (VOID **)&Schg);
+  if (EFI_ERROR (Status) || Schg == NULL) {
+    UtStep (L"pmic charger: absent (%r)", Status);
+    return;
+  }
+  UtStep (L"pmic charger: rev=0x%Lx otg=%c role=%c",
+          Schg->Revision,
+          (Schg->EnableOtg != NULL) ? L'Y' : L'-',
+          (Schg->SetTypeCPortRole != NULL) ? L'Y' : L'-');
+
+  if (Schg->GetActivePort != NULL &&
+      !EFI_ERROR (Schg->GetActivePort (&Active))) {
+    Pmic = Active;
+  }
+  UtStep (L"  pmic index=%u", Pmic);
+
+  if (Schg->GetConnectState != NULL) {
+    Value  = UT_SCHG_CONNECT_MODE_INVALID;
+    Status = Schg->GetConnectState (Pmic, &Value);
+    UtStep (L"  connect state: %r mode=%s", Status, UtSchgModeText (Value));
+  }
+  if (Schg->GetPortState != NULL) {
+    ZeroMem (&Port, sizeof (Port));
+    Status = Schg->GetPortState (Pmic, &Port);
+    UtStep (L"  port state: %r cc=%u ufp=%u vbus=%u dbnc=%u", Status,
+            Port.CcOutSts, Port.UfpConnType, (UINT32)Port.VbusSts,
+            (UINT32)Port.DebounceDoneSts);
+  }
+  if (Schg->GetOtgStatus != NULL) {
+    Value  = UT_SCHG_OTG_STATUS_INVALID;
+    Status = Schg->GetOtgStatus (Pmic, &Value);
+    UtStep (L"  otg status: %r value=%u", Status, Value);
+  }
+  if (Schg->UsbinValid != NULL) {
+    Status = Schg->UsbinValid (Pmic, &UsbinLive);
+    UtStep (L"  usbin valid: %r value=%u", Status, (UINT32)UsbinLive);
+    if (EFI_ERROR (Status)) {
+      UsbinLive = TRUE;
+    }
+  }
+
+  if (!WithOtg) {
+    return;
+  }
+  /* The interlock. An external supply on VBUS and our own boost are two
+   * sources on one rail; refuse rather than arbitrate. */
+  if (UsbinLive) {
+    UtStep (L"  otg skipped: usb input is live - unplug the host cable");
+    return;
+  }
+  if (Schg->EnableOtg == NULL) {
+    UtStep (L"  otg skipped: no EnableOtg at this revision");
+    return;
+  }
+
+  mUtSchg     = Schg;
+  mUtSchgPmic = Pmic;
+
+  if (Schg->SetTypeCPortRole != NULL) {
+    Status = Schg->SetTypeCPortRole (Pmic, UT_SCHG_PORT_ROLE_SRC);
+    UtStep (L"  set port role SRC: %r", Status);
+  }
+  if (Schg->ConfigOtg != NULL) {
+    /* Arm the boost from the command register: the Type-C/RID source never
+     * fires here, which is the whole reason we are down at this layer. */
+    Status = Schg->ConfigOtg (Pmic, UT_SCHG_OTG_CFG_EN_SRC_CFG, FALSE);
+    UtStep (L"  config otg cmd-source: %r", Status);
+  }
+  if (Schg->SetOtgILimit != NULL) {
+    Status = Schg->SetOtgILimit (Pmic, 500);
+    UtStep (L"  otg current limit 500mA: %r", Status);
+  }
+
+  Status        = Schg->EnableOtg (Pmic, TRUE);
+  mUtOtgEnabled = (BOOLEAN)!EFI_ERROR (Status);
+  UtStep (L"  ENABLE OTG: %r", Status);
+
+  gBS->Stall (200 * 1000);
+
+  if (Schg->GetOtgStatus != NULL) {
+    Value  = UT_SCHG_OTG_STATUS_INVALID;
+    Status = Schg->GetOtgStatus (Pmic, &Value);
+    UtStep (L"  otg status after: %r value=%u", Status, Value);
+  }
+  if (Schg->GetPortState != NULL) {
+    ZeroMem (&Port, sizeof (Port));
+    Status = Schg->GetPortState (Pmic, &Port);
+    UtStep (L"  port state after: %r cc=%u ufp=%u vbus=%u", Status,
+            Port.CcOutSts, Port.UfpConnType, (UINT32)Port.VbusSts);
+  }
+}
+
+/*
+ * Always paired with the probe above. Leaving the boost on would keep the
+ * connector sourcing after we hand the machine back.
+ */
+STATIC
+VOID
+UtReleasePmicOtg (VOID)
+{
+  EFI_STATUS  Status;
+
+  if (!mUtOtgEnabled || mUtSchg == NULL) {
+    return;
+  }
+  Status = mUtSchg->EnableOtg (mUtSchgPmic, FALSE);
+  UtStep (L"otg disabled: %r", Status);
+
+  if (mUtSchg->SetTypeCPortRole != NULL) {
+    Status = mUtSchg->SetTypeCPortRole (mUtSchgPmic, UT_SCHG_PORT_ROLE_SNK);
+    UtStep (L"port role restored to SNK: %r", Status);
+  }
+  mUtOtgEnabled = FALSE;
+}
+
+/*
  * Offer every host-controller handle to the driver bindings. UsbBusDxe
  * binds EFI_USB2_HC_PROTOCOL, which XhciDxe installs partway through the
  * connect pass that started it - so the handle that exists at the end of
@@ -539,7 +697,7 @@ UtBindNewHandles (IN EFI_HANDLE *Before, IN UINTN BeforeCount)
 }
 
 EFI_STATUS
-UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
+UtRunHostAttempt (IN EFI_HANDLE ImageHandle, IN BOOLEAN WithOtg)
 {
   QCOM_USB_CONFIG_PROTOCOL  *Cfg;
   EFI_HANDLE                *Before   = NULL;
@@ -696,6 +854,7 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
    * earlier connect pass, so nothing has offered it to the bus driver yet.
    */
   UtProbeUsbPowerControl ();
+  UtProbePmicCharger (WithOtg);
   UtReportXhciPorts (Cfg, Capable);
   UtConnectHostControllers ();
 
@@ -736,6 +895,11 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
    * first started - per the pin, that lands it in XHCI - and then toggled.
    * "Device is back" means the USB function protocol did, not a mode field.
    */
+  /* Stop sourcing before the core goes back to device mode: a gadget on a
+   * connector we are still powering is a contradiction. Guarded, so the
+   * duplicate call on the early-exit path below is a no-op. */
+  UtReleasePmicOtg ();
+
   if (Toggled || Started) {
     UINTN  Pass;
 
@@ -766,6 +930,7 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
   }
 
 Out:
+  UtReleasePmicOtg ();
   if (Before != NULL) {
     FreePool (Before);
   }
