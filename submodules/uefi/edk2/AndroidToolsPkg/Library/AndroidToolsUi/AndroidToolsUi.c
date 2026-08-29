@@ -27,6 +27,22 @@
 #define AT_ATTR_SELECTED  EFI_TEXT_ATTR (EFI_BLACK, EFI_LIGHTGRAY)
 #define AT_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
 
+/*
+ * Qualcomm's keypad can queue several carriage returns for one physical power
+ * press. Hold the result until those duplicates have arrived, then drain them
+ * before the caller changes screens. Volume navigation remains unthrottled.
+ */
+#define AT_SELECT_DEBOUNCE_US  500000
+
+STATIC AT_KEY mAtPendingVolumeKey = AtKeyTimeout;
+
+VOID
+AtUiResetInput (VOID)
+{
+  mAtPendingVolumeKey = AtKeyTimeout;
+  gST->ConIn->Reset (gST->ConIn, FALSE);
+}
+
 /* Seconds to wait for the key that launched us to be released before the
  * input queue is drained. Mirrors SFB_ENTER_MENU_DELAY_S in SuperFbMenu.c:
  * without it a power press held through LoadImage/StartImage is read back at
@@ -45,6 +61,12 @@ AtUiWaitForKey (
   UINTN          EventIndex;
   EFI_INPUT_KEY  Key;
   AT_KEY         Result = AtKeyTimeout;
+
+  if (mAtPendingVolumeKey != AtKeyTimeout) {
+    Result = mAtPendingVolumeKey;
+    mAtPendingVolumeKey = AtKeyTimeout;
+    return Result;
+  }
 
   if (TimeoutMs != 0) {
     Status = gBS->CreateEvent (EVT_TIMER, TPL_CALLBACK, NULL, NULL, &TimerEvent);
@@ -99,6 +121,24 @@ AtUiWaitForKey (
     break;
   }
 
+  if (Result == AtKeySelect) {
+    /*
+     * Keep the first volume action queued during the debounce interval while
+     * discarding duplicate select events from the same physical Power press.
+     */
+    gBS->Stall (AT_SELECT_DEBOUNCE_US);
+    while (!EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
+      if (mAtPendingVolumeKey != AtKeyTimeout) {
+        continue;
+      }
+      if (Key.ScanCode == SCAN_UP) {
+        mAtPendingVolumeKey = AtKeyUp;
+      } else if (Key.ScanCode == SCAN_DOWN) {
+        mAtPendingVolumeKey = AtKeyDown;
+      }
+    }
+  }
+
   if (TimerEvent != NULL) {
     gBS->CloseEvent (TimerEvent);
   }
@@ -128,7 +168,7 @@ AtUiEnterMenu (
 
   /* ...then drop anything typed or held during the wait so it does not leak
    * into the menu as a spurious confirm. */
-  gST->ConIn->Reset (gST->ConIn, FALSE);
+  AtUiResetInput ();
 }
 
 /* ---- drawing ------------------------------------------------------------ */
@@ -256,8 +296,6 @@ AtUiRunMenu (
     return EFI_INVALID_PARAMETER;
   }
 
-  /* Drop anything held since launch so it does not move the cursor at once. */
-  gST->ConIn->Reset (gST->ConIn, FALSE);
 
   Visible = (Count < AT_VISIBLE_ROWS) ? Count : AT_VISIBLE_ROWS;
 
@@ -279,4 +317,130 @@ AtUiRunMenu (
       AtUiMoveCursor (&Cursor, Count, Key);
     }
   }
+}
+
+EFI_STATUS
+AtReportInit (
+  OUT AT_REPORT *Report,
+  IN  UINTN     Capacity
+  )
+{
+  if (Report == NULL || Capacity == 0 ||
+      Capacity > MAX_UINTN / sizeof (AT_ROW)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  ZeroMem (Report, sizeof (*Report));
+  Report->Rows = AllocateZeroPool (Capacity * sizeof (AT_ROW));
+  if (Report->Rows == NULL) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  Report->Capacity = Capacity;
+  return EFI_SUCCESS;
+}
+
+VOID
+AtReportFree (
+  IN OUT AT_REPORT *Report
+  )
+{
+  if (Report == NULL) {
+    return;
+  }
+  if (Report->Rows != NULL) {
+    FreePool (Report->Rows);
+  }
+  ZeroMem (Report, sizeof (*Report));
+}
+
+CHAR16 *
+AtReportNextRow (
+  IN OUT AT_REPORT *Report
+  )
+{
+  if (Report == NULL || Report->Rows == NULL) {
+    return NULL;
+  }
+  if (Report->Count >= Report->Capacity) {
+    Report->Truncated = TRUE;
+    return NULL;
+  }
+
+  return Report->Rows[Report->Count++].Text;
+}
+
+#define AT_REPORT_PAGE_ROWS  10u
+
+/* Same semantics as the host-tested StMovePage in SurfaceTools: stale offsets
+ * clamp to the final real page, and the view never wraps. */
+STATIC
+UINTN
+AtMovePage (
+  IN UINTN    Start,
+  IN UINTN    Count,
+  IN UINTN    Rows,
+  IN BOOLEAN  Forward
+  )
+{
+  if (Count == 0 || Rows == 0) {
+    return 0;
+  }
+  if (Start >= Count) {
+    Start = ((Count - 1) / Rows) * Rows;
+  }
+  if (!Forward) {
+    return (Start >= Rows) ? Start - Rows : 0;
+  }
+  if (Rows < Count - Start) {
+    return Start + Rows;
+  }
+  return Start;
+}
+
+VOID
+AtUiShowReport (
+  IN CONST AT_REPORT_SOURCE *Source
+  )
+{
+  AT_REPORT   Report;
+  EFI_STATUS  Status;
+  UINTN       Start;
+  UINTN       End;
+  UINTN       Index;
+  AT_KEY      Key;
+  CHAR16      Subtitle[64];
+
+  Status = Source->Builder (&Report);
+  if (EFI_ERROR (Status)) {
+    AtUiReportStatus (Source->Title, Status);
+    return;
+  }
+
+  Start = 0;
+  while (TRUE) {
+    End = Start + AT_REPORT_PAGE_ROWS;
+    if (End > Report.Count) {
+      End = Report.Count;
+    }
+    UnicodeSPrint (Subtitle, sizeof (Subtitle), L"Rows %Lu-%Lu of %Lu%s",
+                   (UINT64)((Report.Count == 0) ? 0 : Start + 1),
+                   (UINT64)End, (UINT64)Report.Count,
+                   Report.Truncated ? L" (truncated)" : L"");
+    AtUiBeginScreen (Source->Title, Subtitle);
+    for (Index = Start; Index < End; Index++) {
+      Print (L"%s\r\n", Report.Rows[Index].Text);
+    }
+    AtUiEndScreen (L"Vol+/- page, power back");
+
+    Key = AtUiWaitForKey (0);
+    if (Key == AtKeySelect) {
+      break;
+    }
+    if (Key == AtKeyUp) {
+      Start = AtMovePage (Start, Report.Count, AT_REPORT_PAGE_ROWS, FALSE);
+    } else if (Key == AtKeyDown) {
+      Start = AtMovePage (Start, Report.Count, AT_REPORT_PAGE_ROWS, TRUE);
+    }
+  }
+  AtReportFree (&Report);
 }

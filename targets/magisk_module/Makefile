@@ -28,13 +28,19 @@ submodule_uefi: copy_resources
 	# with different bytes and breaks the byte-identical BDS.efi invariant.
 	cd ../../submodules/uefi && \
 		if [ ! -f build/BDS.efi ]; then make build; fi && \
-		if [ ! -f build/ArbTools.efi ] || \
-		   [ ! -f build/BLTools.efi ] || [ ! -f build/RebootTools.efi ]; then make tools; fi
+		if [ ! -f build/ArbTools.efi ] || [ ! -f build/BLTools.efi ] || \
+		   [ ! -f build/RebootTools.efi ] || [ ! -f build/FdLoader.efi ] || \
+		   [ ! -f build/AbootLoader.efi ] || [ ! -f build/SurfaceTools.efi ] || \
+		   [ ! -f build/UsbTools.efi ]; then make tools; fi
 	cp ../../submodules/uefi/build/BDS.efi ./build/module/BDS.efi
 	mkdir -p build/module/efisp/tools
 	cp ../../submodules/uefi/build/ArbTools.efi ./build/module/efisp/tools/ArbTools.efi
 	cp ../../submodules/uefi/build/BLTools.efi ./build/module/efisp/tools/BLTools.efi
 	cp ../../submodules/uefi/build/RebootTools.efi ./build/module/efisp/tools/RebootTools.efi
+	cp ../../submodules/uefi/build/FdLoader.efi ./build/module/efisp/tools/FdLoader.efi
+	cp ../../submodules/uefi/build/AbootLoader.efi ./build/module/efisp/tools/AbootLoader.efi
+	cp ../../submodules/uefi/build/SurfaceTools.efi ./build/module/efisp/tools/SurfaceTools.efi
+	cp ../../submodules/uefi/build/UsbTools.efi ./build/module/efisp/tools/UsbTools.efi
 submodule_patcher: copy_resources
 	cd ../../submodules/patcher && make build_android
 	cp ../../submodules/patcher/build/patch_abl_android ./build/module/bin/patch_abl

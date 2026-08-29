@@ -1,7 +1,7 @@
 #/** @file
 #  AndroidToolsPkg platform description. Builds the standalone RebootTools,
-#  ArbTools and BLTools UEFI applications plus the shared AndroidToolsUi menu
-#  library. The package is self-contained: it ports the r32 DeviceInfo and
+#  ArbTools, BLTools and SurfaceTools UEFI applications plus the shared
+#  AndroidToolsUi menu library. The package is self-contained: it ports the r32
 #  reboot/recovery code it needs and only relies on the standard EDK2 base
 #  classes, so it does not depend on the stripped QcomModulePkg build config.
 #
@@ -23,7 +23,7 @@
   PLATFORM_VERSION               = 0.1
   DSC_SPECIFICATION              = 0x00010005
   OUTPUT_DIRECTORY               = Build/AndroidToolsPkg
-  SUPPORTED_ARCHITECTURES        = ARM|AARCH64
+  SUPPORTED_ARCHITECTURES        = ARM|AARCH64|X64
   BUILD_TARGETS                  = DEBUG|RELEASE
   SKUID_IDENTIFIER               = DEFAULT
 
@@ -45,8 +45,12 @@
   DebugPrintErrorLevelLib|MdePkg/Library/BaseDebugPrintErrorLevelLib/BaseDebugPrintErrorLevelLib.inf
   PrintLib|MdePkg/Library/BasePrintLib/BasePrintLib.inf
   DevicePathLib|MdePkg/Library/UefiDevicePathLib/UefiDevicePathLib.inf
+  CacheMaintenanceLib|MdePkg/Library/BaseCacheMaintenanceLib/BaseCacheMaintenanceLib.inf
+  IoLib|MdePkg/Library/BaseIoLibIntrinsic/BaseIoLibIntrinsic.inf
   PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
   AndroidToolsUi|AndroidToolsPkg/Library/AndroidToolsUi/AndroidToolsUi.inf
+  # Raw payload handoff shared by the two non-PE payload loaders.
+  AtRawBoot|AndroidToolsPkg/Library/AtRawBoot/AtRawBoot.inf
   # Clang may enable stack protection heuristically; satisfy its guard symbols.
   NULL|MdePkg/Library/BaseStackCheckLib/BaseStackCheckLib.inf
 
@@ -85,14 +89,22 @@
 [BuildOptions]
   *_CLANG35_AARCH64_DLINK_FLAGS = -Wl,-Ttext=0x0
   *_CLANG35_AARCH64_DLINK_FLAGS = $(CLANG_EXTRA_DLINK_FLAGS)
+  GCC:*_*_X64_CC_FLAGS = -Wno-error=unused-function -mcmodel=small
 
 ################################################################################
 #
 # Components - the shared menu library is pulled in transitively by the apps,
-# so only the two applications need to be listed.
+# so only the applications need to be listed.
 #
 ################################################################################
 [Components.common]
   AndroidToolsPkg/Application/RebootTools/RebootTools.inf
   AndroidToolsPkg/Application/ArbTools/ArbTools.inf
   AndroidToolsPkg/Application/BLTools/BLTools.inf
+  # Non-PE payload loaders: a raw firmware volume and an Android boot image.
+  # Both are launched as ordinary EFI applications with arguments in
+  # LoadOptions, which is what keeps the BDS a plain PE launcher.
+  AndroidToolsPkg/Application/FdLoader/FdLoader.inf
+  AndroidToolsPkg/Application/AbootLoader/AbootLoader.inf
+  AndroidToolsPkg/Application/SurfaceTools/SurfaceTools.inf
+  AndroidToolsPkg/Application/UsbTools/UsbTools.inf
