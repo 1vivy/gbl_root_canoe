@@ -41,7 +41,7 @@
 
 #include <Protocol/QcomUsbConfig.h>
 #include "UsbTools.h"
-
+#include "UsbPwrCtrl.h"
 /*
  * The four drivers are device-extracted and unsigned, so LoadImage answers
  * Access Denied unless the security-arch authentication hooks are held open
@@ -297,6 +297,60 @@ UtReportXhciPorts (IN QCOM_USB_CONFIG_PROTOCOL *Cfg, IN UINT32 Core)
             Index, Portsc,
             Portsc & 0x1, (Portsc >> 1) & 0x1, (Portsc >> 9) & 0x1,
             (Portsc >> 5) & 0xF, (Portsc >> 10) & 0xF);
+  }
+}
+
+/*
+ * Ask the Qualcomm power-control protocol for bus power directly.
+ *
+ * UsbConfig's UsbEnableVbus only delegates here, and the vendor's own host
+ * bring-up asks this protocol to turn VBUS OFF, never on. On this target the
+ * power library reports "Invalid Port Index = 0" during boot, so the port
+ * table it validates against is empty and every delegated call fails before
+ * reaching the PMIC. Calling the protocol ourselves, across the plausible
+ * port indices, says whether the lever exists at all - and the status codes
+ * distinguish "no such protocol", "port rejected" and "PMIC refused".
+ */
+STATIC
+VOID
+UtProbeUsbPowerControl (VOID)
+{
+  EFI_GUID  PwrCtrlGuid = {
+    0xe07df17e, 0xe79e, 0x4150,
+    { 0x93, 0x78, 0x50, 0x62, 0x3a, 0x14, 0x99, 0x4a }
+  };
+  UT_USB_PWR_CTRL_PROTOCOL  *Pwr = NULL;
+  EFI_STATUS                Status;
+  UINT8                     Port;
+
+  Status = gBS->LocateProtocol (&PwrCtrlGuid, NULL, (VOID **)&Pwr);
+  if (EFI_ERROR (Status) || Pwr == NULL) {
+    UtStep (L"usb power control: absent (%r)", Status);
+    return;
+  }
+  UtStep (L"usb power control: rev=0x%Lx srcok=%c vbuson=%c",
+          Pwr->Revision,
+          (Pwr->GetVbusSrcOkStatus != NULL) ? L'Y' : L'-',
+          (Pwr->SetVbusSourceEn != NULL) ? L'Y' : L'-');
+
+  for (Port = 0; Port < 2; Port++) {
+    BOOLEAN  State = FALSE;
+
+    if (Pwr->GetVbusSrcOkStatus != NULL) {
+      Status = Pwr->GetVbusSrcOkStatus (Port, &State);
+      UtStep (L"  port %u srcok before: %r state=%u", Port, Status,
+              (UINT32)State);
+    }
+    if (Pwr->SetVbusSourceEn != NULL) {
+      Status = Pwr->SetVbusSourceEn (Port, TRUE);
+      UtStep (L"  port %u SetVbusSourceEn(TRUE): %r", Port, Status);
+    }
+    if (Pwr->GetVbusSrcOkStatus != NULL) {
+      State  = FALSE;
+      Status = Pwr->GetVbusSrcOkStatus (Port, &State);
+      UtStep (L"  port %u srcok after: %r state=%u", Port, Status,
+              (UINT32)State);
+    }
   }
 }
 
@@ -631,6 +685,7 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
    * the mode switch created - and Usb2Hc only appeared partway through that
    * earlier connect pass, so nothing has offered it to the bus driver yet.
    */
+  UtProbeUsbPowerControl ();
   UtReportXhciPorts (Cfg, Capable);
   UtConnectHostControllers ();
 
