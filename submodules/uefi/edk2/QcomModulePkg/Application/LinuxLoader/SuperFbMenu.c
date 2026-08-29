@@ -38,6 +38,18 @@ CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
 #define SFB_ATTR_SELECTED  EFI_TEXT_ATTR (EFI_BLACK, EFI_LIGHTGRAY)
 #define SFB_ATTR_TITLE     EFI_TEXT_ATTR (EFI_WHITE, EFI_BLACK)
 
+/* Room for the "[E] " removable-media prefix in a formatted row. */
+#define SFB_ROW_PREFIX_CHARS  4
+
+/*
+ * One physical Power press may arrive as several carriage returns. Delay only
+ * completed select actions, then discard their queued duplicates before the
+ * next BDS screen can interpret them as another action.
+ */
+#define SFB_SELECT_DEBOUNCE_US  500000
+
+STATIC SFB_KEY mSfbPendingVolumeKey = SfbKeyTimeout;
+
 /*
  * The one key wait in the loader.
  *
@@ -73,7 +85,15 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
   SFB_KEY        Result = SfbKeyTimeout;
 
   if (FlushFirst) {
+    mSfbPendingVolumeKey = SfbKeyTimeout;
     gST->ConIn->Reset (gST->ConIn, FALSE);
+  } else if (mSfbPendingVolumeKey != SfbKeyTimeout) {
+    Result = mSfbPendingVolumeKey;
+    mSfbPendingVolumeKey = SfbKeyTimeout;
+    if (Policy == SfbKeyPolicyConfirm || Result == SfbKeyUp) {
+      return Result;
+    }
+    Result = SfbKeyTimeout;
   }
 
   if (TimeoutMs != 0) {
@@ -136,6 +156,24 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
       Result = SfbKeySelect;
     }
     break;
+  }
+
+  if (Result == SfbKeySelect) {
+    /*
+     * Retain the first volume action that arrives during the debounce interval
+     * while consuming duplicate select events from the same Power press.
+     */
+    gBS->Stall (SFB_SELECT_DEBOUNCE_US);
+    while (!EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
+      if (mSfbPendingVolumeKey != SfbKeyTimeout) {
+        continue;
+      }
+      if (Key.ScanCode == SCAN_UP) {
+        mSfbPendingVolumeKey = SfbKeyUp;
+      } else if (Key.ScanCode == SCAN_DOWN) {
+        mSfbPendingVolumeKey = SfbKeyDown;
+      }
+    }
   }
 
   if (TimerEvent != NULL) {
@@ -256,6 +294,27 @@ SfbMoveCursor (IN OUT UINTN *Cursor, IN UINTN Count, IN SFB_KEY Key)
   } else if (Key == SfbKeyDown) {
     *Cursor = (*Cursor + 1 >= Count) ? 0 : *Cursor + 1;
   }
+}
+
+/*
+ * Print a boot-progress stage to the console, then dwell.
+ *
+ * The platform only flushes its log when boot continues into an OS stage, so
+ * a fault before the menu takes every DEBUG mark with it. These land on the
+ * display instead, and the first screen the menu draws clears them - so they
+ * cost nothing on a boot that works and name the last stage reached on one
+ * that does not.
+ *
+ * The dwell is load-bearing, not politeness. Without it a fault microseconds
+ * after the Print can leave the previous screen contents intact and the mark
+ * invisible, which is exactly the "no change on screen, then dies" symptom
+ * that made a crash unlocalisable.
+ */
+VOID
+SfbBootMark (IN CONST CHAR16 *Stage)
+{
+  Print (L"[%s]\r\n", Stage);
+  gBS->Stall (120 * 1000);
 }
 
 /* Report a failure and hold the screen until the user acknowledges it. */
@@ -405,6 +464,9 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
   for (Index = Start; Index < Last; Index++) {
     CONST SFB_BOOT_ENTRY  *Entry = &Menu->Entry[Index];
     CONST CHAR16          *Marker = (Index == Menu->DefaultIndex) ? L"*" : L" ";
+    /* Removable boot media is obvious at a glance, because a row read off a
+     * stick means something very different from a row on the boot root. */
+    CONST CHAR16          *Prefix = Entry->IsUsb ? L"[E] " : L"";
 
     /* Mode is the session fallback; an entry carrying its own configured mode
      * is deliberately unaffected by this selector. */
@@ -419,8 +481,8 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
       CONST CHAR8 *AsciiSuffix = SfbConfigRoleSuffix (Entry->Role);
       CHAR16 Suffix[16];
       CHAR16 Passthrough[16];
-      CHAR16 Text[SFB_DESC_CHARS + ARRAY_SIZE (Suffix) +
-                  ARRAY_SIZE (Passthrough)];
+      CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS +
+                  ARRAY_SIZE (Suffix) + ARRAY_SIZE (Passthrough)];
       UINTN SuffixIndex;
 
       for (SuffixIndex = 0;
@@ -434,8 +496,13 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
        * than letting the user infer a policy that was never applied. */
       StrCpyS (Passthrough, ARRAY_SIZE (Passthrough),
                Entry->Passthrough ? L" (passthrough)" : L"");
-      UnicodeSPrint (Text, sizeof (Text), L"%s%s%s", Entry->Desc, Suffix,
-                     Passthrough);
+      UnicodeSPrint (Text, sizeof (Text), L"%s%s%s%s", Prefix, Entry->Desc,
+                     Suffix, Passthrough);
+      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
+    } else if (Entry->IsUsb) {
+      CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS];
+
+      UnicodeSPrint (Text, sizeof (Text), L"%s%s", Prefix, Entry->Desc);
       SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
     } else {
       SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Entry->Desc);
@@ -448,6 +515,9 @@ SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
 
   SfbEndScreen (L"Vol Up/Down: move   Power: select");
 }
+
+/* USB diagnostics moved out of the BDS: the UsbTools app under EFI Tools
+ * owns the census screen and the host-mode attempt. */
 /*
  * Select a session-only mode override. Nothing is written: canoe.cfg remains
  * the sole source of configured policy, and its entry modes win over this

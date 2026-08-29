@@ -33,8 +33,33 @@ ID 为 1–31 个 `[A-Za-z0-9._-]` 字符；标题为 1–47 个可打印 ASCII 
 | `mode` | `0`、`1`、`2` | `1` | 没有自身模式的启动项的回退模式 |
 | `devinfo-repair` | `asneeded`、`never` | `asneeded` | 是否允许受管理启动修复 `DeviceInfo` |
 
-启动项块内允许 `title`、`image`、`mode` 与 `role`。启动项自身的 `mode` 优先
-于全局回退值。全局键出现在启动项内会被拒绝，不会追溯应用。
+启动项块内允许 `title`、`image`、`options`、`mode` 与 `role`。启动项自身的
+`mode` 优先于全局回退值。全局键出现在启动项内会被拒绝，不会追溯应用。
+
+`options` 是以 UEFI LoadOptions 形式交给镜像的命令行，最多 383 个字符，
+逐字节原样传递：它不是路径，因此 `/` 不会折叠为 `\`，看起来像路径的值也
+保持原样。空的 `options` 会被记为拒绝行，而不是静默忽略。
+
+这使得一个启动项可以承载 BDS 自身并不解析的载荷。`image` 指向启动根目录
+`tools` 目录中的加载器，`options` 指明它应当启动的载荷：
+
+```text
+entry mu
+  title Mu-Silicium
+  image tools/FdLoader.efi
+  options \mu\SM8850.fd 0x9FC00000 0x00300000
+
+entry android-usb
+  title Android from images
+  image tools/AbootLoader.efi
+  options --boot \img\boot.img --vendor-boot \img\vendor_boot.img
+```
+
+`FdLoader.efi` 接受 FD 镜像路径、十六进制加载基址与十六进制窗口大小，
+链式启动原始的 Mu-Silicium 或 Project-Aloha 固件描述符。`AbootLoader.efi`
+接受 `--boot` 与 `--vendor-boot`，可选 `--init-boot`、`--dtb-index` 与
+`--cmdline`，启动 header 版本为 3 或 4 的 Android boot 镜像。两者的路径都
+相对于加载器自身所在的卷。
 
 ## 两个受管理启动项
 

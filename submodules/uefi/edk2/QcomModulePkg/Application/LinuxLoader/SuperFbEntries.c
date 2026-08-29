@@ -22,6 +22,8 @@
 #include "Hook/SuperFbManagedPath.h"
 #include "Hook/SuperFbProfile.h"
 #include "SuperFbLaunchPolicy.h"
+#include "SuperFbBls.h"
+#include "SuperFbLinuxBoot.h"
 #include "SuperFbSlots.h"
 
 /* Keeps the translation unit legal when the feature is compiled out. */
@@ -235,6 +237,8 @@ SfbMakeFileEntry (IN EFI_HANDLE      Volume,
 
   Entry->Kind = SfbEntryEfiFile;
   Entry->Volume = Volume;
+  Entry->IsUsb = SfbIsUsbVolume (Volume);
+  Entry->BlsIndex = SFB_NO_BLS;
   StrnCpyS (Entry->Path, SFB_PATH_CHARS, PathOnVolume, SFB_PATH_CHARS - 1);
   StrnCpyS (Entry->Desc, SFB_DESC_CHARS, Desc, SFB_DESC_CHARS - 1);
 
@@ -245,7 +249,8 @@ SfbMakeFileEntry (IN EFI_HANDLE      Volume,
    * position. Only a managed name ever gets a wrapper, so for anything else
    * the entry's Mode decides nothing and the menu must say so.
    */
-  Entry->Passthrough = (BOOLEAN)!SfbIsManagedAblPath (PathOnVolume);
+  Entry->Passthrough =
+    (BOOLEAN)(Entry->IsUsb || !SfbIsManagedAblPath (PathOnVolume));
 
   /* Capture the volume label while the volume root is already available. */
   if (!EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) && Root != NULL) {
@@ -296,6 +301,7 @@ SfbAppendBuiltIn (IN OUT SFB_MENU_STATE *Menu,
   Entry = &Menu->Entry[Menu->Count];
   ZeroMem (Entry, sizeof (*Entry));
   Entry->Kind = Kind;
+  Entry->BlsIndex = SFB_NO_BLS;
   StrnCpyS (Entry->Desc, SFB_DESC_CHARS, Desc, SFB_DESC_CHARS - 1);
   Menu->Count++;
 }
@@ -538,6 +544,194 @@ SfbAppendBootRootEntries (IN OUT SFB_MENU_STATE *Menu)
 
   FreePool (Volumes);
 }
+/*
+ * Where the Boot Loader Specification puts Type #1 entries. One file per
+ * entry, and this loader reads them straight off the medium rather than
+ * caching an index, so adding a file and rebooting is the whole workflow.
+ */
+#define SFB_BLS_DIR_PATH  L"\\loader\\entries"
+
+/*
+ * Out-of-line payloads for the boot-spec rows: command line, initrd path and
+ * DTB path.
+ *
+ * They are deliberately not fields of SFB_BOOT_ENTRY. That struct is already
+ * about 1.2 KB and SFB_MENU_STATE embeds SFB_MAX_ENTRIES of them by value, so
+ * another ~900 bytes each would add tens of kilobytes to a stack-allocated
+ * menu. The entry carries one byte of index instead.
+ *
+ * A canoe.cfg row with `options` borrows the same table for its LoadOptions,
+ * keyed the same way. It stays an SfbEntryEfiFile - a plain application
+ * launch that carries arguments, not a boot-spec row - so the launch path
+ * distinguishes the two by Kind and reads the payload by BlsIndex.
+ */
+#if SFB_CONFIG_OPTIONS_CHARS > SFB_BLS_CMDLINE_CHARS
+#error "canoe.cfg options must fit the boot-spec payload it is stored in"
+#endif
+STATIC SFB_BLS_ENTRY  mSfbBlsPayload[SFB_MAX_ENTRIES];
+
+STATIC
+CONST SFB_BLS_ENTRY *
+SfbBlsPayload (IN UINT8 Index)
+{
+  if (Index >= SFB_MAX_ENTRIES) {
+    return NULL;
+  }
+  return &mSfbBlsPayload[Index];
+}
+
+/* TRUE when Name ends in ".conf", case-insensitively. */
+STATIC
+BOOLEAN
+SfbBlsIsConfName (IN CONST CHAR16 *Name)
+{
+  UINTN         Length = StrLen (Name);
+  CONST CHAR16  *Tail;
+  UINTN         Index;
+  STATIC CONST CHAR16  Want[] = L".conf";
+
+  if (Length < 6) {
+    /* Shorter than one character plus the suffix: there is no stem to name a
+     * row with, so the file is not an entry. */
+    return FALSE;
+  }
+  Tail = Name + (Length - 5);
+  for (Index = 0; Index < 5; Index++) {
+    CHAR16  Left = Tail[Index];
+
+    if (Left >= L'A' && Left <= L'Z') {
+      Left = (CHAR16)(Left + (L'a' - L'A'));
+    }
+    if (Left != Want[Index]) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/*
+ * Read /loader/entries off one removable volume and append a row per usable
+ * entry.
+ *
+ * Removable-only by design: an internal ESP must not be able to inject rows
+ * into the on-device boot root's menu, which is canoe.cfg's territory.
+ */
+STATIC
+VOID
+SfbScanBlsEntries (IN OUT SFB_MENU_STATE *Menu,
+                   IN EFI_HANDLE          Volume,
+                   IN EFI_FILE_PROTOCOL  *Root)
+{
+  EFI_FILE_PROTOCOL  *Dir = NULL;
+  SFB_DIR_ENTRY      *List = NULL;
+  CHAR8              *Bytes = NULL;
+  UINTN              Count = 0;
+  BOOLEAN            Truncated = FALSE;
+  UINTN              Index;
+
+  if (EFI_ERROR (Root->Open (Root, &Dir, (CHAR16 *)SFB_BLS_DIR_PATH,
+                             EFI_FILE_MODE_READ, 0)) ||
+      Dir == NULL) {
+    return;
+  }
+
+  /* Both buffers are tens of kilobytes between them and this runs inside a
+   * menu build whose frame already holds an SFB_MENU_STATE, so neither goes
+   * on the stack. */
+  List = AllocateZeroPool (SFB_MAX_DIR_ENTRIES * sizeof (SFB_DIR_ENTRY));
+  Bytes = AllocateZeroPool (SFB_BLS_MAX_BYTES + 1);
+  if (List == NULL || Bytes == NULL) {
+    goto Done;
+  }
+
+  if (EFI_ERROR (SfbReadDirectory (Dir, List, SFB_MAX_DIR_ENTRIES, &Count,
+                                   &Truncated))) {
+    goto Done;
+  }
+  if (Truncated) {
+    DEBUG ((EFI_D_WARN, "SFB: MARK bls-truncated dir='%s'\n",
+            SFB_BLS_DIR_PATH));
+  }
+
+  for (Index = 0; Index < Count && Menu->Count < SFB_MAX_ENTRIES; Index++) {
+    CHAR16          Path[SFB_PATH_CHARS];
+    CHAR16          Desc[SFB_DESC_CHARS];
+    CHAR16          Image[SFB_PATH_CHARS];
+    SFB_BLS_ENTRY   Parsed;
+    SFB_BOOT_ENTRY  *Slot;
+    UINTN           Size = 0;
+
+    if (List[Index].IsDir || !SfbBlsIsConfName (List[Index].Name)) {
+      continue;
+    }
+    if (EFI_ERROR (UnicodeSPrint (Path, sizeof (Path), L"%s\\%s",
+                                  SFB_BLS_DIR_PATH, List[Index].Name)) ||
+        StrLen (Path) >= SFB_PATH_CHARS) {
+      continue;
+    }
+    if (EFI_ERROR (SfbReadFileBytes (Root, Path, Bytes, SFB_BLS_MAX_BYTES,
+                                     &Size))) {
+      continue;
+    }
+    if (!SfbBlsParse (Bytes, Size, &Parsed)) {
+      DEBUG ((EFI_D_WARN, "SFB: MARK bls-reject file='%s'\n",
+              List[Index].Name));
+      continue;
+    }
+
+    SfbAsciiToUnicode (Parsed.Image, Image, ARRAY_SIZE (Image));
+    if (!SfbFileExists (Root, Image)) {
+      DEBUG ((EFI_D_WARN, "SFB: MARK bls-missing file='%s' image='%s'\n",
+              List[Index].Name, Image));
+      continue;
+    }
+
+    if (Parsed.Title[0] != '\0') {
+      SfbAsciiToUnicode (Parsed.Title, Desc, ARRAY_SIZE (Desc));
+    } else {
+      /* No `title`: the file stem is the only other name the author gave us,
+       * and an unlabelled row is worse than a filename. */
+      StrnCpyS (Desc, SFB_DESC_CHARS, List[Index].Name,
+                MIN (SFB_DESC_CHARS - 1, StrLen (List[Index].Name) - 5));
+    }
+
+    Slot = &Menu->Entry[Menu->Count];
+    if (EFI_ERROR (SfbMakeFileEntry (Volume, Image, Desc, Slot))) {
+      continue;
+    }
+
+    /*
+     * Deliberately not deduplicated against earlier rows by device path. The
+     * volume scan does that because two probes of one medium really are the
+     * same launch, but a Type #1 entry is distinguished by its payload, not
+     * its image: `bootctl` and `kernel-install` routinely write several
+     * `.conf` files that name one kernel and differ only in `options`, and a
+     * rescue entry collapsing into the normal one would be a silent loss of
+     * exactly the entry the operator went looking for.
+     */
+
+    Slot->Kind = (Parsed.Kind == SfbBlsKindLinux) ? SfbEntryBlsLinux
+                                                  : SfbEntryBlsEfi;
+    Slot->BlsIndex = (UINT8)Menu->Count;
+    CopyMem (&mSfbBlsPayload[Menu->Count], &Parsed, sizeof (Parsed));
+
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK bls-entry file='%s' kind=%u image='%s' rejected=%u\n",
+            List[Index].Name, (UINT32)Parsed.Kind, Image,
+            (UINT32)Parsed.RejectedLines));
+    Menu->Count++;
+  }
+
+Done:
+  if (Bytes != NULL) {
+    FreePool (Bytes);
+  }
+  if (List != NULL) {
+    FreePool (List);
+  }
+  Dir->Close (Dir);
+}
+
 
 /*
  * Discover the well-known boot loader on every removable/ESP volume.
@@ -563,6 +757,7 @@ SfbScanRemovableVolumes (IN OUT SFB_MENU_STATE *Menu)
   UINTN       Index;
   UINT32      NoName = 0;
 
+  SfbBootMark (L"scan:locate");
   Status = SfbLocateVolumes (&Volumes, &VolumeCount);
   if (EFI_ERROR (Status) || Volumes == NULL) {
     DEBUG ((EFI_D_INFO, "SFB: no boot volumes: %r\n", Status));
@@ -591,45 +786,56 @@ SfbScanRemovableVolumes (IN OUT SFB_MENU_STATE *Menu)
       continue;
     }
 
-    /* Every volume that reaches here is FAT32, whose boot root is its own
-     * root, so the well-known paths need no prefix joining. */
-    if (!SfbFileExists (Root, SFB_BOOT_FILE_PATH)) {
-      Root->Close (Root);
-      continue;
-    }
-
     /*
-     * \EFI\DESC names the loader when the medium bothers to; volumes without
-     * one are numbered off in the order they were found, so every row still
-     * has a label the user can tell apart.
+     * Every volume that reaches here is FAT32, whose boot root is its own
+     * root, so the well-known paths need no prefix joining.
+     *
+     * The well-known-loader probe and the boot-spec scan below are additive
+     * and independent: a stick may carry a GRUB or systemd-boot BOOTAA64.EFI,
+     * a /loader/entries directory, or both, and offering only one of them
+     * because the other was missing would hide a bootable medium.
      */
-    Desc[0] = L'\0';
-    SfbReadAnsiDescription (Root, SFB_DESC_FILE_PATH, Desc, SFB_DESC_CHARS);
-    if (Desc[0] == L'\0') {
-      UnicodeSPrint (Desc, sizeof (Desc), L"NONAME%u", NoName++);
-    }
+    if (SfbFileExists (Root, SFB_BOOT_FILE_PATH)) {
+      /*
+       * \EFI\DESC names the loader when the medium bothers to; volumes
+       * without one are numbered off in the order they were found, so every
+       * row still has a label the user can tell apart.
+       */
+      Desc[0] = L'\0';
+      SfbReadAnsiDescription (Root, SFB_DESC_FILE_PATH, Desc, SFB_DESC_CHARS);
+      if (Desc[0] == L'\0') {
+        UnicodeSPrint (Desc, sizeof (Desc), L"NONAME%u", NoName++);
+      }
 
-    Slot = &Menu->Entry[Menu->Count];
-    Status = SfbMakeFileEntry (Volumes[Index], SFB_BOOT_FILE_PATH, Desc, Slot);
-    Root->Close (Root);
-    if (EFI_ERROR (Status)) {
-      continue;
-    }
-
-    for (Prev = 0; Prev < Menu->Count; Prev++) {
-      if (SfbSameDevicePath (Menu->Entry[Prev].DevicePath, Slot->DevicePath)) {
-        Duplicate = TRUE;
-        break;
+      Slot = &Menu->Entry[Menu->Count];
+      Status = SfbMakeFileEntry (Volumes[Index], SFB_BOOT_FILE_PATH, Desc,
+                                 Slot);
+      if (!EFI_ERROR (Status)) {
+        Duplicate = FALSE;
+        for (Prev = 0; Prev < Menu->Count; Prev++) {
+          if (SfbSameDevicePath (Menu->Entry[Prev].DevicePath,
+                                 Slot->DevicePath)) {
+            Duplicate = TRUE;
+            break;
+          }
+        }
+        if (Duplicate) {
+          SfbFreeEntry (Slot);
+        } else {
+          DEBUG ((EFI_D_INFO, "SFB: discovered '%s' on volume %u\n",
+                  Desc, (UINT32)Index));
+          Menu->Count++;
+        }
       }
     }
-    if (Duplicate) {
-      SfbFreeEntry (Slot);
-      continue;
+
+    /* Boot-spec entries are removable-media only: an internal ESP must not be
+     * able to inject rows into the on-device boot root's menu. */
+    if (SfbIsUsbVolume (Volumes[Index])) {
+      SfbScanBlsEntries (Menu, Volumes[Index], Root);
     }
 
-    DEBUG ((EFI_D_INFO, "SFB: discovered '%s' on volume %u\n",
-            Desc, (UINT32)Index));
-    Menu->Count++;
+    Root->Close (Root);
   }
 
   FreePool (Volumes);
@@ -678,6 +884,25 @@ SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
                                   Config, &Config->Entry[ConfigIndex]);
     Slot->ModeFromConfig = TRUE;
     Slot->Role = Config->Entry[ConfigIndex].Role;
+    /*
+     * An `options` value rides in the same out-of-line payload table the
+     * boot-spec rows use, rather than growing SFB_BOOT_ENTRY: the menu
+     * embeds 32 of those by value. Kind stays SfbEntryEfiFile - this is a
+     * plain application launch that happens to carry arguments, not a
+     * boot-spec entry - so the launch path keys off BlsIndex alone.
+     */
+    if (Config->Entry[ConfigIndex].Options[0] != '\0') {
+      SFB_BLS_ENTRY *Payload = &mSfbBlsPayload[Menu->Count];
+
+      /* The payload was just zeroed and Options is NUL-terminated by the
+       * parser, which refuses an over-long value rather than truncating, so
+       * copying the whole fixed-size source is bounded and leaves the tail
+       * of the wider destination zero. */
+      ZeroMem (Payload, sizeof (*Payload));
+      CopyMem (Payload->Cmdline, Config->Entry[ConfigIndex].Options,
+               SFB_CONFIG_OPTIONS_CHARS);
+      Slot->BlsIndex = (UINT8)Menu->Count;
+    }
     if (Config->DefaultIndex == ConfigIndex) {
       Menu->DefaultIndex = Menu->Count;
     }
@@ -827,7 +1052,11 @@ SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu,
 
   Menu->DefaultIndex = SFB_NO_INDEX;
   for (Index = 0; Index < Menu->Count; Index++) {
-    if (Menu->Entry[Index].Kind == SfbEntryEfiFile) {
+    /* Removable media is never the unattended starting point: its device path
+     * does not survive a reboot, so a USB row either fails to resolve or
+     * resolves onto whatever disk happens to be plugged in next. */
+    if (Menu->Entry[Index].Kind == SfbEntryEfiFile &&
+        !Menu->Entry[Index].IsUsb) {
       Menu->DefaultIndex = Index;
       break;
     }
@@ -840,6 +1069,9 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   EFI_STATUS Status;
   EFI_HANDLE ConfigVolume = NULL;
   SFB_CONFIG Config;
+  /* Fastboot, Selector, Tools, Mass Storage, Recovery, Power Off, Restart:
+   * the rows appended after truncation, whose space the discovered entries
+   * must not eat. */
   UINTN MandatoryRows = 7;
   UINTN ReservedRows;
   UINTN Unconfigured;
@@ -851,8 +1083,11 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   Menu->TimeoutSeconds = SFB_CONFIG_DEFAULT_TIMEOUT;
   Menu->LockPolicy = SfbConfigLockAsNeeded;
 
+  SfbBootMark (L"menu:begin");
   /* The mode row is a session-only override, never a persisted setting. */
   SfbAppendBuiltIn (Menu, SfbEntryMode, L"Session boot mode");
+
+  SfbBootMark (L"menu:config");
 
   Status = SfbLoadBootConfig (&Config, &ConfigVolume);
   if (!EFI_ERROR (Status)) {
@@ -873,6 +1108,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   Unconfigured = Menu->Count;
 
   if (!Menu->ConfigValid) {
+    SfbBootMark (L"menu:bootroot");
     SfbAppendBootRootEntries (Menu);
   }
 
@@ -882,7 +1118,9 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
    * - the same no matter what is plugged in, and it makes the truncation below
    * shed discovered rows rather than configured ones when the budget is hit.
    */
+  SfbBootMark (L"menu:removable");
   SfbScanRemovableVolumes (Menu);
+  SfbBootMark (L"menu:rows");
 
   for (Index = Unconfigured; Index < Menu->Count; Index++) {
     Menu->Entry[Index].Mode = Mode;
@@ -932,6 +1170,10 @@ SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu)
   }
   Menu->Count = 0;
   Menu->DefaultIndex = SFB_NO_INDEX;
+  /* A rebuilt menu must not be able to resurrect a payload belonging to a row
+   * that is no longer there; the index is only a byte and BlsIndex slots are
+   * reused across rebuilds. */
+  ZeroMem (mSfbBlsPayload, sizeof (mSfbBlsPayload));
 }
 
 /* ---- launching ---------------------------------------------------------- */
@@ -955,7 +1197,13 @@ SfbIsManagedAblEntry (IN CONST SFB_BOOT_ENTRY *Entry)
   if (Entry == NULL || Entry->Kind != SfbEntryEfiFile) {
     return FALSE;
   }
-  return SfbIsManagedAblPath (Entry->Path);
+  /*
+   * Managed launches are a property of the on-device boot root, never of the
+   * media. Without the IsUsb test a stick with \boot.efi at its root would be
+   * launched with the full policy projection and the efisp hide armed, purely
+   * because its filename matched.
+   */
+  return (BOOLEAN)(!Entry->IsUsb && SfbIsManagedAblPath (Entry->Path));
 }
 
 
@@ -1177,6 +1425,80 @@ SfbPreloadDrivers (IN EFI_HANDLE Volume, IN CONST CHAR16 *EntryPath)
   }
 }
 
+/*
+ * Launch a Boot Loader Specification row.
+ *
+ * Never managed: the row came off removable media, so no policy wrapper is
+ * installed and the ABL sidecars have nothing to say about it. What it does
+ * carry is the three things a kernel needs and an ordinary EFI application
+ * does not get from a device path: a command line, an initrd and a DTB.
+ *
+ * Either publication failing aborts the launch with that status and no side
+ * effects. A half-published initrd is worse than no boot: the kernel would
+ * come up with a configuration nobody asked for.
+ */
+STATIC
+EFI_STATUS
+SfbLaunchBlsEntry (IN CONST SFB_BOOT_ENTRY *Entry,
+                   IN SFB_BOOT_MODE        EffectiveMode)
+{
+  EFI_STATUS           Status;
+  CONST SFB_BLS_ENTRY  *Payload = SfbBlsPayload (Entry->BlsIndex);
+  CHAR16               Cmdline[SFB_BLS_CMDLINE_CHARS];
+  CHAR16               Path[SFB_PATH_CHARS];
+  CONST CHAR16         *Options = NULL;
+  BOOLEAN              DtbUp = FALSE;
+  BOOLEAN              InitrdUp = FALSE;
+
+  if (Payload == NULL || Payload->Kind == SfbBlsKindNone) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if (Payload->Cmdline[0] != '\0') {
+    SfbAsciiToUnicode (Payload->Cmdline, Cmdline, ARRAY_SIZE (Cmdline));
+    Options = Cmdline;
+  }
+
+  /* An `efi` row is a plain application launch with arguments; only a `linux`
+   * row has a stub on the other end that reads these two. */
+  if (Entry->Kind == SfbEntryBlsLinux) {
+    if (Payload->Dtb[0] != '\0') {
+      SfbAsciiToUnicode (Payload->Dtb, Path, ARRAY_SIZE (Path));
+      Status = SfbDtbInstall (Entry->Volume, Path);
+      if (EFI_ERROR (Status)) {
+        return Status;
+      }
+      DtbUp = TRUE;
+    }
+    if (Payload->Initrd[0] != '\0') {
+      SfbAsciiToUnicode (Payload->Initrd, Path, ARRAY_SIZE (Path));
+      Status = SfbInitrdInstall (Entry->Volume, Path);
+      if (EFI_ERROR (Status)) {
+        if (DtbUp) {
+          SfbDtbUninstall ();
+        }
+        return Status;
+      }
+      InitrdUp = TRUE;
+    }
+  }
+
+  SfbBypassSecurity ();
+  Status = SfbLaunchImage (Entry->DevicePath, FALSE, EffectiveMode, NULL,
+                           NULL, Options);
+
+  /* Return path only: a kernel that booted never comes back here, and a
+   * kernel that returned must not leave a stale configuration table or a
+   * stray LoadFile2 handle for the next launch. */
+  if (InitrdUp) {
+    SfbInitrdUninstall ();
+  }
+  if (DtbUp) {
+    SfbDtbUninstall ();
+  }
+  return Status;
+}
+
 EFI_STATUS
 SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
                 IN BOOLEAN              ClearScreen,
@@ -1192,8 +1514,10 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
    * active while DRIVER.LIST images are loaded. */
   SfbDisarmManagedAblHooks ();
 
-  if (Entry == NULL || Entry->Kind != SfbEntryEfiFile ||
-      Entry->DevicePath == NULL) {
+  if (Entry == NULL || Entry->DevicePath == NULL ||
+      (Entry->Kind != SfbEntryEfiFile &&
+       Entry->Kind != SfbEntryBlsLinux &&
+       Entry->Kind != SfbEntryBlsEfi)) {
     return EFI_INVALID_PARAMETER;
   }
   EffectiveMode = Entry->ModeFromConfig ? Entry->Mode : SessionMode;
@@ -1235,14 +1559,37 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
           (UINT32)Managed, (UINT32)SessionMode, (UINT32)EffectiveMode));
 
   SfbPreloadDrivers (Entry->Volume, Entry->Path);
-  SfbBypassSecurity ();
 
-  Status = SfbLaunchImage (
-             Entry->DevicePath,
-             Managed,
-             EffectiveMode,
-             EffectiveMode == SfbBootModeKmProfile ? &Profile : NULL,
-             TzMapPtr);
+  if (Entry->Kind == SfbEntryBlsLinux || Entry->Kind == SfbEntryBlsEfi) {
+    Status = SfbLaunchBlsEntry (Entry, EffectiveMode);
+  } else {
+    /*
+     * A plain application launch, with arguments when the config row asked
+     * for them. This is what makes a loader row work: the image is
+     * \tools\FdLoader.efi or \tools\AbootLoader.efi and the payload it
+     * should boot is named in `options`. Without this the loaders receive
+     * an empty command line and can only print their usage.
+     */
+    CONST SFB_BLS_ENTRY  *Payload = (Entry->BlsIndex != SFB_NO_BLS)
+                                      ? SfbBlsPayload (Entry->BlsIndex)
+                                      : NULL;
+    CHAR16               Options[SFB_BLS_CMDLINE_CHARS];
+    CONST CHAR16         *OptionsPtr = NULL;
+
+    if (Payload != NULL && Payload->Cmdline[0] != '\0') {
+      SfbAsciiToUnicode (Payload->Cmdline, Options, ARRAY_SIZE (Options));
+      OptionsPtr = Options;
+    }
+
+    SfbBypassSecurity ();
+    Status = SfbLaunchImage (
+               Entry->DevicePath,
+               Managed,
+               EffectiveMode,
+               EffectiveMode == SfbBootModeKmProfile ? &Profile : NULL,
+               TzMapPtr,
+               OptionsPtr);
+  }
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "SFB: '%s' failed or returned: %r\n",
             Entry->Path, Status));

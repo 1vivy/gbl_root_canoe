@@ -24,6 +24,17 @@
   `Android (previous)`；
 - 启动根目录 `tools/` 中文件对应的 **EFI Tools**。
 
+随附的 `SurfaceTools.efi` 清单工具可从 **EFI Tools** 打开。默认视图只枚举
+UEFI 协议 GUID、配置表 GUID、已加载镜像类别、内存描述符和已知的 Qualcomm
+策略协议是否存在；不会显示原始地址，也不会调用厂商方法。**Dump Passive
+Inventory to logfs** 会明确覆盖已挂载 `logfs` 卷上的
+`\SurfaceTools.log`，刷新文件内容并在返回 BDS 前关闭全部文件句柄。执行
+**Run Read-only Active Probes** 前必须再次按音量加键确认（电源键用于取消，
+因此长按菜单选择键不会授权调用）；该操作只调用五个已记录的读取方法，用于
+查询 CPU 最大索引、TrustZone 版本、Verified Boot 状态和 Keymaster 状态。
+调用成功时显示 `authorized`；工具不会据此推断策略已实际生效，且主动读取
+方法不会写入持久状态。
+
 USB Mass Storage 会将一个分区作为一个 USB 磁盘导出。`persist` 的
 `/efisp` 中包含启动根目录；仅当 `logfs` 存在时才会提供它。导出正在使用的
 `persist` 文件系统前，BDS 会显示警告。电脑端流程见

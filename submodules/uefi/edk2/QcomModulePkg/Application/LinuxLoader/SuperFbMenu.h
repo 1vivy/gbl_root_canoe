@@ -75,6 +75,19 @@
 
 #define SFB_NO_INDEX  ((UINTN)-1)
 
+/* SFB_BOOT_ENTRY.BlsIndex when the entry carries no boot-spec payload. */
+#define SFB_NO_BLS  ((UINT8)0xFF)
+
+/* Longest single file name we will read out of a directory. */
+#define SFB_NAME_CHARS  128
+
+typedef struct {
+  CHAR16   Name[SFB_NAME_CHARS];
+  BOOLEAN  IsDir;
+  /* The synthetic ".." row: leaves the directory, or the volume when at root. */
+  BOOLEAN  IsParent;
+} SFB_DIR_ENTRY;
+
 typedef enum {
   /* An EFI application living on a FAT32/ext4 volume. */
   SfbEntryEfiFile = 0,
@@ -89,6 +102,11 @@ typedef enum {
   SfbEntryMode,
   /* Export one partition to a host as USB mass storage. */
   SfbEntryMassStorage,
+  /* Boot Loader Specification Type #1 entries discovered on removable media.
+   * The Linux kind additionally publishes an initrd and a DTB; the EFI kind is
+   * an ordinary LoadImage with a command line. */
+  SfbEntryBlsLinux,
+  SfbEntryBlsEfi,
   /* Inert row: redraws the menu when selected. Carries the notices the menu
    * must show but cannot act on. */
   SfbEntryBack,
@@ -142,6 +160,17 @@ typedef struct {
    * same position as a config entry naming an unmanaged image.
    */
   BOOLEAN                   Passthrough;
+  /*
+   * TRUE when the entry's volume sits behind a USB device path. Such an entry
+   * is drawn with an "[E]" prefix, is never treated as a managed ABL however
+   * its path is spelled, and is never the unattended default: removable media
+   * has no device path that survives a reboot.
+   */
+  BOOLEAN                   IsUsb;
+  /* Index into the out-of-line boot-spec payload table, or SFB_NO_BLS. The
+   * command line, initrd and DTB live there rather than here: SFB_MENU_STATE
+   * embeds 32 of these by value and the payload is ~900 bytes each. */
+  UINT8                     BlsIndex;
 } SFB_BOOT_ENTRY;
 
 typedef struct {
@@ -229,6 +258,13 @@ VOID
 SfbMountLogfs (VOID);
 
 /*
+ * Print a boot-progress stage to the console. Cleared by the first menu
+ * screen, so it is only ever seen when something before that faults.
+ */
+VOID
+SfbBootMark (IN CONST CHAR16 *Stage);
+
+/*
  * Snapshot of the boot volumes currently in the system: FAT32 volumes plus the
  * ext4 persist partition. *Handles must be released with FreePool ().
  *
@@ -301,6 +337,23 @@ SfbIsEfiDriverFile (IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path);
  */
 VOID
 SfbConnectAll (VOID);
+
+/*
+ * TRUE when the volume handle's device path runs through a USB messaging node
+ * (MSG_USB_DP / MSG_USB_CLASS_DP / MSG_USB_WWID_DP). Internal UFS partitions
+ * do not.
+ */
+BOOLEAN
+SfbIsUsbVolume (IN EFI_HANDLE Volume);
+
+/*
+ * Drop the cached FAT32/ext4 classification of every volume. The cache is
+ * keyed on handles, so anything that changes the handle set - a USB role
+ * switch either way - must invalidate it or a recycled handle reads back
+ * someone else's answer.
+ */
+VOID
+SfbResetVolumeClassCache (VOID);
 
 /*
  * Read an ANSI text file and return its first line as a Unicode string.
@@ -425,6 +478,21 @@ BOOLEAN
 SfbIsRootPath (IN CONST CHAR16 *Path);
 
 /*
+ * Fill List with the contents of Dir, preceded by a synthetic ".." row and
+ * sorted. Truncated is set when the directory holds more than Max items, so a
+ * caller can say so rather than silently hiding them.
+ *
+ * List is up to Max * sizeof (SFB_DIR_ENTRY) bytes - tens of kilobytes at the
+ * sizes this loader uses - so callers allocate it from pool, never on stack.
+ */
+EFI_STATUS
+SfbReadDirectory (IN EFI_FILE_PROTOCOL  *Dir,
+                  OUT SFB_DIR_ENTRY     *List,
+                  IN UINTN              Max,
+                  OUT UINTN             *Count,
+                  OUT BOOLEAN           *Truncated);
+
+/*
  * Clear the console and announce fastboot. Called on the way out of the menu so
  * the last thing the menu drew does not stay on screen while fastboot waits for
  * a host that may take a while to show up.
@@ -481,7 +549,8 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
                  IN BOOLEAN         FlushFirst,
                  IN SFB_KEY_POLICY  Policy);
 
-/* The interactive form: no flush, non-volume keys confirm. */
+/* The interactive form: no pre-wait flush, non-volume keys confirm. Completed
+ * confirms discard duplicate Power events and retain one queued volume action. */
 SFB_KEY
 SfbWaitForKey (IN UINT32 TimeoutMs);
 

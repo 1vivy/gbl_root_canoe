@@ -174,12 +174,24 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     MenuRequested = WaitForVolumeUpKey (1000);
     DEBUG ((EFI_D_INFO, "SFB: power-on volume-up detected=%u\n", MenuRequested));
 
+    SfbBootMark (L"fatstack");
     Status = SfbStartFatStack ();
     if (EFI_ERROR (Status)) {
       DEBUG ((EFI_D_ERROR, "Unable to start the FAT stack: %r\n", Status));
     }
+    SfbBootMark (L"logfs");
     SfbMountLogfs ();
-
+    /*
+     * The USB core is left exactly as inherited. Host mode was investigated
+     * on this target and abandoned: the vendor mode switch works and XHCI
+     * comes up, but nothing sources VBUS, because the Type-C/PMIC layer is
+     * never initialised on the ABL path and the charger DXE that would
+     * initialise it cannot start without a DPP provider this firmware does
+     * not carry. Probing that stack cost several unbootable devices. The
+     * census and the host attempt live in the UsbTools EFI tool, where they
+     * are an explicit operator action and a fault costs one tool run rather
+     * than the boot menu.
+     */
     /*
      * Everything below is interactive: the menu, the fastboot screen and any
      * mass-storage export all wait on the operator or the host for as long as

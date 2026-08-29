@@ -7,6 +7,7 @@
 #include <Library/DevicePathLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
+#include <Protocol/LoadedImage.h>
 #include <Protocol/Security.h>
 #include <Protocol/Security2.h>
 
@@ -265,13 +266,15 @@ SfbLaunchImage (
   IN BOOLEAN                  Managed,
   IN SFB_BOOT_MODE            EffectiveMode,
   IN CONST SFB_MODE2_PROFILE *Profile,
-  IN CONST SFB_TZ_MAP         *TzMap
+  IN CONST SFB_TZ_MAP         *TzMap,
+  IN CONST CHAR16             *LoadOptions
   )
 {
   EFI_STATUS Status;
   EFI_HANDLE ImageHandle = NULL;
   CHAR16    *ExitData = NULL;
   UINTN      ExitDataSize = 0;
+  CHAR16    *Options = NULL;
   SFB_BOOT_MODE LaunchMode = EffectiveMode;
 
   if (DevicePath == NULL || gBS == NULL || gBS->LoadImage == NULL ||
@@ -326,6 +329,42 @@ SfbLaunchImage (
     SfbDisarmManagedAblHooks ();
     return Status;
   }
+
+  /*
+   * The command line channel. Linux's arm64 EFI stub reads exactly
+   * LoadOptions/LoadOptionsSize as UTF-16, and it is also the only way to pass
+   * arguments to an ordinary EFI application, so both payload loaders use it.
+   *
+   * The copy is pool-allocated because it has to outlive StartImage: the
+   * started image may read it at any point before it returns, and a stack
+   * buffer here would be gone the moment this frame did. LoadOptionsSize
+   * counts the terminating NUL - omitting it truncates the last option.
+   */
+  if (LoadOptions != NULL && LoadOptions[0] != L'\0') {
+    EFI_LOADED_IMAGE_PROTOCOL *Loaded = NULL;
+
+    Status = gBS->HandleProtocol (ImageHandle, &gEfiLoadedImageProtocolGuid,
+                                  (VOID **)&Loaded);
+    if (EFI_ERROR (Status) || Loaded == NULL) {
+      DEBUG ((EFI_D_ERROR, "SFB: MARK image-options status=%r reason=protocol\n",
+              Status));
+      SfbDisarmManagedAblHooks ();
+      return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
+    }
+
+    Options = AllocateCopyPool ((StrLen (LoadOptions) + 1) * sizeof (CHAR16),
+                                LoadOptions);
+    if (Options == NULL) {
+      SfbDisarmManagedAblHooks ();
+      return EFI_OUT_OF_RESOURCES;
+    }
+    Loaded->LoadOptions = Options;
+    Loaded->LoadOptionsSize =
+      (UINT32)((StrLen (LoadOptions) + 1) * sizeof (CHAR16));
+    DEBUG ((EFI_D_INFO, "SFB: MARK image-options chars=%u\n",
+            (UINT32)StrLen (LoadOptions)));
+  }
+
   DEBUG ((EFI_D_INFO,
           "SFB: MARK image-loaded managed=%u mode=%a\n",
           (UINT32)Managed, SfbLaunchModeText (Managed, LaunchMode)));
@@ -345,6 +384,9 @@ SfbLaunchImage (
    */
   gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
   SfbDisarmManagedAblHooks ();
+  if (Options != NULL) {
+    FreePool (Options);
+  }
   if (ExitData != NULL) {
     FreePool (ExitData);
   }
