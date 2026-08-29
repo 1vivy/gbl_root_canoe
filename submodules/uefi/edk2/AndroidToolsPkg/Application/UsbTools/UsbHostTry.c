@@ -125,7 +125,17 @@ UtBypassSecurity (VOID)
 AT_REPORT  mUtAttemptReport;
 BOOLEAN    mUtAttemptRan = FALSE;
 
+/*
+ * Load order is dependency order. UsbPwrCtrlDxe comes first because it
+ * publishes EFI_USB_PWR_CTRL_PROTOCOL, the only thing that can raise VBUS:
+ * the vendor's host init asks for VBUS *off*, and XhciDxe's automatic
+ * re-enable in XhcGetRootHubPortStatus is #if 0 in the vendor source, so
+ * nothing turns bus power on implicitly. This DXE lives in the device's own
+ * uefi_a volume and is not dispatched on the Android boot path, which is
+ * why the protocol is missing from our runtime entirely.
+ */
 STATIC CONST CHAR16 *CONST mUtDriverStack[] = {
+  L"UsbPwrCtrlDxe.efi",
   L"XhciPciEmulation.efi",
   L"XhciDxe.efi",
   L"UsbBusDxe.efi",
