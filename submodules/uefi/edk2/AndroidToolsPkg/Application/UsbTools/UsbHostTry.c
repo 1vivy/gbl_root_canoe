@@ -237,6 +237,7 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
   EFI_HANDLE                *Handles  = NULL;
   UINTN                     HandleCount;
   UINT32                    Capable   = QCOM_USB_CORE_0;
+  UINT32                    Limit     = 1;
   UINT32                    Index;
   UINT32                    Vbus;
   UINTN                     SfsBefore;
@@ -266,7 +267,18 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
     UtStep (L"core-0 instance missing or lacks GetSupUsbMode");
     goto Out;
   }
-  for (Index = 0; Index < QCOM_USB_CORE_MAX_NUM && !Found; Index++) {
+  /*
+   * Cap the scan at the vendor's own core count: querying cores past it is
+   * an unproven call on this device class - the same class of query that
+   * froze the census on a stopped core. Only core 0 is BDS-proven, so a
+   * missing count reads as "core 0 only", never as "all six".
+   */
+  if (Cfg->GetCoreCount != NULL &&
+      !EFI_ERROR (Cfg->GetCoreCount (Cfg, &Index)) &&
+      Index > 0 && Index <= QCOM_USB_CORE_MAX_NUM) {
+    Limit = Index;
+  }
+  for (Index = 0; Index < Limit && !Found; Index++) {
     UINT32      Modes = 0;
     EFI_STATUS  Query = Cfg->GetSupUsbMode (Cfg, Index, &Modes);
 

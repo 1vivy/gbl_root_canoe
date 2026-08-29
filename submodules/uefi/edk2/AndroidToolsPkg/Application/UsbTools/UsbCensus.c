@@ -11,6 +11,7 @@
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Library/UefiLib.h>
 #include <Protocol/BlockIo.h>
 #include <Protocol/DriverBinding.h>
 #include <Protocol/PciIo.h>
@@ -48,8 +49,6 @@ UtCensusInstance (
 {
   UINT32  Modes;
   UINT32  Count;
-  UINT32  MaxHost;
-  UINT32  Vbus;
 
   AtReportAdd (Report, L"instance %u: rev=0x%lx core=%u mode=0x%x always=%u",
                (UINT32)Index, Cfg->Revision, Cfg->CoreNum, Cfg->ModeType,
@@ -70,28 +69,33 @@ UtCensusInstance (
                (Cfg->Revision >= QCOM_USB_CFG_REVISION_3 &&
                 Cfg->SetUsbCoreMode != NULL) ? L'Y' : L'-');
 
+  /*
+   * Presence is reported for every member, but only calls the BDS has
+   * already exercised on this device class are made here: GetCoreCount,
+   * and GetSupUsbMode on a core whose mode is valid. Querying a core in
+   * USB_INVALID_MODE - and GetUsbMaxHostCoreNum at all - froze the device
+   * in this census; the vendor's port query does not tolerate a stopped
+   * core.
+   */
   if (Cfg->GetCoreCount != NULL &&
       !EFI_ERROR (Cfg->GetCoreCount (Cfg, &Count))) {
     AtReportAdd (Report, L"  GetCoreCount = %u", Count);
   }
-  if (Cfg->GetSupUsbMode != NULL &&
-      !EFI_ERROR (Cfg->GetSupUsbMode (Cfg, Cfg->CoreNum, &Modes))) {
-    AtReportAdd (Report,
-                 L"  GetSupUsbMode(core %u) = 0x%x (host=%c device=%c drd=%c)",
-                 Cfg->CoreNum, Modes,
-                 (Modes & QCOM_USB_HOST_MODE) ? L'Y' : L'-',
-                 (Modes & QCOM_USB_DEVICE_MODE) ? L'Y' : L'-',
-                 (Modes & QCOM_USB_DUAL_ROLE_MODE) ? L'Y' : L'-');
-  }
-  if (Cfg->GetUsbMaxHostCoreNum != NULL &&
-      !EFI_ERROR (Cfg->GetUsbMaxHostCoreNum (Cfg, &MaxHost))) {
-    AtReportAdd (Report, L"  GetUsbMaxHostCoreNum = %u", MaxHost);
-  }
-  if (Cfg->GetUsbVbusStatus != NULL &&
-      !EFI_ERROR (Cfg->GetUsbVbusStatus (Cfg, Cfg->CoreNum, &Vbus))) {
-    AtReportAdd (Report, L"  VbusStatus(core %u) = %u (%a)",
-                 Cfg->CoreNum, Vbus,
-                 Vbus == QCOM_USB_VBUS_DISABLED ? "disabled" : "not-disabled");
+  if (Cfg->GetSupUsbMode != NULL) {
+    if (Cfg->ModeType != QCOM_USB_INVALID_MODE &&
+        !EFI_ERROR (Cfg->GetSupUsbMode (Cfg, Cfg->CoreNum, &Modes))) {
+      AtReportAdd (Report,
+                   L"  GetSupUsbMode(core %u) = 0x%x (host=%c device=%c drd=%c)",
+                   Cfg->CoreNum, Modes,
+                   (Modes & QCOM_USB_HOST_MODE) ? L'Y' : L'-',
+                   (Modes & QCOM_USB_DEVICE_MODE) ? L'Y' : L'-',
+                   (Modes & QCOM_USB_DUAL_ROLE_MODE) ? L'Y' : L'-');
+    } else if (Cfg->ModeType == QCOM_USB_INVALID_MODE) {
+      AtReportAdd (Report, L"  GetSupUsbMode(core %u) skipped: core stopped",
+                   Cfg->CoreNum);
+    } else {
+      AtReportAdd (Report, L"  GetSupUsbMode(core %u) failed", Cfg->CoreNum);
+    }
   }
 }
 
@@ -107,6 +111,13 @@ UtBuildCensusReport (OUT AT_REPORT *Report)
   if (EFI_ERROR (Status)) {
     return Status;
   }
+
+  /* The report is drawn only after it is fully built, so a vendor call that
+   * hangs would leave the screen showing the previous menu. Print a live
+   * line per stage: a freeze names itself. */
+  gST->ConOut->ClearScreen (gST->ConOut);
+  Print (L"[census: counts]\r\n");
+  gBS->Stall (120 * 1000);
 
   AtReportAdd (Report, L"usbconfig=%u usb2hc=%u pciio=%u usbio=%u",
                (UINT32)UtCountByProtocol (&gQcomUsbConfigProtocolGuid),
@@ -130,6 +141,9 @@ UtBuildCensusReport (OUT AT_REPORT *Report)
 
   for (Index = 0; Index < Count; Index++) {
     QCOM_USB_CONFIG_PROTOCOL  *Cfg = NULL;
+
+    Print (L"[census: instance %Lu]\r\n", (UINT64)Index);
+    gBS->Stall (120 * 1000);
 
     if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
                                         &gQcomUsbConfigProtocolGuid,
