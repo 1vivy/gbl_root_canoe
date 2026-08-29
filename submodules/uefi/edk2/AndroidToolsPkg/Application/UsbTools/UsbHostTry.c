@@ -409,42 +409,45 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
     UtStep (L"driver %s: %r", mUtDriverStack[Index], Status);
   }
 
-  /* The vendor start stops device mode itself and creates the host handle. */
-  BeforeCount = UtConfigHandles (&Before);
-  Status = Cfg->StartController (Cfg, Capable, QCOM_USB_HOST_MODE_XHCI);
-  UtStep (L"StartController(core %u, XHCI): %r", Capable, Status);
-  Started = !EFI_ERROR (Status);
-  if (!Started) {
-    goto Out;
-  }
-  UtStep (L"started; offering only the new handle(s) to bindings");
-  UtBindNewHandles (Before, BeforeCount);
-
   /*
-   * On this device the start returns Success, runs PHY bring-up, and still
-   * leaves modeType=DEVICE on the handle it created - so the shim's gate
-   * never passes. The vendor's own mode-switch entry point is ToggleUsbMode
-   * (UsbToggleControllerMode: stop current, pin the static config, start the
-   * next), which the direct start evidently is not equivalent to. Run it
-   * when the start produced nothing, and read the state first so the
-   * transcript shows which direction the toggle went.
+   * The vendor's own mode switch is the primary rung. Measured on this
+   * device: the direct StartController(XHCI) returns Success and still
+   * leaves the new handle in DEVICE mode (the static-config override), while
+   * ToggleUsbMode stops the core, pins the static config to XHCI and lets
+   * the vendor complete the host start ASYNCHRONOUSLY - Usb2Hc and PciIo
+   * appeared seconds later, not at return. So the toggle is followed by a
+   * settle poll, not an immediate bind.
    */
-  if (UtCountByProtocol (&gEfiUsb2HcProtocolGuid) == 0 &&
-      UtCountByProtocol (&gEfiPciIoProtocolGuid) == 0) {
-    if (Cfg->ToggleUsbMode != NULL) {
-      UtStep (L"shim unbound; state before toggle: mode=0x%x", Cfg->ModeType);
-      FreePool (Before);
-      BeforeCount = UtConfigHandles (&Before);
-      Status = Cfg->ToggleUsbMode (Cfg, Capable);
-      UtStep (L"ToggleUsbMode(core %u): %r", Capable, Status);
-      if (!EFI_ERROR (Status)) {
-        Toggled = TRUE;
-        UtStep (L"state after toggle: mode=0x%x", Cfg->ModeType);
-        UtBindNewHandles (Before, BeforeCount);
+  BeforeCount = UtConfigHandles (&Before);
+  if (Cfg->ToggleUsbMode != NULL) {
+    UtStep (L"state before toggle: mode=0x%x", Cfg->ModeType);
+    Status = Cfg->ToggleUsbMode (Cfg, Capable);
+    UtStep (L"ToggleUsbMode(core %u): %r", Capable, Status);
+    if (!EFI_ERROR (Status)) {
+      Toggled = TRUE;
+      for (Step = 0;
+           Step < 16 &&
+           UtCountByProtocol (&gEfiUsb2HcProtocolGuid) == 0;
+           Step++) {
+        gBS->Stall (UT_ENUM_STEP_US);
       }
-    } else {
-      UtStep (L"shim unbound and ToggleUsbMode is absent; out of levers");
+      UtStep (L"host settle: usb2hc=%u pciio=%u after %Lu ms",
+              (UINT32)UtCountByProtocol (&gEfiUsb2HcProtocolGuid),
+              (UINT32)UtCountByProtocol (&gEfiPciIoProtocolGuid),
+              (UINT64)(Step * (UT_ENUM_STEP_US / 1000u)));
+      UtBindNewHandles (Before, BeforeCount);
     }
+  } else {
+    /* No toggle on this build: the direct start is the only lever. It stops
+     * device mode itself and creates the host handle. */
+    Status = Cfg->StartController (Cfg, Capable, QCOM_USB_HOST_MODE_XHCI);
+    UtStep (L"StartController(core %u, XHCI): %r", Capable, Status);
+    Started = !EFI_ERROR (Status);
+    if (!Started) {
+      goto Out;
+    }
+    UtStep (L"started; offering only the new handle(s) to bindings");
+    UtBindNewHandles (Before, BeforeCount);
   }
 
   /* Bus power. A stick with no VBUS never enumerates. */
@@ -482,20 +485,32 @@ UtRunHostAttempt (IN EFI_HANDLE ImageHandle)
           (UINT32)UtCountByProtocol (&gEfiSimpleFileSystemProtocolGuid));
 
   /*
-   * Hand the core back through the lever that matches the state the vendor
-   * is actually in. A toggle acquisition flips back by toggling; a bare
-   * start is unwound by starting device mode, which stops XHCI internally.
-   * If the state already reads device there is nothing to unwind.
+   * Always hand the core back; "nothing to do" is never an acceptable end
+   * state. A stopped (INVALID) core is just as broken for the gadget stack
+   * as a host-mode one - the mass-storage export failed exactly that way.
+   * The toggle-back is asynchronous too, so it gets its own settle poll,
+   * and a direct device-mode start covers whatever the toggle left behind.
    */
-  if (Cfg->ModeType == QCOM_USB_HOST_MODE_XHCI && Toggled) {
+  if (Toggled) {
     Restore = Cfg->ToggleUsbMode (Cfg, Capable);
     UtStep (L"restore via ToggleUsbMode: %r", Restore);
-  } else if (Started && !Toggled) {
+    for (Step = 0;
+         Step < 16 &&
+         UtCountByProtocol (&gEfiUsb2HcProtocolGuid) != 0;
+         Step++) {
+      gBS->Stall (UT_ENUM_STEP_US);
+    }
+    UtStep (L"restore settle: usb2hc=%u after %Lu ms",
+            (UINT32)UtCountByProtocol (&gEfiUsb2HcProtocolGuid),
+            (UINT64)(Step * (UT_ENUM_STEP_US / 1000u)));
+  }
+  if (UtCountByProtocol (&gEfiUsb2HcProtocolGuid) != 0 ||
+      Cfg->ModeType != QCOM_USB_DEVICE_MODE_SS) {
     Restore = Cfg->StartController (Cfg, Capable, QCOM_USB_DEVICE_MODE_SS);
-    UtStep (L"restore device mode: %r", Restore);
+    UtStep (L"device-mode start: %r (state now mode=0x%x)",
+            Restore, Cfg->ModeType);
   } else {
-    UtStep (L"restore: state already reads mode=0x%x, nothing to do",
-            Cfg->ModeType);
+    UtStep (L"restore complete: mode=0x%x", Cfg->ModeType);
   }
 
 Out:
