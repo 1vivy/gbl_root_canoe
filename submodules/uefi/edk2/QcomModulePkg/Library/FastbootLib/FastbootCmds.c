@@ -178,7 +178,7 @@ STATIC EFI_STATUS FlashResult = EFI_SUCCESS;
 STATIC EFI_EVENT UsbTimerEvent;
 #endif
 
-STATIC UINT64 MaxBufferSize = 0;
+STATIC UINT64 MaxUSBBufferSize = 0;
 
 STATIC INT32 Lun = NO_LUN;
 STATIC BOOLEAN LunSet;
@@ -1196,10 +1196,10 @@ CmdDownload (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
     return;
   }
 
-  if (mNumDataBytes > MaxBufferSize) {
+  if (mNumDataBytes > MaxUSBBufferSize) {
     DEBUG ((EFI_D_ERROR,
             "ERROR: Data size (%d) is more than max download size (%d)\n",
-            mNumDataBytes, MaxBufferSize));
+            mNumDataBytes, MaxUSBBufferSize));
     FastbootFail ("Requested download size is more than max allowed\n");
     return;
   }
@@ -1370,8 +1370,11 @@ CmdFetch (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
   }
   /* The DATA phase carries an 8-digit (32-bit) length, so a single fetch can
    * return at most MAX_UINT32 bytes; larger reads must be split by offset. */
-  if (RequestSize > MaxBufferSize) {
-    FastbootFail ("Fetch size too large");
+  if (RequestSize > MaxUSBBufferSize) {
+    DEBUG ((EFI_D_ERROR,
+            "ERROR: Data size (%d) is more than max fetch size (%d)\n",
+            RequestSize, MaxUSBBufferSize));
+    FastbootFail ("Requested fetch size is more than max allowed\n");
     return;
   }
 
@@ -1651,7 +1654,7 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
       goto out;
     }
 
-    if ((PartitionSize > MaxBufferSize) &&
+    if ((PartitionSize > MaxUSBBufferSize) &&
          !IsDisableParallelDownloadFlash ()) {
       if (IsUseMThreadParallel ()) {
         FlashInfo* ThreadFlashInfo = AllocateZeroPool (sizeof (FlashInfo));
@@ -1689,7 +1692,7 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 
     if (EFI_ERROR (Status) ||
       !IsUseMThreadParallel () ||
-      (PartitionSize <= MaxBufferSize)) {
+      (PartitionSize <= MaxUSBBufferSize)) {
       FlashResult = HandleSparseImgFlash (PartitionName,
                                         ARRAY_SIZE (PartitionName),
                                         mFlashDataBuffer, mFlashNumDataBytes);
@@ -1719,8 +1722,8 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
    * sparse images.
    */
   if ((sparse_header->magic != SPARSE_HEADER_MAGIC) ||
-        (PartitionSize < MaxBufferSize) ||
-        ((PartitionSize > MaxBufferSize) &&
+        (PartitionSize < MaxUSBBufferSize) ||
+        ((PartitionSize > MaxUSBBufferSize) &&
         (IsDisableParallelDownloadFlash () ||
         (Status != EFI_SUCCESS)))) {
     if (EFI_ERROR (FlashResult)) {
@@ -1847,7 +1850,7 @@ AcceptData (IN UINT64 Size, IN VOID *Data)
      */
     GetPageSize (&PageSize);
     RoundSize = ROUND_TO_PAGE (mNumDataBytes, PageSize - 1);
-    if (RoundSize < MaxBufferSize) {
+    if (RoundSize < MaxUSBBufferSize) {
       gBS->SetMem ((VOID *)(Data + mNumDataBytes), RoundSize - mNumDataBytes,
                    0);
     }
@@ -2194,17 +2197,17 @@ FastbootCmdsInit (VOID)
   GetBufferSize (&MaxBufferSize, &MinBufferSize);
 
   /* Allocate buffer used to store images passed by the download command */
-  GetMaxAllocatableMemory (&MaxBufferSize);
-  if (!MaxBufferSize) {
+  GetMaxAllocatableMemory (&MaxUSBBufferSize);
+  if (!MaxUSBBufferSize) {
     DEBUG ((EFI_D_ERROR, "Failed to get free memory for fastboot buffer\n"));
     return EFI_OUT_OF_RESOURCES;
   }
 
   do {
     // Try allocating 3/4th of free memory available.
-    MaxBufferSize = EFI_FREE_MEM_DIVISOR (MaxBufferSize);
-    MaxBufferSize = LOCAL_ROUND_TO_PAGE (MaxBufferSize, EFI_PAGE_SIZE);
-    if (MaxBufferSize < MinBufferSize) {
+    MaxUSBBufferSize = EFI_FREE_MEM_DIVISOR (MaxUSBBufferSize);
+    MaxUSBBufferSize = LOCAL_ROUND_TO_PAGE (MaxUSBBufferSize, EFI_PAGE_SIZE);
+    if (MaxUSBBufferSize < MinBufferSize) {
       DEBUG ((EFI_D_ERROR,
         "ERROR: Allocation fail for minimim buffer for fastboot\n"));
       return EFI_OUT_OF_RESOURCES;
@@ -2212,13 +2215,13 @@ FastbootCmdsInit (VOID)
 
     /* If available buffer on target is more than max buffer size,
        we limit this to max buffer buffer size we support */
-    if (MaxBufferSize > MaxBufferSize) {
-      MaxBufferSize = MaxBufferSize;
+    if (MaxUSBBufferSize > MaxBufferSize) {
+      MaxUSBBufferSize = MaxBufferSize;
     }
 
     Status =
         GetFastbootDeviceData ()->UsbDeviceProtocol->AllocateTransferBuffer (
-                                      MaxBufferSize,
+                                      MaxUSBBufferSize,
                                       (VOID **)&FastBootBuffer);
   }while (EFI_ERROR (Status));
 
@@ -2228,14 +2231,14 @@ FastbootCmdsInit (VOID)
   }
 
   /* Clear allocated buffer */
-  gBS->SetMem ((VOID *)FastBootBuffer, MaxBufferSize , 0x0);
+  gBS->SetMem ((VOID *)FastBootBuffer, MaxUSBBufferSize , 0x0);
   DEBUG ((EFI_D_VERBOSE,
                   "Fastboot Buffer Size allocated: %ld\n", MaxBufferSize));
 
   MaxBufferSize = (CheckRootDeviceType () == NAND) ?
-                              MaxBufferSize : MaxBufferSize / 2;
+                              MaxUSBBufferSize : MaxUSBBufferSize / 2;
 
-  FastbootCommandSetup ((VOID *)FastBootBuffer, MaxBufferSize);
+  FastbootCommandSetup ((VOID *)FastBootBuffer, MaxUSBBufferSize);
 
   InitMultiThreadEnv ();
 
@@ -2697,7 +2700,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   mUsbDataBuffer = Base;
 
   mFlashDataBuffer = (CheckRootDeviceType () == NAND) ?
-                           Base : (Base + MaxBufferSize);
+                           Base : (Base + MaxUSBBufferSize);
 
   /* Find all Software Partitions in the User Partition */
   UINT32 i;
@@ -2729,7 +2732,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   /* Register the commands only for non-user builds */
   /* Publish getvar variables */
   AsciiSPrint (MaxBufferSizeStr,
-                  sizeof (MaxBufferSizeStr), "%ld", MaxBufferSize);
+                  sizeof (MaxBufferSizeStr), "%ld", MaxUSBBufferSize);
   FastbootPublishVar ("max-download-size", MaxBufferSizeStr);
   FastbootPublishVar ("max-fetch-size", MaxBufferSizeStr);
 
