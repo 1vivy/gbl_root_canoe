@@ -6,8 +6,9 @@ embeddable runtime has no pip and no site-packages, so everything under this
 package is **stdlib only** - a third-party import here would break the shipped
 Windows toolkit, not just the build.
 
-The device-side transaction is deliberately NOT here: it stays in
-`tools/canoe-device/canoe_device_install.sh`, because it runs on the device.
+The boot-root transaction is deliberately NOT here either: the singular
+`canoe-bootmgr` binary owns it on every surface. This package is the host
+transport and driver around it.
 """
 
 from __future__ import annotations
