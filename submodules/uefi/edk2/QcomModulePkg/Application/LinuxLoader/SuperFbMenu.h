@@ -221,6 +221,15 @@ typedef enum {
   SfbKeySelect
 } SFB_KEY;
 
+/* First-run's only opt-in is Volume Up; timeout, Volume Down, and Power keep
+ * the historical fastboot default. Kept pure so the host contract can test the
+ * decision without constructing UEFI console protocols. */
+static inline BOOLEAN
+SfbFirstRunEntersMenu (IN SFB_KEY Key)
+{
+  return (BOOLEAN)(Key == SfbKeyUp);
+}
+
 /*
  * What a key that is neither volume-up nor volume-down means to a given wait.
  * The menu treats it as confirm; the power-on scan skips it and keeps waiting.
@@ -535,12 +544,10 @@ VOID
 SfbShowEnteringMenu (VOID);
 
 /*
- * Announce that the boot root holds nothing bootable and that fastboot is next.
- * Holds the screen briefly so the message is readable, then returns; the caller
- * enters fastboot. No keypress is required: on a first run there is nothing
- * else the device can usefully do.
+ * Show the first-run choice. Returns TRUE only when Volume Up explicitly
+ * enters the normal boot menu; timeout and every other key preserve fastboot.
  */
-VOID
+BOOLEAN
 SfbShowFirstRunScreen (VOID);
 
 /*

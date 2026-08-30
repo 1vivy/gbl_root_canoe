@@ -346,19 +346,26 @@ SfbShowFastbootMode (VOID)
 }
 
 /*
- * An empty boot root is an installation state, not a recoverable menu state.
- * Hold this message briefly so the operator sees why fastboot follows.
+ * An empty boot root is normally an installation state. Keep fastboot as the
+ * default, but give a first-time operator one explicit way to inspect the
+ * discovered entries before handing the device to the host.
  */
-VOID
+BOOLEAN
 SfbShowFirstRunScreen (VOID)
 {
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
-  gST->ConOut->ClearScreen (gST->ConOut);
-  gST->ConOut->EnableCursor (gST->ConOut, FALSE);
-  Print (L"First run: no boot image installed.\r\n");
-  Print (L"Entering fastboot for installation...\r\n");
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
-  gBS->Stall (2 * 1000 * 1000);
+  STATIC CONST CHAR16 *Rows[] = {
+    L"Enter boot menu (Volume Up)",
+    L"Enter fastboot (default)"
+  };
+  SFB_KEY Key;
+
+  SfbBeginScreen (L"First run", L"No boot image installed.");
+  SfbDrawRow (FALSE, L" ", Rows[0]);
+  SfbDrawRow (TRUE, L" ", Rows[1]);
+  SfbEndScreen (L"Volume Up: menu   Power/timeout: fastboot");
+
+  Key = SfbWaitForKey (2 * 1000);
+  return SfbFirstRunEntersMenu (Key);
 }
 
 /*

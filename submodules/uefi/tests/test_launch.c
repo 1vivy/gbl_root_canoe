@@ -1404,6 +1404,12 @@ TestBootRootEmpty(void)
   mBootRootConfigPresent = FALSE;
   mBootRootManagedPresent = FALSE;
   assert(SfbBootRootIsEmpty ());
+  /* Volume Up is the sole first-run opt-in; all default paths stay fastboot. */
+  assert(SfbFirstRunEntersMenu (SfbKeyUp));
+  assert(!SfbFirstRunEntersMenu (SfbKeyTimeout));
+  assert(!SfbFirstRunEntersMenu (SfbKeyDown));
+  assert(!SfbFirstRunEntersMenu (SfbKeySelect));
+
   mBootRootSlotAPresent = TRUE;
   assert(!SfbBootRootIsEmpty ());
   mBootRootSlotAPresent = FALSE;
