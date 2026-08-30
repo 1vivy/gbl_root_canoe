@@ -55,7 +55,7 @@ fn run_one_shot(cli: &Cli, token: &str) -> ExitCode {
         Ok(request) => request,
         Err(error) => return emit_json_error("request", &error.to_string(), EXIT_OPERATION),
     };
-    match operations::execute_request(&cli.boot_root, request) {
+    match operations::execute_request_cli(cli, request) {
         Ok(success) => emit_json_success(&success),
         Err(error) => emit_json_error("operation", &error.to_string(), EXIT_OPERATION),
     }
@@ -78,7 +78,7 @@ fn run_jsonl(cli: &Cli) -> ExitCode {
             continue;
         }
         let response = match wire::parse_json(line.as_bytes()) {
-            Ok(request) => match operations::execute_request(&cli.boot_root, request) {
+            Ok(request) => match operations::execute_request_cli(cli, request) {
                 Ok(success) => emit_json_success(&success),
                 Err(error) => emit_json_error("operation", &error.to_string(), EXIT_OPERATION),
             },

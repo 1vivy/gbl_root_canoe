@@ -36,10 +36,25 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        default_value = ".",
-        help = "Mounted persist/efisp directory"
+        help = "Mounted persist/efisp directory (default: current directory)"
     )]
-    pub boot_root: PathBuf,
+    pub boot_root: Option<PathBuf>,
+    #[arg(
+        long,
+        id = "ext4-source",
+        global = true,
+        conflicts_with = "ext4-image",
+        help = "Direct ext4 image or block source"
+    )]
+    pub source: Option<PathBuf>,
+    #[arg(
+        long = "ext4-image",
+        id = "ext4-image",
+        global = true,
+        conflicts_with = "ext4-source",
+        help = "Direct ext4 image (alias for --source)"
+    )]
+    pub image: Option<PathBuf>,
     #[arg(
         long,
         global = true,
