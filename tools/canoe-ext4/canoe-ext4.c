@@ -751,12 +751,16 @@ static void remove_path(const char *path) {
     if (rc != 0)
         fail_rc(EXIT_IO, "unlink", rc);
     if (!is_directory) {
-        struct ext2_inode remaining;
-        rc = ext2fs_read_inode(fs, inode, &remaining);
-        if (rc != 0)
-            fail_rc(EXIT_IO, "read-unlinked-inode", rc);
-        if (remaining.i_links_count != 0)
+        /* ext2fs_unlink removes only the directory entry.  Apply the inode
+         * link-count transition ourselves so ordinary files are reclaimed,
+         * while hard-linked files retain their remaining data. */
+        if (metadata.i_links_count > 1) {
+            --metadata.i_links_count;
+            rc = ext2fs_write_inode(fs, inode, &metadata);
+            if (rc != 0)
+                fail_rc(EXIT_IO, "write-unlinked-inode", rc);
             return;
+        }
     }
     if (is_directory) {
         struct ext2_inode parent_metadata;
