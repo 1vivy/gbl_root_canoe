@@ -42,14 +42,16 @@
  * loader names instead. */
 #define SFB_CONFIG_FILE_PATH  L"\\canoe.cfg"
 
-/* The canonical managed loader. Its presence is what distinguishes an
- * installed boot root from a first-run one, so it is named here rather than
- * spelled out at each use. */
-#define SFB_MANAGED_BOOT_NAME  L"\\boot.efi"
-
-/* The demoted previous generation, looked for beside the live loader by the
- * boot-root probe when no canoe.cfg is present. */
-#define SFB_MANAGED_BACKUP_NAME  L"\\boot_backup.efi"
+/*
+ * Managed ABL names. The singular boot.efi spelling remains a compatibility
+ * path while pre-b2 host/device writers still emit it; new transactions use
+ * the independent slot triplets. The core cutover retires the compatibility
+ * name once those writers no longer produce it.
+ */
+#define SFB_MANAGED_BOOT_NAME       L"\\boot.efi"
+#define SFB_MANAGED_SLOT_A_NAME     L"\\boot_a.efi"
+#define SFB_MANAGED_SLOT_B_NAME     L"\\boot_b.efi"
+#define SFB_MANAGED_BACKUP_NAME     L"\\boot_backup.efi"
 
 /* Directory under the boot root that the installers fill with the shipped EFI
  * tools. The menu's tools row lists it rather than a hand-maintained index, so

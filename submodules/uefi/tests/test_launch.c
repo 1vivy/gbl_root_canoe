@@ -47,6 +47,8 @@ static SFB_CONFIG_LOCK_POLICY mLastPreparePolicy;
 static BOOLEAN mVolumesAvailable;
 static BOOLEAN mBootRootConfigPresent;
 static BOOLEAN mBootRootManagedPresent;
+static BOOLEAN mBootRootSlotAPresent;
+static BOOLEAN mBootRootSlotBPresent;
 static EFI_HANDLE mVolumeList[2];
 static UINTN mPrepareCount;
 static UINTN mDisarmCount;
@@ -159,6 +161,8 @@ ResetVolumes(void)
   mBootRootIsExt4 = FALSE;
   mBootRootConfigPresent = FALSE;
   mBootRootManagedPresent = FALSE;
+  mBootRootSlotAPresent = FALSE;
+  mBootRootSlotBPresent = FALSE;
   mBootRootBackupPresent = FALSE;
   mBootRootBootentriesPresent = FALSE;
   mBootRootBootaaPresent = FALSE;
@@ -886,6 +890,18 @@ TestProfileSelection(void)
                  sizeof (L"\\boot.efi.gm2p")) == 0);
   assert(mProfileLoadMarkerCount == 1);
   assert(mCloseCount == 1);
+  /* Sidecar lookup follows the complete per-slot entry path, including the
+   * persist/efisp root prefix. */
+  StrCpyS (Entry.Path, SFB_PATH_CHARS, L"\\efisp\\boot_b.efi");
+  ResetProfileIo ();
+  memcpy (mSidecar, &Input, sizeof (Input));
+  mSidecarBytes = SFB_MODE2_PROFILE_BYTES;
+  assert(SfbResolveManagedAblMode (&Entry, SfbBootModeKmProfile, &Effective,
+                                   &Parsed, &ProfileStatus) == EFI_SUCCESS);
+  assert(Effective == SfbBootModeKmProfile);
+  assert(memcmp (mReadPath, L"\\efisp\\boot_b.efi.gm2p",
+                 sizeof (L"\\efisp\\boot_b.efi.gm2p")) == 0);
+
 
   for (Index = 0; Index < 5; ++Index) {
     ResetProfileIo ();
@@ -1377,14 +1393,33 @@ TestUnmanagedPassthrough(void)
 static void
 TestBootRootEmpty(void)
 {
+  static const CHAR8 ConfigText[] =
+    "version 1\n"
+    "entry android-a\n"
+    "title Android\n"
+    "image boot.efi\n";
+
   mEntriesFixtureEnabled = FALSE;
   mVolumesAvailable = TRUE;
   mBootRootConfigPresent = FALSE;
   mBootRootManagedPresent = FALSE;
   assert(SfbBootRootIsEmpty ());
-
-  mBootRootConfigPresent = TRUE;
+  mBootRootSlotAPresent = TRUE;
   assert(!SfbBootRootIsEmpty ());
+  mBootRootSlotAPresent = FALSE;
+
+
+  /* A config path alone is not usable: it must parse and name a file. */
+  mBootRootConfigPresent = TRUE;
+  assert(SfbBootRootIsEmpty ());
+
+  memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfigText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mBootRootManagedPresent = TRUE;
+  assert(!SfbBootRootIsEmpty ());
+
+  mEntriesFixtureEnabled = FALSE;
   mBootRootConfigPresent = FALSE;
   mBootRootManagedPresent = TRUE;
   assert(!SfbBootRootIsEmpty ());
@@ -1565,10 +1600,10 @@ SameMenu(IN CONST FAKE_MENU_SNAPSHOT *A, IN CONST FAKE_MENU_SNAPSHOT *B)
 
 /*
  * A dd-only upgrade writes a new BDS straight to efisp and never runs the
- * installer, so the boot root holds boot.efi with no canoe.cfg beside it. The
- * known-name probe is the only thing that keeps such a device bootable from
- * the menu, and a stale 6.x BOOTENTRIES left in the same directory must
- * contribute nothing now that its grammar is gone.
+ * installer, so the boot root may hold managed loaders with no canoe.cfg
+ * beside them. The known-name probe keeps such a device bootable from the
+ * menu, and a stale 6.x BOOTENTRIES left in the same directory contributes
+ * nothing now that its grammar is gone.
  */
 static void
 TestBootRootProbe(void)
@@ -1615,6 +1650,24 @@ TestBootRootProbe(void)
   assert(StrCmp (Menu.Entry[2].Desc, L"Android (previous)") == 0);
   assert(!Menu.DefaultFromConfig);
   SfbFreeMenu (&Menu);
+  /* Both independently managed slots are discovered with stable titles. */
+  mBootRootSlotAPresent = TRUE;
+  mBootRootSlotBPresent = TRUE;
+  Files = 0;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
+      Files++;
+    }
+  }
+  assert(Files == 4);
+  assert(StrCmp (Menu.Entry[2].Desc, L"Android (slot A)") == 0);
+  assert(StrCmp (Menu.Entry[3].Desc, L"Android (slot B)") == 0);
+  assert(StrCmp (Menu.Entry[4].Desc, L"Android (previous)") == 0);
+  assert(!Menu.Entry[2].Passthrough);
+  assert(!Menu.Entry[3].Passthrough);
+  SfbFreeMenu (&Menu);
+
 
   ResetVolumes ();
 }
@@ -2287,6 +2340,12 @@ SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
   }
   if (StrCmp (Path, SFB_MANAGED_BOOT_NAME) == 0) {
     return mBootRootManagedPresent;
+  }
+  if (StrCmp (Path, SFB_MANAGED_SLOT_A_NAME) == 0) {
+    return mBootRootSlotAPresent;
+  }
+  if (StrCmp (Path, SFB_MANAGED_SLOT_B_NAME) == 0) {
+    return mBootRootSlotBPresent;
   }
   if (StrCmp (Path, SFB_MANAGED_BACKUP_NAME) == 0) {
     return mBootRootBackupPresent;
