@@ -8,6 +8,9 @@ use thiserror::Error;
 
 use crate::bls::{BlsEntry, BlsError};
 use crate::config::{ConfigDocument, ConfigError};
+#[path = "backend_dispatch.rs"]
+mod backend_dispatch;
+pub use backend_dispatch::Backend;
 
 #[derive(Debug, Error)]
 pub enum BackendError {
@@ -23,6 +26,10 @@ pub enum BackendError {
     Bls(#[from] BlsError),
     #[error("BLS file name is not a simple .conf name: {0}")]
     InvalidBlsName(String),
+    #[error("ext4 backend: {0}")]
+    Ext4(String),
+    #[error("backend transaction: {0}")]
+    Transaction(String),
     #[error("clock is before the Unix epoch")]
     Clock,
 }

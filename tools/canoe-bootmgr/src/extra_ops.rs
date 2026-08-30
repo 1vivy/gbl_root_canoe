@@ -1,7 +1,6 @@
-use std::path::Path;
+use crate::backend::Backend;
 
 use crate::artifact::{self, BlsStageInput};
-use crate::backend::{BootRoot, LocalDir};
 use crate::cli::{
     BlsStageArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs, Success,
     VendorBootCommand,
@@ -21,7 +20,7 @@ pub(crate) fn graft_command(args: &crate::cli::GraftArgs) -> Result<Success, App
 }
 
 pub(crate) fn stage_bls(
-    root: &Path,
+    backend: &Backend,
     args: &BlsStageArgs,
 ) -> Result<crate::artifact::BlsStageReceipt, AppError> {
     let artifacts = args
@@ -39,32 +38,36 @@ pub(crate) fn stage_bls(
                 .map_err(AppError::Request)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(artifact::stage_bls(
-        root,
-        &BlsStageInput {
-            name: args.name.clone(),
-            entry: args.entry.clone(),
-            artifacts,
-        },
-    )?)
+    let input = BlsStageInput {
+        name: args.name.clone(),
+        entry: args.entry.clone(),
+        artifacts,
+    };
+    backend
+        .with_temp_root(|root| artifact::stage_bls(root, &input).map_err(|error| error.to_string()))
+        .map_err(AppError::from)
 }
-
-pub(crate) fn slot_command(backend: &LocalDir, command: &SlotCommand) -> Result<Success, AppError> {
+pub(crate) fn slot_command(backend: &Backend, command: &SlotCommand) -> Result<Success, AppError> {
     match command {
         SlotCommand::Status(args) => slot_status(backend, args),
     }
 }
 
-fn slot_status(backend: &LocalDir, args: &SlotStatusArgs) -> Result<Success, AppError> {
+fn slot_status(backend: &Backend, args: &SlotStatusArgs) -> Result<Success, AppError> {
     let explicit = parse_optional_slot(args.slot.as_deref(), "slot")?;
     let gpt = parse_optional_slot(args.gpt_active_slot.as_deref(), "gpt active slot")?;
     let status = slots::resolve_active(explicit, args.bootctl_output.as_deref(), gpt);
-    let mut installed = Vec::new();
-    for slot in [Slot::A, Slot::B] {
-        if slots::valid_triplet(backend.root(), slot)? {
-            installed.push(slot);
-        }
-    }
+    let installed = backend
+        .with_temp_root_readonly(|root| {
+            let mut installed = Vec::new();
+            for slot in [Slot::A, Slot::B] {
+                if slots::valid_triplet(root, slot).map_err(|error| error.to_string())? {
+                    installed.push(slot);
+                }
+            }
+            Ok(installed)
+        })
+        .map_err(AppError::from)?;
     Ok(Success::SlotStatus {
         ok: true,
         active_slot: status.active_slot,
@@ -73,8 +76,7 @@ fn slot_status(backend: &LocalDir, args: &SlotStatusArgs) -> Result<Success, App
         installed,
     })
 }
-
-pub(crate) fn install_command(backend: &LocalDir, args: &InstallArgs) -> Result<Success, AppError> {
+pub(crate) fn install_command(backend: &Backend, args: &InstallArgs) -> Result<Success, AppError> {
     if args.inactive && args.slot.is_some() {
         return Err(AppError::Request(
             "--inactive cannot be combined with --slot".to_owned(),
@@ -114,21 +116,26 @@ pub(crate) fn install_command(backend: &LocalDir, args: &InstallArgs) -> Result<
         parse_optional_slot(args.slot.as_deref(), "slot")?
             .ok_or_else(|| AppError::Request("install requires --slot a|b".to_owned()))?
     };
-    let receipt = slot_transaction::install(
-        backend.root(),
-        &InstallInput {
-            staged: args.staged.clone(),
-            target,
-            both: args.both,
-            active: status.active_slot,
-            mode: args.mode,
-            allow_new_signer: args.allow_new_signer,
-        },
-    )?;
+    let receipt = backend
+        .with_temp_root(|root| {
+            slot_transaction::install(
+                root,
+                &InstallInput {
+                    staged: args.staged.clone(),
+                    target,
+                    both: args.both,
+                    active: status.active_slot,
+                    mode: args.mode,
+                    allow_new_signer: args.allow_new_signer,
+                },
+            )
+            .map_err(|error| error.to_string())
+        })
+        .map_err(AppError::from)?;
     Ok(Success::Install { ok: true, receipt })
 }
 
-pub(crate) fn ota_apply(backend: &LocalDir, args: &OtaApplyArgs) -> Result<Success, AppError> {
+pub(crate) fn ota_apply(backend: &Backend, args: &OtaApplyArgs) -> Result<Success, AppError> {
     let gpt = parse_optional_slot(args.gpt_active_slot.as_deref(), "gpt active slot")?;
     let status = slots::resolve_active(None, args.bootctl_output.as_deref(), gpt);
     let target = match parse_optional_slot(args.target_slot.as_deref(), "target slot")? {
@@ -148,17 +155,22 @@ pub(crate) fn ota_apply(backend: &LocalDir, args: &OtaApplyArgs) -> Result<Succe
             )
         })?,
     };
-    let receipt = slot_transaction::install(
-        backend.root(),
-        &InstallInput {
-            staged: args.staged.clone(),
-            target,
-            both: false,
-            active: status.active_slot,
-            mode: args.mode,
-            allow_new_signer: args.allow_new_signer,
-        },
-    )?;
+    let receipt = backend
+        .with_temp_root(|root| {
+            slot_transaction::install(
+                root,
+                &InstallInput {
+                    staged: args.staged.clone(),
+                    target,
+                    both: false,
+                    active: status.active_slot,
+                    mode: args.mode,
+                    allow_new_signer: args.allow_new_signer,
+                },
+            )
+            .map_err(|error| error.to_string())
+        })
+        .map_err(AppError::from)?;
     Ok(Success::OtaApply { ok: true, receipt })
 }
 

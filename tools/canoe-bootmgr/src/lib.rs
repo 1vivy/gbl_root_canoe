@@ -11,6 +11,7 @@ pub mod backend;
 pub mod bls;
 pub mod cli;
 pub mod config;
+pub mod ext4;
 pub mod graft;
 pub mod operations;
 pub mod output;

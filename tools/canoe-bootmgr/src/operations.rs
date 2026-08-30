@@ -3,7 +3,7 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::artifact::ArtifactError;
-use crate::backend::{BackendError, BootRoot, LocalDir};
+use crate::backend::{Backend, BackendError, BootRoot};
 use crate::cli::{
     BlsCommand, Command, ConfigCommand, DefaultCommand, EntryCommand, EntrySetArgs, Success,
 };
@@ -35,7 +35,11 @@ pub enum AppError {
 }
 
 pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
-    let backend = LocalDir::new(&cli.boot_root)?;
+    let backend = Backend::from_paths(
+        cli.boot_root.as_deref(),
+        cli.source.as_deref(),
+        cli.image.as_deref(),
+    )?;
     let Some(command) = cli.command.as_ref() else {
         return Err(AppError::Request("a command is required".to_owned()));
     };
@@ -43,12 +47,25 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
 }
 
 pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, AppError> {
-    let backend = LocalDir::new(root)?;
+    let backend = Backend::local(root)?;
     let command = request.into_command();
     execute_command(&backend, &command)
 }
 
-fn execute_command(backend: &LocalDir, command: &Command) -> Result<Success, AppError> {
+pub fn execute_request_cli(
+    cli: &crate::cli::Cli,
+    request: JsonRequest,
+) -> Result<Success, AppError> {
+    let backend = Backend::from_paths(
+        cli.boot_root.as_deref(),
+        cli.source.as_deref(),
+        cli.image.as_deref(),
+    )?;
+    let command = request.into_command();
+    execute_command(&backend, &command)
+}
+
+fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppError> {
     match command {
         Command::Config {
             command: ConfigCommand::Show,
@@ -64,12 +81,12 @@ fn execute_command(backend: &LocalDir, command: &Command) -> Result<Success, App
     }
 }
 
-fn config_show(backend: &LocalDir) -> Result<Success, AppError> {
+fn config_show(backend: &dyn BootRoot) -> Result<Success, AppError> {
     let config = read_or_empty(backend)?;
     Ok(Success::ConfigShow { ok: true, config })
 }
 
-fn entry_command(backend: &LocalDir, command: &EntryCommand) -> Result<Success, AppError> {
+fn entry_command(backend: &dyn BootRoot, command: &EntryCommand) -> Result<Success, AppError> {
     match command {
         EntryCommand::List => {
             let config = read_or_empty(backend)?;
@@ -109,7 +126,7 @@ fn entry_command(backend: &LocalDir, command: &EntryCommand) -> Result<Success, 
     }
 }
 
-fn entry_set(backend: &LocalDir, args: &EntrySetArgs) -> Result<Success, AppError> {
+fn entry_set(backend: &dyn BootRoot, args: &EntrySetArgs) -> Result<Success, AppError> {
     let mut config = read_or_empty(backend)?;
     let generation = config.upsert(EntryRequest {
         id: args.id.clone(),
@@ -145,7 +162,7 @@ fn entry_set(backend: &LocalDir, args: &EntrySetArgs) -> Result<Success, AppErro
     })
 }
 
-fn default_command(backend: &LocalDir, command: &DefaultCommand) -> Result<Success, AppError> {
+fn default_command(backend: &dyn BootRoot, command: &DefaultCommand) -> Result<Success, AppError> {
     match command {
         DefaultCommand::Get => Ok(Success::DefaultGet {
             ok: true,
@@ -164,7 +181,7 @@ fn default_command(backend: &LocalDir, command: &DefaultCommand) -> Result<Succe
     }
 }
 
-fn bls_command(backend: &LocalDir, command: &BlsCommand) -> Result<Success, AppError> {
+fn bls_command(backend: &Backend, command: &BlsCommand) -> Result<Success, AppError> {
     match command {
         BlsCommand::List => Ok(Success::BlsList {
             ok: true,
@@ -176,15 +193,15 @@ fn bls_command(backend: &LocalDir, command: &BlsCommand) -> Result<Success, AppE
         }),
         BlsCommand::Stage(args) => Ok(Success::BlsStage {
             ok: true,
-            receipt: extra_ops::stage_bls(backend.root(), args)?,
+            receipt: extra_ops::stage_bls(backend, args)?,
         }),
     }
 }
-fn read_or_empty(backend: &LocalDir) -> Result<ConfigDocument, AppError> {
+fn read_or_empty(backend: &dyn BootRoot) -> Result<ConfigDocument, AppError> {
     Ok(backend.read_config()?.unwrap_or_else(ConfigDocument::empty))
 }
 
-fn read_existing(backend: &LocalDir) -> Result<ConfigDocument, AppError> {
+fn read_existing(backend: &dyn BootRoot) -> Result<ConfigDocument, AppError> {
     backend
         .read_config()?
         .ok_or_else(|| {
