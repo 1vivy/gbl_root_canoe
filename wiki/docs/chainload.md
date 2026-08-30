@@ -1,10 +1,12 @@
 # Chainloading a third-party UEFI stack
 
-BDS is a chainloader selector, not a boot manager. It enumerates candidate
-images and starts one, and that is the whole of it: `LoadImage` followed by
-`StartImage`, with the row's `options` handed over byte for byte. It does not
-enumerate USB, it does not implement a boot manager for other operating systems,
-and it does not carry loaders for payload formats.
+BDS is a read-only UEFI selector. It scans retained volumes for well-known EFI
+loaders and BLS Type #1 entries, and starts the selected one. For a plain row
+that remains `LoadImage` followed by `StartImage`, with the row's `options`
+handed over byte for byte; a BLS `linux` row additionally publishes its initrd
+and device tree to an EFI-stub kernel. BDS is not a general operating-system
+boot manager, does not parse Android boot images or raw firmware descriptors,
+and does not carry payload loaders.
 
 So the contract for anything you want to chainload is short: **it must be a UEFI
 application**.
@@ -28,6 +30,70 @@ the load base and window size, so there is no hex for anyone to transcribe. An
 earlier design took `<path> <base> <size>`; two of four device cycles were lost
 to getting those numbers and their prefix right, which is why the surviving
 design does not ask for them.
+
+## BLS Type #1 entries
+
+BLS provides a second declaration namespace for bootable artifacts. Each
+`loader/entries/<name>.conf` file is one Type #1 row and must contain exactly
+one `linux` or `efi` key. A `linux` row names an EFI-stub kernel and may name
+one `initrd`, one `devicetree`, and command-line `options`; an `efi` row names
+an ordinary UEFI application and uses `options` as its opaque LoadOptions.
+Unknown standard BLS keys are retained for compatibility, while malformed
+entries, missing images, and unsupported duplicate fields are skipped.
+
+The boot manager stages a row and every referenced artifact with SHA-256
+verification:
+
+```bash
+# A local boot-root directory:
+sha256sum vmlinuz-canoe initramfs-canoe
+canoe-bootmgr --boot-root /path/to/efisp bls stage \
+  --name canoe-linux.conf --entry ./canoe-linux.conf \
+  --artifact ./vmlinuz-canoe,vmlinuz-canoe,<KERNEL_SHA256> \
+  --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
+
+# A direct ext4 image or exported block source:
+canoe-bootmgr --source <ext4-image-or-block-device> bls stage \
+  --name canoe-linux.conf --entry ./canoe-linux.conf \
+  --artifact ./vmlinuz-canoe,vmlinuz-canoe,<KERNEL_SHA256> \
+  --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
+```
+
+`--artifact` is `SOURCE,DESTINATION,SHA256`; every destination must be
+referenced by the parsed BLS file, and every digest must be 64 hexadecimal
+characters. The operation verifies the source before and during the copy,
+writes `loader/entries/<name>.conf` only after all artifacts pass, and rolls
+back the whole set on failure. `--source` and `--ext4-image` select the direct
+ext4 backend; `--boot-root` selects a local directory and cannot be combined
+with them.
+
+### The two path namespaces
+
+The two declaration grammars name paths relative to different roots:
+
+| Declaration | Path value | Persist ext4 resolution | FAT resolution |
+| --- | --- | --- | --- |
+| `canoe.cfg` `image` | `mu/place.efi` | `\efisp\mu\place.efi` | `\mu\place.efi` |
+| `canoe.cfg` `options` | payload-owned opaque value | passed unchanged; a payload path starts at `\` | passed unchanged; a payload path starts at `\` |
+| BLS `linux`/`efi`/`initrd`/`devicetree` | relative or leading-`/` path | prefixed to `\efisp\...` | volume-root `\...` |
+
+Thus a BLS file staged in `persist/efisp/loader/entries` can say
+`linux /vmlinuz-canoe`, and BDS opens `\efisp\vmlinuz-canoe`. A Canoe row
+staged in the same boot root says `image mu/place.efi` without the prefix.
+The path in a plain row's `options` belongs to the launched payload and must
+include `\efisp` when that payload lives on persist.
+
+### Discovery is not an unattended default
+
+BDS appends discovered BLS rows after configured `canoe.cfg` rows. The
+unattended default resolver accepts only a non-removable plain EFI row from
+`canoe.cfg`; a discovered BLS `efi` or `linux` row cannot be named by
+`canoe.cfg default`. Hold **Volume Up** during the startup sampling window,
+choose the BLS row in the menu, and press Power. For repeatable unattended
+tests, add a small wrapper UEFI application as a plain `canoe.cfg` row and
+make that wrapper row the default; the wrapper can select or chain to the BLS
+artifacts.
+
 
 ## Why BDS ships no payload loaders
 
@@ -65,9 +131,9 @@ allocator gives and aligns inside it.
 | You want to boot | Ship as | BDS does |
 | --- | --- | --- |
 | A Project Mu / Aloha firmware descriptor | a UEFI application that places it after `ExitBootServices` | starts the PE |
-| Linux | GRUB, or any EFI-stub kernel | starts the PE |
-| Another bootloader, including a self-compiled ABL | its UEFI application form | starts the PE |
-| Android | the managed `boot.efi` | starts the PE, with mode hooks |
+| Linux | GRUB, or any EFI-stub kernel, in a plain row or BLS `linux` entry | starts the PE; BLS publishes initrd/DTB |
+| Another bootloader, including a self-compiled ABL | its UEFI application form, in a plain row or BLS `efi` entry | starts the PE |
+| Android | the managed `boot_a.efi`, `boot_b.efi`, or `boot_backup.efi` triplet | starts the PE, with mode hooks |
 
 A `canoe.cfg` row pointing at a self-compiled ABL is a legitimate entry: the
 inner artefact of something like `abl2esp` is an ordinary UEFI application before
@@ -79,7 +145,8 @@ side project.
 
 ## Not a managed launch
 
-A row that is not one of the four managed Android paths is a passthrough: the
-`efisp` recursion guard and the Mode 1/2 policy hooks are not armed around it.
-That is correct, because the payload owns the machine afterwards and those hooks
-would have nothing left to govern.
+A row that is not one of the current managed boot-root paths is a passthrough:
+the `efisp` recursion guard and the Mode 1/2 policy hooks are not armed around
+it. This includes every BLS row and every removable-media row. That is correct,
+because the payload owns the machine afterwards and those hooks would have
+nothing left to govern.
