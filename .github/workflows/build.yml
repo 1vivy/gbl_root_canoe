@@ -44,7 +44,14 @@ jobs:
 
     - name: Build Toolkits
       run: |
-        bash tools/canoe-ext4/build-windows.sh
+        git clone --depth 1 --branch v1.47.3 https://github.com/tytso/e2fsprogs.git /tmp/e2fsprogs
+        git clone --depth 1 https://github.com/madler/zlib.git /tmp/zlib
+        make -C /tmp/zlib -f win32/Makefile.gcc PREFIX=x86_64-w64-mingw32- libz.a
+        mkdir -p /tmp/zlib-mingw/include /tmp/zlib-mingw/lib
+        cp /tmp/zlib/zlib.h /tmp/zlib/zconf.h /tmp/zlib-mingw/include/
+        cp /tmp/zlib/libz.a /tmp/zlib-mingw/lib/
+        E2FSPROGS_SRC=/tmp/e2fsprogs ZLIB_PREFIX=/tmp/zlib-mingw bash tools/canoe-ext4/build-windows.sh
+        test -f tools/canoe-ext4/canoe-ext4.exe
         make target_toolkit_linux
         make target_toolkit_windows
         make target_toolkit_android

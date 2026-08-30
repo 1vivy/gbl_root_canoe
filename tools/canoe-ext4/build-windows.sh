@@ -12,6 +12,13 @@ SOURCE=${E2FSPROGS_SRC:-}
 BUILD=${E2FSPROGS_BUILD:-"$ROOT/.e2fsprogs-mingw-build"}
 PREFIX=${E2FSPROGS_PREFIX:-"$BUILD/install"}
 OUT=${OUT:-"$ROOT/canoe-ext4.exe"}
+# zlib for the mingw link (the helper compresses nothing, but libext2fs pulls
+# in -lz unconditionally on this build): a prefix with include/ and lib/.
+ZLIB_PREFIX=${ZLIB_PREFIX:-}
+ZLIB_FLAGS=""
+if [ -n "$ZLIB_PREFIX" ]; then
+    ZLIB_FLAGS="-I$ZLIB_PREFIX/include -L$ZLIB_PREFIX/lib"
+fi
 
 if ! command -v "$CC" >/dev/null 2>&1; then
     printf '%s\n' "MinGW compiler $CC is not installed; no Windows binary was built." >&2
@@ -31,14 +38,15 @@ if [ ! -f "$BUILD/Makefile" ]; then
     (
         cd "$BUILD"
         "$SOURCE/configure" \
+            --cache-file="$BUILD/config.cache" \
             --host=x86_64-w64-mingw32 \
             --prefix="$PREFIX" \
             --disable-nls \
             --disable-fsck \
             --disable-e2scrub \
             --disable-fuse2fs \
-            --disable-libblkid \
-            --disable-libuuid
+            --enable-libblkid \
+            --enable-libuuid
     )
 fi
 # The helper only consumes libext2fs and libcom_err. Their dependencies are
@@ -53,5 +61,5 @@ LIB_FLAGS="$BUILD/lib/ext2fs/.libs/libext2fs.a $BUILD/lib/et/.libs/libcom_err.a"
 # supplied, while clean read/write operations use the same helper contract.
 "$CC" -std=c11 -O2 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 \
     $INCLUDE_FLAGS -o "$OUT" "$ROOT/canoe-ext4.c" $LIB_FLAGS \
-    -lz -lws2_32
+    $ZLIB_FLAGS -lz -lws2_32
 printf 'Built %s\n' "$OUT"
