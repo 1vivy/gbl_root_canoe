@@ -52,7 +52,32 @@ and close it before returning success.
 On Linux, install the e2fsprogs development package (`libext2fs-dev` on
 Debian/Ubuntu), then run `make`. The normal binary links dynamically to
 `libext2fs` and `libcom_err`; `make static` requests a fully static link when
-the host supplies suitable archives. `build-windows.sh` documents and drives
-a source build of e2fsprogs/libext2fs followed by an x86_64 MinGW helper build.
-It deliberately produces no placeholder binary when MinGW or the e2fsprogs
-source tree is absent.
+the host supplies suitable archives.
+
+`build-windows.sh` cross-builds `canoe-ext4.exe` for x86_64 Windows. It
+deliberately produces no placeholder binary when MinGW or the e2fsprogs source
+tree is absent. It needs two inputs, because MinGW supplies no system
+`libuuid`/`libblkid`/`zlib` and the build enables e2fsprogs' bundled uuid and
+blkid instead:
+
+| Variable | Meaning |
+| --- | --- |
+| `E2FSPROGS_SRC` | Checked-out e2fsprogs tree (release tarball unpacked is fine); configured in a sibling build directory, never modified. |
+| `ZLIB_PREFIX` | Prefix holding `include/zlib.h` and `lib/libz.a` built for MinGW; `libext2fs` links `-lz` unconditionally. |
+| `BUILD_CC` | Build-machine compiler for configure's own probes; defaults to `cc`. Leave it unless the default is unusable. |
+
+```sh
+git clone --depth 1 --branch v1.47.3 https://github.com/tytso/e2fsprogs.git /tmp/e2fsprogs
+git clone --depth 1 https://github.com/madler/zlib.git /tmp/zlib
+make -C /tmp/zlib -f win32/Makefile.gcc PREFIX=x86_64-w64-mingw32- libz.a
+mkdir -p /tmp/zlib-mingw/include /tmp/zlib-mingw/lib
+cp /tmp/zlib/zlib.h /tmp/zlib/zconf.h /tmp/zlib-mingw/include/
+cp /tmp/zlib/libz.a /tmp/zlib-mingw/lib/
+E2FSPROGS_SRC=/tmp/e2fsprogs ZLIB_PREFIX=/tmp/zlib-mingw sh build-windows.sh
+```
+
+The first configure run is slow (every MinGW probe compiles); results are
+cached in the build directory, so reruns are fast. On Windows the helper uses
+`libext2fs`' `windows_io_manager` against `\\.\PhysicalDrive<N>`: clean reads
+and writes behave as on Linux, while journal recovery of a dirty source stays
+unavailable and is refused with exit code 4 rather than attempted.
