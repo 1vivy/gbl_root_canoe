@@ -86,6 +86,10 @@ shadow() {
 
 run_install() {
   rc=0
+  # The installer refuses an unknown slot since 7.0.0-b2; fixture cases state
+  # the slot explicitly, with one dedicated refusal case at the end.
+  CANOE_ACTIVE_SLOT=${CANOE_ACTIVE_SLOT:-_a}
+  export CANOE_ACTIVE_SLOT
   if [ -n "${SHADOW:-}" ]; then
     ( PATH="$SHADOW:$PATH"; export PATH; sh "$SCRIPT" "$@" ) >"$OUT" 2>"$ERR" || rc=$?
   else
@@ -357,5 +361,17 @@ grep -q 'CANOE-MARK: signer-changed source=supplied' "$OUT" ||
   fail '16: supplied signer source was not reported'
 grep -q '^entry android-a$' "$D/canoe.cfg" || fail '16: active entry missing'
 pass 'an explicitly supplied changed signer is accepted'
+
+# ----------------------------------------------------------------- case 17 --
+# An unknown active slot is refused: no arg, no CANOE_ACTIVE_SLOT, no getprop.
+setup c17 no 120 256
+OUT="$TMP/c17/out"; ERR="$TMP/c17/err"; SHADOW=""
+rc=0
+env -u CANOE_ACTIVE_SLOT PATH="$PATH" sh "$SCRIPT" "$ST" "$D" >"$OUT" 2>"$ERR" || rc=$?
+[ "$rc" -ne 0 ] || fail '17: accepted an unknown active slot'
+grep -q 'active slot unknown' "$ERR" || fail '17: wrong refusal message'
+[ "$(sha "$D/boot.efi")" = ABSENT ] || fail '17: boot.efi was written'
+[ "$(sha "$D/canoe.cfg")" = ABSENT ] || fail '17: canoe.cfg was written'
+pass 'an unknown active slot is refused before any write'
 
 echo 'all canoe device-install fixtures passed'

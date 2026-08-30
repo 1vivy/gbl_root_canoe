@@ -44,7 +44,7 @@ ACTIVE_SLOT=${5:-${CANOE_ACTIVE_SLOT:-}}
 if [ -z "$ACTIVE_SLOT" ] && command -v getprop >/dev/null 2>&1; then
   ACTIVE_SLOT=$(getprop ro.boot.slot_suffix 2>/dev/null || :)
 fi
-case "$ACTIVE_SLOT" in _a|_b) ;; *) ACTIVE_SLOT=_a ;; esac
+case "$ACTIVE_SLOT" in _a|_b) ;; *) printf 'canoe-device: error: active slot unknown; pass it explicitly (arg 5 or CANOE_ACTIVE_SLOT)\n' >&2; exit 1 ;; esac
 say()  { printf 'canoe-device: %s\n' "$1"; }
 mark() { printf 'CANOE-MARK: %s\n' "$1"; }
 die()  { printf 'canoe-device: error: %s\n' "$1" >&2; exit 1; }
