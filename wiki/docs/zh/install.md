@@ -33,12 +33,10 @@ fastboot flash efisp BDS.efi
 `boot.efi`、`.gm2p` 和 `.tzmap` 必须描述同一套匹配的原厂固件。分区中保留
 的漏洞 ABL 可以比这套固件更旧。
 
-在 Linux 上，导出的 ext4 文件系统使用内核驱动 `sudo mount -t ext4` 挂载，
-因为它会遵循 ext4 日志。该挂载点归 root 所有，因此必须以 root 运行 `canoe`。
-只有在无法使用 `sudo` 时才会退回 `fuse2fs`：它明确声明"不支持使用日志"
-（does not support using the journal），一旦未正常卸载就可能损坏 `persist`，
-并且它写入的新文件属于当前调用用户而非 root。因此安装 `fuse2fs` 并不能替代
-以 root 运行；而且普通的 `fuse2fs -o rw` 挂载根本无法写入归 root 所有的启动根目录。
+主机不会挂载导出的 ext4 文件系统。`canoe-ext4`（libext2fs）直接打开原始块
+设备，取得独占锁，在修改前恢复日志，以有界事务写入并干净关闭。除操作系统
+允许打开 USB 设备所需的权限外，此路径不要求 root；helper 会拒绝另一个写入
+者已经挂载的源。
 
 ## 五种支持的场景
 
@@ -64,17 +62,19 @@ Windows： canoe.cmd
 fastboot oem mass-storage:persist
 ```
 
-程序挂载导出的 `persist`，派生三件套，提交启动根目录事务，并在
-`canoe.cfg` 写入活动行。Mode 1 还会询问 Recovery graft 和可选的
-`vendor_boot` 修补。要脚本化执行同样的工作，先构建产物，再安装：
+主机会识别导出的 Canoe USB 磁盘（`1209:ca0e`；旧固件的
+`05c6:f000` 也会接受），然后把原始块设备路径直接交给 `canoe-bootmgr`。
+不会创建挂载点或盘符。`canoe-bootmgr` 通过 `canoe-ext4` 路由所有启动根目录
+读写；helper 在缺少 `/efisp` 时创建它，boot manager 以同一事务提交三件套、
+配置、附属文件并保留回滚。要脚本化执行同样的工作，先构建产物，再安装：
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --boot-root <persist-mount>/efisp --slot a --mode 1
+canoe install --slot a --mode 1
 ```
 
-电脑需要自行导出并挂载时可省略 `--boot-root`。电脑端程序使用 Python，
-不会调用 shell。
+`--boot-root <persist>/efisp` 仅用于测试、local 后端或操作员自行管理的目录。
+电脑端程序使用 Python，不会调用 shell。
 
 ### Super Fastboot fastboot 变量
 
@@ -164,19 +164,18 @@ su -c sh ./build.sh --mode 1 --abl /path/abl.img --vbmeta /path/vbmeta.img
 
 ## Windows 电脑端工具
 
-Windows 压缩包内附带固定版本的 `fastboot.exe`、Ext4Windows 和 WinFsp 安装
-程序。Ext4Windows 使用：
+Windows 压缩包内附带 `canoe-bootmgr.exe`、`canoe-ext4.exe` 和
+`fastboot.exe`。选择新枚举的 USB 物理磁盘后，boot manager 将
+`\\\\.\\PhysicalDrive<N>` 原始路径直接交给 helper：
 
 ```text
-ext4windows.exe mount \\.\PhysicalDrive<N> Z: --rw
+canoe.cmd install --slot a --mode 1
 ```
 
-默认挂载是只读的；安装必须指定 `--rw`。如果压缩包工具无法连接导出的磁盘，
-请运行 `ext4windows.exe --scan`，手动挂载卷，然后重新运行：
-
-```text
-canoe.cmd install --boot-root <drive>:\efisp --slot a --mode 1
-```
+不使用盘符挂载或第三方文件系统驱动。打包时必须提供 `canoe-ext4.exe`；
+如果当前主机无法原生构建，可运行
+`tools/canoe-ext4/build-windows.sh` 后将输出传给打包输入覆盖参数。缺少
+该输入会使构建失败，不会静默删除 Windows 支持。
 
 ## 首次运行与 Super Fastboot
 

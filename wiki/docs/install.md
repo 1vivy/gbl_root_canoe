@@ -34,14 +34,12 @@ fastboot flash efisp BDS.efi
 The `boot.efi`, `.gm2p`, and `.tzmap` files must describe one matching stock
 firmware pair. The vulnerable ABL left in the partition may be older than that
 pair.
-On Linux the exported ext4 filesystem is mounted with `sudo mount -t ext4`, the
-kernel driver, because it honours the ext4 journal. That mount is root-owned,
-so `canoe` must be run as root. `fuse2fs` is used only when `sudo` is
-unavailable: it reports that it "does not support using the journal", so an
-ungraceful unmount can corrupt `persist`, and it writes new files under the
-calling user instead of root. Installing `fuse2fs` is therefore not a way to
-avoid running as root, and a plain `fuse2fs -o rw` mount cannot write a
-root-owned boot root at all.
+The host never mounts the exported ext4 filesystem. `canoe-ext4` (libext2fs)
+opens the exported block device directly, takes its exclusive lock, performs
+journal recovery before mutation, writes bounded transactions, and closes it
+cleanly. This path requires no root privilege beyond the operating system's
+permission to open the USB device. The helper rejects a source that is mounted
+by another writer.
 
 
 ## The five supported scenarios
@@ -69,20 +67,22 @@ then reaches the boot root through:
 fastboot oem mass-storage:persist
 ```
 
-It mounts the exported `persist` filesystem, derives the triplet, commits the
-boot root transaction, and writes the active row in `canoe.cfg`. A mode-1
-installation also asks about recovery grafting and the optional `vendor_boot`
-patch. To script the same work, build the artifacts first and then install:
+The host discovers the resulting Canoe USB disk (`1209:ca0e`; stock
+`05c6:f000` is accepted for older firmware) and passes its raw block-device
+path directly to `canoe-bootmgr`. No mount point or drive letter is created.
+`canoe-bootmgr` routes all boot-root reads and writes through `canoe-ext4`.
+The helper creates `/efisp` when it is missing, and the boot manager commits
+the triplet, configuration, sidecars, and rollback as one transaction. To
+script the same work, build the artifacts first and then install:
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --boot-root <persist-mount>/efisp --slot a --mode 1
+canoe install --slot a --mode 1
 ```
 
-`--boot-root` is optional when the computer should perform the BDS mass-storage
-export itself. The host program is Python and does not invoke a shell.
-
-### Super Fastboot fastboot variables
+Use `--boot-root <persist>/efisp` only for a local directory backend, tests, or
+an operator-managed mount. The default export path is unmounted and direct.
+The host program is Python and does not invoke a shell.
 
 Super Fastboot publishes these fastboot variables:
 
@@ -180,20 +180,19 @@ explicitly supplied `vbmeta` path and otherwise keeps the safe mode selection.
 
 ## Windows host tools
 
-The Windows archive bundles pinned platform-tools `fastboot.exe`, Ext4Windows,
-and the WinFsp installer. Ext4Windows is invoked as:
+The Windows archive bundles `canoe-bootmgr.exe`, `canoe-ext4.exe`, and the
+platform-tools fastboot executable. The helper operates on the raw source
+selected by the export discovery:
 
 ```text
-ext4windows.exe mount \\.\PhysicalDrive<N> Z: --rw
+canoe-ext4.exe inspect \\.\PhysicalDrive<N>
 ```
 
-Its default mount is read-only; `--rw` is required for an installation. If the
-bundle cannot attach the exported disk, run `ext4windows.exe --scan`, mount the
-volume manually, and rerun:
-
-```text
-canoe.cmd install --boot-root <drive>:\efisp --slot a --mode 1
-```
+No WinFsp driver or drive-letter mount is used. If the package cannot provide
+`canoe-ext4.exe`, packaging fails; there is no placeholder or silent fallback.
+The native helper may be built with `tools/canoe-ext4/build-windows.sh` on a
+host with MinGW and an e2fsprogs source tree, then supplied to the package
+build.
 
 ## First run and Super Fastboot
 

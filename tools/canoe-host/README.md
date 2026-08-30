@@ -7,7 +7,7 @@ and Windows toolkit archives.
 | --- | --- |
 | `canoe` | Linux launcher and interactive questionnaire |
 | `canoe.cmd` | Windows launcher using the bundled interpreter |
-| `canoelib/` | Python implementation |
+| `canoelib/` | Python transport and process adapters |
 | `tests/` | Host-only test suite; never packaged |
 
 ## Design
@@ -16,17 +16,16 @@ The host uses Python 3.11 and the standard library only. Child processes receive
 argv lists through `canoe.proc.run`; the host never invokes a shell. Linux and
 Windows therefore use the same argument handling and transaction semantics.
 
-The boot-root transaction is owned by `canoelib.boottree`. It validates the
-staged `boot.efi` triplet, compares the profile signer digest with the live
-generation, snapshots the files it may replace, demotes the live triplet to
-`boot_backup.efi`, commits the new tree, writes `canoe.cfg`, and rolls back the
-snapshot on failure. `canoelib.config` is the canonical configuration model.
+`canoe-bootmgr` is the single boot-root transaction and configuration writer.
+The host adapter only discovers the export and forwards the canonical request.
+For a USB export, `canoe-bootmgr` receives the raw block-device source and its
+`canoe-ext4` backend performs journal recovery, locking, write-back, and close.
+No kernel filesystem mount, FUSE layer, or root-owned directory is involved.
+The local `--boot-root` directory form remains available for tests and for an
+operator who has already mounted persist outside Canoe.
 
-The host reaches an unmounted boot root through the BDS
-`fastboot oem mass-storage:persist` export. It can also install against an
-already mounted `persist/efisp` path with `--boot-root`. The host transaction
-mutates only that directory; the operator separately flashes the vulnerable ABL
-and raw `BDS.efi` with fastboot.
+The operator separately flashes the vulnerable ABL and raw `BDS.efi` with
+fastboot. The host installer never writes either partition.
 
 ## Command surface
 
@@ -35,26 +34,31 @@ canoe
 canoe build [--abl IMG] [--vbmeta IMG]
 canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
               [--vendor-boot IMG] [--allow-new-signer]
+canoe entry set|remove|mode ...
+canoe default get|set ...
+canoe bls list|show|stage ...
+canoe slot status ...
 ```
 
-With no arguments, `canoe` runs the interactive five-scenario questionnaire.
-`build` defaults to `images/abl.img` and `images/vbmeta.img`; explicit image
-arguments are copied into those canonical locations before derivation.
-`install` requires the slot because the BDS does not publish a current-slot
-variable. `--vendor-boot` writes a patched copy in the work area and reports its
-fastboot flash command; it does not alter the source image.
+With no arguments, `canoe` runs the interactive questionnaire. `build` defaults
+to `images/abl.img` and `images/vbmeta.img`; explicit image arguments are
+copied into those canonical locations before derivation. `install` requires the
+slot because an export has no slot metadata; the request is forwarded to the
+boot manager, which applies the slot safety rules. When `--boot-root` is absent,
+`canoe` starts `fastboot oem mass-storage:persist`, discovers the Canoe USB
+identity (`1209:ca0e`, with stock `05c6:f000` retained for compatibility), and
+passes that block device directly to the boot manager.
 
-The Windows archive bundles `fastboot.exe`, Ext4Windows, WinFsp, and an
-embeddable Python interpreter. Ext4Windows is read-only unless invoked with
-`--rw`:
+Entry, default, BLS, and slot commands are thin routes to the bundled
+`canoe-bootmgr` human CLI. They do not implement a second config grammar or
+serializer. Use the boot manager's `--json` mode for bounded machine output.
 
-```text
-ext4windows.exe mount \\.\PhysicalDrive<N> Z: --rw
-```
-
-If automatic mounting fails, run `ext4windows.exe --scan`, mount the volume
-manually, and rerun `canoe.cmd install --boot-root <drive>:\efisp` with the
-required slot and mode.
+The Windows archive bundles `canoe-bootmgr.exe`, `canoe-ext4.exe`,
+`fastboot.exe`, and an embeddable Python interpreter. `canoe-ext4.exe` operates
+on `\\.\PhysicalDrive<N>` directly; it does not mount a drive letter. A Windows
+helper is required at package-build time. If the native helper cannot be built
+on the current host, provide the output of `tools/canoe-ext4/build-windows.sh`
+(or set the package input override); packaging fails loudly when it is absent.
 
 ## Development
 

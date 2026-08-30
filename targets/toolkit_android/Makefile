@@ -2,7 +2,7 @@ include ../../version.mk
 
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
-	submodule_ablfvextractor canoe_boot_entry canoe_device_install build
+	submodule_ablfvextractor build
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -62,14 +62,6 @@ submodule_canoe_bootmgr: copy_resources
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/toolkit/bin/extractfv
-canoe_boot_entry: copy_resources
-	# The temporary-root wrapper invokes both shared writers directly.
-	# Keep the package's canoe.cfg writer alongside the transaction script.
-	cp ../../tools/canoe-device/canoe_boot_entry.sh ./build/toolkit/canoe_boot_entry.sh
-	chmod +x ./build/toolkit/canoe_boot_entry.sh
-canoe_device_install: copy_resources
-	cp ../../tools/canoe-device/canoe_device_install.sh ./build/toolkit/canoe_device_install.sh
-	chmod +x ./build/toolkit/canoe_device_install.sh
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor canoe_boot_entry canoe_device_install
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor
 	# zip
 	cd build/toolkit && zip -r ../toolkit_android.zip ./

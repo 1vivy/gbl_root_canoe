@@ -10,8 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from . import boottree, massstorage, sfb, vendorboot
-from .config import Config, ConfigError, verify_config
+from . import bootmgr, massstorage, sfb, vendorboot
 from .errors import CanoeError
 from .layout import GM2P_BYTES, TZMAP_BYTES, Toolkit, require_exact, require_nonempty
 from .proc import Completed, run
@@ -51,25 +50,24 @@ def _parse_mode(raw: str) -> int:
 
 
 def _parse_slot(raw: str) -> str:
-    """Parse a slot letter into the suffix used by the BDS row writer."""
+    """Parse the slot letter accepted by canoe-bootmgr."""
     if raw not in ("a", "b"):
         raise argparse.ArgumentTypeError("must be a or b")
-    return f"_{raw}"
-
+    return raw
 
 def _options(argv: Sequence[str]) -> Options:
     """Parse install options without consulting a device."""
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="Install a prepared boot root over BDS USB Mass Storage.",
+        description="Install a prepared boot root through BDS USB Mass Storage.",
         epilog=(
-            "Use --boot-root for an already-mounted persist export; otherwise canoe starts "
-            "fastboot oem mass-storage:persist. The BDS session ends only with Volume Down."
+            "Use --boot-root for a local persist/efisp directory in tests; otherwise canoe "
+            "starts fastboot oem mass-storage:persist and passes the exported block device "
+            "to canoe-bootmgr without mounting it. The BDS session ends only with Volume Down."
         ),
-        exit_on_error=False,
     )
-    parser.add_argument("--boot-root", metavar="PATH", help="already-mounted persist/efisp path")
-    parser.add_argument("--slot", type=_parse_slot, required=True, metavar="a|b")
+    parser.add_argument("--boot-root", metavar="PATH", help="local persist/efisp directory")
+    parser.add_argument("--slot", type=_parse_slot, required=True, metavar="A|B")
     parser.add_argument("--mode", type=_parse_mode, default=1, metavar="0|1|2")
     parser.add_argument("--vendor-boot", type=Path, metavar="IMG")
     parser.add_argument("--allow-new-signer", action="store_true")
@@ -143,45 +141,41 @@ def _verify_tzmap(toolkit: Toolkit) -> None:
     )
 
 
-def _verify_installed_config(path: Path) -> Config:
-    """Confirm that the installed config has canonical bytes."""
-    try:
-        config = verify_config(path)
-    except ConfigError as exc:
-        raise CanoeError(f"installed canoe.cfg verification failed: {exc}") from exc
-    note(f"canoe.cfg verified (generation {config.generation})")
-    return config
 
 
-def _install_mounted(
+def _install_export(
     toolkit: Toolkit,
     staging: Path,
     options: Options,
-) -> tuple[Path, boottree.Receipt]:
-    """Install into a mounted root and release the transport afterwards."""
+) -> tuple[str, bootmgr.InstallReceipt]:
+    """Run the canonical transaction against a local directory or raw export."""
     handle = (
         massstorage.export(toolkit.root)
         if options.boot_root is None
         else massstorage.local_boot_root(options.boot_root)
     )
     try:
-        boot_root = Path(handle.boot_root)
         step("Installing the staged boot root")
-        receipt = boottree.install_tree(
-            boot_root,
+        receipt = bootmgr.install(
+            toolkit,
+            handle,
             staging,
-            mode=options.mode,
-            active_slot=options.slot,
-            allow_new_signer=options.allow_new_signer,
+            bootmgr.InstallOptions(
+                slot=options.slot,
+                mode=options.mode,
+                allow_new_signer=options.allow_new_signer,
+            ),
         )
-        _verify_installed_config(boot_root / "canoe.cfg")
-        return boot_root, receipt
+        destination = handle.boot_root if handle.backend == "local" else handle.source
+        if destination is None:
+            raise CanoeError("boot-root export has no destination")
+        return str(destination), receipt
     finally:
         massstorage.release(handle)
 
 
 def _run(argv: Sequence[str]) -> None:
-    """Run one host-side install against a mounted or newly exported boot root."""
+    """Run one host-side install against a local root or raw ext4 source."""
     options = _options(argv)
     toolkit = Toolkit.shipped()
     for path in (toolkit.boot_efi, toolkit.gm2p, toolkit.tzmap):
@@ -209,11 +203,11 @@ def _run(argv: Sequence[str]) -> None:
                         "fastboot oem mass-storage:persist does not exist outside the BDS."
                     )
             step("Exporting persist over USB Mass Storage")
-        boot_root, receipt = _install_mounted(toolkit, staging, options)
+        destination, receipt = _install_export(toolkit, staging, options)
 
     emit(
         stage_report(
-            destination=str(boot_root),
+            destination=destination,
             mode=options.mode,
             first_install=receipt.first_install,
             vendor_boot=patched_vendor,

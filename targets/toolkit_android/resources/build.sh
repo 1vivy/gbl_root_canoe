@@ -90,12 +90,15 @@ ABL_ORIGINAL="$STAGE/ABL_original.efi"
 PATCH_LOG="$STAGE/patch_log.txt"
 LINUX_LOADER="$STAGE/LinuxLoader.efi"
 
-# Keep the packaged EFI tools in the transaction when the archive contains
-# them.  They are copied into the boot root by canoe_device_install.sh.
+# Keep packaged EFI tools in the transaction when the archive contains them.
 if [ -d "$SCRIPTDIR/efisp/tools" ]; then
   mkdir -p "$STAGE/tools"
   cp -r "$SCRIPTDIR/efisp/tools/." "$STAGE/tools/"
 fi
+
+# The canonical boot manager owns config rows, slot semantics, rollback, and
+# boot-root writes.  This package passes only its mounted local boot-root path;
+# raw partition writes remain explicit operator-owned steps below.
 
 if ! "$SCRIPTDIR/bin/extractfv" -o "$STAGE" "$ABL_SOURCE"; then
   die "extractfv failed"
@@ -137,23 +140,18 @@ if grep -q "Warning: Failed to patch ABL GBL" "$PATCH_LOG"; then
   echo "The abl partition must be downgraded to an older vulnerable ABL before booting."
 fi
 
-# The staging directory is inside the boot root, so the shared transaction can
-# atomically rename its files on the same filesystem.  No efisp block device is
-# passed: this is deliberately a tree-only install.
+# The boot manager's local-dir backend is the package format here: Android
+# already mounted persist before invoking this temporary-root builder.
+BOOTMGR="$SCRIPTDIR/bin/canoe-bootmgr"
+[ -x "$BOOTMGR" ] || die "bundled canoe-bootmgr is missing or not executable"
 if [ "$VBMETA_KIND" = supplied ]; then
-  (cd "$SCRIPTDIR" && \
-    CANOE_MODE="$MODE" CANOE_ACTIVE_SLOT="$SLOT" \
-    CANOE_ALLOW_NEW_SIGNER=1 CANOE_SIGNER_SOURCE=supplied \
-    CANOE_BOOT_ENTRY=./canoe_boot_entry.sh \
-    sh ./canoe_device_install.sh "$STAGE" "$BOOT_ROOT") ||
-    die "canoe_device_install.sh failed"
+  "$BOOTMGR" --boot-root "$BOOT_ROOT" install --staged "$STAGE" \
+    --slot "${SLOT#_}" --mode "$MODE" --allow-new-signer ||
+    die "canoe-bootmgr install failed"
 else
-  (cd "$SCRIPTDIR" && \
-    CANOE_MODE="$MODE" CANOE_ACTIVE_SLOT="$SLOT" \
-    CANOE_ALLOW_NEW_SIGNER= CANOE_SIGNER_SOURCE= \
-    CANOE_BOOT_ENTRY=./canoe_boot_entry.sh \
-    sh ./canoe_device_install.sh "$STAGE" "$BOOT_ROOT") ||
-    die "canoe_device_install.sh failed"
+  "$BOOTMGR" --boot-root "$BOOT_ROOT" install --staged "$STAGE" \
+    --slot "${SLOT#_}" --mode "$MODE" ||
+    die "canoe-bootmgr install failed"
 fi
 
 cat <<'EOF'
