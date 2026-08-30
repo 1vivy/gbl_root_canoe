@@ -70,6 +70,20 @@ all boot-root files, sidecars, configuration, and rollback through the same
 backend. The host installer never flashes a partition; the operator separately
 owns the vulnerable ABL and `BDS.efi` commands described in [`install.md`](./install.md).
 
+For an ext4 image or raw block source outside a live export, select the direct
+backend explicitly:
+
+```bash
+canoe-bootmgr --source /path/to/persist.ext4 install \
+  --staged /path/to/staged --slot a --mode 1
+canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
+  --staged /path/to/staged --slot a --mode 1
+```
+
+The bilingual `canoe-gui` exposes the same choices with
+`--source`/`--ext4-image` or `--boot-root`; see [`install.md`](./install.md)
+for the backend comparison.
+
 For tests or an operator-managed local directory, use the explicit local
 backend:
 

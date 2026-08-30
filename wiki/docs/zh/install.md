@@ -1,24 +1,27 @@
 # 安装指南
 
-GBL Root Canoe 将带 GBL 漏洞的原厂 ABL 保留在 `abl`，将原始
-`BDS.efi` 写入 `efisp`，并把当前世代的已修补加载器放在
+GBL Root Canoe 会将带 GBL 漏洞的原厂 ABL 保留在 `abl`，将原始
+`BDS.efi` 写入 `efisp`，并把一个或两个当前已修补加载器三件套放在
 `persist/efisp`。BDS 从启动根目录读取 `canoe.cfg`，再链式启动所选启动项；
 BDS 从不写入存储。
 
-启动根目录包含：
+每个有效的受管理槽位三件套包含：
 
 | 文件 | 用途 |
 | --- | --- |
-| `canoe.cfg` | 启动策略、受管理启动项与世代编号 |
-| `boot.efi` | 当前安装世代的已修补 ABL |
-| `boot.efi.gm2p` | 从匹配的 `vbmeta` 派生的 120 字节 profile |
-| `boot.efi.tzmap` | 从未修补 ABL 派生的 256 字节映射 |
-| `boot_backup.efi` 及其附属文件 | 更新时保留的上一世代 |
+| `boot_a.efi`、`boot_a.efi.gm2p`、`boot_a.efi.tzmap` | 槽位 A 当前已修补加载器与匹配的 120 字节 profile、256 字节映射 |
+| `boot_b.efi`、`boot_b.efi.gm2p`、`boot_b.efi.tzmap` | 槽位 B 当前已修补加载器与匹配的 120 字节 profile、256 字节映射 |
+| `boot_backup.efi` 及其附属文件 | 最近一次被更新槽位的上一代有效三件套 |
 | `tools/` | BDS 菜单提供的 EFI 工具 |
 
-`persist` 文件系统通常在 Android 中挂载为 `/mnt/vendor/persist`，在
-Recovery 中挂载为 `/persist`，其 `efisp/` 目录就是启动根目录。不要刷写
-`persist`：这是保存厂商数据的 live 文件系统。
+受管理行只为完整且有效的三件套生成：加载器必须非空，
+`.gm2p` 必须恰好 120 字节，`.tzmap` 必须恰好 256 字节。新安装不会再写
+已退役的 `boot.efi`；完整的旧式三件套会迁移到明确槽位，不完整的旧式文件
+会被隔离。
+
+`persist` 文件系统通常在 Android 中暴露为 `/mnt/vendor/persist`，在
+Recovery 中暴露为 `/persist`，其 `efisp/` 目录就是启动根目录。不要刷写
+`persist`：这是同时保存厂商数据的 live 文件系统。
 
 ## 前置条件
 
@@ -30,20 +33,19 @@ fastboot flash abl <vulnerable>.img       # 仅当当前 ABL 已修复时执行
 fastboot flash efisp BDS.efi
 ```
 
-`boot.efi`、`.gm2p` 和 `.tzmap` 必须描述同一套匹配的原厂固件。分区中保留
-的漏洞 ABL 可以比这套固件更旧。
+用于派生暂存三件套的 `abl.img` 与 `vbmeta.img` 必须描述同一套匹配的原厂
+固件。分区中保留的漏洞 ABL 可以比这套固件更旧。
 
-主机不会挂载导出的 ext4 文件系统。`canoe-ext4`（libext2fs）直接打开原始块
-设备，取得独占锁，在修改前恢复日志，以有界事务写入并干净关闭。除操作系统
-允许打开 USB 设备所需的权限外，此路径不要求 root；helper 会拒绝另一个写入
-者已经挂载的源。
+对于 USB 导出，`canoe-ext4`（libext2fs）直接打开原始 ext4 源，取得独占锁，
+修改前恢复日志，以有界事务写入并干净关闭。主机不经过文件系统层；helper
+会拒绝另一个写入者已经占用的源。主机只需要有权限打开该源设备。
 
 ## 五种支持的场景
 
 ### 1. 电脑端首次安装
 
-这是从 Linux 或 Windows 电脑执行首次安装的流程。运行交互式 Python 程序前，
-设备必须已经处于 Super Fastboot：
+这是从 Linux 或 Windows 电脑执行首次安装的流程。运行主机界面前，设备
+必须已经处于 Super Fastboot：
 
 ```text
 Linux：   ./canoe
@@ -56,25 +58,51 @@ Windows： canoe.cmd
 
 交互流程等待 `images/abl.img` 与 `images/vbmeta.img`；BDS 发布
 `current-slot` 时，程序从设备读取活动槽位。只有较旧、未发布该变量的 BDS
-才会询问当前活动槽位，然后通过以下通道访问启动根目录：
+才会询问当前活动槽位，然后请求：
 
 ```text
 fastboot oem mass-storage:persist
 ```
 
 主机会识别导出的 Canoe USB 磁盘（`1209:ca0e`；旧固件的
-`05c6:f000` 也会接受），然后把原始块设备路径直接交给 `canoe-bootmgr`。
-不会创建挂载点或盘符。`canoe-bootmgr` 通过 `canoe-ext4` 路由所有启动根目录
-读写；helper 在缺少 `/efisp` 时创建它，boot manager 以同一事务提交三件套、
-配置、附属文件并保留回滚。要脚本化执行同样的工作，先构建产物，再安装：
+`05c6:f000` 也会接受），然后把原始源直接交给 `canoe-bootmgr`。不会创建
+盘符或主机文件系统目录。`canoe-bootmgr` 通过 `canoe-ext4` 路由所有启动
+根目录读写；helper 在缺少 `/efisp` 时创建它，并以同一事务提交选定槽位的
+三件套、配置、附属文件并保留回滚：
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
 canoe install --slot a --mode 1
 ```
 
-`--boot-root <persist>/efisp` 仅用于测试、local 后端或操作员自行管理的目录。
-电脑端程序使用 Python，不会调用 shell。
+只有在测试或操作员明确提供目录时，才使用
+`--boot-root <persist>/efisp` 的本地目录后端。对于镜像或原始块源，直接
+使用 boot manager 后端：
+
+```bash
+canoe-bootmgr --boot-root /path/to/efisp install \
+  --staged /path/to/staged --slot a --mode 1
+canoe-bootmgr --source /path/to/persist.ext4 install \
+  --staged /path/to/staged --slot a --mode 1
+canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
+  --staged /path/to/staged --slot a --mode 1
+```
+
+`--ext4-image` 是 `--source` 的别名；两种直接源形式都接受 ext4 镜像或块
+设备，且不能与 `--boot-root` 合用。直接安装必须指定 `--slot a|b`，除非
+明确使用带有已知活动元数据及 `--i-know-inactive-status` 的 inactive 形式。
+未知槽位会被拒绝。
+
+双语 `canoe-gui` 是使用同一 `canoe-bootmgr` 协议的图形主机界面：
+
+```bash
+canoe-gui --source /path/to/persist.ext4
+canoe-gui --boot-root /path/to/efisp
+canoe-gui --zh --source /path/to/persist.ext4
+```
+
+其 `--source`/`--ext4-image` 与 `--boot-root` 选项互斥。它显示槽位状态、
+配置和 BLS 行，并提供安装与 OTA 后操作；GUI 不实现另一个配置写入器。
 
 ### Super Fastboot fastboot 变量
 
@@ -87,69 +115,69 @@ Super Fastboot 发布以下 fastboot 变量：
 
 ### 2. 电脑端更新
 
-为新的匹配固件世代再次运行相同的电脑端命令：
+为新的匹配固件世代再次运行相同的电脑端命令，并选择要安装加载器的槽位：
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --boot-root <persist-mount>/efisp --slot b --mode 1
+canoe install --slot b --mode 1
 ```
 
-提交新三件套前，当前三件套会连同匹配的附属文件移动为
-`boot_backup.efi`。只要该加载器非空，`canoe.cfg` 就保留
-`android-backup` 行。手动添加的启动项原样保留；活动行始终使用
-`--slot` 指定的槽位。
+提交新三件套前，目标槽位原有三件套会连同附属文件复制为
+`boot_backup.efi`。只要该上一代加载器有效，`android-backup` 行就会保留。
+只有带有效三件套的槽位才会写入 `android-a` 与 `android-b` 行；手动添加的
+启动项原样保留。受管理安装不会自动创建 `default`；需要时使用
+`canoe-bootmgr default set`。
 
 ### 3. KernelSU 模块安装
 
-在已 Root 的设备上安装模块并按首次安装问卷操作，选择 Mode 0、1 或 2。
-Mode 1 还会在以下必要步骤后要求确认：
-
-```text
-vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>
-```
-
-graft 后的输出文件大小不得增加。问卷随后提供原地修补 `vendor_boot` 命令行
-的选项。模块默认从设备分区派生三件套，提交启动根目录，并执行设备端安装
-所需的原始分区写入；完成后会显示格式化数据提示。
-
-每种镜像来源都可以独立切换到非空的提供文件：
-`/data/local/tmp/canoe/abl.img` 和
-`/data/local/tmp/canoe/vbmeta.img`。默认始终读取对应设备分区。提供文件只
-是派生输入，绝不会作为刷写载荷。
+在已 Root 的设备上安装模块，按中英文首次安装问卷操作，选择 Mode 0、1 或 2。
+模块的设备端流程派生所选槽位三件套，通过 `canoe-bootmgr` 提交启动根目录，
+并执行所需的设备分区写入。
 
 ### 4. KernelSU 更新或 OTA 后安装
 
-安装 OTA 后保持在当前系统中，并且**在重启前**打开模块 WebUI，按下
-**Flash To Other Slot**。该操作为即将启动的槽位派生加载器，将其作为新的
-`boot.efi` 安装，刷新 profile 与映射，并在需要时把漏洞 ABL 复制到目标槽位。
-活动行会标记即将启动的槽位。
+系统更新器完成 OTA 后，保持在当前系统中，并且**在重启前**打开模块
+WebUI，按下 **Install to inactive slot**。该操作要求目标槽位元数据，为
+即将启动的槽位派生并只安装对应的加载器三件套，刷新匹配的附属文件，并更新
+该槽位的受管理行。元数据未知时会拒绝；它绝不会重新标记运行中的槽位，也不
+会静默回退到运行中的槽位。
 
 如果忘记执行该操作，新槽位仍带有原厂 ABL。该处没有 GBL 漏洞，因此 BDS
 不会加载，设备会以原厂状态启动且没有挂钩。不会变砖：返回另一个槽位启动，
-或者执行该操作后再次重启即可。
+或者执行 **Install to inactive slot** 后再次重启即可。
 
-受管理的 Mode 2 profile 属于已安装的固件世代。它只会在按下
-**Flash To Other Slot** 时刷新，OTA 本身不会刷新。此版本不包含自动的
-OTA 后修补。
+受管理的 Mode 2 profile 属于已安装的固件世代。它只会在明确执行该操作时
+刷新，系统更新器不会刷新。此版本不包含 OTA watcher。
 
-WebUI 也提供上面所述的两个独立提供镜像开关。只有对应的精确路径存在且
-非空时开关才可用，否则继续使用设备分区。
+如果 WebUI 提供派生镜像选择，文件必须精确、非空并匹配安装的固件世代；
+它们绝不会作为刷写载荷。
 
 ### 5. 锁定 Bootloader 的临时 root
 
-要在锁定设备上获得临时 root，请使用 Android 工具包中的设备端 shell 包装器。
-它从活动槽位运行，并且只改变启动根目录树：
+要在锁定设备上获得临时 root，请使用 Android 工具包中的
+`resources/build.sh`。它从活动槽位派生暂存三件套，然后调用捆绑的
+`canoe-bootmgr` 本地目录后端：
 
 ```sh
 su -c sh ./build.sh --mode 0
-# 或 --mode 1
+su -c sh ./build.sh --mode 1
 su -c sh ./build.sh --mode 1 --abl /path/abl.img --vbmeta /path/vbmeta.img
 ```
 
-包装器只接受 Mode 0 和 Mode 1；Mode 2 属于模块/WebUI 流程。默认从活动槽位
-的分区镜像读取，`--abl` 与 `--vbmeta` 只改变派生输入。所有生成文件都会被
-验证，任何失败都会删除完整暂存集，不会写入分区。易受攻击的 ABL 和
-`BDS.efi` 到 `efisp` 的 `dd` 由操作员自行完成。
+该包装器只接受 Mode 0 和 Mode 1；它只改变启动根目录树，验证所有生成文件，
+失败时删除完整暂存集，并且不写入分区。对于已准备好的暂存目录，等价的
+设备端命令是：
+
+```sh
+canoe-bootmgr --boot-root /mnt/vendor/persist/efisp install \
+  --staged /path/to/staged --slot a --mode 1
+```
+
+`--boot-root` 是本地目录后端；对于 ext4 镜像或块源，改用 `--source` 或
+`--ext4-image`。旧的 `canoe_device_install.sh`、`canoe_boot_entry.sh` 以及
+主机端 `boottree.py` / `bootsnap.py` 写入器均已退役；事务和配置行由
+`canoe-bootmgr` 统一负责。易受攻击的 ABL 和 `BDS.efi` 到 `efisp` 的
+`dd` 由操作员自行完成。
 
 ## 匹配镜像与签名变化
 
@@ -165,30 +193,32 @@ su -c sh ./build.sh --mode 1 --abl /path/abl.img --vbmeta /path/vbmeta.img
 ## Windows 电脑端工具
 
 Windows 压缩包内附带 `canoe-bootmgr.exe`、`canoe-ext4.exe` 和
-`fastboot.exe`。选择新枚举的 USB 物理磁盘后，boot manager 将
-`\\\\.\\PhysicalDrive<N>` 原始路径直接交给 helper：
+`fastboot.exe`。选择导出的 USB 物理磁盘后，boot manager 将
+`\\\\.\\PhysicalDrive<N>` 原始源直接交给 helper：
 
 ```text
-canoe.cmd install --slot a --mode 1
+canoe-ext4.exe inspect \\\\.\\PhysicalDrive<N>
 ```
 
-不使用盘符挂载或第三方文件系统驱动。打包时必须提供 `canoe-ext4.exe`；
-如果当前主机无法原生构建，可运行
-`tools/canoe-ext4/build-windows.sh` 后将输出传给打包输入覆盖参数。缺少
-该输入会使构建失败，不会静默删除 Windows 支持。
+不使用盘符或第三方文件系统驱动。打包时必须提供 `canoe-ext4.exe`；如果当前
+主机无法原生构建，可运行 `tools/canoe-ext4/build-windows.sh` 后将输出传给
+打包输入覆盖参数。缺少该输入会使构建失败，不会静默回退。
 
 ## 首次运行与 Super Fastboot
 
-### 7. 首次运行行为
+### 首次运行行为
 
-启动根目录为空、缺失或无法访问时，都会计为首次运行。BDS 会显示首次运行
-界面并自动进入 Super Fastboot。此时还没有可启动的启动项。早期 BDS 构建将
-无法访问的启动根目录误判为已填充，因此不会自动进入 fastboot；新刷写的设备
-会被困住，直到操作员手动导航菜单。
-BDS 菜单提供 **Reboot to Recovery** 与 **USB Mass Storage**；后者每次只导出
-一个分区，`persist` 是包含 `efisp` 的分区。
+启动根目录为空、缺失、无法访问或不可用时，都会计为首次运行。BDS 会显示
+首次运行界面，其中有 **Enter boot menu (Volume Up)** 与
+**Enter fastboot (default)**。光标默认位于 fastboot，界面等待两秒；超时、
+Volume Down 和 Power 都保持 fastboot 默认值。明确按 Volume Up 才会打开普通
+菜单，随后可在安装前检查槽位及其他发现的启动项。
 
-命令见 [`usage.md`](./usage.md)，完整导出流程见
+BDS 菜单还提供 **USB Mass Storage** 与 **Reboot to Recovery**，以及已发现或
+已配置的启动项。USB Mass Storage 每次只导出一个分区；`persist` 是包含
+`efisp` 的分区。
+
+菜单与 fastboot 控制见 [`usage.md`](./usage.md)，直接源主机流程见
 [`mass-storage.md`](./mass-storage.md)。
 
 首次安装 Mode 1 后，从设备菜单格式化数据：
