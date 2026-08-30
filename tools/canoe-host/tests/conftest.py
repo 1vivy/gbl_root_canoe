@@ -23,6 +23,8 @@ HOST_BINARIES: Final = (
     "vbmetabackup",
     "vbmetaport",
 )
+BOOTMGR_MANIFEST: Final = HOST_ROOT.parent / "canoe-bootmgr" / "Cargo.toml"
+BOOTMGR_BINARY: Final = BOOTMGR_MANIFEST.parent / "target" / "debug" / "canoe-bootmgr"
 GM2P_BYTES: Final = 120
 TZMAP_BYTES: Final = 256
 DEFAULT_EFISP_BYTES: Final = 4 * 1024 * 1024
@@ -110,6 +112,20 @@ def _build_device(root: Path, *, efisp_bytes: int) -> FakeDevice:
     return device
 
 
+def _bootmgr_source() -> Path:
+    """Build the canonical transaction binary once for host integration tests."""
+    if not BOOTMGR_BINARY.is_file():
+        result = subprocess.run(
+            ["cargo", "build", "--manifest-path", str(BOOTMGR_MANIFEST)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"cargo build canoe-bootmgr failed:\n{result.stderr}")
+    return BOOTMGR_BINARY
+
+
 def _build_toolkit(root: Path, device: FakeDevice, trace: Path) -> FakeToolkit:
     root.mkdir(parents=True, exist_ok=True)
     shutil.copytree(HOST_ROOT / "canoelib", root / "canoelib")
@@ -122,6 +138,9 @@ def _build_toolkit(root: Path, device: FakeDevice, trace: Path) -> FakeToolkit:
         target = root / "bin" / binary
         shutil.copyfile(STUB_DIR / binary, target)
         target.chmod(0o755)
+    bootmgr = root / "bin" / "canoe-bootmgr"
+    shutil.copyfile(_bootmgr_source(), bootmgr)
+    bootmgr.chmod(0o755)
     (root / "images").mkdir()
     tools = root / "efisp" / "tools"
     tools.mkdir(parents=True)

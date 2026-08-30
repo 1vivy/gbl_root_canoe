@@ -18,15 +18,7 @@ PLATFORM_TOOLS_SHA256 ?= 4fe305812db074cea32903a489d061eb4454cbc90a49e8fea677f4b
 PLATFORM_TOOLS_CACHE ?= $(ROOT_DIR)/.cache/platform-tools
 PLATFORM_TOOLS_ARCHIVE = $(PLATFORM_TOOLS_CACHE)/platform-tools_r37.0.0-win.zip
 
-EXT4_WINDOWS_URL ?= https://github.com/Mateuscruz19/Ext4Windows/releases/download/v1.2.0/Ext4Windows-v1.2.0-portable.zip
-EXT4_WINDOWS_SHA256 ?= 1dba3d4dcc8a3c7bb3d8837bbe8d91e8984b8d0e98f6c5ecf413fb3bedcc853e
-EXT4_WINDOWS_CACHE ?= $(ROOT_DIR)/.cache/ext4windows
-EXT4_WINDOWS_ARCHIVE = $(EXT4_WINDOWS_CACHE)/Ext4Windows-v1.2.0-portable.zip
-
-WINFSP_URL ?= https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi
-WINFSP_SHA256 ?= 073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a
-WINFSP_CACHE ?= $(ROOT_DIR)/.cache/winfsp
-WINFSP_ARCHIVE = $(WINFSP_CACHE)/winfsp-2.1.25156.msi
+CANOE_EXT4_WINDOWS ?= $(ROOT_DIR)/tools/canoe-ext4/canoe-ext4.exe
 
 clean:
 	rm -rf build || true
@@ -128,44 +120,11 @@ platform_tools: copy_resources
 	trap - EXIT HUP INT TERM; \
 	rm -rf "$$tmp"
 ext4_tools: copy_resources
-	$(MAKE) -C "$(ROOT_DIR)" fetch-verified \
-		FETCH_URL="$(EXT4_WINDOWS_URL)" \
-		FETCH_SHA256="$(EXT4_WINDOWS_SHA256)" \
-		FETCH_DEST="$(EXT4_WINDOWS_ARCHIVE)"
-	$(MAKE) -C "$(ROOT_DIR)" fetch-verified \
-		FETCH_URL="$(WINFSP_URL)" \
-		FETCH_SHA256="$(WINFSP_SHA256)" \
-		FETCH_DEST="$(WINFSP_ARCHIVE)"
-	@set -eu; \
-	tmp="$$(mktemp -d "$(CURDIR)/build/.ext4-tools.XXXXXX")"; \
-	trap 'rm -rf "$$tmp"' EXIT HUP INT TERM; \
-	unzip -q "$(EXT4_WINDOWS_ARCHIVE)" \
-		'ext4windows.exe' 'winfsp-x64.dll' -d "$$tmp"; \
-	test -f "$$tmp/ext4windows.exe"; \
-	test -f "$$tmp/winfsp-x64.dll"; \
-	mkdir -p "$$tmp/out"; \
-	cp "$$tmp/ext4windows.exe" "$$tmp/out/ext4windows.exe"; \
-	cp "$$tmp/winfsp-x64.dll" "$$tmp/out/winfsp-x64.dll"; \
-	cp "$(WINFSP_ARCHIVE)" "$$tmp/out/winfsp-2.1.25156.msi"; \
-	printf '%s\n' \
-		'These binaries are redistributed unmodified. Their upstream sources and' \
-		'licences, so the package can be audited without network access:' \
-		'' \
-		'ext4windows.exe  Ext4Windows v1.2.0, GPL-2.0' \
-		'                 $(EXT4_WINDOWS_URL)' \
-		'                 sha256 $(EXT4_WINDOWS_SHA256)' \
-		'' \
-		'winfsp-x64.dll   shipped inside the Ext4Windows portable archive above;' \
-		'winfsp-*.msi     WinFsp 2.1, under its own licence' \
-		'                 $(WINFSP_URL)' \
-		'                 sha256 $(WINFSP_SHA256)' \
-		'' \
-		'ext4windows.exe mounts read-only unless --rw is passed. canoe install' \
-		'passes --rw; a manual mount must too, or the boot root cannot be written.' \
-		> "$$tmp/out/SOURCES.txt"; \
-	rm -rf build/toolkit/ext4; \
-	mv "$$tmp/out" build/toolkit/ext4; \
-	trap - EXIT HUP INT TERM; \
-	rm -rf "$$tmp"
+	@test -f "$(CANOE_EXT4_WINDOWS)" || { \
+		echo "canoe-ext4 Windows binary is required; run tools/canoe-ext4/build-windows.sh or set CANOE_EXT4_WINDOWS" >&2; \
+		exit 1; \
+	}
+	mkdir -p build/toolkit/bin
+	cp "$(CANOE_EXT4_WINDOWS)" ./build/toolkit/bin/canoe-ext4.exe
 build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor submodule_vbmetafixer canoe_host python_embed platform_tools ext4_tools
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./

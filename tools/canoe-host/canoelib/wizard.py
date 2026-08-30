@@ -6,12 +6,12 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
-from . import build, sfb, stage
+from . import bootmgr, build, sfb, stage
 from .errors import CanoeError
 from .layout import Toolkit
 from .ui import ask_choice, ask_yes_no, emit, note, run_entry, step, warn
 
-_COMMANDS = ("build", "install")
+_COMMANDS = ("build", "install", "entry", "default", "bls", "slot")
 
 _USAGE = """canoe - the Canoe host tool.
 
@@ -23,6 +23,10 @@ for scripts and CI; each takes the flags its own --help lists.
   canoe build [--abl IMG] [--vbmeta IMG]
                                      patch the ABL and derive both sidecars
   canoe install [flags]              install the boot root over USB Mass Storage
+  canoe entry set|remove|mode ...    edit persisted canoe.cfg rows
+  canoe default get|set ...         inspect or change the default row
+  canoe bls list|show|stage ...     inspect or stage BLS Type #1 entries
+  canoe slot status ...              report active/inactive slot metadata
 
   canoe <command> --help             flags for one command
 """
@@ -40,6 +44,9 @@ def _dispatch(command: str, argv: Sequence[str]) -> None:
             result = build.entry(argv)
         case "install":
             result = stage.entry(argv)
+        case "entry" | "default" | "bls" | "slot":
+            bootmgr.route(Toolkit.shipped(), None, (command, *argv))
+            result = 0
         case _:
             raise CanoeError(f"unknown canoe command: {command}")
     if result != 0:
