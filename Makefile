@@ -164,6 +164,7 @@ test:
 	cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
+	$(MAKE) -C tools/canoe-ext4 test
 	sh targets/magisk_module/tests/test_flows.sh
 	sh targets/magisk_module/tests/test_webui.sh
 	sh tools/canoe-device/tests/test_canoe_boot_entry.sh
