@@ -118,19 +118,16 @@ EOF
   chmod +x "$work/bin/id" "$work/bin/getprop" "$work/bin/extractfv" \
     "$work/bin/patch_abl" "$work/bin/mode2_profile" "$work/bin/abl_tzmap"
 
-  # This fixture stands in for the shared transaction and records every
-  # positional argument.  Exactly two arguments proves no efisp block device
-  # or backup path can be written by the temporary-root package.
-  cat > "$work/canoe_device_install.sh" <<'EOF'
+  # This fixture stands in for the boot-manager binary.  It records the
+  # invocation and proves the temporary-root package commits tree-only:
+  # --boot-root names a directory, never an efisp block device.
+  cat > "$work/bin/canoe-bootmgr" <<'EOF'
 #!/bin/sh
-printf 'install argc=%s mode=%s slot=%s allow=%s\n' "$#" "${CANOE_MODE-}" \
-  "${CANOE_ACTIVE_SLOT-}" "${CANOE_ALLOW_NEW_SIGNER-}" >> "$TRACE"
-printf 'install arg1=%s\ninstall arg2=%s\n' "${1-}" "${2-}" >> "$TRACE"
-[ "$#" -eq 2 ] || exit 61
-[ -d "$1" ] || exit 62
-[ "$2" = "$CANOE_BOOT_ROOT" ] || exit 63
+printf 'bootmgr args=%s\n' "$*" >> "$TRACE"
+case " $* " in *" --boot-root "*) ;; *) exit 61 ;; esac
+case " $* " in *" install "*) ;; *) exit 62 ;; esac
 EOF
-  : > "$work/canoe_boot_entry.sh"
+  chmod +x "$work/bin/canoe-bootmgr"
 }
 
 run_build() {
@@ -168,8 +165,10 @@ grep -F "extractfv $work/dev/by-name/abl_b" "$work/trace.log" >/dev/null || \
   fail 'default ABL did not use the active slot partition'
 grep -F "profile-derive $work/dev/by-name/vbmeta_b" "$work/trace.log" >/dev/null || \
   fail 'default vbmeta did not use the active slot partition'
-grep -F 'install argc=2 mode=1 slot=_b allow=' "$work/trace.log" >/dev/null || \
-  fail 'default transaction was not mode 1 and tree-only'
+grep -F "bootmgr args=--boot-root $work/bootroot install --staged " "$work/trace.log" >/dev/null || \
+  fail 'default transaction was not tree-only'
+grep -F -- '--slot b --mode 1' "$work/trace.log" >/dev/null || \
+  fail 'default transaction was not mode 1 on slot b'
 pass 'defaults derive from active-slot partitions and invoke the transaction tree-only'
 
 make_fixture supplied
@@ -180,8 +179,10 @@ grep -F "extractfv $work/supplied-abl.img" "$work/trace.log" >/dev/null || \
   fail 'supplied ABL was not fed to extractfv'
 grep -F "profile-derive $work/supplied-vbmeta.img" "$work/trace.log" >/dev/null || \
   fail 'supplied vbmeta was not fed to mode2_profile'
-grep -F 'install argc=2 mode=0 slot=_a allow=1' "$work/trace.log" >/dev/null || \
-  fail 'supplied vbmeta did not allow the signer gate transaction'
+grep -F "bootmgr args=--boot-root $work/bootroot install --staged " "$work/trace.log" >/dev/null || \
+  fail 'supplied transaction was not tree-only'
+grep -F -- '--slot a --mode 0 --allow-new-signer' "$work/trace.log" >/dev/null || \
+  fail 'supplied vbmeta did not enable the signer allowance'
 pass 'supplied ABL and vbmeta feed derivation and enable only the signer allowance'
 
 make_fixture mode2
