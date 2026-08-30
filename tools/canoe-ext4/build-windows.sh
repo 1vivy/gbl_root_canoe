@@ -37,8 +37,9 @@ mkdir -p "$BUILD"
 if [ ! -f "$BUILD/Makefile" ]; then
     (
         cd "$BUILD"
-        "$SOURCE/configure" \
+        BUILD_CC="${BUILD_CC:-cc}" "$SOURCE/configure" \
             --cache-file="$BUILD/config.cache" \
+            --build="$(cc -dumpmachine)" \
             --host=x86_64-w64-mingw32 \
             --prefix="$PREFIX" \
             --disable-nls \
@@ -51,11 +52,12 @@ if [ ! -f "$BUILD/Makefile" ]; then
 fi
 # The helper only consumes libext2fs and libcom_err. Their dependencies are
 # built by the e2fsprogs makefiles before the two requested archive targets.
-make -C "$BUILD" lib/et/libcom_err.la lib/ext2fs/libext2fs.la
-make -C "$BUILD" install-libLTLIBRARIES install-data-local >/dev/null 2>&1 || true
+# e2fsprogs builds plain static archives, not libtool artifacts.
+make -C "$BUILD/lib/et"
+make -C "$BUILD/lib/ext2fs"
 
 INCLUDE_FLAGS="-I$BUILD/lib -I$SOURCE/lib -I$BUILD/lib/ext2fs -I$SOURCE/lib/ext2fs"
-LIB_FLAGS="$BUILD/lib/ext2fs/.libs/libext2fs.a $BUILD/lib/et/.libs/libcom_err.a"
+LIB_FLAGS="$BUILD/lib/ext2fs/libext2fs.a $BUILD/lib/et/libcom_err.a"
 # Windows uses libext2fs' windows_io_manager (selected by default_io_manager);
 # recovery of a dirty image remains unavailable unless a Windows e2fsck port is
 # supplied, while clean read/write operations use the same helper contract.
