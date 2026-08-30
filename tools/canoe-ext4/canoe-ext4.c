@@ -750,6 +750,14 @@ static void remove_path(const char *path) {
     rc = ext2fs_unlink(fs, parent, name, inode, 0);
     if (rc != 0)
         fail_rc(EXIT_IO, "unlink", rc);
+    if (!is_directory) {
+        struct ext2_inode remaining;
+        rc = ext2fs_read_inode(fs, inode, &remaining);
+        if (rc != 0)
+            fail_rc(EXIT_IO, "read-unlinked-inode", rc);
+        if (remaining.i_links_count != 0)
+            return;
+    }
     if (is_directory) {
         struct ext2_inode parent_metadata;
         rc = ext2fs_read_inode(fs, parent, &parent_metadata);
