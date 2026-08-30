@@ -1,9 +1,12 @@
 use serde::Deserialize;
+use std::path::PathBuf;
 use thiserror::Error;
 
+use crate::artifact::ArtifactSpec;
 use crate::cli::{
-    BlsCommand, CliDeviceInfoRepair, CliRole, Command, DefaultCommand, EntryCommand, EntryIdArgs,
-    EntryModeArgs, EntrySetArgs,
+    BlsCommand, BlsStageArgs, CliDeviceInfoRepair, CliRole, Command, DefaultCommand, EntryCommand,
+    EntryIdArgs, EntryModeArgs, EntrySetArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand,
+    SlotStatusArgs, VendorBootCommand, VendorBootPatchArgs,
 };
 
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -46,6 +49,62 @@ pub enum JsonRequest {
     BlsList,
     #[serde(rename = "bls.show")]
     BlsShow { name: String },
+    #[serde(rename = "bls.stage")]
+    BlsStage {
+        name: String,
+        entry: PathBuf,
+        artifacts: Vec<ArtifactSpec>,
+    },
+    #[serde(rename = "slot.status")]
+    SlotStatus {
+        #[serde(default)]
+        slot: Option<String>,
+        #[serde(default)]
+        bootctl_output: Option<String>,
+        #[serde(default)]
+        gpt_active_slot: Option<String>,
+    },
+    #[serde(rename = "install")]
+    Install {
+        staged: PathBuf,
+        #[serde(default)]
+        slot: Option<String>,
+        #[serde(default)]
+        both: bool,
+        #[serde(default)]
+        inactive: bool,
+        #[serde(default)]
+        i_know_inactive_status: bool,
+        #[serde(default)]
+        active_slot: Option<String>,
+        #[serde(default)]
+        bootctl_output: Option<String>,
+        #[serde(default)]
+        gpt_active_slot: Option<String>,
+        #[serde(default)]
+        mode: Option<u8>,
+        #[serde(default)]
+        allow_new_signer: bool,
+    },
+    #[serde(rename = "ota-apply")]
+    OtaApply {
+        target_slot: Option<String>,
+        bootctl_output: Option<String>,
+        gpt_active_slot: Option<String>,
+        staged: PathBuf,
+        #[serde(default)]
+        mode: Option<u8>,
+        #[serde(default)]
+        allow_new_signer: bool,
+    },
+    #[serde(rename = "vbmeta.graft", alias = "graft", alias = "vbmetaport")]
+    VbmetaGraft {
+        vbmeta: PathBuf,
+        recovery: PathBuf,
+        output: PathBuf,
+    },
+    #[serde(rename = "vendorboot.patch", alias = "vendor_boot.patch")]
+    VendorBootPatch { input: PathBuf, output: PathBuf },
 }
 
 #[derive(Debug, Error)]
@@ -109,6 +168,88 @@ impl JsonRequest {
             },
             Self::BlsShow { name } => Command::Bls {
                 command: BlsCommand::Show { name },
+            },
+            Self::BlsStage {
+                name,
+                entry,
+                artifacts,
+            } => Command::Bls {
+                command: BlsCommand::Stage(BlsStageArgs {
+                    name,
+                    entry,
+                    artifacts: artifacts
+                        .into_iter()
+                        .map(|artifact| {
+                            format!(
+                                "{},{},{}",
+                                artifact.source.display(),
+                                artifact.destination,
+                                artifact.sha256
+                            )
+                        })
+                        .collect(),
+                }),
+            },
+            Self::SlotStatus {
+                slot,
+                bootctl_output,
+                gpt_active_slot,
+            } => Command::Slot {
+                command: SlotCommand::Status(SlotStatusArgs {
+                    slot,
+                    bootctl_output,
+                    gpt_active_slot,
+                }),
+            },
+            Self::Install {
+                staged,
+                slot,
+                both,
+                inactive,
+                i_know_inactive_status,
+                active_slot,
+                bootctl_output,
+                gpt_active_slot,
+                mode,
+                allow_new_signer,
+            } => Command::Install(InstallArgs {
+                staged,
+                slot,
+                both,
+                inactive,
+                i_know_inactive_status,
+                active_slot,
+                bootctl_output,
+                gpt_active_slot,
+                mode,
+                allow_new_signer,
+            }),
+            Self::OtaApply {
+                target_slot,
+                bootctl_output,
+                gpt_active_slot,
+                staged,
+                mode,
+                allow_new_signer,
+            } => Command::OtaApply(OtaApplyArgs {
+                target_slot,
+                bootctl_output,
+                gpt_active_slot,
+                staged,
+                mode,
+                allow_new_signer,
+            }),
+            Self::VbmetaGraft {
+                vbmeta,
+                recovery,
+                output,
+            } => Command::Graft(GraftArgs {
+                vbmeta,
+                recovery,
+                output,
+            }),
+            Self::VendorBootPatch { input, output } => Command::VendorBoot {
+                command: VendorBootCommand::Patch(VendorBootPatchArgs { input, output }),
             },
         }
     }

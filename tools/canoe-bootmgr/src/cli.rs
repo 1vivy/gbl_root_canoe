@@ -3,8 +3,17 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
 
+use crate::artifact::BlsStageReceipt;
 use crate::backend::BlsFile;
+pub use crate::cli_extra::{
+    BlsStageArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs,
+    VendorBootCommand, VendorBootPatchArgs,
+};
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, Role};
+use crate::graft::GraftReceipt;
+use crate::slot_transaction::InstallReceipt;
+use crate::slots::Slot;
+use crate::vendorboot::PatchReceipt;
 #[derive(Debug, Parser)]
 #[command(
     name = "canoe-bootmgr",
@@ -59,6 +68,22 @@ pub enum Command {
     Bls {
         #[command(subcommand)]
         command: BlsCommand,
+    },
+    Slot {
+        #[command(subcommand)]
+        command: SlotCommand,
+    },
+    /// Install one or both per-slot managed loader triplets.
+    Install(InstallArgs),
+    /// Apply a post-OTA loader to the explicitly confirmed target slot.
+    #[command(name = "ota-apply")]
+    OtaApply(OtaApplyArgs),
+    /// Graft official recovery vbmeta onto a custom recovery image.
+    #[command(name = "vbmeta-graft", visible_alias = "graft")]
+    Graft(GraftArgs),
+    VendorBoot {
+        #[command(subcommand)]
+        command: VendorBootCommand,
     },
 }
 
@@ -135,6 +160,8 @@ pub enum BlsCommand {
         #[arg(long)]
         name: String,
     },
+    /// Stage a BLS row and every referenced artifact atomically.
+    Stage(BlsStageArgs),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, Deserialize)]
@@ -215,6 +242,24 @@ pub enum Success {
     BlsList { ok: bool, entries: Vec<BlsFile> },
     #[serde(rename = "bls.show")]
     BlsShow { ok: bool, entry: BlsFile },
+    #[serde(rename = "bls.stage")]
+    BlsStage { ok: bool, receipt: BlsStageReceipt },
+    #[serde(rename = "slot.status")]
+    SlotStatus {
+        ok: bool,
+        active_slot: Option<Slot>,
+        inactive_slot: Option<Slot>,
+        source: String,
+        installed: Vec<Slot>,
+    },
+    #[serde(rename = "install")]
+    Install { ok: bool, receipt: InstallReceipt },
+    #[serde(rename = "ota-apply")]
+    OtaApply { ok: bool, receipt: InstallReceipt },
+    #[serde(rename = "vbmeta.graft")]
+    VbmetaGraft { ok: bool, receipt: GraftReceipt },
+    #[serde(rename = "vendorboot.patch")]
+    VendorBootPatch { ok: bool, receipt: PatchReceipt },
 }
 impl CliRole {
     pub(crate) const fn as_str(self) -> &'static str {

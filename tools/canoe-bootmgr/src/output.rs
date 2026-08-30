@@ -64,6 +64,44 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
                 .map_err(|error| ConfigError::Invalid(error.to_string()))?,
         )
         .map_err(|_| ConfigError::Invalid("serialized BLS is not UTF-8".to_owned()))?,
+        Success::BlsStage { receipt, .. } => {
+            format!("staged {} ({})\n", receipt.name, receipt.artifacts.len())
+        }
+        Success::SlotStatus {
+            active_slot,
+            inactive_slot,
+            source,
+            installed,
+            ..
+        } => format!(
+            "active={} inactive={} source={} installed={}\n",
+            active_slot.map_or_else(|| "unknown".to_owned(), |slot| slot.to_string()),
+            inactive_slot.map_or_else(|| "unknown".to_owned(), |slot| slot.to_string()),
+            source,
+            installed
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Success::Install { receipt, .. } | Success::OtaApply { receipt, .. } => format!(
+            "installed={} generation={} backup={}\n",
+            receipt
+                .installed
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            receipt.generation,
+            receipt.backup_present
+        ),
+        Success::VbmetaGraft { receipt, .. } => {
+            format!("grafted {} ({} bytes)\n", receipt.output, receipt.bytes)
+        }
+        Success::VendorBootPatch { receipt, .. } => format!(
+            "patched {} ({} bytes, changed={})\n",
+            receipt.output, receipt.bytes, receipt.changed
+        ),
     };
     let mut bytes = text.into_bytes();
     if !bytes.ends_with(b"\n") {

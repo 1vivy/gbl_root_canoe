@@ -1,13 +1,20 @@
 mod bls_parse;
 mod bls_render;
+mod cli_extra;
 mod config_ops;
 mod config_parse;
 mod config_render;
+mod extra_ops;
 
+pub mod artifact;
 pub mod backend;
 pub mod bls;
 pub mod cli;
 pub mod config;
+pub mod graft;
 pub mod operations;
 pub mod output;
+pub mod slot_transaction;
+pub mod slots;
+pub mod vendorboot;
 pub mod wire;
