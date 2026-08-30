@@ -296,6 +296,125 @@ SfbMoveCursor (IN OUT UINTN *Cursor, IN UINTN Count, IN SFB_KEY Key)
   }
 }
 
+STATIC
+VOID
+SfbDefaultMenuDrawRow (IN VOID    *Context,
+                       IN UINTN    Row,
+                       IN BOOLEAN  Selected)
+{
+  SFB_MENU_TEMPLATE *Template = (SFB_MENU_TEMPLATE *)Context;
+  CONST CHAR16      *Marker;
+
+  Marker = (Template->Rows[Row].Marker != NULL)
+           ? Template->Rows[Row].Marker : L" ";
+  SfbDrawRow (Selected, Marker, Template->Rows[Row].Text);
+}
+
+EFI_STATUS
+SfbMenuNoopEnter (IN VOID *Context)
+{
+  (VOID)Context;
+  return EFI_SUCCESS;
+}
+
+VOID
+SfbMenuNoopExit (IN VOID *Context)
+{
+  (VOID)Context;
+}
+
+EFI_STATUS
+SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template)
+{
+  EFI_STATUS Status = EFI_SUCCESS;
+  BOOLEAN    FirstWait = TRUE;
+  BOOLEAN    NeedRefresh = TRUE;
+
+  if (Template == NULL || Template->Handler == NULL ||
+      (Template->Rows == NULL && Template->DrawRow == NULL)) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  if (Template->Enter != NULL) {
+    Status = Template->Enter (Template->Context);
+  }
+  if (EFI_ERROR (Status)) {
+    goto Exit;
+  }
+
+  while (TRUE) {
+    SFB_KEY         Key;
+    SFB_MENU_ACTION Action;
+
+    if (NeedRefresh && Template->Refresh != NULL) {
+      Status = Template->Refresh (Template->Context);
+      if (EFI_ERROR (Status)) {
+        break;
+      }
+      NeedRefresh = FALSE;
+      if (Template->RowCount == 0) {
+        Template->Cursor = 0;
+      } else if (Template->Cursor >= Template->RowCount) {
+        Template->Cursor = Template->RowCount - 1;
+      }
+    }
+
+    SfbBeginScreen (Template->Title, Template->Subtitle);
+    if (Template->DrawHeader != NULL) {
+      Template->DrawHeader (Template->Context);
+    }
+    if (Template->RowCount == 0) {
+      Print (L"  No entries found.\r\n");
+    } else {
+      UINTN Start = SfbWindowStart (Template->Cursor, Template->RowCount,
+                                    SFB_VISIBLE_ROWS);
+      UINTN Last = Start + SFB_VISIBLE_ROWS;
+      UINTN Row;
+
+      if (Last > Template->RowCount) {
+        Last = Template->RowCount;
+      }
+      for (Row = Start; Row < Last; Row++) {
+        if (Template->DrawRow != NULL) {
+          Template->DrawRow (Template->Context, Row,
+                             (BOOLEAN)(Row == Template->Cursor));
+        } else {
+          SfbDefaultMenuDrawRow (Template, Row,
+                                 (BOOLEAN)(Row == Template->Cursor));
+        }
+      }
+      if (Last < Template->RowCount) {
+        Print (L"    ... %u more\r\n",
+               (UINT32)(Template->RowCount - Last));
+      }
+    }
+    SfbEndScreen (Template->Footer);
+
+    Key = (FirstWait && Template->TimeoutMs != 0)
+          ? SfbWaitForKey (Template->TimeoutMs) : SfbWaitForKey (0);
+    FirstWait = FALSE;
+
+    if (Template->Navigate && (Key == SfbKeyUp || Key == SfbKeyDown)) {
+      SfbMoveCursor (&Template->Cursor, Template->RowCount, Key);
+      continue;
+    }
+
+    Action = Template->Handler (Template->Context, Template->Cursor, Key);
+    if (Action == SfbMenuActionExit) {
+      break;
+    }
+    if (Action == SfbMenuActionRebuild) {
+      NeedRefresh = TRUE;
+    }
+  }
+
+Exit:
+  if (Template->Exit != NULL) {
+    Template->Exit (Template->Context);
+  }
+  return Status;
+}
+
 /*
  * Print a boot-progress stage to the console, then dwell.
  *
@@ -345,6 +464,19 @@ SfbShowFastbootMode (VOID)
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
 }
 
+STATIC
+SFB_MENU_ACTION
+SfbFirstRunMenuHandler (IN VOID *Context,
+                        IN UINTN Row,
+                        IN SFB_KEY Key)
+{
+  BOOLEAN *EnterMenu = (BOOLEAN *)Context;
+
+  (VOID)Row;
+  *EnterMenu = SfbFirstRunEntersMenu (Key);
+  return SfbMenuActionExit;
+}
+
 /*
  * An empty boot root is normally an installation state. Keep fastboot as the
  * default, but give a first-time operator one explicit way to inspect the
@@ -353,19 +485,28 @@ SfbShowFastbootMode (VOID)
 BOOLEAN
 SfbShowFirstRunScreen (VOID)
 {
-  STATIC CONST CHAR16 *Rows[] = {
-    L"Enter boot menu (Volume Up)",
-    L"Enter fastboot (default)"
+  STATIC SFB_MENU_ROW Rows[] = {
+    { L"Enter boot menu (Volume Up)", L" " },
+    { L"Enter fastboot (default)", L" " }
   };
-  SFB_KEY Key;
+  SFB_MENU_TEMPLATE Template;
+  BOOLEAN EnterMenu = FALSE;
 
-  SfbBeginScreen (L"First run", L"No boot image installed.");
-  SfbDrawRow (FALSE, L" ", Rows[0]);
-  SfbDrawRow (TRUE, L" ", Rows[1]);
-  SfbEndScreen (L"Volume Up: menu   Power/timeout: fastboot");
-
-  Key = SfbWaitForKey (2 * 1000);
-  return SfbFirstRunEntersMenu (Key);
+  ZeroMem (&Template, sizeof (Template));
+  Template.Title = L"First run";
+  Template.Subtitle = L"No boot image installed.";
+  Template.Footer = L"Volume Up: menu   Power/timeout: fastboot";
+  Template.Rows = Rows;
+  Template.RowCount = ARRAY_SIZE (Rows);
+  Template.Cursor = 1;
+  Template.TimeoutMs = 2 * 1000;
+  Template.Navigate = FALSE;
+  Template.Context = &EnterMenu;
+  Template.Enter = SfbMenuNoopEnter;
+  Template.Exit = SfbMenuNoopExit;
+  Template.Handler = SfbFirstRunMenuHandler;
+  (VOID)SfbRunMenu (&Template);
+  return EnterMenu;
 }
 
 /*
@@ -446,85 +587,176 @@ SfbShowEnteringMenu (VOID)
 
 /* ---- boot menu ---------------------------------------------------------- */
 
+typedef struct {
+  SFB_MENU_TEMPLATE *Template;
+  SFB_MENU_STATE     Menu;
+  SFB_BOOT_MODE      CurrentMode;
+  BOOLEAN            EnterFastboot;
+} SFB_MAIN_MENU_CONTEXT;
+
 STATIC
 VOID
-SfbDrawMenu (IN CONST SFB_MENU_STATE *Menu,
-             IN UINTN                Cursor,
-             IN CONST CHAR16         *Title)
+SfbDrawMainMenuRow (IN VOID    *Context,
+                    IN UINTN    Row,
+                    IN BOOLEAN  Selected)
 {
-  UINTN  Start;
-  UINTN  Index;
-  UINTN  Last;
+  SFB_MAIN_MENU_CONTEXT *State = (SFB_MAIN_MENU_CONTEXT *)Context;
+  CONST SFB_BOOT_ENTRY  *Entry = &State->Menu.Entry[Row];
+  CONST CHAR16          *Marker = (Row == State->Menu.DefaultIndex)
+                                  ? L"*" : L" ";
+  CONST CHAR16          *Prefix = Entry->IsUsb ? L"[E] " : L"";
 
-  SfbBeginScreen (Title, SFB_MENU_CREDIT);
+  if (Entry->Kind == SfbEntryMode) {
+    CHAR16 Text[SFB_DESC_CHARS + 90];
 
-  if (Menu->Count == 0) {
-    Print (L"  No boot entries found.\r\n");
-  }
+    UnicodeSPrint (Text, sizeof (Text),
+                   L"Session mode: %s (configured entry modes unaffected)",
+                   SfbBootModeLabel (State->Menu.Mode));
+    SfbDrawRow (Selected, Marker, Text);
+  } else if (Entry->Role != SfbConfigRoleOther || Entry->Passthrough) {
+    CONST CHAR8 *AsciiSuffix = SfbConfigRoleSuffix (Entry->Role);
+    CHAR16 Suffix[16];
+    CHAR16 Passthrough[16];
+    CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS +
+                ARRAY_SIZE (Suffix) + ARRAY_SIZE (Passthrough)];
+    UINTN SuffixIndex;
 
-  Start = SfbWindowStart (Cursor, Menu->Count, SFB_VISIBLE_ROWS);
-  Last = Start + SFB_VISIBLE_ROWS;
-  if (Last > Menu->Count) {
-    Last = Menu->Count;
-  }
-
-  for (Index = Start; Index < Last; Index++) {
-    CONST SFB_BOOT_ENTRY  *Entry = &Menu->Entry[Index];
-    CONST CHAR16          *Marker = (Index == Menu->DefaultIndex) ? L"*" : L" ";
-    /* Removable boot media is obvious at a glance, because a row read off a
-     * stick means something very different from a row on the boot root. */
-    CONST CHAR16          *Prefix = Entry->IsUsb ? L"[E] " : L"";
-
-    /* Mode is the session fallback; an entry carrying its own configured mode
-     * is deliberately unaffected by this selector. */
-    if (Entry->Kind == SfbEntryMode) {
-      CHAR16 Text[SFB_DESC_CHARS + 90];
-
-      UnicodeSPrint (Text, sizeof (Text),
-                     L"Session mode: %s (configured entry modes unaffected)",
-                     SfbBootModeLabel (Menu->Mode));
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
-    } else if (Entry->Role != SfbConfigRoleOther || Entry->Passthrough) {
-      CONST CHAR8 *AsciiSuffix = SfbConfigRoleSuffix (Entry->Role);
-      CHAR16 Suffix[16];
-      CHAR16 Passthrough[16];
-      CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS +
-                  ARRAY_SIZE (Suffix) + ARRAY_SIZE (Passthrough)];
-      UINTN SuffixIndex;
-
-      for (SuffixIndex = 0;
-           SuffixIndex + 1 < ARRAY_SIZE (Suffix) &&
-           AsciiSuffix[SuffixIndex] != '\0'; SuffixIndex++) {
-        Suffix[SuffixIndex] = (CHAR16)(UINT8)AsciiSuffix[SuffixIndex];
-      }
-      Suffix[SuffixIndex] = L'\0';
-      /* An unmanaged image is launched with nothing wrapped around it, so a
-       * `mode` written against it changes nothing. Say that on the row rather
-       * than letting the user infer a policy that was never applied. */
-      StrCpyS (Passthrough, ARRAY_SIZE (Passthrough),
-               Entry->Passthrough ? L" (passthrough)" : L"");
-      UnicodeSPrint (Text, sizeof (Text), L"%s%s%s%s", Prefix, Entry->Desc,
-                     Suffix, Passthrough);
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
-    } else if (Entry->IsUsb) {
-      CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS];
-
-      UnicodeSPrint (Text, sizeof (Text), L"%s%s", Prefix, Entry->Desc);
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Text);
-    } else {
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, Entry->Desc);
+    for (SuffixIndex = 0;
+         SuffixIndex + 1 < ARRAY_SIZE (Suffix) &&
+         AsciiSuffix[SuffixIndex] != '\0'; SuffixIndex++) {
+      Suffix[SuffixIndex] = (CHAR16)(UINT8)AsciiSuffix[SuffixIndex];
     }
+    Suffix[SuffixIndex] = L'\0';
+    StrCpyS (Passthrough, ARRAY_SIZE (Passthrough),
+             Entry->Passthrough ? L" (passthrough)" : L"");
+    UnicodeSPrint (Text, sizeof (Text), L"%s%s%s%s", Prefix, Entry->Desc,
+                   Suffix, Passthrough);
+    SfbDrawRow (Selected, Marker, Text);
+  } else if (Entry->IsUsb) {
+    CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS];
+
+    UnicodeSPrint (Text, sizeof (Text), L"%s%s", Prefix, Entry->Desc);
+    SfbDrawRow (Selected, Marker, Text);
+  } else {
+    SfbDrawRow (Selected, Marker, Entry->Desc);
+  }
+}
+STATIC
+VOID
+SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode);
+
+STATIC
+EFI_STATUS
+SfbRefreshMainMenu (IN VOID *Context)
+{
+  SFB_MAIN_MENU_CONTEXT *State = (SFB_MAIN_MENU_CONTEXT *)Context;
+
+  SfbFreeMenu (&State->Menu);
+  SfbBuildMenu (&State->Menu, State->CurrentMode);
+  SfbSetLaunchLockPolicy (State->Menu.ConfigValid
+                          ? State->Menu.LockPolicy
+                          : SfbConfigLockAsNeeded);
+  State->Template->RowCount = State->Menu.Count;
+  State->Template->Cursor = (State->Menu.DefaultIndex != SFB_NO_INDEX &&
+                             State->Menu.DefaultIndex < State->Menu.Count)
+                            ? State->Menu.DefaultIndex : 0;
+  State->Template->TimeoutMs =
+    (State->Menu.DefaultFromConfig && State->Menu.TimeoutSeconds != 0)
+    ? State->Menu.TimeoutSeconds * 1000 : 0;
+  return EFI_SUCCESS;
+}
+
+STATIC
+VOID
+SfbExitMainMenu (IN VOID *Context)
+{
+  SFB_MAIN_MENU_CONTEXT *State = (SFB_MAIN_MENU_CONTEXT *)Context;
+
+  SfbFreeMenu (&State->Menu);
+}
+
+STATIC
+SFB_MENU_ACTION
+SfbHandleMainMenuRow (IN VOID *Context,
+                      IN UINTN Row,
+                      IN SFB_KEY Key)
+{
+  SFB_MAIN_MENU_CONTEXT *State = (SFB_MAIN_MENU_CONTEXT *)Context;
+  SFB_BOOT_ENTRY        *Entry;
+  EFI_STATUS             Status;
+
+  if (State->Menu.Count == 0 || Row >= State->Menu.Count) {
+    return SfbMenuActionContinue;
+  }
+  Entry = &State->Menu.Entry[Row];
+
+  if (Entry->Kind == SfbEntryEfiFile) {
+    if (Key == SfbKeyTimeout) {
+      SfbSetLaunchLockPolicy (State->Menu.ConfigValid
+                              ? State->Menu.LockPolicy
+                              : SfbConfigLockAsNeeded);
+      Status = SfbLaunchEntry (Entry, FALSE, State->CurrentMode);
+    } else {
+      Status = SfbLaunchEntry (Entry, TRUE, State->CurrentMode);
+    }
+    if (EFI_ERROR (Status)) {
+      SfbReportStatus (L"Boot failed", Status);
+    }
+    return SfbMenuActionRebuild;
   }
 
-  if (Last < Menu->Count) {
-    Print (L"    ... %u more\r\n", (UINT32)(Menu->Count - Last));
+  switch (Entry->Kind) {
+  case SfbEntryFastboot:
+    State->EnterFastboot = TRUE;
+    return SfbMenuActionExit;
+  case SfbEntryMode:
+    SfbRunModeMenu (&State->CurrentMode);
+    return SfbMenuActionRebuild;
+  case SfbEntrySelector:
+    SfbRunFileBrowser (State->CurrentMode);
+    return SfbMenuActionRebuild;
+  case SfbEntryTools:
+    SfbRunToolsBrowser (State->CurrentMode);
+    return SfbMenuActionRebuild;
+  case SfbEntryMassStorage:
+    SfbRunMassStorageMenu ();
+    return SfbMenuActionRebuild;
+  case SfbEntryRecovery:
+    SfbShowActionScreen (L"Rebooting to recovery...");
+    RebootDevice (RECOVERY_MODE);
+    return SfbMenuActionRebuild;
+  case SfbEntryBack:
+    return SfbMenuActionRebuild;
+  case SfbEntryPowerOff:
+    SfbShowActionScreen (L"Powering off...");
+    ShutdownDevice ();
+    return SfbMenuActionRebuild;
+  case SfbEntryRestart:
+    SfbShowActionScreen (L"Restarting...");
+    RebootDevice (NORMAL_MODE);
+    return SfbMenuActionRebuild;
+  default:
+    return SfbMenuActionRebuild;
   }
-
-  SfbEndScreen (L"Vol Up/Down: move   Power: select");
 }
 
 /* USB diagnostics moved out of the BDS: the UsbTools app under EFI Tools
  * owns the census screen and the host-mode attempt. */
+STATIC
+SFB_MENU_ACTION
+SfbHandleModeMenuRow (IN VOID *Context,
+                      IN UINTN Row,
+                      IN SFB_KEY Key)
+{
+  SFB_BOOT_MODE *CurrentMode = (SFB_BOOT_MODE *)Context;
+
+  (VOID)Key;
+  if (Row < 3) {
+    *CurrentMode = (SFB_BOOT_MODE)Row;
+  }
+  return SfbMenuActionExit;
+}
+
 /*
  * Select a session-only mode override. Nothing is written: canoe.cfg remains
  * the sole source of configured policy, and its entry modes win over this
@@ -534,153 +766,57 @@ STATIC
 VOID
 SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode)
 {
-  STATIC CONST CHAR16 *Rows[] = {
-    L"Mode 0 - Honest unlocked",
-    L"Mode 1 - ABL fake locked",
-    L"Mode 2 - KM/SPSS profile spoof",
-    L"Back"
+  STATIC SFB_MENU_ROW Rows[] = {
+    { L"Mode 0 - Honest unlocked", L" " },
+    { L"Mode 1 - ABL fake locked", L" " },
+    { L"Mode 2 - KM/SPSS profile spoof", L" " },
+    { L"Back", L" " }
   };
-  UINTN  Cursor = 0;
-  UINTN  Index;
+  SFB_MENU_TEMPLATE Template;
 
   if (CurrentMode == NULL) {
     return;
   }
-
-  while (TRUE) {
-    SFB_KEY  Key;
-
-    SfbBeginScreen (L"Boot Mode",
-                    L"Session fallback only; configured entry modes win.");
-    for (Index = 0; Index < ARRAY_SIZE (Rows); Index++) {
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), L" ", Rows[Index]);
-    }
-    SfbEndScreen (L"Vol Up/Down: move   Power: select");
-
-    Key = SfbWaitForKey (0);
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, ARRAY_SIZE (Rows), Key);
-      continue;
-    }
-
-    if (Cursor == ARRAY_SIZE (Rows) - 1) {
-      return;
-    }
-
-    *CurrentMode = (SFB_BOOT_MODE)Cursor;
-    return;
-  }
+  ZeroMem (&Template, sizeof (Template));
+  Template.Title = L"Boot Mode";
+  Template.Subtitle = L"Session fallback only; configured entry modes win.";
+  Template.Footer = L"Vol Up/Down: move   Power: select";
+  Template.Rows = Rows;
+  Template.RowCount = ARRAY_SIZE (Rows);
+  Template.Navigate = TRUE;
+  Template.Context = CurrentMode;
+  Template.Enter = SfbMenuNoopEnter;
+  Template.Exit = SfbMenuNoopExit;
+  Template.Handler = SfbHandleModeMenuRow;
+  (VOID)SfbRunMenu (&Template);
 }
 
 BOOLEAN
 SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
 {
-  SFB_MENU_STATE  Menu;
-  SFB_BOOT_MODE   CurrentMode = InitialMode;
-  UINTN           Cursor = 0;
-  BOOLEAN         Rebuild = TRUE;
-  BOOLEAN         FirstDraw = TRUE;
-  SFB_KEY         Key;
-  EFI_STATUS      Status;
+  SFB_MAIN_MENU_CONTEXT State;
+  SFB_MENU_TEMPLATE     Template;
 
-  if (CurrentMode > SfbBootModeKmProfile) {
-    CurrentMode = SfbBootModeAblFakeLocked;
+  if (InitialMode > SfbBootModeKmProfile) {
+    InitialMode = SfbBootModeAblFakeLocked;
   }
 
-  ZeroMem (&Menu, sizeof (Menu));
-  Menu.DefaultIndex = SFB_NO_INDEX;
+  ZeroMem (&State, sizeof (State));
+  ZeroMem (&Template, sizeof (Template));
+  State.Template = &Template;
+  State.CurrentMode = InitialMode;
+  State.Menu.DefaultIndex = SFB_NO_INDEX;
 
-  while (TRUE) {
-    UINTN  Chosen;
-
-    if (Rebuild) {
-      SfbFreeMenu (&Menu);
-      SfbBuildMenu (&Menu, CurrentMode);
-      SfbSetLaunchLockPolicy (Menu.ConfigValid ? Menu.LockPolicy
-                                               : SfbConfigLockAsNeeded);
-      Cursor = (Menu.DefaultIndex != SFB_NO_INDEX &&
-                Menu.DefaultIndex < Menu.Count) ? Menu.DefaultIndex : 0;
-      Rebuild = FALSE;
-    }
-
-    SfbDrawMenu (&Menu, Cursor, L"Boot Menu");
-    if (FirstDraw && Menu.DefaultFromConfig) {
-      Key = (Menu.TimeoutSeconds == 0)
-            ? SfbKeyTimeout : SfbWaitForKey (Menu.TimeoutSeconds * 1000);
-    } else {
-      Key = SfbWaitForKey (0);
-    }
-    FirstDraw = FALSE;
-
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, Menu.Count, Key);
-      continue;
-    }
-
-    Chosen = Cursor;
-
-    if (Menu.Count == 0) {
-      continue;
-    }
-
-    switch (Menu.Entry[Chosen].Kind) {
-    case SfbEntryFastboot:
-      SfbFreeMenu (&Menu);
-      return TRUE;
-
-    case SfbEntryMode:
-      SfbRunModeMenu (&CurrentMode);
-      Rebuild = TRUE;
-      break;
-
-    case SfbEntrySelector:
-      SfbRunFileBrowser (CurrentMode);
-      Rebuild = TRUE;
-      break;
-
-    case SfbEntryTools:
-      SfbRunToolsBrowser (CurrentMode);
-      Rebuild = TRUE;
-      break;
-
-    case SfbEntryMassStorage:
-      SfbRunMassStorageMenu ();
-      Rebuild = TRUE;
-      break;
-
-    case SfbEntryRecovery:
-      SfbShowActionScreen (L"Rebooting to recovery...");
-      RebootDevice (RECOVERY_MODE);
-      break;
-
-    case SfbEntryBack:
-      Rebuild = TRUE;
-      break;
-
-    case SfbEntryPowerOff:
-      SfbShowActionScreen (L"Powering off...");
-      ShutdownDevice ();
-      break;
-
-    case SfbEntryRestart:
-      SfbShowActionScreen (L"Restarting...");
-      RebootDevice (NORMAL_MODE);
-      break;
-
-    case SfbEntryEfiFile:
-    default:
-      if (Key == SfbKeyTimeout) {
-        SfbSetLaunchLockPolicy (Menu.ConfigValid ? Menu.LockPolicy
-                                                 : SfbConfigLockAsNeeded);
-        Status = SfbLaunchEntry (&Menu.Entry[Chosen], FALSE, CurrentMode);
-      } else {
-        Status = SfbLaunchEntry (&Menu.Entry[Chosen], TRUE, CurrentMode);
-      }
-      if (EFI_ERROR (Status)) {
-        SfbReportStatus (L"Boot failed", Status);
-      }
-      Rebuild = TRUE;
-      break;
-    }
-  }
+  Template.Title = L"Boot Menu";
+  Template.Subtitle = SFB_MENU_CREDIT;
+  Template.Footer = L"Vol Up/Down: move   Power: select";
+  Template.Context = &State;
+  Template.Navigate = TRUE;
+  Template.Enter = SfbMenuNoopEnter;
+  Template.Refresh = SfbRefreshMainMenu;
+  Template.Exit = SfbExitMainMenu;
+  Template.Handler = SfbHandleMainMenuRow;
+  Template.DrawRow = SfbDrawMainMenuRow;
+  (VOID)SfbRunMenu (&Template);
+  return State.EnterFastboot;
 }

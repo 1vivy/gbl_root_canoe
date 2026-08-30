@@ -239,6 +239,65 @@ typedef enum {
   SfbKeyPolicyUpOnly
 } SFB_KEY_POLICY;
 
+/*
+ * Shared menu scaffold. Screens provide declarative rows, a row handler, and
+ * optional enter/refresh/exit hooks. The scaffold owns redraw, cursor movement,
+ * timeout consumption, and cleanup ordering so every screen follows one
+ * lifecycle even when a callback fails.
+ */
+typedef struct {
+  CONST CHAR16  *Text;
+  CONST CHAR16  *Marker;
+} SFB_MENU_ROW;
+
+typedef enum {
+  SfbMenuActionContinue = 0,
+  SfbMenuActionRebuild,
+  SfbMenuActionExit
+} SFB_MENU_ACTION;
+
+typedef EFI_STATUS (*SFB_MENU_ENTER)(IN VOID *Context);
+typedef EFI_STATUS (*SFB_MENU_REFRESH)(IN VOID *Context);
+typedef VOID (*SFB_MENU_EXIT)(IN VOID *Context);
+typedef SFB_MENU_ACTION (*SFB_MENU_HANDLER)(
+  IN VOID   *Context,
+  IN UINTN   Row,
+  IN SFB_KEY Key
+  );
+typedef VOID (*SFB_MENU_DRAW_ROW)(
+  IN VOID    *Context,
+  IN UINTN    Row,
+  IN BOOLEAN  Selected
+  );
+typedef VOID (*SFB_MENU_DRAW_HEADER)(IN VOID *Context);
+
+typedef struct {
+  CONST CHAR16       *Title;
+  CONST CHAR16       *Subtitle;
+  CONST CHAR16       *Footer;
+  SFB_MENU_ROW       *Rows;
+  UINTN               RowCount;
+  UINTN               Cursor;
+  UINT32              TimeoutMs;
+  BOOLEAN             Navigate;
+  VOID               *Context;
+  SFB_MENU_ENTER      Enter;
+  SFB_MENU_REFRESH    Refresh;
+  SFB_MENU_EXIT       Exit;
+  SFB_MENU_HANDLER     Handler;
+  SFB_MENU_DRAW_HEADER DrawHeader;
+  SFB_MENU_DRAW_ROW    DrawRow;
+} SFB_MENU_TEMPLATE;
+
+EFI_STATUS
+SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template);
+
+EFI_STATUS
+SfbMenuNoopEnter (IN VOID *Context);
+
+VOID
+SfbMenuNoopExit (IN VOID *Context);
+
 /* ---- SuperFbFat.c: embedded FAT/EXT4 stack and volume helpers ----------- */
 
 /*
