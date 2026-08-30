@@ -2,11 +2,16 @@ use std::path::Path;
 
 use thiserror::Error;
 
+use crate::artifact::ArtifactError;
 use crate::backend::{BackendError, BootRoot, LocalDir};
 use crate::cli::{
     BlsCommand, Command, ConfigCommand, DefaultCommand, EntryCommand, EntrySetArgs, Success,
 };
 use crate::config::{ConfigDocument, ConfigError, EntryRequest};
+use crate::extra_ops;
+use crate::graft::GraftError;
+use crate::slots::SlotError;
+use crate::vendorboot::VendorBootError;
 use crate::wire::JsonRequest;
 
 #[derive(Debug, Error)]
@@ -15,6 +20,14 @@ pub enum AppError {
     Backend(#[from] BackendError),
     #[error(transparent)]
     Config(#[from] ConfigError),
+    #[error(transparent)]
+    Artifact(#[from] ArtifactError),
+    #[error(transparent)]
+    Graft(#[from] GraftError),
+    #[error(transparent)]
+    Slot(#[from] SlotError),
+    #[error(transparent)]
+    VendorBoot(#[from] VendorBootError),
     #[error("request: {0}")]
     Request(String),
     #[error("command output: {0}")]
@@ -43,6 +56,11 @@ fn execute_command(backend: &LocalDir, command: &Command) -> Result<Success, App
         Command::Entry { command } => entry_command(backend, command),
         Command::Default { command } => default_command(backend, command),
         Command::Bls { command } => bls_command(backend, command),
+        Command::Slot { command } => extra_ops::slot_command(backend, command),
+        Command::Install(args) => extra_ops::install_command(backend, args),
+        Command::OtaApply(args) => extra_ops::ota_apply(backend, args),
+        Command::Graft(args) => extra_ops::graft_command(args),
+        Command::VendorBoot { command } => extra_ops::vendorboot_command(command),
     }
 }
 
@@ -156,9 +174,12 @@ fn bls_command(backend: &LocalDir, command: &BlsCommand) -> Result<Success, AppE
             ok: true,
             entry: backend.read_bls(name)?,
         }),
+        BlsCommand::Stage(args) => Ok(Success::BlsStage {
+            ok: true,
+            receipt: extra_ops::stage_bls(backend.root(), args)?,
+        }),
     }
 }
-
 fn read_or_empty(backend: &LocalDir) -> Result<ConfigDocument, AppError> {
     Ok(backend.read_config()?.unwrap_or_else(ConfigDocument::empty))
 }

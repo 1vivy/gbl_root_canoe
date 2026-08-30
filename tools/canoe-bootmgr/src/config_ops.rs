@@ -96,6 +96,55 @@ impl ConfigDocument {
         self.entries.remove(position);
         self.bump_generation()
     }
+    pub fn sync_managed_rows(&mut self, rows: &[ConfigEntry]) -> Result<u32, ConfigError> {
+        if rows.is_empty() || rows.len() > MAX_ENTRIES {
+            return Err(ConfigError::Invalid(
+                "managed rows must contain at least one entry".to_owned(),
+            ));
+        }
+        if self.generation == MAX_GENERATION {
+            return Err(ConfigError::Invalid(
+                "generation cannot be bumped past 4294967295".to_owned(),
+            ));
+        }
+        let managed = ["android-a", "android-b", "android-backup"];
+        for row in rows {
+            validate_request(&EntryRequest {
+                id: row.id.clone(),
+                title: row.title.clone(),
+                image: row.image.clone(),
+                options: row.options.clone(),
+                role: row.role,
+                mode: Some(row.mode),
+                global_mode: None,
+                timeout: None,
+                devinfo_repair: None,
+                make_default: false,
+            })?;
+        }
+        let previous = self
+            .entries
+            .iter()
+            .filter(|entry| managed.contains(&entry.id.as_str()))
+            .map(|entry| (entry.id.clone(), entry.unknown.clone()))
+            .collect::<std::collections::HashMap<_, _>>();
+        self.entries
+            .retain(|entry| !managed.contains(&entry.id.as_str()));
+        self.entries.extend(rows.iter().cloned().map(|mut row| {
+            if let Some(unknown) = previous.get(&row.id) {
+                row.unknown = unknown.clone();
+            }
+            row
+        }));
+        if self
+            .default
+            .as_deref()
+            .is_some_and(|id| managed.contains(&id))
+        {
+            self.default = None;
+        }
+        self.bump_generation()
+    }
 
     pub fn set_mode(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
         validate_mode(mode)?;

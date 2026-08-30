@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::process::Command;
 
@@ -192,4 +193,201 @@ fn request_b64_accepts_base64url_json() {
     assert!(output.status.success());
     let document: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
     assert_eq!(document["operation"], "default.get");
+}
+
+fn staged_root(parent: &tempfile::TempDir, payload: &[u8], signer: u8) -> std::path::PathBuf {
+    let staged = parent.path().join("staged");
+    fs::create_dir_all(&staged).expect("staged directory");
+    fs::write(staged.join("boot.efi"), payload).expect("loader");
+    let mut gm2p = vec![0_u8; 120];
+    gm2p[0x38..0x58].fill(signer);
+    fs::write(staged.join("boot.efi.gm2p"), gm2p).expect("gm2p");
+    fs::write(staged.join("boot.efi.tzmap"), vec![signer; 256]).expect("tzmap");
+    staged
+}
+
+fn request_json(
+    root: &std::path::Path,
+    request: serde_json::Value,
+) -> Result<canoe_bootmgr::cli::Success, canoe_bootmgr::operations::AppError> {
+    canoe_bootmgr::operations::execute_request(
+        root,
+        canoe_bootmgr::wire::parse_json(&serde_json::to_vec(&request).expect("request"))
+            .expect("wire"),
+    )
+}
+
+#[test]
+fn dual_slot_install_writes_independent_rows_and_sidecars() {
+    let root = tempfile::tempdir().expect("root");
+    let staged = staged_root(&root, b"new", 7);
+    let result = request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"slot":"a","both":true}),
+    )
+    .expect("install");
+    let rendered = serde_json::to_value(result).expect("response");
+    assert_eq!(rendered["operation"], "install");
+    for slot in ["a", "b"] {
+        assert!(root.path().join(format!("boot_{slot}.efi")).is_file());
+        assert_eq!(
+            fs::metadata(root.path().join(format!("boot_{slot}.efi.gm2p")))
+                .expect("gm2p")
+                .len(),
+            120
+        );
+        assert_eq!(
+            fs::metadata(root.path().join(format!("boot_{slot}.efi.tzmap")))
+                .expect("tzmap")
+                .len(),
+            256
+        );
+    }
+    let config = ConfigDocument::parse(&fs::read(root.path().join("canoe.cfg")).expect("config"))
+        .expect("parse");
+    assert_eq!(config.entry("android-a").expect("a row").role, Role::Active);
+    assert_eq!(
+        config.entry("android-b").expect("b row").role,
+        Role::Inactive
+    );
+}
+
+#[test]
+fn second_install_demotes_previous_generation_and_migrates_legacy() {
+    let root = tempfile::tempdir().expect("root");
+    let first = staged_root(&root, b"first", 1);
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":first,"slot":"a"}),
+    )
+    .expect("first install");
+    let second = staged_root(&root, b"second", 2);
+    request_json(
+        root.path(),
+        serde_json::json!({
+            "verb":"install",
+            "staged":second,
+            "slot":"a",
+            "allow_new_signer":true
+        }),
+    )
+    .expect("update");
+    assert_eq!(
+        fs::read(root.path().join("boot_a.efi")).expect("live"),
+        b"second"
+    );
+    assert!(!root.path().join("boot.efi").exists());
+    assert!(root.path().join("boot_backup.efi.gm2p").is_file());
+}
+
+#[test]
+fn inactive_install_requires_explicit_caveat() {
+    let root = tempfile::tempdir().expect("root");
+    let staged = staged_root(&root, b"new", 1);
+    let error = request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"inactive":true,"active_slot":"a"}),
+    )
+    .expect_err("inactive install must refuse");
+    assert!(error.to_string().contains("i-know-inactive-status"));
+}
+
+#[test]
+fn ota_apply_refuses_without_target_metadata() {
+    let root = tempfile::tempdir().expect("root");
+    let staged = staged_root(&root, b"new", 1);
+    let error = request_json(
+        root.path(),
+        serde_json::json!({"verb":"ota-apply","staged":staged}),
+    )
+    .expect_err("OTA must refuse");
+    assert!(error.to_string().contains("target slot metadata"));
+}
+
+#[test]
+fn bls_staging_rolls_back_every_artifact_when_one_hash_fails() {
+    let root = tempfile::tempdir().expect("root");
+    let source = tempfile::tempdir().expect("sources");
+    let kernel = source.path().join("kernel");
+    let initrd = source.path().join("initrd");
+    fs::write(&kernel, b"kernel").expect("kernel");
+    fs::write(&initrd, b"initrd").expect("initrd");
+    let entry = source.path().join("entry.conf");
+    fs::write(&entry, b"title Test\nlinux \\kernel\ninitrd \\initrd\n").expect("entry");
+    let kernel_hash = format!("{:x}", Sha256::digest(b"kernel"));
+    let error = request_json(
+        root.path(),
+        serde_json::json!({
+            "verb":"bls.stage",
+            "name":"test.conf",
+            "entry":entry,
+            "artifacts":[
+                {"source":kernel,"destination":"kernel","sha256":kernel_hash},
+                {"source":initrd,"destination":"initrd","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}
+            ]
+        }),
+    )
+    .expect_err("bad hash must roll back");
+    assert!(error.to_string().contains("hash mismatch"));
+    assert!(!root.path().join("kernel").exists());
+    assert!(!root.path().join("initrd").exists());
+    assert!(!root.path().join("loader/entries/test.conf").exists());
+}
+
+#[test]
+fn graft_preserves_recovery_size_and_writes_avb_footer() {
+    let root = tempfile::tempdir().expect("root");
+    let vbmeta = root.path().join("recovery.vbmeta");
+    let recovery = root.path().join("recovery.img");
+    let output = root.path().join("grafted.img");
+    let mut vbmeta_bytes = vec![0_u8; 256];
+    vbmeta_bytes[..4].copy_from_slice(b"AVB0");
+    fs::write(&vbmeta, vbmeta_bytes).expect("vbmeta");
+    fs::write(&recovery, vec![0x55_u8; 1024]).expect("recovery");
+    let result = request_json(
+        root.path(),
+        serde_json::json!({
+            "verb":"vbmeta.graft",
+            "vbmeta":vbmeta,
+            "recovery":recovery,
+            "output":output
+        }),
+    )
+    .expect("graft");
+    let response = serde_json::to_value(result).expect("response");
+    assert_eq!(response["operation"], "vbmeta.graft");
+    assert_eq!(fs::metadata(&output).expect("output").len(), 1024);
+    let bytes = fs::read(output).expect("grafted bytes");
+    assert_eq!(&bytes[960..964], b"AVBf");
+}
+
+#[test]
+fn vendorboot_patch_is_fixed_size_and_idempotent() {
+    let root = tempfile::tempdir().expect("root");
+    let input = root.path().join("vendor_boot.img");
+    let output = root.path().join("patched.img");
+    let second = root.path().join("patched-again.img");
+    let mut image = vec![0_u8; 4096];
+    image[..8].copy_from_slice(b"VNDRBOOT");
+    image[28..39].copy_from_slice(b"console=tty");
+    fs::write(&input, image).expect("vendor_boot");
+    let first = request_json(
+        root.path(),
+        serde_json::json!({"verb":"vendorboot.patch","input":input,"output":output}),
+    )
+    .expect("first patch");
+    let second_result = request_json(
+        root.path(),
+        serde_json::json!({"verb":"vendorboot.patch","input":output,"output":second}),
+    )
+    .expect("second patch");
+    assert_eq!(
+        serde_json::to_value(first).expect("first response")["receipt"]["changed"],
+        true
+    );
+    assert_eq!(
+        serde_json::to_value(second_result).expect("second response")["receipt"]["changed"],
+        false
+    );
+    assert_eq!(fs::metadata(second).expect("second output").len(), 4096);
 }
