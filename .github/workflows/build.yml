@@ -118,10 +118,6 @@ jobs:
         test -f artifacts/magisk_module/webroot/index.html
         test -f artifacts/magisk_module/webroot/style.css
         test -f artifacts/magisk_module/module.prop
-        for package in toolkit_android magisk_module; do
-          test -x "artifacts/$package/canoe_device_install.sh"
-          test -x "artifacts/$package/canoe_boot_entry.sh"
-        done
         for package in toolkit_linux toolkit_windows toolkit_android magisk_module; do
           test -s "artifacts/$package/BDS.efi"
           test -s "artifacts/$package/efisp/tools/RebootTools.efi"
@@ -277,12 +273,6 @@ jobs:
                    bin/canoe-bootmgr bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in archive: $exe"; exit 1; }
-        done
-        for package in toolkit_android magisk_module; do
-          rm -rf modecheck && unzip -q -o "release/$package.zip" -d modecheck
-          for script in canoe_device_install.sh canoe_boot_entry.sh; do
-            test -x "modecheck/$script" || { echo "not executable in $package archive: $script"; exit 1; }
-          done
         done
         rm -rf modecheck
 

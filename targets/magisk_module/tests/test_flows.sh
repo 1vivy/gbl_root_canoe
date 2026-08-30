@@ -35,10 +35,8 @@ mkdir -p "$ROOT/tools/canoe-bootmgr/target"
 cargo build --quiet --locked --manifest-path "$ROOT/tools/canoe-bootmgr/Cargo.toml"
 cp "$ROOT/tools/canoe-bootmgr/target/debug/canoe-bootmgr" "$MOD/bin/canoe-bootmgr"
 chmod +x "$MOD/bin/canoe-bootmgr"
-cp "$ROOT/tools/canoe-device/canoe_device_install.sh" "$MOD/canoe_device_install.sh"
-cp "$ROOT/tools/canoe-device/canoe_boot_entry.sh" "$MOD/canoe_boot_entry.sh"
 cp "$ROOT/targets/magisk_module/module/bin/canoe_vendor_boot.sh" "$MOD/bin/canoe_vendor_boot.sh"
-chmod +x "$MOD/canoe_device_install.sh" "$MOD/canoe_boot_entry.sh" "$MOD/bin/canoe_vendor_boot.sh"
+chmod +x "$MOD/bin/canoe_vendor_boot.sh"
 printf 'BDS fixture\n' > "$MOD/BDS.efi"
 printf 'tool\n' > "$MOD/efisp/tools/BLTools.efi"
 
@@ -67,10 +65,10 @@ truncate -s 2097152 "$BY_NAME/efisp"
 
 # Plant a stale passthrough row and a hand-added row; the transaction must
 # migrate only the former while preserving the latter.
-sh "$MOD/canoe_boot_entry.sh" set "$EFISP" \
+"$MOD/bin/canoe-bootmgr" --boot-root "$EFISP" entry set \
   --id android-b --title 'Android (slot B)' --image boot_b.efi \
   --role inactive --mode 2 >/dev/null
-sh "$MOD/canoe_boot_entry.sh" set "$EFISP" \
+"$MOD/bin/canoe-bootmgr" --boot-root "$EFISP" entry set \
   --id lineage --title 'Lineage custom' --image lineage.efi \
   --role other --mode 1 >/dev/null
 printf 'stale-b\n' > "$EFISP/boot_b.efi"
@@ -405,11 +403,6 @@ run_questionnaire() {
     "$question_mod/bin/"
   cp "$MOD/BDS.efi" "$question_mod/BDS.efi"
   cp -r "$MOD/efisp/tools/." "$question_mod/efisp/tools/"
-  cat > "$question_mod/canoe_device_install.sh" <<'EOF'
-#!/bin/sh
-printf 'CANOE_MODE=%s\n' "$CANOE_MODE" >> "${QUESTION_LOG:?}"
-exit 0
-EOF
   cat > "$question_bin/getevent" <<'EOF'
 #!/bin/sh
 number=$(cat "${QUESTION_COUNT:?}" 2>/dev/null || echo 0)
@@ -437,7 +430,7 @@ set_perm() { :; }
 EOF
   cat "$question_mod/customize.sh" >> "$question_mod/question-wrapper.sh"
   chmod +x "$question_bin/"* "$question_mod/question-wrapper.sh" "$question_mod/customize.sh" \
-    "$question_mod/canoe_device_install.sh" "$question_mod/bin/"*
+    "$question_mod/bin/"*
   : > "$question_count"
   : > "$question_log"
   QUESTION_COUNT="$question_count" QUESTION_KEYS="$question_keys" \
