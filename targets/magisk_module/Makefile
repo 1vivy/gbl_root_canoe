@@ -62,13 +62,5 @@ submodule_canoe_bootmgr: copy_resources
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/module/bin/extractfv
-canoe_device_script: copy_resources
-	# The module and Android temporary-root toolkit invoke the same persist
-	# transaction and boot-entry writer; keep both scripts together here.
-	cp ../../tools/canoe-device/canoe_device_install.sh ./build/module/canoe_device_install.sh
-	chmod +x ./build/module/canoe_device_install.sh
-	cp ../../tools/canoe-device/canoe_boot_entry.sh ./build/module/canoe_boot_entry.sh
-	chmod +x ./build/module/canoe_boot_entry.sh
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor canoe_device_script
 	# zip
 	cd build/module && zip -r ../module_android.zip ./

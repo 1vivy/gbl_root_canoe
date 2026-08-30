@@ -27,7 +27,7 @@ jobs:
       run: |
         unzip -q -o toolkit_linux/toolkit_linux.zip -d modecheck
         for exe in canoe \
-                   canoe_device_install.sh bin/patch_abl bin/mode2_profile \
+                   bin/patch_abl bin/mode2_profile \
                    bin/abl_tzmap bin/canoe-bootmgr bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in release asset: $exe"; exit 1; }
