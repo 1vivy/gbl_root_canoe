@@ -31,6 +31,10 @@ assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3" ;; esac; }
 assert_not_contains() { case "$1" in *"$2"*) fail "$3" ;; esac; }
 
 mkdir -p "$MOD/bin" "$MOD/efisp/tools" "$BIN" "$BY_NAME" "$EFISP" "$SUPPLIED"
+mkdir -p "$ROOT/tools/canoe-bootmgr/target"
+cargo build --quiet --locked --manifest-path "$ROOT/tools/canoe-bootmgr/Cargo.toml"
+cp "$ROOT/tools/canoe-bootmgr/target/debug/canoe-bootmgr" "$MOD/bin/canoe-bootmgr"
+chmod +x "$MOD/bin/canoe-bootmgr"
 cp "$ROOT/tools/canoe-device/canoe_device_install.sh" "$MOD/canoe_device_install.sh"
 cp "$ROOT/tools/canoe-device/canoe_boot_entry.sh" "$MOD/canoe_boot_entry.sh"
 cp "$ROOT/targets/magisk_module/module/bin/canoe_vendor_boot.sh" "$MOD/bin/canoe_vendor_boot.sh"
@@ -81,6 +85,10 @@ case "$1" in
   ro.product.model) echo Test-Model ;;
   ro.board.platform) echo sm8850 ;;
 esac
+EOF
+cat > "$BIN/bootctl" <<'EOF'
+#!/bin/sh
+echo "${BOOTCTL_SLOT:-1}"
 EOF
 cat > "$BIN/blockdev" <<'EOF'
 #!/bin/sh
@@ -208,26 +216,18 @@ chmod +x "$MOD/bin/bl_flasher.sh"
 
 run flash update-efisp > "$TMP/initial.out"
 cfg=$(cat "$EFISP/canoe.cfg")
-assert_contains "$cfg" 'entry android-a' 'active entry missing'
-assert_contains "$cfg" 'role active' 'active role missing'
+assert_contains "$cfg" 'entry android-b' 'target-slot entry missing'
+assert_contains "$cfg" 'role active' 'target-slot role missing'
 assert_contains "$cfg" 'entry android-backup' 'backup entry missing'
 assert_contains "$cfg" 'image boot_backup.efi' 'backup image missing'
 assert_contains "$cfg" 'entry lineage' 'hand-added row was not preserved'
-assert_no_entry "$cfg" android-b 'passthrough row was not migrated'
-[ ! -e "$EFISP/boot_b.efi" ] || fail 'passthrough loader survived migration'
-[ ! -e "$EFISP/boot_b.efi.gm2p" ] || fail 'passthrough profile survived migration'
-[ ! -e "$EFISP/boot_b.efi.tzmap" ] || fail 'passthrough tzmap survived migration'
-assert_contains "$(cat "$LOG")" 'CANOE-MARK: passthrough-row-migrated id=android-b' \
-  'passthrough migration mark missing'
-pass 'module pair install writes active and backup rows and migrates passthrough state'
+assert_no_entry "$cfg" android-a 'legacy active row survived migration'
+[ ! -e "$EFISP/boot.efi" ] || fail 'legacy loader survived migration'
+assert_file "$EFISP/boot_b.efi"
+assert_file "$EFISP/boot_b.efi.gm2p"
+assert_file "$EFISP/boot_b.efi.tzmap"
+pass 'module pair install writes target and backup rows while preserving custom state'
 
-run start-mode 2 >/dev/null
-sleep 1
-cfg=$(cat "$EFISP/canoe.cfg")
-active_block=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
-assert_contains "$active_block" 'mode 2' 'mode selector did not update the existing active row'
-assert_no_entry "$cfg" android-b 'mode selector resurrected passthrough row'
-pass 'mode selector updates only the installed managed row'
 
 : > "$LOG"
 printf 'target-vulnerable\n' > "$BY_NAME/abl_b"
@@ -288,13 +288,18 @@ pass 'bootctl next-slot probe labels the next active row'
 rm -f "$BIN/bootctl"
 printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
 : > "$LOG"
-run flash update-efisp >/dev/null
-cfg=$(cat "$EFISP/canoe.cfg")
-assert_contains "$cfg" 'entry android-a' 'missing bootctl did not keep running slot label'
-assert_contains "$(cat "$LOG")" \
-  'next-slot probe unavailable; labelling the row with the running slot' \
-  'missing bootctl fallback log is absent'
-pass 'missing next-slot probe keeps the running slot label'
+if run flash update-efisp >/dev/null 2>&1; then
+  fail 'missing bootctl metadata was accepted'
+fi
+assert_contains "$(cat "$LOG")" 'bootctl/GPT' \
+  'missing bootctl refusal was not logged'
+pass 'missing bootctl metadata refuses a running-slot relabel'
+
+cat > "$BIN/bootctl" <<'EOF'
+#!/bin/sh
+echo 1
+EOF
+chmod +x "$BIN/bootctl"
 
 printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
 : > "$LOG"
@@ -314,22 +319,24 @@ printf 'custom-vbmeta\n' > "$BY_NAME/vbmeta_b"
 : > "$LOG"
 run flash update-efisp >/dev/null
 cfg=$(cat "$EFISP/canoe.cfg")
-active_block=$(awk '/^entry android-a$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
-assert_contains "$(cat "$LOG")" 'CANOE-MARK: signer-changed source=partition' \
+active_block=$(awk '/^entry android-b$/{seen=1} seen{print} /^$/{if(seen) exit}' "$EFISP/canoe.cfg")
+assert_contains "$(cat "$LOG")" '"signer_changed":true' \
   'partition signer change was not reported'
-assert_contains "$(cat "$LOG")" 'Mode 2 downgraded to Mode 1 after signer change' \
+assert_contains "$(cat "$LOG")" 'Mode 2' \
   'Mode 2 was not downgraded after a partition signer change'
 assert_contains "$active_block" 'mode 1' \
   'partition signer change left the active row in Mode 2'
 pass 'partition signer changes are reported and Mode 2 is downgraded'
 
-printf 'supplied-custom-vbmeta\n' > "$SUPPLIED/vbmeta.img"
+"$MOD/bin/canoe-bootmgr" --boot-root "$EFISP" entry mode --id android-b --mode 2 >/dev/null
 : > "$LOG"
 run flash update-efisp,abl=supplied,vbmeta=supplied >/dev/null
-assert_contains "$(cat "$LOG")" 'CANOE-MARK: signer-changed source=supplied' \
-  'supplied signer change was not reported as supplied'
-assert_not_contains "$(cat "$LOG")" '签名者已变化' \
-  'supplied signer change unexpectedly emitted a partition warning'
+assert_contains "$(cat "$LOG")" '"signer_changed":true' \
+  'supplied signer change was not reported'
+assert_contains "$(cat "$EFISP/canoe.cfg")" 'entry android-b' \
+  'supplied signer change removed target entry'
+assert_contains "$(cat "$EFISP/canoe.cfg")" 'mode 2' \
+  'supplied signer change unexpectedly downgraded Mode 2'
 pass 'supplied signer changes proceed without a Mode 2 downgrade'
 printf 'vbmeta-b\n' > "$BY_NAME/vbmeta_b"
 printf 'supplied-vbmeta\n' > "$SUPPLIED/vbmeta.img"
@@ -390,6 +397,7 @@ run_questionnaire() {
   question_supplied_dir=${3:-}
   mkdir -p "$question_mod/bin" "$question_mod/efisp/tools" \
     "$question_bin" "$question_efisp"
+  cp "$MOD/bin/canoe-bootmgr" "$question_mod/bin/canoe-bootmgr"
   cp "$ROOT/targets/magisk_module/module/customize.sh" "$question_mod/customize.sh"
   cp "$ROOT/targets/magisk_module/module/bin/canoe_vendor_boot.sh" \
     "$question_mod/bin/canoe_vendor_boot.sh"
@@ -441,7 +449,7 @@ EOF
 }
 
 run_questionnaire questionnaire-mode2 DUUD
-assert_contains "$(cat "$TMP/questionnaire-mode2.log")" 'CANOE_MODE=2' \
+assert_contains "$(cat "$TMP/questionnaire-mode2-persist/efisp/canoe.cfg")" 'mode 2' \
   'Mode 2 questionnaire selection did not reach the device transaction'
 assert_contains "$(cat "$TMP/questionnaire-mode2.log")" \
   'Select boot mode: Vol+ = keep Mode 1, Vol- = Mode 2' \
@@ -453,7 +461,7 @@ assert_contains "$(cat "$TMP/questionnaire-mode2.log")" \
 pass 'questionnaire reaches Mode 2 and skips Mode 1-only questions'
 
 run_questionnaire questionnaire-mode1 DUUUUU
-assert_contains "$(cat "$TMP/questionnaire-mode1.log")" 'CANOE_MODE=1' \
+assert_contains "$(cat "$TMP/questionnaire-mode1-persist/efisp/canoe.cfg")" 'mode 1' \
   'Mode 1 questionnaire selection did not reach the device transaction'
 assert_contains "$(cat "$TMP/questionnaire-mode1.log")" \
   'Mode 1: patch vendor_boot? Vol+ = yes, Vol- = no' \

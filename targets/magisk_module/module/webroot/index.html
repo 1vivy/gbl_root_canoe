@@ -1,152 +1,72 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title id="pageTitle">假回锁 - BL Flasher</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'" />
+  <title>Canoe Boot Manager</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<div class="page-shell">
-  <header class="hero-card">
-    <div>
-      <p class="eyebrow" id="lblKsuWebUI">KernelSU Module WebUI</p>
-      <h1>BL Flasher</h1>
-      <p class="hero-copy" id="heroDesc">
-        自动识别当前活动槽位，若新版本存在GBL漏洞则跳过BL刷写；将BL镜像刷写到另一槽位，在persist的efisp目录安装修补后的ABL与匹配profile，并将BDS刷入efisp分区
-      </p>
-    </div>
-    <div class="hero-meta">
-      <span class="chip" id="stateChip">等待检测</span>
-      <span class="chip chip-warn" id="slotChip">槽位未知</span>
-    </div>
-  </header>
-
-  <main class="grid-layout">
-    <section class="panel stats-panel">
-      <div class="panel-heading">
-        <h2 id="lblSlotStatus">槽位状态</h2>
-        <button class="ghost-button" id="refreshButton" type="button" data-i18n="refresh">刷新</button>
+  <div class="page-shell">
+    <header class="hero-card">
+      <div>
+        <p class="eyebrow">KernelSU WebUI</p>
+        <h1>Canoe Boot Manager</h1>
+        <p class="hero-copy">One protocol for boot-root entries, slot-safe installs, and post-OTA updates. The WebUI sends bounded base64url JSON requests to the bundled arm64 canoe-bootmgr.</p>
       </div>
-
-      <div class="stats-grid">
-        <article class="stat-card">
-          <span class="stat-label" id="lblCurrentSlot">当前槽位</span>
-          <strong class="stat-value" id="currentSlot">-</strong>
-        </article>
-        <article class="stat-card accent-card">
-          <span class="stat-label" id="lblTargetSlot">目标槽位</span>
-          <strong class="stat-value" id="targetSlot">-</strong>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label" id="lblImageCount">镜像数量</span>
-          <strong class="stat-value" id="imageCount">0</strong>
-        </article>
-        <article class="stat-card">
-          <span class="stat-label" id="lblTaskStatus">任务状态</span>
-          <strong class="stat-value stat-small" id="taskMessage">等待操作</strong>
-        </article>
+      <div class="hero-meta">
+        <span class="chip" id="stateChip">Starting</span>
+        <span class="chip chip-warn" id="slotChip">Slot unknown</span>
       </div>
+    </header>
 
-      <div class="action-strip">
-        <button class="primary-button" id="flashButton" type="button" data-i18n="flash">刷写到另一槽位</button>
-        <button class="ghost-button" id="bdsToolsButton" type="button" data-i18n="bdsTools">仅更新BDS和Tools</button>
-        <button class="ghost-button" id="patchPartButton" type="button" data-i18n="patchPart">修补分区</button>
-        <button class="ghost-button" id="clearLogButton" type="button" data-i18n="clearLog">清空日志</button>
-      </div>
-
-      <fieldset class="mode-control">
-        <legend id="lblPreferredMode">当前启动项模式</legend>
-        <div class="mode-actions">
-          <select id="preferredModeSelect" aria-labelledby="lblPreferredMode" aria-describedby="modeStatusText">
-            <option value="0">Mode 0 - Honest unlocked</option>
-            <option value="1">Mode 1 - ABL fake locked</option>
-            <option value="2">Mode 2 - KM/SPSS profile spoof</option>
-          </select>
-          <button class="ghost-button" id="saveModeButton" type="button" data-i18n="saveMode">保存</button>
+    <main class="grid-layout">
+      <section class="panel stats-panel">
+        <div class="panel-heading">
+          <h2>Slot status</h2>
+          <button class="ghost-button" id="refreshButton" type="button">Refresh</button>
         </div>
-        <p class="caption mode-status" id="modeStatusText" aria-live="polite">等待读取 canoe.cfg 启动项模式</p>
-      </fieldset>
+        <div class="stats-grid">
+          <article class="stat-card"><span class="stat-label">Active slot</span><strong class="stat-value" id="activeSlot">Unknown</strong></article>
+          <article class="stat-card accent-card"><span class="stat-label">Inactive slot</span><strong class="stat-value" id="inactiveSlot">Unknown</strong></article>
+          <article class="stat-card"><span class="stat-label">Source provenance</span><strong class="stat-value stat-small" id="slotSource">unknown</strong></article>
+          <article class="stat-card"><span class="stat-label">Installed triplets</span><strong class="stat-value stat-small" id="installedSlots">None</strong></article>
+        </div>
+        <p class="caption" id="taskMessage">Starting</p>
+        <p class="caption" id="otaHint">Reading bootctl/GPT metadata...</p>
+        <button class="primary-button" id="otaButton" data-action type="button" disabled>Install to inactive slot</button>
+      </section>
 
-      <label class="option-check" for="updateEfispCheckbox">
-        <input id="updateEfispCheckbox" type="checkbox" checked />
-        <span id="lblUpdateEfisp">更新 efisp（默认开启）</span>
-      </label>
+      <section class="panel map-panel">
+        <div class="panel-heading"><h2>Persisted entries</h2><span class="caption">entry.list</span></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>Title</th><th>Image</th><th>Role</th><th>Mode</th></tr></thead>
+            <tbody id="entryTableBody"><tr><td colspan="5" class="empty-row">Reading canoe.cfg...</td></tr></tbody>
+          </table>
+        </div>
+        <h3>Selected entry</h3>
+        <dl class="entry-detail" id="entryDetail">Select an entry to inspect its persisted fields.</dl>
+        <div class="control-row"><span class="caption" id="selectedEntry">None selected</span><select id="entryModeSelect" aria-label="Selected entry mode"><option value="0">Mode 0 - Honest unlocked</option><option value="1">Mode 1 - ABL fake locked</option><option value="2">Mode 2 - KM/SPSS profile spoof</option></select><button class="ghost-button" id="saveEntryModeButton" data-action type="button">Save mode</button></div>
+      </section>
 
-      <label class="option-check" for="debugModeCheckbox">
-        <input id="debugModeCheckbox" type="checkbox" />
-        <span id="lblDebugMode">调试模式（仅处理不刷写，生成的文件保存在 tmp 目录）</span>
-      </label>
+      <section class="panel map-panel">
+        <div class="panel-heading"><h2>BLS Type #1 entries</h2><span class="caption">bls.list</span></div>
+        <div class="table-wrap"><table><thead><tr><th>File</th><th>Title</th><th>Kind</th><th>Image</th></tr></thead><tbody id="blsTableBody"><tr><td colspan="4" class="empty-row">Reading loader/entries...</td></tr></tbody></table></div>
+        <h3>Default and install</h3>
+        <div class="control-row"><select id="defaultSelect" aria-label="Default entry"></select><button class="ghost-button" id="saveDefaultButton" data-action type="button">Save default</button></div>
+        <label class="field-label" for="stagePath">Staged boot-root directory</label>
+        <input class="text-input" id="stagePath" value="/data/adb/modules/fake_bl_efisp/tmp/staged" autocomplete="off" />
+        <label class="field-label" for="installTarget">Install target</label>
+        <select id="installTarget"><option value="active">Active slot</option><option value="inactive">Inactive slot</option><option value="both">Both slots</option></select>
+        <div id="inactiveConfirmation" hidden><label class="option-check" for="inactiveStatusConfirm"><input id="inactiveStatusConfirm" type="checkbox" /><span>I know the status of my inactive slot</span></label><p class="caption">Only enable if you know the status of your inactive slot.</p></div>
+        <button class="primary-button" id="installButton" data-action type="button">Install</button>
+      </section>
 
-      <label class="option-check" for="patchVendorBootCheckbox">
-        <input id="patchVendorBootCheckbox" type="checkbox" />
-        <span id="lblPatchVendorBoot">修补 vendor_boot 分区</span>
-      </label>
-      <p class="caption hint-text" id="lblPatchVendorBootHint">Mode 2 已取代原有的分区修补绕过方案。</p>
-
-      <label class="option-check" for="suppliedAblCheckbox">
-        <input id="suppliedAblCheckbox" type="checkbox" disabled />
-        <span id="lblSuppliedAbl">使用提供的 abl.img</span>
-      </label>
-      <p class="caption hint-text" id="suppliedAblHint">未找到非空文件 /data/local/tmp/canoe/abl.img</p>
-
-      <label class="option-check" for="suppliedVbmetaCheckbox">
-        <input id="suppliedVbmetaCheckbox" type="checkbox" disabled />
-        <span id="lblSuppliedVbmeta">使用提供的 vbmeta.img</span>
-      </label>
-      <p class="caption hint-text" id="suppliedVbmetaHint">未找到非空文件 /data/local/tmp/canoe/vbmeta.img</p>
-
-      <p class="warning-copy" id="lblWarning">
-        刷写对象是 bootloader 相关分区，风险较高。开始前请确认镜像与机型严格匹配。
-      </p>
-    </section>
-
-    <section class="panel map-panel">
-      <div class="panel-heading">
-        <h2 id="lblImageMap">镜像映射</h2>
-        <span class="caption" id="updatedAt">尚未检测</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th id="tblPartition">分区名</th>
-              <th id="tblSource">源分区 (当前槽位)</th>
-              <th id="tblTarget">目标分区</th>
-              <th id="tblAction">操作</th>
-            </tr>
-          </thead>
-          <tbody id="imageTableBody">
-            <tr>
-              <td colspan="4" class="empty-row" id="tblWaiting">等待读取模块状态</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel log-panel">
-      <div class="panel-heading">
-        <h2 id="lblLog">实时日志</h2>
-        <span class="caption" id="lblAutoPoll">自动轮询最近 200 行</span>
-      </div>
-      <pre id="logOutput">等待日志输出...</pre>
-    </section>
-  </main>
-</div>
-
-<div class="modal-backdrop hidden" id="confirmModal" aria-hidden="true">
-  <div class="modal-card" role="dialog" aria-modal="true">
-    <p class="eyebrow" id="modalRisk">高风险操作</p>
-    <h2 id="modalTitle">确认刷写</h2>
-    <p id="confirmText">即将开始刷写，请确认操作对象和槽位。</p>
-    <div class="modal-actions">
-      <button class="ghost-button" id="cancelConfirmButton" type="button" data-i18n="cancel">取消</button>
-      <button class="primary-button" id="nextConfirmButton" type="button" data-i18n="continue">继续</button>
-    </div>
+      <section class="panel log-panel"><div class="panel-heading"><h2>Protocol activity</h2><span class="caption">bounded JSON responses</span></div><pre id="logOutput">Waiting for canoe-bootmgr...</pre></section>
+    </main>
   </div>
-</div>
-
-<script type="module" src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

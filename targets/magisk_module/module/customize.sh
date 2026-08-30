@@ -322,6 +322,7 @@ fetch_abl_from_repo() {
 }
 MODE2_PROFILE="$MODPATH/bin/mode2_profile"
 ABL_TZMAP="$MODPATH/bin/abl_tzmap"
+CANOE_BOOTMGR="$MODPATH/bin/canoe-bootmgr"
 abl_part="$BY_NAME_DIR/abl$current_slot_suffix"
 vbmeta_part="$BY_NAME_DIR/vbmeta$current_slot_suffix"
 abl_source="$abl_part"
@@ -550,24 +551,35 @@ install_pair() {
     rm -rf "$stage"
     return 1
   fi
+  [ -x "$CANOE_BOOTMGR" ] || {
+    printf '%s\n' "$T_BIN_FAIL: canoe-bootmgr missing" >> "$RUNTIME_DIR/flash.log"
+    rm -rf "$stage"
+    return 1
+  }
   transaction_log="$RUNTIME_DIR/transaction.log"
   rm -f "$transaction_log"
-  if ! CANOE_ALLOW_NEW_SIGNER=1 CANOE_SIGNER_SOURCE="$signer_source" \
-       CANOE_MODE="$selected_mode" CANOE_ACTIVE_SLOT="$current_slot_suffix" \
-       CANOE_BOOT_ENTRY="$MODPATH/canoe_boot_entry.sh" \
-       sh "$MODPATH/canoe_device_install.sh" "$stage" "$target" \
-       "$BY_NAME_DIR/efisp" "$RUNTIME_DIR/efisp.backup" \
-       > "$transaction_log" 2>&1; then
+  if ! "$CANOE_BOOTMGR" --json --boot-root "$target" install \
+       --staged "$stage" --slot "$slot_letter" \
+       --active-slot "$slot_letter" --mode "$selected_mode" \
+       --allow-new-signer > "$transaction_log" 2>&1; then
     cat "$transaction_log" >> "$RUNTIME_DIR/flash.log"
     rm -rf "$stage"
     return 1
   fi
   cat "$transaction_log" >> "$RUNTIME_DIR/flash.log"
-  if grep -q 'CANOE-MARK: signer-changed' "$transaction_log"; then
+  if ! cp "$stage/BDS.efi" "$target/BDS.efi" ||
+     { [ -d "$stage/tools" ] &&
+       ! mkdir -p "$target/tools"; } ||
+     { [ -d "$stage/tools" ] &&
+       ! cp -r "$stage/tools/." "$target/tools/"; }; then
+    rm -rf "$stage"
+    return 1
+  fi
+  if grep -q '"signer_changed":true' "$transaction_log"; then
     ui_print "$T_SIGNER_CHANGED"
     if [ "$signer_source" != "supplied" ] && [ "$selected_mode" = "2" ]; then
       entry_id=android-${current_slot_suffix#_}
-      if ! sh "$MODPATH/canoe_boot_entry.sh" mode "$target" \
+      if ! "$CANOE_BOOTMGR" --boot-root "$target" entry mode \
            --id "$entry_id" --mode 1 >> "$RUNTIME_DIR/flash.log" 2>&1; then
         rm -rf "$stage"
         return 1
@@ -577,6 +589,27 @@ install_pair() {
     fi
   fi
   rm -rf "$stage"
+  return 0
+}
+
+flash_bds_partition() {
+  efisp_part="$BY_NAME_DIR/efisp"
+  [ -e "$efisp_part" ] || return 1
+  if ! blockdev --setrw "$efisp_part" >> "$RUNTIME_DIR/flash.log" 2>&1; then
+    return 1
+  fi
+  if ! dd if="$efisp_part" of="$RUNTIME_DIR/efisp.backup" bs=4M conv=fsync \
+       >> "$RUNTIME_DIR/flash.log" 2>&1 ||
+     ! dd if="$MODPATH/BDS.efi" of="$efisp_part" bs=4M conv=fsync \
+       >> "$RUNTIME_DIR/flash.log" 2>&1 ||
+     ! sync; then
+    if [ -s "$RUNTIME_DIR/efisp.backup" ]; then
+      dd if="$RUNTIME_DIR/efisp.backup" of="$efisp_part" bs=4M conv=fsync \
+        >> "$RUNTIME_DIR/flash.log" 2>&1 || :
+      sync || :
+    fi
+    return 1
+  fi
   return 0
 }
 
@@ -725,7 +758,8 @@ while true; do
     mkdir -p "$EFISP_DIR" || { ui_print "$T_EFISP_DIR_FAIL"; abort "efisp mkdir failed"; }
     run_optional_patch
     ui_print "$T_FLASH_BDS"
-    if ! install_pair "$EFISP_DIR"; then
+    if ! install_pair "$EFISP_DIR" ||
+       ! flash_bds_partition; then
       ui_print "$T_EFISP_WRITE_FAIL"
       ui_print "$T_FLASH_FAIL"
       abort "efisp pair write failed"

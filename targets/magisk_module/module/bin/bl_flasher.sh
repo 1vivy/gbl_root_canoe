@@ -21,7 +21,7 @@ fi
 if [ "$LANG" = "zh" ]; then
   TEXT_IDLE="等待操作"
   TEXT_NO_SLOT="无法识别当前槽位"
-  TEXT_NO_TARGET_SLOT="无法计算目标槽位"
+  TEXT_NO_TARGET_SLOT="无法解析 OTA 目标槽位；bootctl/GPT 元数据不可用，拒绝将运行槽位重新标记"
   TEXT_FLASHING="刷写任务运行中，目标槽位"
   TEXT_PATCH_ONLY="分区修补任务运行中"
   TEXT_DEBUG_MODE="调试模式：仅处理不刷写，efisp 目录使用模块 tmp/efisp"
@@ -66,12 +66,10 @@ if [ "$LANG" = "zh" ]; then
   TEXT_BIN_RUN_INFO="执行中"
   TEXT_PATCH_SLOT="目标槽位"
 else
-  TEXT_IDLE="Waiting"
   TEXT_NO_SLOT="Cannot detect current slot"
-  TEXT_NO_TARGET_SLOT="Cannot detect target slot"
+  TEXT_NO_TARGET_SLOT="Cannot resolve the OTA target slot; bootctl/GPT metadata is unavailable, refusing to relabel the running slot"
   TEXT_FLASHING="Flash task running, target slot"
   TEXT_PATCH_ONLY="Partition patch task running"
-  TEXT_DEBUG_MODE="Debug Mode: process only, no flash; efisp dir uses module tmp/efisp"
   TEXT_DEBUG_DONE="Debug task completed"
   TEXT_DEBUG_FAILED="Debug error"
   TEXT_EXTRACT_FAILED="ABL extract failed"
@@ -119,6 +117,7 @@ BY_NAME_DIR="${BY_NAME_DIR:-/dev/block/by-name}"
 PERSIST_MNT="${PERSIST_MNT:-/mnt/vendor/persist}"
 EFISP_DIR="${EFISP_DIR:-$PERSIST_MNT/efisp}"
 BDS_EFI="$MODDIR/BDS.efi"
+CANOE_BOOTMGR="$BINDIR/canoe-bootmgr"
 IMAGE_NAMES="abl"
 LOG_FILE="$RUNTIME_DIR/flash.log"
 STATE_FILE="$RUNTIME_DIR/state"
@@ -403,12 +402,14 @@ install_efisp_pair() {
   source_efi="$2"
   source_profile="$3"
   source_tzmap="$4"
-  active_slot="${5:-_a}"
+  active_slot="$5"
   flash_bds="${6:-yes}"
+  case "$active_slot" in _a|_b) ;; *) return 1 ;; esac
   install_mode=1
   if config_mode_for_slot "$target/canoe.cfg" "$active_slot"; then
     install_mode="$PREFERRED_MODE"
   fi
+  active_slot_letter=$(slot_suffix_to_letter "$active_slot")
   stage="$target/.canoe.stage.$$"
   rm -rf "$stage"
   mkdir -p "$stage" || return 1
@@ -434,24 +435,17 @@ install_efisp_pair() {
     rm -rf "$stage"
     return 1
   fi
+  [ -x "$CANOE_BOOTMGR" ] || {
+    write_log "$TEXT_BIN_NOT_FOUND: $CANOE_BOOTMGR"
+    rm -rf "$stage"
+    return 1
+  }
   transaction_log="$RUNTIME_DIR/transaction.log"
   rm -f "$transaction_log"
-  if [ "$flash_bds" = "yes" ]; then
-    if CANOE_ALLOW_NEW_SIGNER=1 CANOE_SIGNER_SOURCE="$SIGNER_SOURCE" \
-        CANOE_MODE="$install_mode" CANOE_ACTIVE_SLOT="$active_slot" \
-        CANOE_BOOT_ENTRY="$MODDIR/canoe_boot_entry.sh" \
-        sh "$MODDIR/canoe_device_install.sh" "$stage" "$target" \
-        "$BY_NAME_DIR/efisp" "$RUNTIME_DIR/efisp.backup" \
-        > "$transaction_log" 2>&1; then
-      transaction_status=0
-    else
-      transaction_status=$?
-    fi
-  elif CANOE_ALLOW_NEW_SIGNER=1 CANOE_SIGNER_SOURCE="$SIGNER_SOURCE" \
-      CANOE_MODE="$install_mode" CANOE_ACTIVE_SLOT="$active_slot" \
-      CANOE_BOOT_ENTRY="$MODDIR/canoe_boot_entry.sh" \
-      sh "$MODDIR/canoe_device_install.sh" "$stage" "$target" \
-      > "$transaction_log" 2>&1; then
+  if "$CANOE_BOOTMGR" --json --boot-root "$target" install \
+      --staged "$stage" --slot "$active_slot_letter" \
+      --active-slot "$active_slot_letter" --mode "$install_mode" \
+      --allow-new-signer > "$transaction_log" 2>&1; then
     transaction_status=0
   else
     transaction_status=$?
@@ -461,12 +455,22 @@ install_efisp_pair() {
     rm -rf "$stage"
     return 1
   fi
-  if grep -q 'CANOE-MARK: signer-changed' "$transaction_log" &&
+  if [ "$flash_bds" = "yes" ]; then
+    if ! cp "$stage/BDS.efi" "$target/BDS.efi" ||
+       { [ -d "$stage/tools" ] &&
+         ! mkdir -p "$target/tools"; } ||
+       { [ -d "$stage/tools" ] &&
+         ! cp -r "$stage/tools/." "$target/tools/"; }; then
+      rm -rf "$stage"
+      return 1
+    fi
+  fi
+  if grep -q '"signer_changed":true' "$transaction_log" &&
      [ "$SIGNER_SOURCE" != "supplied" ]; then
     write_log "$TEXT_SIGNER_CHANGED"
     if [ "$install_mode" = "2" ]; then
       entry_id=$(config_active_id "$active_slot")
-      if ! sh "$MODDIR/canoe_boot_entry.sh" mode "$target" \
+      if ! "$CANOE_BOOTMGR" --boot-root "$target" entry mode \
            --id "$entry_id" --mode 1 >> "$LOG_FILE" 2>&1; then
         rm -rf "$stage"
         return 1
@@ -606,7 +610,10 @@ update_bds_tools() {
     fi
     return 2
   fi
-  current_slot=$(detect_current_slot) || current_slot=_a
+  current_slot=$(detect_current_slot) || {
+    write_log "$TEXT_NO_SLOT"
+    return 1
+  }
   if ! install_efisp_pair "$EFISP_DIR" "$EFISP_DIR/boot.efi" \
        "$EFISP_DIR/boot.efi.gm2p" "$EFISP_DIR/boot.efi.tzmap" \
        "$current_slot"; then
@@ -801,19 +808,14 @@ run_flash() {
     derivation_vbmeta="$SUPPLIED_DIR/vbmeta.img"
     derivation_source_vbmeta="$SUPPLIED_DIR/vbmeta.img"
   fi
-  if [ "$arg_vbmeta_supplied" = "1" ]; then
-    SIGNER_SOURCE=supplied
-  else
-    SIGNER_SOURCE=partition
-  fi
   write_log "canoe: abl source=$abl_source_kind vbmeta source=$vbmeta_source_kind"
-  active_slot="$current_slot"
   next_slot=$(next_boot_slot || :)
-  if [ -n "$next_slot" ] && [ "$next_slot" != "$current_slot" ]; then
-    active_slot="$next_slot"
-  else
-    write_log "next-slot probe unavailable; labelling the row with the running slot"
+  if [ -z "$next_slot" ] || [ "$next_slot" = "$current_slot" ]; then
+    write_log "$TEXT_NO_TARGET_SLOT"
+    write_state error "$TEXT_NO_TARGET_SLOT"
+    exit 1
   fi
+  active_slot="$next_slot"
 
   if [ "$debug" = "yes" ]; then
     update_efisp "$derivation_abl" "$derivation_vbmeta" yes \
@@ -952,15 +954,13 @@ run_config_mode_worker() {
     exit 1
   }
   entry_id=$(config_active_id "$current_slot")
-  if ! sh "$MODDIR/canoe_boot_entry.sh" mode "$EFISP_DIR" \
+  [ -x "$CANOE_BOOTMGR" ] || {
+    write_state error "$TEXT_BIN_NOT_FOUND: $CANOE_BOOTMGR"
+    exit 1
+  }
+  if ! "$CANOE_BOOTMGR" --json --boot-root "$EFISP_DIR" entry mode \
        --id "$entry_id" --mode "$mode_value" >> "$LOG_FILE" 2>&1; then
     write_state error "canoe.cfg mode write failed"
-    exit 1
-  fi
-  if ! config_mode_for_slot "$EFISP_DIR/canoe.cfg" "$current_slot" ||
-     [ "$PREFERRED_MODE" != "$mode_value" ] ||
-     [ "$MODE_DEFAULTED" != "0" ]; then
-    write_state error "canoe.cfg verification failed"
     exit 1
   fi
   write_state success "entry mode saved"
