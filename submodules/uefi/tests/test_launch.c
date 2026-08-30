@@ -2583,5 +2583,6 @@ SfbShowBootingScreen(IN CONST CHAR16 *Name,
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenuScaffold.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBrowser.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.c"

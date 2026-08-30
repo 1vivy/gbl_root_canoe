@@ -77,6 +77,7 @@
 	SuperFbFat.c
 	SuperFbEntries.c
 	SuperFbMenu.c
+	SuperFbMenuScaffold.c
 	SuperFbBrowser.c
 	SuperFbSlots.h
 	SuperFbSlots.c
