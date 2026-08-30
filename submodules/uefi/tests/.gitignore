@@ -8,6 +8,7 @@ test_deviceinfo
 test_fat
 test_hooks
 test_launch
+test_linuxboot
 test_profile
 test_tzmap
 test_surface

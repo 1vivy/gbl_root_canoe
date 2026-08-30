@@ -437,7 +437,7 @@ SfbAsciiRelPathToUnicode (IN CONST CHAR8 *Rel, OUT CHAR16 *Out, IN UINTN OutChar
 
 /*
  * Build an absolute volume path by prepending RootPrefix to a root-relative
- * suffix that already begins with a backslash. RootPrefix is "" for FAT32, so
+ * suffix that already begins with a backslash. RootPrefix is "" for FAT, so
  * the suffix passes through untouched; for the ext4 persist volume it is
  * "\efisp", turning "\EFI\BOOT\BOOTAA64.EFI" into "\efisp\EFI\BOOT\BOOTAA64.EFI".
  * The suffix always carries the joining separator, so nothing is inserted
@@ -610,11 +610,39 @@ SfbBlsIsConfName (IN CONST CHAR16 *Name)
 }
 
 /*
- * Read /loader/entries off one removable volume and append a row per usable
- * entry.
+ * Narrow a boot-root prefix to ASCII for the parser module.
  *
- * Removable-only by design: an internal ESP must not be able to inject rows
- * into the on-device boot root's menu, which is canoe.cfg's territory.
+ * SfbVolumeRootPrefix returns the CHAR16 form every EFI_FILE_PROTOCOL caller
+ * needs; SuperFbBls.c is a pure parser with no EDK2 dependency, so it works in
+ * the payload's own ASCII. The prefixes are compile-time literals in the
+ * ASCII range, which is why a byte-wise narrowing is sufficient - and keeping
+ * one definition of "\efisp" rather than an ASCII twin is why the conversion
+ * happens here instead.
+ */
+STATIC
+VOID
+SfbNarrowPrefix (IN CONST CHAR16  *Prefix,
+                 OUT char         *Out,
+                 IN UINTN          Chars)
+{
+  UINTN  Index;
+
+  for (Index = 0; Index + 1 < Chars && Prefix[Index] != L'\0'; Index++) {
+    Out[Index] = (char)Prefix[Index];
+  }
+  Out[Index] = '\0';
+}
+
+/*
+ * Read the boot spec's /loader/entries off one volume and append a row per
+ * usable entry.
+ *
+ * The caller decides which volumes are eligible. Arbitrary internal media are
+ * not: this platform retains 11 internal FAT partitions (modem, dcp, bluetooth
+ * and friends), and none of them may inject rows into the menu. Removable
+ * media and the boot root itself are, the latter because it is the same volume
+ * canoe.cfg is read from - a Type #1 entry there is strictly less privileged
+ * than the config file already honoured beside it.
  */
 STATIC
 VOID
@@ -622,15 +650,24 @@ SfbScanBlsEntries (IN OUT SFB_MENU_STATE *Menu,
                    IN EFI_HANDLE          Volume,
                    IN EFI_FILE_PROTOCOL  *Root)
 {
+  CONST CHAR16       *Prefix = SfbVolumeRootPrefix (Volume);
   EFI_FILE_PROTOCOL  *Dir = NULL;
   SFB_DIR_ENTRY      *List = NULL;
   CHAR8              *Bytes = NULL;
+  CHAR16             DirPath[SFB_PATH_CHARS];
+  char               AsciiPrefix[SFB_BLS_PATH_CHARS];
   UINTN              Count = 0;
   BOOLEAN            Truncated = FALSE;
   UINTN              Index;
 
-  if (EFI_ERROR (Root->Open (Root, &Dir, (CHAR16 *)SFB_BLS_DIR_PATH,
-                             EFI_FILE_MODE_READ, 0)) ||
+  SfbNarrowPrefix (Prefix, AsciiPrefix, ARRAY_SIZE (AsciiPrefix));
+
+  if (EFI_ERROR (SfbJoinRoot (Prefix, SFB_BLS_DIR_PATH, DirPath,
+                              ARRAY_SIZE (DirPath)))) {
+    return;
+  }
+
+  if (EFI_ERROR (Root->Open (Root, &Dir, DirPath, EFI_FILE_MODE_READ, 0)) ||
       Dir == NULL) {
     return;
   }
@@ -649,8 +686,7 @@ SfbScanBlsEntries (IN OUT SFB_MENU_STATE *Menu,
     goto Done;
   }
   if (Truncated) {
-    DEBUG ((EFI_D_WARN, "SFB: MARK bls-truncated dir='%s'\n",
-            SFB_BLS_DIR_PATH));
+    DEBUG ((EFI_D_WARN, "SFB: MARK bls-truncated dir='%s'\n", DirPath));
   }
 
   for (Index = 0; Index < Count && Menu->Count < SFB_MAX_ENTRIES; Index++) {
@@ -665,7 +701,7 @@ SfbScanBlsEntries (IN OUT SFB_MENU_STATE *Menu,
       continue;
     }
     if (EFI_ERROR (UnicodeSPrint (Path, sizeof (Path), L"%s\\%s",
-                                  SFB_BLS_DIR_PATH, List[Index].Name)) ||
+                                  DirPath, List[Index].Name)) ||
         StrLen (Path) >= SFB_PATH_CHARS) {
       continue;
     }
@@ -675,6 +711,13 @@ SfbScanBlsEntries (IN OUT SFB_MENU_STATE *Menu,
     }
     if (!SfbBlsParse (Bytes, Size, &Parsed)) {
       DEBUG ((EFI_D_WARN, "SFB: MARK bls-reject file='%s'\n",
+              List[Index].Name));
+      continue;
+    }
+
+    /* Volume-absolute from here on, for every path the entry named. */
+    if (!SfbBlsPrefixPaths (&Parsed, AsciiPrefix)) {
+      DEBUG ((EFI_D_WARN, "SFB: MARK bls-reject file='%s' reason=prefix\n",
               List[Index].Name));
       continue;
     }
@@ -732,24 +775,26 @@ Done:
   Dir->Close (Dir);
 }
 
-
 /*
- * Discover the well-known boot loader on every removable/ESP volume.
+ * Discover boot media on every retained volume: the well-known loader path on
+ * each, plus the boot spec's /loader/entries where that is allowed.
  *
  * This is what the loader carries its own FAT stack for: enumerating loaders on
  * media whose firmware exposes nothing but Block I/O. It is additive and runs
- * on every boot, which draws the line exactly - canoe.cfg owns the persist boot
- * root, discovery owns removable media.
+ * on every boot.
  *
- * The ext4 persist volume is therefore skipped. Without that gate this scan
- * would re-find the boot root's own boot.efi and list every configured entry a
- * second time. SfbVolumeIsExt4 reads the cached classification rather than
- * re-probing the block device, which matters here because the scan visits every
- * volume; the two near-identical predicates beside it in the header do re-probe.
+ * The well-known-loader probe covers every retained volume, internal or
+ * removable, at that volume's boot root - an ESP is an ESP wherever it lives,
+ * and this platform's FAT volumes are all internal. Boot-spec discovery is
+ * narrower: see SfbScanBlsEntries for who is eligible and why.
+ *
+ * SfbVolumeIsExt4 reads the cached classification rather than re-probing the
+ * block device, which matters here because the scan visits every volume; the
+ * two near-identical predicates beside it in the header do re-probe.
  */
 STATIC
 VOID
-SfbScanRemovableVolumes (IN OUT SFB_MENU_STATE *Menu)
+SfbScanDiscoveredVolumes (IN OUT SFB_MENU_STATE *Menu)
 {
   EFI_STATUS  Status;
   EFI_HANDLE  *Volumes = NULL;
@@ -765,9 +810,12 @@ SfbScanRemovableVolumes (IN OUT SFB_MENU_STATE *Menu)
   }
 
   for (Index = 0; Index < VolumeCount; Index++) {
+    CONST CHAR16       *Prefix;
     EFI_FILE_PROTOCOL  *Root = NULL;
     SFB_BOOT_ENTRY     *Slot;
     CHAR16             Desc[SFB_DESC_CHARS];
+    CHAR16             BootPath[SFB_PATH_CHARS];
+    CHAR16             DescPath[SFB_PATH_CHARS];
     UINTN              Prev;
     BOOLEAN            Duplicate = FALSE;
 
@@ -777,39 +825,51 @@ SfbScanRemovableVolumes (IN OUT SFB_MENU_STATE *Menu)
       break;
     }
 
-    if (SfbVolumeIsExt4 (Volumes[Index])) {
-      continue;
-    }
-
     if (EFI_ERROR (SfbOpenVolumeRoot (Volumes[Index], &Root)) ||
         Root == NULL) {
       continue;
     }
 
     /*
-     * Every volume that reaches here is FAT32, whose boot root is its own
-     * root, so the well-known paths need no prefix joining.
+     * The well-known paths are relative to the volume's boot root, which is the
+     * volume root on FAT and \efisp on the ext4 persist partition. Joining the
+     * prefix is what makes an ESP-shaped layout on the boot root discoverable:
+     * without it this probe looked for \EFI\BOOT\BOOTAA64.EFI at the ext4
+     * volume root, where the boot root's own files are not, and the volume was
+     * skipped outright to avoid the wrong answer.
+     *
+     * There is no duplicate to worry about. SfbAppendBootRootEntries probes
+     * boot.efi and boot_backup.efi, never the well-known loader, and the
+     * device-path check below catches anything that did overlap.
      *
      * The well-known-loader probe and the boot-spec scan below are additive
-     * and independent: a stick may carry a GRUB or systemd-boot BOOTAA64.EFI,
+     * and independent: a medium may carry a GRUB or systemd-boot BOOTAA64.EFI,
      * a /loader/entries directory, or both, and offering only one of them
      * because the other was missing would hide a bootable medium.
      */
-    if (SfbFileExists (Root, SFB_BOOT_FILE_PATH)) {
+    Prefix = SfbVolumeRootPrefix (Volumes[Index]);
+    if (EFI_ERROR (SfbJoinRoot (Prefix, SFB_BOOT_FILE_PATH, BootPath,
+                                ARRAY_SIZE (BootPath))) ||
+        EFI_ERROR (SfbJoinRoot (Prefix, SFB_DESC_FILE_PATH, DescPath,
+                                ARRAY_SIZE (DescPath)))) {
+      Root->Close (Root);
+      continue;
+    }
+
+    if (SfbFileExists (Root, BootPath)) {
       /*
        * \EFI\DESC names the loader when the medium bothers to; volumes
        * without one are numbered off in the order they were found, so every
        * row still has a label the user can tell apart.
        */
       Desc[0] = L'\0';
-      SfbReadAnsiDescription (Root, SFB_DESC_FILE_PATH, Desc, SFB_DESC_CHARS);
+      SfbReadAnsiDescription (Root, DescPath, Desc, SFB_DESC_CHARS);
       if (Desc[0] == L'\0') {
         UnicodeSPrint (Desc, sizeof (Desc), L"NONAME%u", NoName++);
       }
 
       Slot = &Menu->Entry[Menu->Count];
-      Status = SfbMakeFileEntry (Volumes[Index], SFB_BOOT_FILE_PATH, Desc,
-                                 Slot);
+      Status = SfbMakeFileEntry (Volumes[Index], BootPath, Desc, Slot);
       if (!EFI_ERROR (Status)) {
         Duplicate = FALSE;
         for (Prev = 0; Prev < Menu->Count; Prev++) {
@@ -822,16 +882,27 @@ SfbScanRemovableVolumes (IN OUT SFB_MENU_STATE *Menu)
         if (Duplicate) {
           SfbFreeEntry (Slot);
         } else {
-          DEBUG ((EFI_D_INFO, "SFB: discovered '%s' on volume %u\n",
-                  Desc, (UINT32)Index));
+          /* The path is the evidence, not decoration: on the ext4 boot root it
+           * has to read \efisp\EFI\BOOT\BOOTAA64.EFI, and a probe that lost the
+           * boot-root prefix would find nothing while still logging a row. */
+          DEBUG ((EFI_D_INFO,
+                  "SFB: MARK discovered volume=%u path='%s' desc='%s'\n",
+                  (UINT32)Index, BootPath, Desc));
           Menu->Count++;
         }
       }
     }
 
-    /* Boot-spec entries are removable-media only: an internal ESP must not be
-     * able to inject rows into the on-device boot root's menu. */
-    if (SfbIsUsbVolume (Volumes[Index])) {
+    /*
+     * Boot-spec entries come from removable media or from the boot root, and
+     * from nowhere else. An arbitrary internal FAT partition must not inject
+     * rows: this platform retains eleven of them, all vendor-owned. The boot
+     * root is exempt because it is the volume canoe.cfg is read from - an entry
+     * there is strictly less privileged than the config already honoured beside
+     * it - and because on a device whose USB host mode does not work it is the
+     * only place an entry can be staged at all.
+     */
+    if (SfbVolumeIsExt4 (Volumes[Index]) || SfbIsUsbVolume (Volumes[Index])) {
       SfbScanBlsEntries (Menu, Volumes[Index], Root);
     }
 
@@ -1118,8 +1189,8 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
    * - the same no matter what is plugged in, and it makes the truncation below
    * shed discovered rows rather than configured ones when the budget is hit.
    */
-  SfbBootMark (L"menu:removable");
-  SfbScanRemovableVolumes (Menu);
+  SfbBootMark (L"menu:discover");
+  SfbScanDiscoveredVolumes (Menu);
   SfbBootMark (L"menu:rows");
 
   for (Index = Unconfigured; Index < Menu->Count; Index++) {
@@ -1180,7 +1251,7 @@ SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu)
 
 /*
  * On this platform the firmware's LoadImage refuses images that come off a
- * FAT32 volume: the verified-boot policy behind the Security Arch protocols is
+ * FAT volume: the verified-boot policy behind the Security Arch protocols is
  * built for the signed boot chain, not for the arbitrary loaders this menu
  * exists to run. The device is unlocked and the user has asked for these images
  * explicitly, so the authentication hooks are neutralised for the duration of
@@ -1405,7 +1476,7 @@ SfbPreloadDrivers (IN EFI_HANDLE Volume, IN CONST CHAR16 *EntryPath)
       continue;
     }
     /* Driver paths are relative to the same virtual root as the entry itself
-     * (the volume root for FAT32, \efisp for the ext4 persist volume). */
+     * (the volume root for FAT, \efisp for the ext4 persist volume). */
     Status = SfbJoinRoot (SfbVolumeRootPrefix (Volume), RelPath, DriverPath,
                           SFB_PATH_CHARS);
     if (EFI_ERROR (Status)) {
@@ -1553,10 +1624,18 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
              Entry->Path, ProfileStatus);
     }
   }
+  /*
+   * The path is here because none of the marks downstream of this one carry it:
+   * image-loaded, image-start and image-return report the mode and the status
+   * but not what was launched, so a log alone could not tell an internal-ESP
+   * row apart from the managed Android row. One line, named, before anything
+   * irreversible happens.
+   */
   DEBUG ((EFI_D_INFO,
           "SFB: MARK launch managed=%u requested-mode=%u "
-          "effective-mode=%u\n",
-          (UINT32)Managed, (UINT32)SessionMode, (UINT32)EffectiveMode));
+          "effective-mode=%u kind=%u path='%s'\n",
+          (UINT32)Managed, (UINT32)SessionMode, (UINT32)EffectiveMode,
+          (UINT32)Entry->Kind, Entry->Path));
 
   SfbPreloadDrivers (Entry->Volume, Entry->Path);
 
@@ -1565,10 +1644,11 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
   } else {
     /*
      * A plain application launch, with arguments when the config row asked
-     * for them. This is what makes a loader row work: the image is
-     * \tools\FdLoader.efi or \tools\AbootLoader.efi and the payload it
-     * should boot is named in `options`. Without this the loaders receive
-     * an empty command line and can only print their usage.
+     * for them. This is the whole of what a chainloader selector does: start
+     * a PE and hand it its arguments byte for byte. A payload-side launcher
+     * that has to place a firmware descriptor or assemble a kernel handoff
+     * gets told what to act on here; without publication it receives an empty
+     * command line and can only print its usage.
      */
     CONST SFB_BLS_ENTRY  *Payload = (Entry->BlsIndex != SFB_NO_BLS)
                                       ? SfbBlsPayload (Entry->BlsIndex)

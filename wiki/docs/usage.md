@@ -12,10 +12,63 @@
 - When the OEM-unlocking warning appears during boot, press **Volume Up** to
   enter Super Fastboot.
 
+### Both RAM-boot routes work, for different reasons
+
+```bash
+fastboot stage <BDS.efi>
+fastboot oem boot-efi
+```
+
+```bash
+fastboot boot <BDS.efi>
+```
+
+The second one surprises people because `BDS.efi` is a PE image, not an Android
+boot image. It works because the *host* `fastboot` tool wraps whatever file it
+is given into a synthetic boot image before sending it — the transcript says so:
+
+```text
+creating boot image...
+creating boot image - 440320 bytes
+Sending 'boot.img' (430 KB)                        OKAY
+Booting                                            OKAY
+```
+
+438272 bytes of `BDS.efi` in, a 440320-byte boot image out. The bootloader's
+boot handler then finds the `MZ` signature at the start of that image's kernel
+section and launches the EFI payload rather than treating it as a kernel; that
+is exactly what `IsEfiInBootImg` in `QcomModulePkg/Library/FastbootLib` is for.
+Measured on the OnePlus 15.
+
+Use whichever is convenient. `fastboot stage` + `fastboot oem boot-efi` is the
+explicit form and does not depend on the host tool's wrapping behaviour;
+`fastboot boot` is one command.
+
 ## First run and menu
 
 If the boot root has neither `canoe.cfg` nor `boot.efi`, BDS shows first-run
 information and enters Super Fastboot. There is no entry to launch yet.
+
+### Reaching the menu instead of the default
+
+BDS samples **Volume Up for one second at startup**, before it brings up the
+filesystem stack, so the key is read before initialization can consume it.
+
+- **Volume Up held during that second** — the menu opens immediately and no
+  unattended launch is attempted.
+- **Volume Up not held** — BDS launches the entry named by `default` in
+  `canoe.cfg` without showing the menu. The menu is reached only if that launch
+  returns or fails, or if the file names no `default`.
+
+Once the menu is up, the countdown applies to the **first draw only**: it waits
+`timeout` seconds and then launches the highlighted default. Any key press stops
+the countdown, and every later draw waits indefinitely. `timeout 0` does not
+mean "wait forever" — it launches the default immediately, so a config being
+used to test a new row wants a generous `timeout`, not a zero one.
+
+This matters when adding a hand-written row: a row that never gets selected
+because the default launched first looks exactly like a row that failed to
+enumerate.
 
 The menu includes:
 
@@ -23,6 +76,9 @@ The menu includes:
 - **USB Mass Storage**
 - configured `Android (slot A)`, `Android (slot B)`, and `Android (previous)`
   rows when their managed files exist;
+- every other `canoe.cfg` row whose `image` exists, including hand-written ones
+  such as a third-party firmware chainload — see
+  [Chainloading a third-party UEFI firmware](./chainload.md);
 - **EFI Tools** for files in the boot root's `tools/` directory.
 
 The shipped `SurfaceTools.efi` inventory opens from **EFI Tools**. Its default

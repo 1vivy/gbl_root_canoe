@@ -3,7 +3,7 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
 .PHONY: test clean
 
-test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_surface
+test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_surface
 	./test_profile
 	./test_deviceinfo
 	./test_tzmap
@@ -12,6 +12,7 @@ test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch te
 	./test_launch
 	./test_config
 	./test_bls
+	./test_linuxboot
 	./test_surface
 
 test_profile: test_profile.c \
@@ -71,10 +72,18 @@ test_launch: test_launch.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
+# Initrd and DTB publication. Links the real SuperFbLinuxBoot.c against a fake
+# gBS so the GUIDs, the device-path shape and the LoadFile2 size contract are
+# checked against the values the kernel actually looks for.
+test_linuxboot: test_linuxboot.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLinuxBoot.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLinuxBoot.h
+	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
+
 test_surface: test_surface.c \
 	../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.c \
 	../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.h
 	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 clean:
-	rm -f test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_surface
+	rm -f test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_surface

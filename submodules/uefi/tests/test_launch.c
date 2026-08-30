@@ -2,6 +2,7 @@
  * hidden symbol visibility and never pops it, so libc declarations pulled in
  * afterwards become unlinkable hidden references. */
 #include <assert.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/UefiBootServicesTableLib.h>
+#include <Guid/FileInfo.h>
 #include <Protocol/LoadedImage.h>
 #include <Protocol/Security.h>
 #include <Protocol/Security2.h>
@@ -82,6 +84,51 @@ static BOOLEAN mBootRootBootentriesPresent;
 static BOOLEAN mBootRootBootaaPresent;
 
 /*
+ * Boot-spec discovery on the ext4 boot root. Opt-in because the rest of this
+ * harness models the boot root as a volume root - mBootRootPrefixIsEfisp is
+ * what makes SfbVolumeRootPrefix behave the way production does, and only the
+ * test that wants prefixed paths turns it on, so no existing fixture's path
+ * expectations move.
+ */
+static EFI_FILE_PROTOCOL mBlsDir;
+static BOOLEAN mBlsDirPresent;
+static BOOLEAN mBootRootPrefixIsEfisp;
+static CONST CHAR16 *mBlsConfNames[2];
+static UINTN mBlsConfCount;
+static UINTN mBlsReadCursor;
+static CHAR16 mBlsOpenedPath[SFB_PATH_CHARS];
+/* The image path the scan actually probed for. Whether the boot-root prefix
+ * was applied is invisible in the menu row, but it is exactly what this
+ * records. */
+static CHAR16 mBlsImageProbed[SFB_PATH_CHARS];
+
+/* Suffix match on a wide string; the fixture needs it before StrLen is in
+ * scope from the production sources included at the end of this file. */
+static BOOLEAN
+SfbStrEndsWith(IN CONST CHAR16 *Text, IN CONST CHAR16 *Suffix)
+{
+  UINTN TextChars = 0;
+  UINTN SuffixChars = 0;
+  UINTN Index;
+
+  while (Text[TextChars] != L'\0') {
+    ++TextChars;
+  }
+  while (Suffix[SuffixChars] != L'\0') {
+    ++SuffixChars;
+  }
+  if (SuffixChars > TextChars) {
+    return FALSE;
+  }
+  for (Index = 0; Index < SuffixChars; ++Index) {
+    if (Text[TextChars - SuffixChars + Index] != Suffix[Index]) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+/*
  * One device path per (volume, file). The menu suppresses duplicates by
  * comparing device paths, so a harness handing out a single shared object
  * would make every entry look like a duplicate of the first and hide exactly
@@ -115,7 +162,16 @@ ResetVolumes(void)
   mBootRootBackupPresent = FALSE;
   mBootRootBootentriesPresent = FALSE;
   mBootRootBootaaPresent = FALSE;
-  mFakeActiveSlot = SfbSlotUnknown;
+  mBlsDirPresent = FALSE;
+  mBootRootPrefixIsEfisp = FALSE;
+  mBlsConfCount = 0;
+  mBlsReadCursor = 0;
+  mBlsOpenedPath[0] = L'\0';
+  mBlsImageProbed[0] = L'\0';
+  /* The pool is per test, not per process: it holds one entry per
+   * (volume, file) and every test that builds a menu consumes some. Sixteen is
+   * ample for one menu and was silently a process-wide budget before. */
+  mDevicePathCount = 0;
 }
 
 static EFI_STATUS
@@ -241,15 +297,82 @@ ZeroMem(OUT VOID *Buffer, IN UINTN Size)
 {
   return memset(Buffer, 0, Size);
 }
+/*
+ * A real formatter, limited to the conversions this tree actually uses: %s
+ * (CHAR16), %a (ASCII), %u/%d (32-bit). It replaced a stub that only wrote a
+ * terminator, which silently voided every path built through it - including
+ * the boot-spec entry paths, where the resulting empty filename was read
+ * without complaint because the file-bytes fixture ignores its path argument.
+ */
 UINTN EFIAPI
 UnicodeSPrint(OUT CHAR16 *Start, IN UINTN BufferSize,
               IN CONST CHAR16 *Format, ...)
 {
-  (void)Format;
-  if (Start != NULL && BufferSize >= sizeof (CHAR16)) {
-    Start[0] = L'\0';
+  UINTN   Chars = BufferSize / sizeof (CHAR16);
+  UINTN   Out = 0;
+  va_list Args;
+
+  if (Start == NULL || Chars == 0) {
+    return 0;
   }
-  return 0;
+
+  va_start (Args, Format);
+  while (*Format != L'\0' && Out + 1 < Chars) {
+    if (*Format != L'%') {
+      Start[Out++] = *Format++;
+      continue;
+    }
+
+    ++Format;
+    switch (*Format) {
+      case L's': {
+        CONST CHAR16 *Text = va_arg (Args, CONST CHAR16 *);
+
+        while (Text != NULL && *Text != L'\0' && Out + 1 < Chars) {
+          Start[Out++] = *Text++;
+        }
+        break;
+      }
+      case L'a': {
+        CONST char *Text = va_arg (Args, CONST char *);
+
+        while (Text != NULL && *Text != '\0' && Out + 1 < Chars) {
+          Start[Out++] = (CHAR16)*Text++;
+        }
+        break;
+      }
+      case L'u':
+      case L'd': {
+        UINT32 Value = va_arg (Args, UINT32);
+        CHAR16 Digits[11];
+        UINTN  Count = 0;
+
+        do {
+          Digits[Count++] = (CHAR16)(L'0' + (Value % 10));
+          Value /= 10;
+        } while (Value != 0 && Count < ARRAY_SIZE (Digits));
+        while (Count != 0 && Out + 1 < Chars) {
+          Start[Out++] = Digits[--Count];
+        }
+        break;
+      }
+      case L'%':
+        Start[Out++] = L'%';
+        break;
+      default:
+        /* An unimplemented conversion must be loud: a silent one is what made
+         * the old stub hide a real defect. */
+        assert(0);
+        break;
+    }
+    if (*Format != L'\0') {
+      ++Format;
+    }
+  }
+  va_end (Args);
+
+  Start[Out] = L'\0';
+  return Out;
 }
 UINTN EFIAPI
 Print(IN CONST CHAR16 *Format, ...)
@@ -420,8 +543,82 @@ __StrCatS(IN OUT CHAR16 *Destination, IN UINTN DestinationMax,
 static EFI_STATUS EFIAPI
 FakeRootClose(IN EFI_FILE_PROTOCOL *This)
 {
-  assert(This == &mRoot || This == &mFatRoot);
+  assert(This == &mRoot || This == &mFatRoot || This == &mBlsDir);
   ++mCloseCount;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS EFIAPI
+FakeDirSetPosition(IN EFI_FILE_PROTOCOL *This, IN UINT64 Position)
+{
+  assert(This == &mBlsDir);
+  mBlsReadCursor = (UINTN)Position;
+  return EFI_SUCCESS;
+}
+
+/*
+ * Hand back one EFI_FILE_INFO per staged name, then a zero-length read to mark
+ * the end - the contract SfbReadDirectory is written against. Sizing the
+ * record the way a real FAT driver does is the point: the caller's
+ * EFI_BUFFER_TOO_SMALL retry only works if this reports the size it needs.
+ */
+static EFI_STATUS EFIAPI
+FakeDirRead(IN EFI_FILE_PROTOCOL *This, IN OUT UINTN *BufferSize,
+            OUT VOID *Buffer)
+{
+  EFI_FILE_INFO *Info = (EFI_FILE_INFO *)Buffer;
+  CONST CHAR16 *Name;
+  UINTN Needed;
+
+  assert(This == &mBlsDir);
+
+  if (mBlsReadCursor >= mBlsConfCount) {
+    *BufferSize = 0;
+    return EFI_SUCCESS;
+  }
+
+  Name = mBlsConfNames[mBlsReadCursor];
+  Needed = SIZE_OF_EFI_FILE_INFO + (StrLen (Name) + 1) * sizeof (CHAR16);
+  if (*BufferSize < Needed) {
+    *BufferSize = Needed;
+    return EFI_BUFFER_TOO_SMALL;
+  }
+
+  memset (Info, 0, Needed);
+  Info->Size = Needed;
+  Info->FileSize = 64;
+  Info->Attribute = 0;
+  FakeCopyChars (Info->FileName, Name, StrLen (Name) + 1);
+  *BufferSize = Needed;
+  ++mBlsReadCursor;
+  return EFI_SUCCESS;
+}
+
+/*
+ * The only directory this harness can open is the boot spec's, and only where
+ * a test staged it. Everything else reports absent, which is what a boot root
+ * with no loader tree does.
+ */
+static EFI_STATUS EFIAPI
+FakeRootOpen(IN EFI_FILE_PROTOCOL *This, OUT EFI_FILE_PROTOCOL **NewHandle,
+             IN CHAR16 *FileName, IN UINT64 OpenMode, IN UINT64 Attributes)
+{
+  (VOID)OpenMode;
+  (VOID)Attributes;
+  assert(This == &mRoot || This == &mFatRoot);
+  assert(NewHandle != NULL && FileName != NULL);
+
+  FakeCopyChars (mBlsOpenedPath, FileName, ARRAY_SIZE (mBlsOpenedPath));
+
+  if (!mBlsDirPresent) {
+    return EFI_NOT_FOUND;
+  }
+
+  mBlsDir.Close = FakeRootClose;
+  mBlsDir.SetPosition = FakeDirSetPosition;
+  mBlsDir.Read = FakeDirRead;
+  mBlsReadCursor = 0;
+  *NewHandle = &mBlsDir;
   return EFI_SUCCESS;
 }
 
@@ -436,11 +633,13 @@ SfbOpenVolumeRoot(IN EFI_HANDLE Volume, OUT EFI_FILE_PROTOCOL **Root)
   }
   if (Volume == mVolume) {
     mRoot.Close = FakeRootClose;
+    mRoot.Open = FakeRootOpen;
     *Root = &mRoot;
     return EFI_SUCCESS;
   }
   if (Volume == mFatVolume && mFatVolumePresent) {
     mFatRoot.Close = FakeRootClose;
+    mFatRoot.Open = FakeRootOpen;
     *Root = &mFatRoot;
     return EFI_SUCCESS;
   }
@@ -725,9 +924,13 @@ TestProfileSelection(void)
 }
 
 static void
+ResetArena(void);
+
+static void
 ResetLaunchBackend(void)
 {
   static EFI_BOOT_SERVICES BootServices;
+  ResetArena ();
   memset (&BootServices, 0, sizeof (BootServices));
   BootServices.LocateProtocol = FakeLocateProtocol;
   mLastPrepareMode = SfbBootModeHonestUnlocked;
@@ -997,12 +1200,16 @@ TestLockRefusalDemotes(void)
 }
 
 /*
- * A config row that names a loader as its image and a payload in `options`
- * must reach StartImage with that string as its LoadOptions. This is the
- * whole mechanism behind holding a Mu-Silicium/Aloha or Android boot entry:
- * the image is a loader shipped in tools/, and the payload it should boot is
- * named by the row. Without publication the loader gets an empty command
- * line and can only print its usage.
+ * A config row that names a payload-side launcher as its image and a payload
+ * in `options` must reach StartImage with that string as its LoadOptions.
+ * This is the whole mechanism behind holding a Mu-Silicium/Aloha boot entry:
+ * the BDS is a chainloader selector, so it starts a PE and passes arguments
+ * through byte for byte; placing a firmware descriptor at its link address is
+ * the payload's own job. Without publication the launcher receives an empty
+ * command line and cannot find what it was asked to boot.
+ *
+ * Verified on hardware: `SFB: MARK image-options chars=40` for a 40-character
+ * option string, OnePlus 15, 2026-08-29.
  */
 static void
 TestConfigOptionsBecomeLoadOptions(void)
@@ -1011,10 +1218,10 @@ TestConfigOptionsBecomeLoadOptions(void)
     "version 1\n"
     "entry mu\n"
     "title Mu-Silicium\n"
-    "image tools/FdLoader.efi\n"
-    "options \\mu\\SM8850.fd 0x9FC00000 0x00300000\n";
+    "image mu/PlaceMuFd.efi\n"
+    "options \\efisp\\mu\\Mu-infiniti.fd 0xC6900000 0x00300000\n";
   static CONST CHAR16 Expected[] =
-    L"\\mu\\SM8850.fd 0x9FC00000 0x00300000";
+    L"\\efisp\\mu\\Mu-infiniti.fd 0xC6900000 0x00300000";
   SFB_MENU_STATE Menu;
   UINTN Index;
   UINTN Found = SFB_NO_INDEX;
@@ -1047,8 +1254,8 @@ TestConfigOptionsBecomeLoadOptions(void)
   assert(mLoadCount == 1 && mStartCount == 1);
   assert(mLoadedImage.LoadOptions != NULL);
   assert(StrCmp ((CHAR16 *)mLoadedImage.LoadOptions, Expected) == 0);
-  /* Counting the terminating NUL; without it the loader loses its last
-   * argument, which for FdLoader is the load window size. */
+  /* Counting the terminating NUL; without it the launcher loses its last
+   * argument, which for a descriptor placer is the load window size. */
   assert(mLoadedImage.LoadOptionsSize ==
          (StrLen (Expected) + 1) * sizeof (CHAR16));
   SfbFreeMenu (&Menu);
@@ -1452,7 +1659,10 @@ TestAdditiveDiscovery(void)
   mBootRootManagedPresent = TRUE;
   mBootRootBackupPresent = TRUE;
   mBootRootIsExt4 = TRUE;
-  mBootRootBootaaPresent = TRUE;
+  /* No well-known loader on the boot root: this case is about what plugging in
+   * a medium adds, and a boot-root ESP row would be noise in that comparison.
+   * TestBootRootEspIsDiscovered owns that behaviour. */
+  mBootRootBootaaPresent = FALSE;
 
   SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
   SnapshotMenu (&Menu, &Alone);
@@ -1477,8 +1687,7 @@ TestAdditiveDiscovery(void)
   }
   SfbFreeMenu (&Menu);
 
-  /* Two configured rows and exactly one discovered row: the boot root's own
-   * BOOTAA64.EFI is not offered a second time. */
+  /* Two configured rows and exactly one discovered row. */
   assert(Files == 3);
   assert(Discovered == 3);
   assert(WithMedia.Count == Alone.Count + 1);
@@ -1498,6 +1707,321 @@ TestAdditiveDiscovery(void)
   SnapshotMenu (&Menu, &MediaWithoutLoader);
   SfbFreeMenu (&Menu);
   assert(SameMenu (&MediaWithoutLoader, &Alone));
+
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
+/*
+ * A Boot Loader Specification Type #1 entry staged on the ext4 boot root.
+ *
+ * This is the only way a boot-spec entry can reach this device: it has no
+ * removable-media path, USB host mode does not work on it, and the scan used
+ * to run on USB volumes alone - so a \loader\entries tree on persist was read
+ * by nothing. The row has to appear, and the kernel it names has to be looked
+ * for under \efisp rather than at the volume root, because that is where the
+ * boot root actually is.
+ */
+static void
+TestBootRootBlsEntryIsDiscovered(void)
+{
+  static const CHAR8 ConfText[] =
+    "title postmarketOS\n"
+    "linux /pmos/vmlinuz\n"
+    "options root=/dev/mmcblk0p1 rw\n";
+  SFB_MENU_STATE Menu;
+  UINTN Index;
+  UINTN Found = SFB_NO_INDEX;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfText, sizeof (ConfText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootIsExt4 = TRUE;
+  mBootRootPrefixIsEfisp = TRUE;
+  mBlsDirPresent = TRUE;
+  mBlsConfNames[0] = L"pmos.conf";
+  mBlsConfCount = 1;
+
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+
+  /* The directory that was opened is the one under the boot root, not the one
+   * at the volume root: getting this wrong is silent, the open simply fails. */
+  assert(StrCmp (mBlsOpenedPath, L"\\efisp\\loader\\entries") == 0);
+  /* The path the scan probed for is the prefixed one. Without this the row
+   * could still appear while the firmware looked for the kernel at the volume
+   * root, which is the bug the prefix exists to prevent. */
+  assert(StrCmp (mBlsImageProbed, L"\\efisp\\pmos\\vmlinuz") == 0);
+
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryBlsLinux) {
+      assert(Found == SFB_NO_INDEX);
+      Found = Index;
+    }
+  }
+  assert(Found != SFB_NO_INDEX);
+  assert(StrCmp (Menu.Entry[Found].Desc, L"postmarketOS") == 0);
+  assert(Menu.Entry[Found].BlsIndex != SFB_NO_BLS);
+
+  SfbFreeMenu (&Menu);
+
+  /* Without the tree the menu gains nothing, which is what every other boot
+   * on this device looks like. */
+  mBlsDirPresent = FALSE;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    assert(Menu.Entry[Index].Kind != SfbEntryBlsLinux);
+  }
+  SfbFreeMenu (&Menu);
+
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
+/*
+ * Build a menu holding one Type #1 row of the requested shape and return its
+ * index. The conf text is what the caller wants published; the rest is the same
+ * boot-root fixture the discovery test uses.
+ */
+static UINTN
+StageBlsRow(const CHAR8 *ConfText, UINTN ConfBytes, SFB_MENU_STATE *Menu)
+{
+  UINTN Index;
+  UINTN Found = SFB_NO_INDEX;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfText, ConfBytes);
+  mEntriesFixtureBytes = ConfBytes;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootIsExt4 = TRUE;
+  mBootRootPrefixIsEfisp = TRUE;
+  mBlsDirPresent = TRUE;
+  mBlsConfNames[0] = L"pmos.conf";
+  mBlsConfCount = 1;
+
+  SfbBuildMenu (Menu, SfbBootModeAblFakeLocked);
+  for (Index = 0; Index < Menu->Count; ++Index) {
+    if (Menu->Entry[Index].Kind == SfbEntryBlsLinux ||
+        Menu->Entry[Index].Kind == SfbEntryBlsEfi) {
+      assert(Found == SFB_NO_INDEX);
+      Found = Index;
+    }
+  }
+  assert(Found != SFB_NO_INDEX);
+  return Found;
+}
+
+/*
+ * The publication order and the teardown, which is the part that cannot be seen
+ * from a screen.
+ *
+ * A kernel that boots never returns, so the uninstall calls only run when the
+ * launch failed or the child came back. Skipping them leaves a configuration
+ * table pointing at freed pages and a LoadFile2 handle whose data is gone - and
+ * because SfbDtbInstall refuses a second install while one is up, the *next*
+ * launch attempt in the same session then fails with EFI_UNSUPPORTED for a
+ * reason nothing reports.
+ */
+static void
+TestBlsLinuxPublishesAndTearsDownBoth(void)
+{
+  static const CHAR8 ConfText[] =
+    "title postmarketOS\n"
+    "linux /pmos/vmlinuz\n"
+    "initrd /pmos/initramfs\n"
+    "devicetree /pmos/board.dtb\n"
+    "options pmos_root_uuid=1234 rw\n";
+  SFB_MENU_STATE Menu;
+  UINTN Found = StageBlsRow (ConfText, sizeof (ConfText) - 1, &Menu);
+
+  assert(Menu.Entry[Found].Kind == SfbEntryBlsLinux);
+
+  /* The fake child returns, so both must come back down. */
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeAblFakeLocked) == EFI_SUCCESS);
+  assert(mDtbInstallCount == 0);
+  assert(mInitrdInstallCount == 0);
+  /* And the command line reached the child. */
+  assert(mLoadedImage.LoadOptions != NULL);
+  assert(StrCmp ((CHAR16 *)mLoadedImage.LoadOptions,
+                 L"pmos_root_uuid=1234 rw") == 0);
+
+  SfbFreeMenu (&Menu);
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
+/*
+ * The DTB goes up first, so an initrd failure has to take it back down. This is
+ * the one ordering in the function that has a cleanup obligation, and it is
+ * exactly the one a refactor drops.
+ */
+static void
+TestBlsLinuxUnwindsTheDtbWhenTheInitrdFails(void)
+{
+  static const CHAR8 ConfText[] =
+    "title postmarketOS\n"
+    "linux /pmos/vmlinuz\n"
+    "initrd /pmos/initramfs\n"
+    "devicetree /pmos/board.dtb\n";
+  SFB_MENU_STATE Menu;
+  UINTN Found = StageBlsRow (ConfText, sizeof (ConfText) - 1, &Menu);
+
+  mInitrdInstallStatus = EFI_NOT_FOUND;
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeAblFakeLocked) == EFI_NOT_FOUND);
+  /* Nothing left published, and the child was never started. */
+  assert(mDtbInstallCount == 0);
+  assert(mInitrdInstallCount == 0);
+  /* The entry's own image never started. mStartCount is not the right signal:
+   * it counts every StartImage, including the driver preload pass. */
+  assert(mImageStartMarkerCount == 0);
+
+  SfbFreeMenu (&Menu);
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
+/* A DTB failure aborts before the initrd is touched at all. */
+static void
+TestBlsLinuxAbortsWhenTheDtbFails(void)
+{
+  static const CHAR8 ConfText[] =
+    "title postmarketOS\n"
+    "linux /pmos/vmlinuz\n"
+    "initrd /pmos/initramfs\n"
+    "devicetree /pmos/board.dtb\n";
+  SFB_MENU_STATE Menu;
+  UINTN Found = StageBlsRow (ConfText, sizeof (ConfText) - 1, &Menu);
+
+  mDtbInstallStatus = EFI_UNSUPPORTED;
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeAblFakeLocked) == EFI_UNSUPPORTED);
+  assert(mDtbInstallCount == 0);
+  assert(mInitrdInstallCount == 0);
+  /* The entry's own image never started. mStartCount is not the right signal:
+   * it counts every StartImage, including the driver preload pass. */
+  assert(mImageStartMarkerCount == 0);
+
+  SfbFreeMenu (&Menu);
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
+/*
+ * An `efi` row is a plain application launch: it publishes neither an initrd nor
+ * a DTB, because doing so would advertise state nothing consumes to everything
+ * else walking the handle database and the configuration table.
+ *
+ * Where the guarantee actually comes from, checked rather than assumed: the
+ * parser clears both fields on an `efi` row and counts a rejection
+ * (`test_bls.c::TestEfiEntryRefusesKernelOnlyKeys`), so by the time the launch
+ * path sees the payload there is nothing to publish. Widening the launch path's
+ * `Entry->Kind` gate to include `SfbEntryBlsEfi` does *not* break this test -
+ * measured, by doing it - which is worth stating so nobody reads this case as
+ * cover for that gate. The gate is belt to the parser's braces.
+ */
+static void
+TestBlsEfiPublishesNeither(void)
+{
+  static const CHAR8 ConfText[] =
+    "title A plain application\n"
+    "efi /pmos/probe.efi\n"
+    "options --self-test\n";
+  SFB_MENU_STATE Menu;
+  UINTN Found = StageBlsRow (ConfText, sizeof (ConfText) - 1, &Menu);
+
+  assert(Menu.Entry[Found].Kind == SfbEntryBlsEfi);
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeAblFakeLocked) == EFI_SUCCESS);
+  assert(mDtbInstallCount == 0);
+  assert(mInitrdInstallCount == 0);
+  assert(mImageStartMarkerCount == 1);
+  /* Its own arguments still reach it. */
+  assert(StrCmp ((CHAR16 *)mLoadedImage.LoadOptions, L"--self-test") == 0);
+
+  SfbFreeMenu (&Menu);
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
+/* A `linux` row with no initrd and no devicetree publishes nothing and still
+ * launches: both keys are optional in the specification. */
+static void
+TestBlsLinuxWithoutPayloadsStillLaunches(void)
+{
+  static const CHAR8 ConfText[] =
+    "title Bare kernel\n"
+    "linux /pmos/vmlinuz\n"
+    "options console=ttyMSM0\n";
+  SFB_MENU_STATE Menu;
+  UINTN Found = StageBlsRow (ConfText, sizeof (ConfText) - 1, &Menu);
+
+  assert(Menu.Entry[Found].Kind == SfbEntryBlsLinux);
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeAblFakeLocked) == EFI_SUCCESS);
+  assert(mDtbInstallCount == 0);
+  assert(mInitrdInstallCount == 0);
+  assert(mImageStartMarkerCount == 1);
+
+  SfbFreeMenu (&Menu);
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
+/*
+ * An ESP-shaped layout on the boot root: \efisp\EFI\BOOT\BOOTAA64.EFI.
+ *
+ * This is the internal-volume case. It used to be unreachable twice over - the
+ * scan skipped the ext4 volume outright, and when it did probe it used the
+ * unprefixed well-known path, which on this volume names the ext4 filesystem
+ * root rather than the boot root. Both had to change, and a regression in
+ * either one is silent: the row simply never appears.
+ */
+static void
+TestBootRootEspIsDiscovered(void)
+{
+  SFB_MENU_STATE Menu;
+  UINTN Index;
+  UINTN Found = SFB_NO_INDEX;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  mEntriesFixtureEnabled = TRUE;
+  mEntriesFixtureBytes = 0;
+  mVolumesAvailable = TRUE;
+  mBootRootIsExt4 = TRUE;
+  mBootRootPrefixIsEfisp = TRUE;
+  mBootRootBootaaPresent = TRUE;
+
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryEfiFile &&
+        StrCmp (Menu.Entry[Index].Path,
+                L"\\efisp\\EFI\\BOOT\\BOOTAA64.EFI") == 0) {
+      assert(Found == SFB_NO_INDEX);
+      Found = Index;
+    }
+  }
+  assert(Found != SFB_NO_INDEX);
+  SfbFreeMenu (&Menu);
+
+  /* Absent, and the menu gains nothing: the probe is not answering yes to
+   * whatever it is handed. */
+  mBootRootBootaaPresent = FALSE;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    assert(StrCmp (Menu.Entry[Index].Path,
+                   L"\\efisp\\EFI\\BOOT\\BOOTAA64.EFI") != 0);
+  }
+  SfbFreeMenu (&Menu);
 
   ResetVolumes ();
   mEntriesFixtureEnabled = FALSE;
@@ -1608,6 +2132,13 @@ main(void)
   TestConfigOptionsBecomeLoadOptions ();
   TestConfigWithoutOptionsPublishesNone ();
   TestAdditiveDiscovery ();
+  TestBootRootBlsEntryIsDiscovered ();
+  TestBootRootEspIsDiscovered ();
+  TestBlsLinuxPublishesAndTearsDownBoth ();
+  TestBlsLinuxUnwindsTheDtbWhenTheInitrdFails ();
+  TestBlsLinuxAbortsWhenTheDtbFails ();
+  TestBlsEfiPublishesNeither ();
+  TestBlsLinuxWithoutPayloadsStillLaunches ();
   TestStaleSlotRole ();
   return 0;
 }
@@ -1660,11 +2191,46 @@ GetDevicePathSize(IN CONST EFI_DEVICE_PATH_PROTOCOL *DevicePath)
   return sizeof (EFI_DEVICE_PATH_PROTOCOL);
 }
 
+/*
+ * A bump allocator over a static arena.
+ *
+ * It used to return mEntriesFixture - the very buffer the file-read fixture
+ * copies from - for every request. Any code that held two allocations at once
+ * therefore had them alias: the boot-spec scan holds a directory listing and a
+ * file buffer together, so the directory records overwrote the file content and
+ * the entry silently failed to parse. Handing out distinct blocks is what makes
+ * that class of test result trustworthy.
+ *
+ * The gate is unchanged: with the fixture disabled, allocation still fails, so
+ * the tests that exercise out-of-memory paths still do.
+ */
+static UINT8 mArena[1u << 22];
+static UINTN mArenaUsed;
+
+static void
+ResetArena(void)
+{
+  mArenaUsed = 0;
+}
+
 VOID *EFIAPI
 AllocateZeroPool(IN UINTN AllocationSize)
 {
-  (void)AllocationSize;
-  return mEntriesFixtureEnabled ? mEntriesFixture : NULL;
+  UINTN Aligned = (AllocationSize + 15u) & ~(UINTN)15u;
+  VOID  *Block;
+
+  if (!mEntriesFixtureEnabled) {
+    return NULL;
+  }
+  /* Nothing frees in this harness - FreePool is a no-op - so exhausting the
+   * arena means a test looped further than it was sized for. Say so rather
+   * than returning NULL and being read as an allocation-failure case. */
+  assert(Aligned != 0 && mArenaUsed + Aligned <= sizeof (mArena));
+
+  Block = &mArena[mArenaUsed];
+  mArenaUsed += Aligned;
+  memset (Block, 0, AllocationSize);
+  return Block;
 }
 
 EFI_STATUS
@@ -1705,6 +2271,17 @@ SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
     return (BOOLEAN)(StrCmp (Path, SFB_BOOT_FILE_PATH) == 0 &&
                      mFatBootFilePresent);
   }
+  /*
+   * The kernel a staged boot-spec entry names. Recorded and answered
+   * authoritatively - the unprefixed spelling must fall to FALSE here rather
+   * than through to the generic fixture below, or the case would pass whether
+   * or not the boot-root prefix was applied.
+   */
+  if (mBlsConfCount != 0 && SfbStrEndsWith (Path, L"vmlinuz")) {
+    FakeCopyChars (mBlsImageProbed, Path, ARRAY_SIZE (mBlsImageProbed));
+    return (BOOLEAN)(mBlsDirPresent &&
+                     StrCmp (Path, L"\\efisp\\pmos\\vmlinuz") == 0);
+  }
   if (StrCmp (Path, L"\\canoe.cfg") == 0) {
     return mBootRootConfigPresent;
   }
@@ -1718,8 +2295,17 @@ SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
   if (StrCmp (Path, L"\\BOOTENTRIES") == 0) {
     return mBootRootBootentriesPresent;
   }
-  if (StrCmp (Path, SFB_BOOT_FILE_PATH) == 0) {
+  /*
+   * The well-known loader on the boot root. Answered only at its prefixed
+   * spelling, and the unprefixed one is answered FALSE rather than falling
+   * through to the generic fixture below - otherwise a probe that forgot the
+   * boot root would pass here while finding nothing on the device.
+   */
+  if (StrCmp (Path, L"\\efisp\\EFI\\BOOT\\BOOTAA64.EFI") == 0) {
     return mBootRootBootaaPresent;
+  }
+  if (StrCmp (Path, SFB_BOOT_FILE_PATH) == 0) {
+    return (BOOLEAN)(mBootRootBootaaPresent && !mBootRootPrefixIsEfisp);
   }
   return mEntriesFixtureEnabled;
 }
@@ -1727,7 +2313,9 @@ SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
 CONST CHAR16 *
 SfbVolumeRootPrefix(IN EFI_HANDLE Volume)
 {
-  (void)Volume;
+  if (Volume == mVolume && mBootRootPrefixIsEfisp) {
+    return L"\\efisp";
+  }
   return L"";
 }
 BOOLEAN
@@ -1773,21 +2361,35 @@ SfbBootMark(IN CONST CHAR16 *Stage)
   (void)Stage;
 }
 
+/*
+ * These count what is *currently published*, not how many times the installer
+ * was called. A failed install publishes nothing, so it must not increment -
+ * otherwise a leak and a correctly-unwound failure look identical to a test,
+ * and the real implementation refuses a second install while one is up, which
+ * is precisely the state a leak leaves behind.
+ *
+ * The uninstall side asserts rather than clamping: an uninstall with nothing up
+ * is a double-free in production, and silently flooring at zero would hide it.
+ */
 EFI_STATUS
 SfbInitrdInstall(IN EFI_HANDLE Volume, IN CONST CHAR16 *Path)
 {
   (void)Volume;
   (void)Path;
+  if (EFI_ERROR (mInitrdInstallStatus)) {
+    return mInitrdInstallStatus;
+  }
+  /* The real one refuses a second install while one is up. */
+  assert(mInitrdInstallCount == 0);
   mInitrdInstallCount++;
-  return mInitrdInstallStatus;
+  return EFI_SUCCESS;
 }
 
 VOID
 SfbInitrdUninstall(VOID)
 {
-  if (mInitrdInstallCount != 0) {
-    mInitrdInstallCount--;
-  }
+  assert(mInitrdInstallCount == 1);
+  mInitrdInstallCount--;
 }
 
 EFI_STATUS
@@ -1795,16 +2397,19 @@ SfbDtbInstall(IN EFI_HANDLE Volume, IN CONST CHAR16 *Path)
 {
   (void)Volume;
   (void)Path;
+  if (EFI_ERROR (mDtbInstallStatus)) {
+    return mDtbInstallStatus;
+  }
+  assert(mDtbInstallCount == 0);
   mDtbInstallCount++;
-  return mDtbInstallStatus;
+  return EFI_SUCCESS;
 }
 
 VOID
 SfbDtbUninstall(VOID)
 {
-  if (mDtbInstallCount != 0) {
-    mDtbInstallCount--;
-  }
+  assert(mDtbInstallCount == 1);
+  mDtbInstallCount--;
 }
 
 VOID

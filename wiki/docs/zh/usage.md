@@ -11,10 +11,57 @@
 
 - 启动时出现 OEM 解锁警告后，按**音量上**进入 Super Fastboot。
 
+### 两条内存启动路径都可用，原理不同
+
+```bash
+fastboot stage <BDS.efi>
+fastboot oem boot-efi
+```
+
+```bash
+fastboot boot <BDS.efi>
+```
+
+第二条常令人意外，因为 `BDS.efi` 是 PE 镜像而不是 Android boot 镜像。它之所以
+可行，是因为**电脑端**的 `fastboot` 工具会先把传入的文件包装成一个合成的 boot
+镜像再发送——命令回显本身就说明了这一点：
+
+```text
+creating boot image...
+creating boot image - 440320 bytes
+Sending 'boot.img' (430 KB)                        OKAY
+Booting                                            OKAY
+```
+
+输入 438272 字节的 `BDS.efi`，输出 440320 字节的 boot 镜像。随后 bootloader 的
+boot 处理函数在该镜像 kernel 段的开头识别出 `MZ` 签名，于是按 EFI 载荷启动而不
+是当作内核处理；这正是 `QcomModulePkg/Library/FastbootLib` 中 `IsEfiInBootImg`
+的用途。在一加 15 上实测如此。
+
+两者任选。`fastboot stage` + `fastboot oem boot-efi` 是显式形式，不依赖电脑端
+工具的包装行为；`fastboot boot` 只需一条命令。
+
 ## 首次运行与菜单
 
 如果启动根目录中既没有 `canoe.cfg` 也没有 `boot.efi`，BDS 会显示首次运行
 信息并进入 Super Fastboot。此时没有可启动的启动项。
+
+### 如何进入菜单，而不是直接启动默认项
+
+BDS 在启动时会**先采样音量上键一秒**，早于文件系统栈的初始化，以免初始化过程
+吃掉这次按键。
+
+- **在这一秒内按住音量上**：立即进入菜单，不会尝试任何无人值守启动。
+- **未按住音量上**：BDS 直接启动 `canoe.cfg` 中 `default` 指定的启动项，不显示
+  菜单。只有当该启动返回或失败、或文件中没有 `default` 时，才会进入菜单。
+
+进入菜单后，倒计时**只作用于第一次绘制**：等待 `timeout` 秒后启动当前高亮的
+默认项。任意按键都会取消倒计时，之后每次绘制都无限等待。`timeout 0` 并不表示
+“永久等待”，而是立即启动默认项；因此用于测试新启动项的配置应当给一个充裕的
+`timeout`，而不是 0。
+
+新增手写启动项时这一点尤其重要：一个因为默认项先启动而始终没被选中的启动项，
+看起来和一个根本没被枚举出来的启动项完全一样。
 
 菜单包括：
 
@@ -22,6 +69,8 @@
 - **USB Mass Storage**；
 - 文件存在时显示受管理的 `Android (slot A)`、`Android (slot B)` 与
   `Android (previous)`；
+- `canoe.cfg` 中其他所有 `image` 存在的启动项，包括手写的第三方固件链式启动项
+  ——见[链式启动第三方 UEFI 固件](./chainload.md)；
 - 启动根目录 `tools/` 中文件对应的 **EFI Tools**。
 
 随附的 `SurfaceTools.efi` 清单工具可从 **EFI Tools** 打开。默认视图只枚举

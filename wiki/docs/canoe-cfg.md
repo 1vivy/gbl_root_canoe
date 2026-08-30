@@ -46,28 +46,54 @@ is not a path, so `/` is never folded to `\` and a value that looks like a
 path is left exactly as written. An empty `options` is a rejected line rather
 than a silent no-op.
 
-This is what lets a row hold a payload the BDS does not itself parse. The
-image is one of the loaders shipped in the boot root's `tools` directory, and
-the payload it should boot is named in `options`:
+This is what lets a row hold a payload the BDS does not itself parse. BDS is a
+chainloader selector: it starts a PE and hands over `options` byte for byte,
+and the image on the other end owns its argument grammar entirely.
 
 ```text
 entry mu
   title Mu-Silicium
-  image tools/FdLoader.efi
-  options \mu\SM8850.fd 0x9FC00000 0x00300000
+  image mu/place.efi
+  options \efisp\mu\Mu-infiniti.bin
 
-entry android-usb
-  title Android from images
-  image tools/AbootLoader.efi
-  options --boot \img\boot.img --vendor-boot \img\vendor_boot.img
+entry grub
+  title GRUB
+  image grub/grubaa64.efi
 ```
 
-`FdLoader.efi` takes an FD image path, a hexadecimal load base and a
-hexadecimal window size, and chainloads a raw Mu-Silicium or Project-Aloha
-firmware descriptor. `AbootLoader.efi` takes `--boot` and `--vendor-boot`,
-optionally `--init-boot`, `--dtb-index` and `--cmdline`, and boots an Android
-boot image with header version 3 or 4. Both paths are relative to the volume
-the loader itself was launched from.
+Neither image is shipped by this project. BDS carries no payload loaders — see
+[Chainloading a third-party UEFI stack](./chainload.md) for why, and for what a
+third-party stack has to ship to be launchable. `place.efi` comes from the
+`canoe-uefi-handoff` side project and takes a single path, because the blob it
+enters describes its own load base and window size.
+
+### The two path namespaces
+
+`image` and a launched image's own `options` path do not resolve the same way,
+and mixing them up is the one mistake that makes a correct entry fail.
+
+`image` is resolved by the BDS, which prepends the volume's boot root. On the
+ext4 `persist` partition that boot root is the `\efisp` directory, so
+`image mu/place.efi` loads `\efisp\mu\place.efi`. On a FAT volume the boot root
+is the volume root, so the same value loads `\mu\place.efi`. FAT of any width
+counts: this device ships no FAT32 partition at all, and a stick formatted
+FAT16 is an ordinary boot volume.
+
+`options` is handed over untouched, and the launched image opens any path in it
+against the raw filesystem root of the volume it was itself loaded from. It
+knows nothing about the boot root. A payload staged in `persist/efisp/mu` must
+therefore be written `\efisp\mu\...`; the same payload on a FAT stick is
+written `\mu\...`.
+
+This was confirmed on hardware: a row whose `options` named the FAT-style
+`\mu\Mu-infiniti.fd` reported `Not Found`, while `image mu/…` resolved through
+the boot root in the same launch.
+
+Any load base and window size in `options` belong to the payload, not to Canoe.
+For a Mu-Silicium build they are the `[uefi_fd]` `base` and `size` from that
+device's `Resources/Configs/<codename>.toml`, which match the `UEFI_FD` row of
+its `MemoryMapLib.c`; for a Project-Aloha config they are `StackBase` and
+`StackSize`. The values above are OnePlus 15 (`infiniti`).
 
 ## The two managed rows
 

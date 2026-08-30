@@ -1,5 +1,6 @@
 /*
- * Simple FAT32 file browser for the super-fastboot boot menu.
+ * File browser for the super-fastboot boot menu: FAT of any width, plus the
+ * ext4 persist volume.
  *
  * Pick a volume, walk directories with the volume keys, and launch an EFI
  * application for this boot only.
@@ -450,7 +451,7 @@ SfbBrowseVolume (IN EFI_HANDLE    Volume,
     return FALSE;
   }
 
-  /* Start at the volume's browse root: "\" for FAT32, "\efisp" for the ext4
+  /* Start at the volume's browse root: "\" for FAT, "\efisp" for the ext4
    * persist volume. It is also the floor: ".." there backs out to the volume
    * list rather than climbing above it. */
   StrCpyS (Path, SFB_PATH_CHARS, BrowseRoot);
@@ -604,7 +605,7 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
 
   Status = SfbLocateVolumes (&Volumes, &VolumeCount);
   if (EFI_ERROR (Status) || Volumes == NULL || VolumeCount == 0) {
-    SfbReportStatus (L"No FAT32 volumes found",
+    SfbReportStatus (L"No boot volumes found",
                      EFI_ERROR (Status) ? Status : EFI_NOT_FOUND);
     if (Volumes != NULL) {
       FreePool (Volumes);
@@ -630,7 +631,7 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
       Root->Close (Root);
     }
 
-    /* Tag the ext4 persist volume so it is told apart from FAT32 media. */
+    /* Tag the ext4 persist volume so it is told apart from FAT media. */
     if (SfbVolumeIsExt4 (Volumes[Index])) {
       if (Label[0] != L'\0') {
         if (RETURN_ERROR (StrCatS (Label, SFB_DESC_CHARS, L" (ext4)"))) {
@@ -659,7 +660,7 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
     UINTN    Last;
     SFB_KEY  Key;
 
-    SfbBeginScreen (L"EFI Program Selector", L"Choose a FAT32 volume to browse.");
+    SfbBeginScreen (L"EFI Program Selector", L"Choose a volume to browse.");
 
     Start = SfbWindowStart (Cursor, RowCount, SFB_VISIBLE_ROWS);
     Last = Start + SFB_VISIBLE_ROWS;
@@ -692,8 +693,8 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
     }
 
     {
-      /* Browse from the volume's root: "\" for FAT32, "\efisp" for the ext4
-       * persist volume. SfbVolumeRootPrefix gives "" for FAT32, which here
+      /* Browse from the volume's root: "\" for FAT, "\efisp" for the ext4
+       * persist volume. SfbVolumeRootPrefix gives "" for FAT, which here
        * means the plain volume root. */
       CONST CHAR16  *Prefix = SfbVolumeRootPrefix (Volumes[Cursor]);
       CONST CHAR16  *BrowseRoot = (Prefix[0] == L'\0') ? L"\\" : Prefix;
