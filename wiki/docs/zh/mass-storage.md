@@ -61,6 +61,18 @@ canoe install --slot a --mode 1
 `BDS.efi` 的 fastboot 命令仍由操作员按 [`install.md`](./install.md) 的说明
 自行完成。
 
+对于非实时导出的 ext4 镜像或原始块源，显式选择直接后端：
+
+```bash
+canoe-bootmgr --source /path/to/persist.ext4 install \
+  --staged /path/to/staged --slot a --mode 1
+canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
+  --staged /path/to/staged --slot a --mode 1
+```
+
+双语 `canoe-gui` 通过 `--source`/`--ext4-image` 或 `--boot-root` 提供相同
+选择；后端对比见 [`install.md`](./install.md)。
+
 测试或操作员自行管理的本地目录可以使用显式 local 后端：
 
 ```bash
