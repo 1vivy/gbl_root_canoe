@@ -1,8 +1,9 @@
 include ../../version.mk
 
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
-	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
-	submodule_vbmetafixer canoe_host python_embed platform_tools ext4_tools build
+	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
+	submodule_ablfvextractor submodule_vbmetafixer canoe_host python_embed \
+	platform_tools ext4_tools build
 
 ROOT_DIR := $(abspath ../..)
 
@@ -69,6 +70,10 @@ submodule_abl_tzmap: copy_resources
 	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/abl-tzmap/Cargo.toml
 	test -f ../../tools/abl-tzmap/target/x86_64-pc-windows-gnu/release/abl_tzmap.exe
 	cp ../../tools/abl-tzmap/target/x86_64-pc-windows-gnu/release/abl_tzmap.exe ./build/toolkit/bin/abl_tzmap.exe
+submodule_canoe_bootmgr: copy_resources
+	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
+	test -f ../../tools/canoe-bootmgr/target/x86_64-pc-windows-gnu/release/canoe-bootmgr.exe
+	cp ../../tools/canoe-bootmgr/target/x86_64-pc-windows-gnu/release/canoe-bootmgr.exe ./build/toolkit/bin/canoe-bootmgr.exe
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_windows
 	cp ../../submodules/ablfvextractor/build/extractfv.exe ./build/toolkit/bin/extractfv.exe
@@ -162,5 +167,5 @@ ext4_tools: copy_resources
 	mv "$$tmp/out" build/toolkit/ext4; \
 	trap - EXIT HUP INT TERM; \
 	rm -rf "$$tmp"
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor submodule_vbmetafixer canoe_host python_embed platform_tools ext4_tools
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor submodule_vbmetafixer canoe_host python_embed platform_tools ext4_tools
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./

@@ -1,8 +1,8 @@
 include ../../version.mk
 
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
-	submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor \
-	canoe_device_script build
+	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
+	submodule_ablfvextractor canoe_device_script build
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -53,6 +53,12 @@ submodule_abl_tzmap: copy_resources
 	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/abl-tzmap/Cargo.toml
 	test -f ../../tools/abl-tzmap/target/aarch64-linux-android/release/abl_tzmap
 	cp ../../tools/abl-tzmap/target/aarch64-linux-android/release/abl_tzmap ./build/module/bin/abl_tzmap
+submodule_canoe_bootmgr: copy_resources
+	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for canoe-bootmgr"; exit 1; }
+	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
+	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
+	test -f ../../tools/canoe-bootmgr/target/aarch64-linux-android/release/canoe-bootmgr
+	cp ../../tools/canoe-bootmgr/target/aarch64-linux-android/release/canoe-bootmgr ./build/module/bin/canoe-bootmgr
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/module/bin/extractfv
@@ -63,6 +69,6 @@ canoe_device_script: copy_resources
 	chmod +x ./build/module/canoe_device_install.sh
 	cp ../../tools/canoe-device/canoe_boot_entry.sh ./build/module/canoe_boot_entry.sh
 	chmod +x ./build/module/canoe_boot_entry.sh
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_ablfvextractor canoe_device_script
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor canoe_device_script
 	# zip
 	cd build/module && zip -r ../module_android.zip ./

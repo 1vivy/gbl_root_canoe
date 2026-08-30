@@ -161,6 +161,7 @@ tools_vbmetafixer_android:
 test:
 	cargo test --locked --manifest-path tools/mode2-profile/Cargo.toml
 	cargo test --locked --manifest-path tools/abl-tzmap/Cargo.toml
+	cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
 	sh targets/magisk_module/tests/test_flows.sh

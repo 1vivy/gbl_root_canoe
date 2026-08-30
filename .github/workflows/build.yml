@@ -75,9 +75,11 @@ jobs:
         test -x artifacts/toolkit_linux/bin/patch_abl
         test -x artifacts/toolkit_linux/bin/mode2_profile
         test -x artifacts/toolkit_linux/bin/abl_tzmap
+        test -x artifacts/toolkit_linux/bin/canoe-bootmgr
         test -f artifacts/toolkit_windows/bin/patch_abl.exe
         test -f artifacts/toolkit_windows/bin/mode2_profile.exe
         test -f artifacts/toolkit_windows/bin/abl_tzmap.exe
+        test -f artifacts/toolkit_windows/bin/canoe-bootmgr.exe
         test -f artifacts/toolkit_windows/Platform-Tools/fastboot.exe
         test ! -e artifacts/toolkit_windows/Platform-Tools/adb.exe
         test -f artifacts/toolkit_windows/ext4/ext4windows.exe
@@ -86,9 +88,11 @@ jobs:
         test -x artifacts/toolkit_android/bin/patch_abl
         test -x artifacts/toolkit_android/bin/mode2_profile
         test -x artifacts/toolkit_android/bin/abl_tzmap
+        test -x artifacts/toolkit_android/bin/canoe-bootmgr
         test -x artifacts/magisk_module/bin/patch_abl
         test -x artifacts/magisk_module/bin/mode2_profile
         test -x artifacts/magisk_module/bin/abl_tzmap
+        test -x artifacts/magisk_module/bin/canoe-bootmgr
         test -x artifacts/toolkit_linux/bin/extractfv
         test -f artifacts/toolkit_windows/bin/extractfv.exe
         test -x artifacts/toolkit_android/bin/extractfv
@@ -192,6 +196,26 @@ jobs:
           *"ELF 64-bit"*"ARM aarch64"*) ;;
           *) echo "unexpected Magisk mode2_profile: $module_profile_type"; exit 1 ;;
         esac
+        linux_bootmgr_type="$(file -b artifacts/toolkit_linux/bin/canoe-bootmgr)"
+        case "$linux_bootmgr_type" in
+          *"ELF 64-bit"*"x86-64"*) ;;
+          *) echo "unexpected Linux canoe-bootmgr: $linux_bootmgr_type"; exit 1 ;;
+        esac
+        windows_bootmgr_type="$(file -b artifacts/toolkit_windows/bin/canoe-bootmgr.exe)"
+        case "$windows_bootmgr_type" in
+          *"PE32+ executable"*"x86-64"*) ;;
+          *) echo "unexpected Windows canoe-bootmgr: $windows_bootmgr_type"; exit 1 ;;
+        esac
+        android_bootmgr_type="$(file -b artifacts/toolkit_android/bin/canoe-bootmgr)"
+        case "$android_bootmgr_type" in
+          *"ELF 64-bit"*"ARM aarch64"*) ;;
+          *) echo "unexpected Android toolkit canoe-bootmgr: $android_bootmgr_type"; exit 1 ;;
+        esac
+        module_bootmgr_type="$(file -b artifacts/magisk_module/bin/canoe-bootmgr)"
+        case "$module_bootmgr_type" in
+          *"ELF 64-bit"*"ARM aarch64"*) ;;
+          *) echo "unexpected Magisk canoe-bootmgr: $module_bootmgr_type"; exit 1 ;;
+        esac
         linux_extractfv_type="$(file -b artifacts/toolkit_linux/bin/extractfv)"
         case "$linux_extractfv_type" in
           *"ELF 64-bit"*"x86-64"*) ;;
@@ -231,8 +255,8 @@ jobs:
         # does not preserve the executable bit, so zipping after that round-trip
         # publishes mode-644 scripts and binaries: `./canoe` fails with
         # Permission denied and bin/* cannot be exec'd even via `bash canoe`.
-        # A zip stores the modes itself, and
-        # uploading the zip round-trips its bytes intact.
+        # A zip stores the modes itself, and uploading the zip round-trips its
+        # bytes intact.
         mkdir -p release
         for package in toolkit_linux toolkit_windows toolkit_android magisk_module \
                        vbmetafixer_linux vbmetafixer_windows vbmetafixer_android; do
@@ -249,8 +273,8 @@ jobs:
         # rather than in the build tree they came from.
         rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
         for exe in canoe \
-                   bin/patch_abl bin/mode2_profile \
-                   bin/abl_tzmap bin/extractfv \
+                   bin/patch_abl bin/mode2_profile bin/abl_tzmap \
+                   bin/canoe-bootmgr bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in archive: $exe"; exit 1; }
         done
