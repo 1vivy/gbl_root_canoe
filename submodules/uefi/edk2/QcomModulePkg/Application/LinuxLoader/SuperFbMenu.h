@@ -1,7 +1,7 @@
 /*
  * Boot menu for the "super fastboot only" (TEST_ADAPTER) product.
  *
- * The loader carries its own FAT stack, so it can enumerate FAT32 volumes and
+ * The loader carries its own FAT stack, so it can enumerate FAT volumes and
  * offer whatever removable/ESP boot loaders it finds there even on platforms
  * whose firmware exposes nothing but Block I/O.
  *
@@ -32,7 +32,7 @@
 #define SFB_BDS_VERSION "0.0.0-dev"
 #endif
 
-/* The boot loader we look for on every FAT32 volume, and the optional ANSI
+/* The boot loader we look for on every FAT volume, and the optional ANSI
  * one-liner describing it. */
 #define SFB_BOOT_FILE_PATH  L"\\EFI\\BOOT\\BOOTAA64.EFI"
 #define SFB_DESC_FILE_PATH  L"\\EFI\\DESC"
@@ -89,7 +89,7 @@ typedef struct {
 } SFB_DIR_ENTRY;
 
 typedef enum {
-  /* An EFI application living on a FAT32/ext4 volume. */
+  /* An EFI application living on a FAT or ext4 volume. */
   SfbEntryEfiFile = 0,
   /* Built-in entries; no backing file, handled in code. */
   SfbEntryFastboot,
@@ -102,9 +102,9 @@ typedef enum {
   SfbEntryMode,
   /* Export one partition to a host as USB mass storage. */
   SfbEntryMassStorage,
-  /* Boot Loader Specification Type #1 entries discovered on removable media.
-   * The Linux kind additionally publishes an initrd and a DTB; the EFI kind is
-   * an ordinary LoadImage with a command line. */
+  /* Boot Loader Specification Type #1 entries, discovered on removable media or
+   * on the boot root. The Linux kind additionally publishes an initrd and a DTB;
+   * the EFI kind is an ordinary LoadImage with a command line. */
   SfbEntryBlsLinux,
   SfbEntryBlsEfi,
   /* Inert row: redraws the menu when selected. Carries the notices the menu
@@ -232,12 +232,31 @@ typedef enum {
 
 /*
  * Install the embedded Unicode Collation, Disk I/O, FAT and read-only EXT4
- * drivers, then run the driver connection pass so FAT32 and ext4 volumes
+ * drivers, then run the driver connection pass so FAT and ext4 volumes
  * surface as Simple File System instances. Safe to call more than once;
  * already-present platform drivers are left alone.
  */
 EFI_STATUS
 SfbStartFatStack (VOID);
+
+/*
+ * Signal the vendor storage-detect event group, giving a handler the chance to
+ * publish media that has not appeared yet. Called by SfbStartFatStack () both
+ * on first bring-up and on every media rescan; exposed for callers that want a
+ * rescan without restarting the stack.
+ */
+VOID
+SfbSignalStorageDetect (VOID);
+
+/*
+ * Signal EndOfDxe then ReadyToBoot. The fastboot-only boot path never reaches
+ * the stock BDS, so without this nothing ever tells the platform's drivers that
+ * dispatch is over and a boot is imminent - and vendor drivers commonly defer
+ * the last stage of initialisation to exactly those groups. Called by
+ * SfbStartFatStack () once the connection pass has run.
+ */
+VOID
+SfbSignalBootPhase (VOID);
 
 /*
  * Find the Block I/O instance for the GPT partition named Name. Returns
@@ -265,10 +284,10 @@ VOID
 SfbBootMark (IN CONST CHAR16 *Stage);
 
 /*
- * Snapshot of the boot volumes currently in the system: FAT32 volumes plus the
+ * Snapshot of the boot volumes currently in the system: FAT volumes plus the
  * ext4 persist partition. *Handles must be released with FreePool ().
  *
- * Handles whose media is neither FAT32 nor ext4 are dropped: the menu and the
+ * Handles whose media is neither FAT nor ext4 are dropped: the menu and the
  * browser are specified in terms of those, and a platform's firmware may well
  * publish Simple File System over things this loader has no business writing
  * to or offering as boot media. An ext4 volume is also dropped unless it carries
@@ -280,13 +299,17 @@ SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count);
 
 typedef enum {
   SfbVolumeKindOther = 0,
-  SfbVolumeKindFat32,
+  SfbVolumeKindFat,
   SfbVolumeKindExt4
 } SFB_VOLUME_KIND;
 
-/* TRUE when the volume handle's block device holds a FAT32 file system. */
+/*
+ * TRUE when the volume handle's block device holds a FAT file system of any
+ * width. FAT12 and FAT16 count: this platform ships no FAT32 partition, and a
+ * small USB stick is routinely FAT16.
+ */
 BOOLEAN
-SfbIsFat32Volume (IN EFI_HANDLE Volume);
+SfbIsFatVolume (IN EFI_HANDLE Volume);
 
 /* TRUE when the volume handle's block device holds an ext4 file system. */
 BOOLEAN
@@ -296,7 +319,7 @@ BOOLEAN
 SfbVolumeIsExt4 (IN EFI_HANDLE Volume);
 
 /*
- * The volume-relative directory that acts as the boot root: "" for FAT32 (its
+ * The volume-relative directory that acts as the boot root: "" for FAT (its
  * root already is) and "\efisp" for the ext4 persist partition. The scanner
  * prepends this to \EFI\BOOT\BOOTAA64.EFI and friends; the browser starts
  * browsing here.
@@ -347,7 +370,7 @@ BOOLEAN
 SfbIsUsbVolume (IN EFI_HANDLE Volume);
 
 /*
- * Drop the cached FAT32/ext4 classification of every volume. The cache is
+ * Drop the cached FAT/ext4 classification of every volume. The cache is
  * keyed on handles, so anything that changes the handle set - a USB role
  * switch either way - must invalidate it or a recycled handle reads back
  * someone else's answer.
@@ -456,7 +479,7 @@ SfbFreeEntry (IN OUT SFB_BOOT_ENTRY *Entry);
 BOOLEAN
 SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode);
 
-/* Simple FAT32 browser: pick a volume, walk directories, act on a .efi. */
+/* File browser: pick a volume, walk directories, act on a .efi. */
 VOID
 SfbRunFileBrowser (IN SFB_BOOT_MODE Mode);
 

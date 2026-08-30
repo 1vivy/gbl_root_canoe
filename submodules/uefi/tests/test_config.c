@@ -354,24 +354,30 @@ TestNullAndEmpty (void)
 static void
 TestOptionsArePassedThroughVerbatim (void)
 {
-  /* The reason this key exists: a row names a loader as its image and the
-   * payload it should boot as its options. */
+  /* The reason this key exists: a row names a payload-side launcher as its
+   * image and whatever that launcher should act on as its options. The BDS
+   * ships no such launcher itself - it is a chainloader selector, so anything
+   * that is not a plain PE launch belongs to the payload. The path here is
+   * deliberately the persist form: `image` is joined with the volume's boot
+   * root, but a launched image opens its own argument against the volume's
+   * filesystem root, so on the ext4 persist partition the two differ by
+   * exactly \efisp. */
   assert (Parse ("version 1\nentry mu\n"
-                 "  image tools/FdLoader.efi\n"
-                 "  options \\mu\\SM8850.fd 0x9FC00000 0x00300000\n"));
+                 "  image mu/PlaceMuFd.efi\n"
+                 "  options \\efisp\\mu\\Mu-infiniti.fd 0xC6900000 0x00300000\n"));
   assert (gConfig.Count == 1);
-  assert (strcmp (gConfig.Entry[0].Image, "\\tools\\FdLoader.efi") == 0);
+  assert (strcmp (gConfig.Entry[0].Image, "\\mu\\PlaceMuFd.efi") == 0);
   assert (strcmp (gConfig.Entry[0].Options,
-                  "\\mu\\SM8850.fd 0x9FC00000 0x00300000") == 0);
+                  "\\efisp\\mu\\Mu-infiniti.fd 0xC6900000 0x00300000") == 0);
   assert (gConfig.RejectedLines == 0);
 
   /* Forward slashes inside an options value are data, not path separators.
    * Folding them the way `image` is folded would corrupt a kernel command
    * line, so the value is stored byte for byte. */
-  assert (Parse ("version 1\nentry a\n  image tools/AbootLoader.efi\n"
-                 "  options --boot /a/boot.img --cmdline \"root=/dev/sda1 ro\"\n"));
+  assert (Parse ("version 1\nentry a\n  image mu/PlaceMuFd.efi\n"
+                 "  options --fd /mu/SILICIUM.fd --cmdline \"root=/dev/sda1 ro\"\n"));
   assert (strcmp (gConfig.Entry[0].Options,
-                  "--boot /a/boot.img --cmdline \"root=/dev/sda1 ro\"") == 0);
+                  "--fd /mu/SILICIUM.fd --cmdline \"root=/dev/sda1 ro\"") == 0);
   assert (gConfig.RejectedLines == 0);
 
   /* Absent by default, so an ordinary row still launches with no arguments. */

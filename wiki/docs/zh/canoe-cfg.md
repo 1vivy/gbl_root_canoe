@@ -40,26 +40,46 @@ ID 为 1–31 个 `[A-Za-z0-9._-]` 字符；标题为 1–47 个可打印 ASCII 
 逐字节原样传递：它不是路径，因此 `/` 不会折叠为 `\`，看起来像路径的值也
 保持原样。空的 `options` 会被记为拒绝行，而不是静默忽略。
 
-这使得一个启动项可以承载 BDS 自身并不解析的载荷。`image` 指向启动根目录
-`tools` 目录中的加载器，`options` 指明它应当启动的载荷：
+这使得一个启动项可以承载 BDS 自身并不解析的载荷。BDS 是链式启动选择器：它启动一个
+PE，并把 `options` 逐字节交过去，另一端的镜像完全拥有自己的参数语法。
 
 ```text
 entry mu
   title Mu-Silicium
-  image tools/FdLoader.efi
-  options \mu\SM8850.fd 0x9FC00000 0x00300000
+  image mu/place.efi
+  options \efisp\mu\Mu-infiniti.bin
 
-entry android-usb
-  title Android from images
-  image tools/AbootLoader.efi
-  options --boot \img\boot.img --vendor-boot \img\vendor_boot.img
+entry grub
+  title GRUB
+  image grub/grubaa64.efi
 ```
 
-`FdLoader.efi` 接受 FD 镜像路径、十六进制加载基址与十六进制窗口大小，
-链式启动原始的 Mu-Silicium 或 Project-Aloha 固件描述符。`AbootLoader.efi`
-接受 `--boot` 与 `--vendor-boot`，可选 `--init-boot`、`--dtb-index` 与
-`--cmdline`，启动 header 版本为 3 或 4 的 Android boot 镜像。两者的路径都
-相对于加载器自身所在的卷。
+这两个镜像都不由本项目提供。BDS 不携带任何载荷加载器——原因以及第三方栈需要以何种
+形式提供才能被启动，见[链式启动第三方 UEFI 栈](./chainload.md)。`place.efi` 来自
+`canoe-uefi-handoff` 附属项目，只接受一个路径参数，因为它所进入的 blob 自身就描述了
+加载基址与窗口大小。
+
+### 两个路径命名空间
+
+`image` 与被启动镜像自身 `options` 中的路径解析方式不同，混淆这一点是唯一会让
+一个本来正确的启动项失败的错误。
+
+`image` 由 BDS 解析，它会补上该卷的启动根目录。在 ext4 `persist` 分区上启动根目录
+是 `\efisp`，因此 `image mu/place.efi` 实际加载 `\efisp\mu\place.efi`。
+在 FAT 卷上启动根目录就是卷根，同样的值加载 `\mu\place.efi`。FAT 的位宽无关：
+本机根本没有 FAT32 分区，格式化为 FAT16 的 U 盘也是普通的启动卷。
+
+`options` 原样交出，被启动的镜像是相对它自身所在卷的**文件系统根**打开其中路径的，
+它并不知道启动根目录的存在。因此放在 `persist/efisp/mu` 下的载荷必须写成
+`\efisp\mu\...`；同一载荷放在 FAT U 盘上则写成 `\mu\...`。
+
+这一点已在硬件上确认：`options` 写成 FAT 风格 `\mu\Mu-infiniti.fd` 的启动项报告
+`Not Found`，而同一次启动中 `image mu/…` 则经启动根目录正确解析。
+
+`options` 中的加载基址与窗口大小属于载荷，与 Canoe 无关。对 Mu-Silicium 构建，
+它们是该设备 `Resources/Configs/<codename>.toml` 中 `[uefi_fd]` 的 `base` 与
+`size`，与其 `MemoryMapLib.c` 中的 `UEFI_FD` 行一致；对 Project-Aloha 配置，
+它们是 `StackBase` 与 `StackSize`。上面的取值来自一加 15（`infiniti`）。
 
 ## 两个受管理启动项
 

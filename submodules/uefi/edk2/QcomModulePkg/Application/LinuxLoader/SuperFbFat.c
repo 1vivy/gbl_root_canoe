@@ -81,14 +81,102 @@ SfbCreateDriverHandle (OUT EFI_HANDLE *Handle)
 }
 
 /*
+ * Event groups the platform's DXEs may be waiting on.
+ *
+ * The fastboot-only boot path never reaches the stock BDS, so nothing ever
+ * signals these. Qualcomm's own minimal ABL replacement signals all three
+ * before it enumerates filesystems (qualcomm/abl2esp, src/main.rs), and vendor
+ * drivers commonly defer the last stage of initialisation to EndOfDxe or
+ * ReadyToBoot. DetectSdCard is a vendor group whose name says what it triggers.
+ *
+ * Signalling a group nobody listens to is a no-op, so the cost of being wrong
+ * about which of these matters is nil.
+ */
+STATIC CONST EFI_GUID mSfbReadyToBootGuid = {
+  0x7ce88fb3, 0x4bd7, 0x4679,
+  { 0x87, 0xa8, 0xa8, 0xd8, 0xde, 0xe5, 0x0d, 0x2b }
+};
+STATIC CONST EFI_GUID mSfbEndOfDxeGuid = {
+  0x02ce967a, 0xdd7e, 0x4ffc,
+  { 0x9e, 0xe7, 0x81, 0x0c, 0xf0, 0x47, 0x08, 0x80 }
+};
+STATIC CONST EFI_GUID mSfbDetectSdCardGuid = {
+  0xb7972c36, 0x8a4c, 0x4a56,
+  { 0x8b, 0x02, 0x11, 0x59, 0xb5, 0x2d, 0x4b, 0xfb }
+};
+
+STATIC
+VOID
+EFIAPI
+SfbEventGroupNoop (IN EFI_EVENT Event, IN VOID *Context)
+{
+  (VOID)Event;
+  (VOID)Context;
+}
+
+/*
+ * Create a member of Group, signal it, and close it. Creating the event is what
+ * makes the group exist for this call; every other member registered by a
+ * driver is notified by the signal.
+ */
+STATIC
+EFI_STATUS
+SfbSignalEventGroup (IN CONST EFI_GUID *Group)
+{
+  EFI_STATUS  Status;
+  EFI_EVENT   Event = NULL;
+
+  Status = gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_NOTIFY,
+                               SfbEventGroupNoop, NULL,
+                               (EFI_GUID *)Group, &Event);
+  if (EFI_ERROR (Status) || Event == NULL) {
+    return EFI_ERROR (Status) ? Status : EFI_OUT_OF_RESOURCES;
+  }
+
+  Status = gBS->SignalEvent (Event);
+  gBS->CloseEvent (Event);
+  return Status;
+}
+
+VOID
+SfbSignalStorageDetect (VOID)
+{
+  EFI_STATUS  Status;
+
+  Status = SfbSignalEventGroup (&mSfbDetectSdCardGuid);
+  DEBUG ((EFI_D_INFO, "SFB: MARK event-signal group=detect-sd-card status=%r\n",
+          Status));
+}
+
+VOID
+SfbSignalBootPhase (VOID)
+{
+  EFI_STATUS  EndOfDxe;
+  EFI_STATUS  ReadyToBoot;
+
+  /*
+   * EndOfDxe first, then ReadyToBoot: that is the order the platform BDS would
+   * have used, and a driver that gates on both expects to see them that way.
+   */
+  EndOfDxe = SfbSignalEventGroup (&mSfbEndOfDxeGuid);
+  ReadyToBoot = SfbSignalEventGroup (&mSfbReadyToBootGuid);
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK event-signal end-of-dxe=%r ready-to-boot=%r\n",
+          EndOfDxe, ReadyToBoot));
+}
+
+/*
  * Recursively connect every controller in the system.
  *
  * The fastboot-only boot path skips the BDS "connect all" pass, so on this
- * platform whole device stacks are left dispatched-but-unconnected. Most of
- * them do not matter here, but the USB host storage chain does: this platform's
- * firmware carries the Qualcomm USB host bring-up (UsbConfigDxe), the XHCI
- * PCI-emulation shim, XhciDxe, UsbBusDxe and UsbMassStorageDxe, but nothing in
- * the fastboot path ever connects them, so an attached USB drive never appears.
+ * platform whole device stacks are left dispatched-but-unconnected. The one
+ * that matters to a chainloader is storage: without this pass the ext4 and
+ * FAT drivers are never bound to the UFS and removable block devices, no
+ * EFI_SIMPLE_FILE_SYSTEM_PROTOCOL appears, and the persist boot root that
+ * holds canoe.cfg, boot.efi and the payload loaders cannot be read at all.
+ * Connecting everything rather than a named subset is deliberate: the pass
+ * runs once, before any menu row exists, and the alternative is a hardcoded
+ * list that goes stale on the next platform.
  */
 VOID
 SfbConnectAll (VOID)
@@ -127,10 +215,16 @@ SfbStartFatStack (VOID)
 
   if (mSfbFatStackStarted) {
     /* Re-run the connection pass only: media may have appeared since, and a USB
-     * drive may have just been inserted (or a host cable attached). */
+     * drive may have just been inserted (or a host cable attached). Re-signal
+     * the storage-detect group first for the same reason. */
+    SfbSignalStorageDetect ();
     SfbConnectAll ();
     return EFI_SUCCESS;
   }
+
+  /* Before anything binds: give a vendor storage-detect handler the chance to
+   * publish media that is not present yet. */
+  SfbSignalStorageDetect ();
 
   /*
    * EnhancedFatDxe refuses to mount a volume without a Unicode Collation
@@ -170,7 +264,7 @@ SfbStartFatStack (VOID)
 
   /*
    * The read-only EXT4 driver mounts the ext4 persist partition so its \efisp
-   * directory can be scanned and browsed like a FAT32 volume. Same pattern as
+   * directory can be scanned and browsed like a FAT volume. Same pattern as
    * FAT above: a private handle carries its driver binding, and the connect
    * pass at the end binds it to the Disk I/O handles of any ext4 partitions.
    * Failure here is non-fatal to the FAT stack already up, but the persist
@@ -189,6 +283,14 @@ SfbStartFatStack (VOID)
   mSfbFatStackStarted = TRUE;
 
   SfbConnectAll ();
+
+  /*
+   * Now that every controller is connected, tell the platform the DXE phase is
+   * over and a boot is imminent. A driver that published its protocol during
+   * dispatch but deferred the rest of its bring-up to one of these groups gets
+   * its chance here, before any volume is scanned or any entry is launched.
+   */
+  SfbSignalBootPhase ();
 
   return EFI_SUCCESS;
 }
@@ -376,17 +478,19 @@ SfbLe32 (IN CONST UINT8 *Sector, IN UINTN Offset)
 
 /*
  * Decide from the boot sector alone. The FAT type is defined by the geometry
- * rather than by the "FAT32" text at offset 82, which is documented as
- * informational only.
+ * rather than by the "FAT12"/"FAT16"/"FAT32" text at offset 54 or 82, which the
+ * specification documents as informational only - and which is exactly why this
+ * reads the geometry: the device's own FAT12 volumes do carry the text, but a
+ * volume that lies about it still mounts.
  */
 BOOLEAN
-SfbIsFat32Volume (IN EFI_HANDLE Volume)
+SfbIsFatVolume (IN EFI_HANDLE Volume)
 {
   EFI_STATUS             Status;
   EFI_BLOCK_IO_PROTOCOL  *BlockIo = NULL;
   UINT8                  *Sector;
   UINTN                  SectorSize;
-  BOOLEAN                IsFat32 = FALSE;
+  BOOLEAN                IsFat = FALSE;
 
   Status = gBS->HandleProtocol (Volume, &gEfiBlockIoProtocolGuid,
                                 (VOID **)&BlockIo);
@@ -416,19 +520,19 @@ SfbIsFat32Volume (IN EFI_HANDLE Volume)
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_VERBOSE, "SFB: boot sector read failed: %r\n", Status));
   } else {
-    IsFat32 = (BOOLEAN)(SfbClassifyVolumeBytes (Sector, SectorSize) ==
-                        SfbVolumeKindFat32);
+    IsFat = (BOOLEAN)(SfbClassifyVolumeBytes (Sector, SectorSize) ==
+                      SfbVolumeKindFat);
   }
 
   FreeAlignedPages (Sector, EFI_SIZE_TO_PAGES (SectorSize));
-  return IsFat32;
+  return IsFat;
 }
 
 /*
  * The ext4 superblock sits 1024 bytes into the partition and carries the
  * 0xEF53 signature at offset 56 within it (byte 1080). The shared classifier
- * checks FAT32 geometry first and validates the ext4 layout before accepting
- * the magic, so a coincidental match cannot redirect a FAT32 root.
+ * checks FAT geometry first and validates the ext4 layout before accepting the
+ * magic, so a coincidental match cannot redirect a FAT root.
  */
 BOOLEAN
 SfbIsExt4Volume (IN EFI_HANDLE Volume)
@@ -567,8 +671,8 @@ SfbClassifyVolume (IN EFI_HANDLE Volume)
   return Kind;
 }
 /*
- * The subdirectory that plays the role of a FAT32 volume root on a given
- * volume: empty for genuine FAT32 (its root already is the scan root) and
+ * The subdirectory that plays the role of a volume root on a given
+ * volume: empty for genuine FAT (its root already is the scan root) and
  * \efisp for the ext4 persist partition, whose boot files live there. The
  * entry scanner and the browser prepend this to the well-known boot file
  * paths and use it as the browse floor respectively.
@@ -589,7 +693,7 @@ SfbVolumeIsExt4 (IN EFI_HANDLE Volume)
  * TRUE when Path names an existing directory on Volume. Ext4 volumes are only
  * treated as boot volumes when they carry \efisp, so an ext4 partition whose
  * \efisp directory has not been created is never scanned or offered in the
- * browser. FAT32 volumes are never gated on this: their root is the boot root.
+ * browser. FAT volumes are never gated on this: their root is the boot root.
  */
 STATIC
 BOOLEAN
@@ -655,21 +759,25 @@ SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
   }
 
   /* Filter in place: the buffer is ours, and the survivors keep their order.
-   * FAT32 volumes are the menu's traditional boot media; ext4 volumes are the
-   * persist partition, whose \efisp directory the scanner treats as a volume
-   * root via SfbVolumeRootPrefix (). An ext4 volume without \efisp is dropped:
-   * it has no boot root to scan and nothing to browse, so it would only clutter
-   * the menu. Anything else is dropped too. */
+   * FAT volumes of any width are the menu's traditional boot media; ext4
+   * volumes are the persist partition, whose \efisp directory the scanner
+   * treats as a volume root via SfbVolumeRootPrefix (). An ext4 volume without
+   * \efisp is dropped: it has no boot root to scan and nothing to browse, so it
+   * would only clutter the menu. Anything else is dropped too.
+   *
+   * Width matters here because this platform has no FAT32 partition at all.
+   * Accepting only FAT32 dropped all 11 of its FAT volumes - and would drop a
+   * FAT16-formatted USB stick - leaving persist as the sole survivor. */
   for (Index = 0; Index < AllCount; Index++) {
     Kind = SfbClassifyVolume (All[Index]);
-    if (Kind == SfbVolumeKindFat32 ||
+    if (Kind == SfbVolumeKindFat ||
         (Kind == SfbVolumeKindExt4 &&
          SfbVolumeHasDir (All[Index], L"\\efisp"))) {
       All[Kept++] = All[Index];
     }
   }
 
-  DEBUG ((EFI_D_INFO, "SFB: %u of %u file systems are FAT32/ext4\n",
+  DEBUG ((EFI_D_INFO, "SFB: MARK volumes kept=%u of=%u kinds=fat/ext4\n",
           (UINT32)Kept, (UINT32)AllCount));
 
   if (Kept == 0) {

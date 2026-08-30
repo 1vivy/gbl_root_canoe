@@ -176,7 +176,6 @@
 	gEfiPartTypeSystemPartGuid
 
 [Protocols]
-	gQcomUsbConfigProtocolGuid
 	gEfiSimpleTextInputExProtocolGuid
 	gEfiBlockIoProtocolGuid
 	gEfiLoadedImageProtocolGuid
@@ -209,7 +208,7 @@
 	gEfiPartitionRecordGuid
 	gEfiResetReasonProtocolGuid
 	gQcomRngProtocolGuid
-	# Patched around FAT32 image launches so the boot menu can run unsigned
+	# Patched around unsigned image launches so the boot menu can run unsigned
 	# loaders on an unlocked device.
 	gEfiSecurityArchProtocolGuid
 	gEfiSecurity2ArchProtocolGuid
