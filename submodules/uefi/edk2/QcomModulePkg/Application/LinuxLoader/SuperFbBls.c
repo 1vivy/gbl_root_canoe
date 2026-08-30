@@ -144,25 +144,44 @@ SfbBlsCopy (char *Out, SFB_UINTN Chars, const char *Text, SFB_UINTN Length)
 /*
  * A path value, normalised to the separator the firmware's file protocol
  * wants. The spec writes '/' because it is written on Linux; every consumer
- * here is EFI_FILE_PROTOCOL, which wants '\'. Rejects an empty value and one
- * that does not start at the volume root, because a relative path has no
- * defined base once the entry has been lifted out of its directory.
+ * here is EFI_FILE_PROTOCOL, which wants '\'.
+ *
+ * A value with no leading separator is accepted and given one. The
+ * specification calls these paths relative to the boot partition root, and the
+ * two writers that matter disagree about whether to spell that with a leading
+ * slash: `kernel-install` writes `linux /vmlinuz-linux`, while postmarketOS's
+ * boot-deploy writes bare file names (generate_bootloader_spec_conf,
+ * boot-deploy-functions.sh:550-594). Refusing the second form rejected every
+ * entry postmarketOS produces, for a distinction that carries no meaning: both
+ * are resolved against the same boot root either way.
+ *
+ * An empty value is still refused - there is nothing to resolve.
  */
 static SFB_BOOLEAN
 SfbBlsCopyPath (char *Out, SFB_UINTN Chars, const char *Text, SFB_UINTN Length)
 {
   SFB_UINTN Index;
+  SFB_UINTN Offset = 0;
 
-  if (Length == 0 || Length >= Chars) {
+  if (Length == 0) {
     return FALSE;
   }
+
   if (Text[0] != '/' && Text[0] != '\\') {
+    /* Room for the separator this adds as well as the value and its NUL. */
+    if (Length + 2 > Chars) {
+      return FALSE;
+    }
+    Out[0] = '\\';
+    Offset = 1;
+  } else if (Length >= Chars) {
     return FALSE;
   }
+
   for (Index = 0; Index < Length; Index++) {
-    Out[Index] = (Text[Index] == '/') ? '\\' : Text[Index];
+    Out[Offset + Index] = (Text[Index] == '/') ? '\\' : Text[Index];
   }
-  Out[Length] = '\0';
+  Out[Offset + Length] = '\0';
   return TRUE;
 }
 
@@ -319,4 +338,70 @@ SfbBlsParse (const char *Bytes, SFB_UINTN Size, SFB_BLS_ENTRY *Entry)
     }
   }
   return TRUE;
+}
+
+/*
+ * Shift one path right and write Prefix over the space that opens up.
+ *
+ * The parser guarantees a leading separator on every stored path and Prefix
+ * carries no trailing one, so the two concatenate directly.
+ */
+static SFB_BOOLEAN
+SfbBlsPrefixOne (char *Path, SFB_UINTN Chars, const char *Prefix,
+                 SFB_UINTN PrefixLength)
+{
+  SFB_UINTN PathLength;
+  SFB_UINTN Index;
+
+  /* An absent optional path - no initrd, no devicetree - stays absent. */
+  if (Path[0] == '\0') {
+    return TRUE;
+  }
+
+  PathLength = SfbBlsLength (Path);
+  if (PrefixLength + PathLength + 1 > Chars) {
+    return FALSE;
+  }
+
+  for (Index = PathLength + 1; Index > 0; Index--) {
+    Path[Index - 1 + PrefixLength] = Path[Index - 1];
+  }
+  for (Index = 0; Index < PrefixLength; Index++) {
+    Path[Index] = Prefix[Index];
+  }
+  return TRUE;
+}
+
+SFB_BOOLEAN
+SfbBlsPrefixPaths (SFB_BLS_ENTRY *Entry, const char *Prefix)
+{
+  SFB_UINTN PrefixLength;
+
+  if (Entry == NULL) {
+    return FALSE;
+  }
+  if (Prefix == NULL || Prefix[0] == '\0') {
+    /* A FAT volume's boot root is its volume root: already correct. */
+    return TRUE;
+  }
+
+  PrefixLength = SfbBlsLength (Prefix);
+
+  /*
+   * All three or none. Prefixing the image and failing on the initrd would
+   * leave an entry that launches a kernel with a device tree it cannot find,
+   * so the caller must see one verdict for the whole entry.
+   */
+  if (PrefixLength + SfbBlsLength (Entry->Image) + 1 > SFB_BLS_PATH_CHARS ||
+      PrefixLength + SfbBlsLength (Entry->Initrd) + 1 > SFB_BLS_PATH_CHARS ||
+      PrefixLength + SfbBlsLength (Entry->Dtb) + 1 > SFB_BLS_PATH_CHARS) {
+    return FALSE;
+  }
+
+  return (SFB_BOOLEAN)(SfbBlsPrefixOne (Entry->Image, SFB_BLS_PATH_CHARS,
+                                        Prefix, PrefixLength) &&
+                       SfbBlsPrefixOne (Entry->Initrd, SFB_BLS_PATH_CHARS,
+                                        Prefix, PrefixLength) &&
+                       SfbBlsPrefixOne (Entry->Dtb, SFB_BLS_PATH_CHARS,
+                                        Prefix, PrefixLength));
 }

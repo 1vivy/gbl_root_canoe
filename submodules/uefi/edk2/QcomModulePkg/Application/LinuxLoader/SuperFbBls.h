@@ -68,4 +68,22 @@ typedef struct {
 SFB_BOOLEAN
 SfbBlsParse (const char *Bytes, SFB_UINTN Size, SFB_BLS_ENTRY *Entry);
 
+/*
+ * Rewrite every path in Entry to sit under Prefix, in place.
+ *
+ * A Type #1 entry names its paths relative to the boot root, and the parser
+ * guarantees each begins at that root. On a FAT volume the boot root is the
+ * volume root and Prefix is empty, so nothing changes. On the ext4 persist
+ * volume the boot root is \efisp, and without this the firmware would look for
+ * a kernel at the volume root where nothing lives.
+ *
+ * Applied once, right after parsing, so a stored path is always
+ * volume-absolute and no later consumer has to know which volume it came from.
+ *
+ * Returns false when any prefixed path would not fit, which rejects the whole
+ * entry: a truncated kernel path is worse than a missing row.
+ */
+SFB_BOOLEAN
+SfbBlsPrefixPaths (SFB_BLS_ENTRY *Entry, const char *Prefix);
+
 #endif /* __SUPER_FB_BLS_H__ */

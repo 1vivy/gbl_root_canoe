@@ -94,13 +94,54 @@ TestPathSeparatorIsRewritten (void)
   assert (strcmp (gEntry.Image, "\\EFI\\Linux\\Image") == 0);
 }
 
+/*
+ * What postmarketOS's boot-deploy actually writes: every value a bare file
+ * name, no leading slash anywhere. Refusing this rejected every entry that
+ * tool produces, and it is the only tool that would be writing entries on this
+ * device - there is no removable-media path here, so a staged pmOS install on
+ * the persist boot root is the whole of the use case.
+ *
+ * Source: boot-deploy-functions.sh, generate_bootloader_spec_conf, which emits
+ * title / sort-key / linux / initrd / options / devicetree with filenames
+ * relative to the boot partition root.
+ */
 static void
-TestRelativePathIsRefused (void)
+TestBootDeployRelativePathsAreAccepted (void)
 {
-  /* Once an entry has been lifted out of /loader/entries there is no base a
-   * relative path could resolve against, so it is rejected rather than
-   * guessed at - and with no image key left, the whole entry goes. */
-  assert (!Parse ("linux vmlinuz\n"));
+  assert (Parse ("title postmarketOS\n"
+                 "sort-key postmarketos\n"
+                 "linux vmlinuz\n"
+                 "initrd initramfs\n"
+                 "devicetree dtbs/qcom/sm8850-oneplus-infiniti.dtb\n"
+                 "options pmos_root_uuid=1234 rw\n"));
+  assert (gEntry.Kind == SfbBlsKindLinux);
+  assert (strcmp (gEntry.Image, "\\vmlinuz") == 0);
+  assert (strcmp (gEntry.Initrd, "\\initramfs") == 0);
+  assert (strcmp (gEntry.Dtb,
+                  "\\dtbs\\qcom\\sm8850-oneplus-infiniti.dtb") == 0);
+  assert (strcmp (gEntry.Cmdline, "pmos_root_uuid=1234 rw") == 0);
+  /* sort-key is one of the keys this loader has no use for; ignoring an
+   * unknown key must not count as a rejection. */
+  assert (gEntry.RejectedLines == 0);
+}
+
+/* Both spellings name the same file, so both must land on the same path. */
+static void
+TestLeadingSeparatorIsOptionalNotSignificant (void)
+{
+  char Absolute[SFB_BLS_PATH_CHARS];
+
+  assert (Parse ("title X\nlinux /boot/vmlinuz\n"));
+  memcpy (Absolute, gEntry.Image, sizeof (Absolute));
+  assert (Parse ("title X\nlinux boot/vmlinuz\n"));
+  assert (strcmp (gEntry.Image, Absolute) == 0);
+}
+
+/* An empty value has nothing to resolve, with or without a separator. */
+static void
+TestEmptyPathIsStillRefused (void)
+{
+  assert (!Parse ("linux \n"));
   assert (gEntry.RejectedLines == 1);
 }
 
@@ -161,7 +202,7 @@ TestEfiEntryRefusesKernelOnlyKeys (void)
    * DTB for it would set up state nothing consumes, so they are dropped and
    * the file is reported as partly refused. */
   assert (Parse ("title Mu\n"
-                 "efi /aloha/FdLoader.efi\n"
+                 "efi /aloha/PlaceAlohaFd.efi\n"
                  "initrd /nope.img\n"
                  "options \\aloha\\SILICIUM_UEFI.fd 0xC6900000 0x300000\n"));
   assert (gEntry.Kind == SfbBlsKindEfi);
@@ -218,6 +259,108 @@ TestOverlongValuesAreRefusedNotTruncated (void)
   assert (gEntry.RejectedLines == 1);
 }
 
+/*
+ * The boot root on this platform is a directory - \efisp - inside the ext4
+ * persist partition, not a volume root. A Type #1 entry staged there names its
+ * kernel relative to that boot root, so every path has to be rewritten before
+ * the firmware looks for it, or the kernel is sought at the volume root where
+ * nothing lives. This is the only way a boot-spec entry can be staged on this
+ * device at all: it has no removable media path, USB host mode does not work.
+ */
+static void
+TestBootRootPrefixIsAppliedToEveryPath (void)
+{
+  assert (Parse ("title postmarketOS\n"
+                 "linux /pmos/vmlinuz\n"
+                 "initrd /pmos/initramfs\n"
+                 "devicetree /pmos/oneplus-plk110.dtb\n"
+                 "options root=/dev/mmcblk0p1 rw\n"));
+  assert (SfbBlsPrefixPaths (&gEntry, "\\efisp"));
+  assert (strcmp (gEntry.Image, "\\efisp\\pmos\\vmlinuz") == 0);
+  assert (strcmp (gEntry.Initrd, "\\efisp\\pmos\\initramfs") == 0);
+  assert (strcmp (gEntry.Dtb, "\\efisp\\pmos\\oneplus-plk110.dtb") == 0);
+  /* The command line is the kernel's, not a path: it must not be touched. */
+  assert (strcmp (gEntry.Cmdline, "root=/dev/mmcblk0p1 rw") == 0);
+}
+
+/* A FAT volume's boot root is its volume root, so an empty prefix has to be a
+ * no-op rather than an error - that is the removable-media case. */
+static void
+TestEmptyPrefixLeavesPathsAlone (void)
+{
+  assert (Parse ("title Arch\nlinux /vmlinuz-linux\n"));
+  assert (SfbBlsPrefixPaths (&gEntry, ""));
+  assert (strcmp (gEntry.Image, "\\vmlinuz-linux") == 0);
+}
+
+/* An absent optional path stays absent; prefixing an empty string would
+ * invent a devicetree at the boot root and publish it to the kernel. */
+static void
+TestAbsentOptionalPathsStayAbsent (void)
+{
+  assert (Parse ("title Arch\nlinux /vmlinuz-linux\n"));
+  assert (gEntry.Initrd[0] == '\0');
+  assert (SfbBlsPrefixPaths (&gEntry, "\\efisp"));
+  assert (gEntry.Initrd[0] == '\0');
+  assert (gEntry.Dtb[0] == '\0');
+}
+
+/* Build "<Head>" + Fill repeated Repeats times + "\n", NUL-terminated. */
+static void
+BuildLongValue (char *Text, SFB_UINTN Chars, const char *Head, char Fill,
+                SFB_UINTN Repeats)
+{
+  SFB_UINTN Used = strlen (Head);
+  SFB_UINTN Index;
+
+  assert (Used + Repeats + 2 <= Chars);
+  memcpy (Text, Head, Used);
+  for (Index = 0; Index < Repeats; Index++) {
+    Text[Used + Index] = Fill;
+  }
+  Text[Used + Repeats] = '\n';
+  Text[Used + Repeats + 1] = '\0';
+}
+
+/*
+ * A path that no longer fits rejects the whole entry rather than truncating.
+ * All-or-nothing matters more than the individual field: an entry whose kernel
+ * was prefixed but whose devicetree was not would boot with a device tree read
+ * from the wrong directory, or none.
+ */
+static void
+TestPrefixThatDoesNotFitRejectsTheEntry (void)
+{
+  char Text[SFB_BLS_PATH_CHARS + 64];
+
+  /* The longest path the field can hold, so any prefix overflows it. */
+  BuildLongValue (Text, sizeof (Text), "title X\nlinux /", 'a',
+                  SFB_BLS_PATH_CHARS - 2);
+
+  assert (Parse (Text));
+  assert (strlen (gEntry.Image) == SFB_BLS_PATH_CHARS - 1);
+  assert (!SfbBlsPrefixPaths (&gEntry, "\\efisp"));
+}
+
+/* An overlong initrd must reject the entry even though the image would fit -
+ * the verdict covers the payload, not one field. */
+static void
+TestOverflowOnASecondaryPathRejectsTheEntry (void)
+{
+  char Text[SFB_BLS_PATH_CHARS + 64];
+
+  BuildLongValue (Text, sizeof (Text), "title X\nlinux /k\ninitrd /", 'b',
+                  SFB_BLS_PATH_CHARS - 2);
+
+  assert (Parse (Text));
+  assert (strcmp (gEntry.Image, "\\k") == 0);
+  assert (strlen (gEntry.Initrd) == SFB_BLS_PATH_CHARS - 1);
+  assert (!SfbBlsPrefixPaths (&gEntry, "\\efisp"));
+  /* Nothing was rewritten: the caller drops the row, and a half-prefixed
+   * payload must never be what it drops. */
+  assert (strcmp (gEntry.Image, "\\k") == 0);
+}
+
 int
 main (void)
 {
@@ -226,13 +369,20 @@ main (void)
   TestSecondInitrdIsIgnoredAndCounted ();
   TestOptionsJoinWithExactlyOneSpace ();
   TestPathSeparatorIsRewritten ();
-  TestRelativePathIsRefused ();
+  TestBootDeployRelativePathsAreAccepted ();
+  TestLeadingSeparatorIsOptionalNotSignificant ();
+  TestEmptyPathIsStillRefused ();
   TestCapIsRespectedWithoutReadingPast ();
   TestMissingTitleLeavesTheFieldEmpty ();
   TestUnknownKeysAreIgnoredNotRejected ();
   TestEfiEntryRefusesKernelOnlyKeys ();
   TestCommentsBlanksAndCarriageReturns ();
   TestOverlongValuesAreRefusedNotTruncated ();
+  TestBootRootPrefixIsAppliedToEveryPath ();
+  TestEmptyPrefixLeavesPathsAlone ();
+  TestAbsentOptionalPathsStayAbsent ();
+  TestPrefixThatDoesNotFitRejectsTheEntry ();
+  TestOverflowOnASecondaryPathRejectsTheEntry ();
   printf ("test_bls: all cases passed\n");
   return 0;
 }
