@@ -29,8 +29,8 @@
 #define SFB_CONFIG_TITLE_CHARS     48u
 #define SFB_CONFIG_PATH_CHARS      200u
 /* An entry's `options` value: the command line handed to the image as UEFI
- * LoadOptions. Sized to hold an AbootLoader invocation, which names two or
- * three image paths and may carry a kernel command line. */
+ * LoadOptions. Sized generously because the launched image owns its own
+ * argument grammar and may need several paths plus a kernel command line. */
 #define SFB_CONFIG_OPTIONS_CHARS   384u
 #define SFB_CONFIG_TIMEOUT_MAX     60u
 #define SFB_CONFIG_DEFAULT_TIMEOUT 5u
@@ -67,9 +67,10 @@ typedef struct {
   /*
    * Verbatim LoadOptions for the image, or empty. Not a path and never
    * folded like one: it is passed through byte for byte, because the image
-   * on the other end owns its own argument grammar. This is what lets a row
-   * name a loader and its payload - \tools\FdLoader.efi with an FD image and
-   * a load window, or \tools\AbootLoader.efi with --boot and --vendor-boot.
+   * on the other end owns its own argument grammar. The BDS is a chainloader
+   * selector, so this is how a row hands a payload-side launcher whatever it
+   * needs - a firmware descriptor and a load window, a kernel command line -
+   * without this loader knowing anything about those formats.
    */
   char            Options[SFB_CONFIG_OPTIONS_CHARS];
   SFB_UINT8       Mode;

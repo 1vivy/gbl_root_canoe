@@ -123,11 +123,9 @@ jobs:
           test -s "artifacts/$package/efisp/tools/RebootTools.efi"
           test -s "artifacts/$package/efisp/tools/BLTools.efi"
           test -s "artifacts/$package/efisp/tools/ArbTools.efi"
-          test -s "artifacts/$package/efisp/tools/FdLoader.efi"
-          test -s "artifacts/$package/efisp/tools/AbootLoader.efi"
           test -s "artifacts/$package/efisp/tools/SurfaceTools.efi"
         done
-        for file in BDS.efi efisp/tools/RebootTools.efi efisp/tools/BLTools.efi efisp/tools/ArbTools.efi efisp/tools/FdLoader.efi efisp/tools/AbootLoader.efi efisp/tools/SurfaceTools.efi; do
+        for file in BDS.efi efisp/tools/RebootTools.efi efisp/tools/BLTools.efi efisp/tools/ArbTools.efi efisp/tools/SurfaceTools.efi; do
           cmp "artifacts/toolkit_linux/$file" "artifacts/toolkit_windows/$file"
           cmp "artifacts/toolkit_linux/$file" "artifacts/toolkit_android/$file"
           cmp "artifacts/toolkit_linux/$file" "artifacts/magisk_module/$file"
@@ -215,7 +213,7 @@ jobs:
           *) echo "unexpected Magisk extractfv: $module_extractfv_type"; exit 1 ;;
         esac
 
-        for efi in BDS.efi efisp/tools/RebootTools.efi efisp/tools/BLTools.efi efisp/tools/ArbTools.efi efisp/tools/FdLoader.efi efisp/tools/AbootLoader.efi efisp/tools/SurfaceTools.efi; do
+        for efi in BDS.efi efisp/tools/RebootTools.efi efisp/tools/BLTools.efi efisp/tools/ArbTools.efi efisp/tools/SurfaceTools.efi; do
           efi_type="$(file -b "artifacts/toolkit_linux/$efi")"
           # file(1) renamed the PE machine string for this architecture from
           # "ARM64" to "Aarch64"; a runner-image bump must not fail a correct

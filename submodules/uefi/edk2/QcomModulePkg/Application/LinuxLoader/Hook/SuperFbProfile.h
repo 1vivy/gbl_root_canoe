@@ -92,23 +92,4 @@ SfbProfileParse (
   SFB_MODE2_PROFILE *Profile
   );
 
-static inline SFB_BOOLEAN
-SfbValidateMode2Profile (
-  const SFB_UINT8 *Bytes,
-  SFB_UINTN        Size,
-  SFB_MODE2_PROFILE *Profile
-  )
-{
-  return SfbProfileParse (Bytes, Size, Profile);
-}
-static inline SFB_BOOLEAN
-SfbParseMode2Profile (
-  const SFB_UINT8 *Bytes,
-  SFB_UINTN        Size,
-  SFB_MODE2_PROFILE *Profile
-  )
-{
-  return SfbProfileParse (Bytes, Size, Profile);
-}
-
 #endif

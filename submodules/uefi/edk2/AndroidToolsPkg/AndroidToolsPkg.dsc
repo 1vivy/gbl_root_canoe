@@ -49,17 +49,21 @@
   IoLib|MdePkg/Library/BaseIoLibIntrinsic/BaseIoLibIntrinsic.inf
   PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
   AndroidToolsUi|AndroidToolsPkg/Library/AndroidToolsUi/AndroidToolsUi.inf
-  # Raw payload handoff shared by the two non-PE payload loaders.
-  AtRawBoot|AndroidToolsPkg/Library/AtRawBoot/AtRawBoot.inf
   # Clang may enable stack protection heuristically; satisfy its guard symbols.
   NULL|MdePkg/Library/BaseStackCheckLib/BaseStackCheckLib.inf
 
+# MdePkg's ArmCache.c is a documented set of null functions, so any ARM consumer
+# of CacheMaintenanceLib must get the ArmPkg implementation instead. Nothing in
+# the package consumes the class today; the override stays so that the next
+# module to need it cannot silently link the stub.
 [LibraryClasses.ARM]
   ArmLib|ArmPkg/Library/ArmLib/ArmBaseLib.inf
+  CacheMaintenanceLib|ArmPkg/Library/ArmCacheMaintenanceLib/ArmCacheMaintenanceLib.inf
   NULL|ArmPkg/Library/CompilerIntrinsicsLib/CompilerIntrinsicsLib.inf
 
 [LibraryClasses.AARCH64]
   ArmLib|ArmPkg/Library/ArmLib/ArmBaseLib.inf
+  CacheMaintenanceLib|ArmPkg/Library/ArmCacheMaintenanceLib/ArmCacheMaintenanceLib.inf
   NULL|ArmPkg/Library/CompilerIntrinsicsLib/CompilerIntrinsicsLib.inf
 
 ################################################################################
@@ -101,10 +105,5 @@
   AndroidToolsPkg/Application/RebootTools/RebootTools.inf
   AndroidToolsPkg/Application/ArbTools/ArbTools.inf
   AndroidToolsPkg/Application/BLTools/BLTools.inf
-  # Non-PE payload loaders: a raw firmware volume and an Android boot image.
-  # Both are launched as ordinary EFI applications with arguments in
-  # LoadOptions, which is what keeps the BDS a plain PE launcher.
-  AndroidToolsPkg/Application/FdLoader/FdLoader.inf
-  AndroidToolsPkg/Application/AbootLoader/AbootLoader.inf
   AndroidToolsPkg/Application/SurfaceTools/SurfaceTools.inf
   AndroidToolsPkg/Application/UsbTools/UsbTools.inf
