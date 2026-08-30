@@ -120,16 +120,81 @@ SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume)
 }
 
 /*
- * A missing or unreachable root is first-run too: when nothing can be
- * launched, fastboot is the only useful destination for installation.
+ * A config file is useful only when it parses and at least one of its images
+ * still exists on this volume. Merely leaving canoe.cfg behind after a failed
+ * transaction must not suppress the first-run fastboot path.
+ */
+STATIC
+BOOLEAN
+SfbRootHasUsableConfig (IN EFI_FILE_PROTOCOL *Root,
+                        IN CONST CHAR16      *RootPrefix,
+                        IN CONST CHAR16      *ConfigPath)
+{
+  CHAR8        *Buffer;
+  SFB_CONFIG   *Config;
+  UINTN         BytesRead = 0;
+  UINTN         Index;
+  BOOLEAN       Usable = FALSE;
+
+  if (Root == NULL || RootPrefix == NULL || ConfigPath == NULL ||
+      !SfbFileExists (Root, ConfigPath)) {
+    return FALSE;
+  }
+
+  Buffer = AllocateZeroPool (SFB_LIST_MAX_BYTES + 1);
+  Config = AllocateZeroPool (sizeof (*Config));
+  if (Buffer == NULL || Config == NULL) {
+    if (Buffer != NULL) {
+      FreePool (Buffer);
+    }
+    if (Config != NULL) {
+      FreePool (Config);
+    }
+    return FALSE;
+  }
+
+  if (!EFI_ERROR (SfbReadFileBytes (Root, ConfigPath, Buffer,
+                                    SFB_LIST_MAX_BYTES, &BytesRead)) &&
+      SfbConfigParse (Buffer, BytesRead, Config)) {
+    for (Index = 0; Index < Config->Count; Index++) {
+      CHAR16 Relative[SFB_PATH_CHARS];
+      CHAR16 ImagePath[SFB_PATH_CHARS];
+
+      SfbAsciiToUnicode (Config->Entry[Index].Image, Relative,
+                         ARRAY_SIZE (Relative));
+      if (!EFI_ERROR (SfbJoinRoot (RootPrefix, Relative, ImagePath,
+                                   ARRAY_SIZE (ImagePath))) &&
+          SfbFileExists (Root, ImagePath)) {
+        Usable = TRUE;
+        break;
+      }
+    }
+  }
+
+  FreePool (Config);
+  FreePool (Buffer);
+  return Usable;
+}
+
+/*
+ * A missing or unreachable root is first-run too. A root is populated only
+ * when it contains a launchable managed loader or a valid config naming an
+ * existing image.
  */
 BOOLEAN
 SfbBootRootIsEmpty (VOID)
 {
+  STATIC CONST CHAR16 *ManagedNames[] = {
+    SFB_MANAGED_BOOT_NAME,
+    SFB_MANAGED_SLOT_A_NAME,
+    SFB_MANAGED_SLOT_B_NAME,
+    SFB_MANAGED_BACKUP_NAME
+  };
   EFI_STATUS Status;
   EFI_HANDLE *Volumes = NULL;
   UINTN VolumeCount = 0;
   UINTN Index;
+  UINTN Which;
   BOOLEAN FoundRoot = FALSE;
 
   Status = SfbLocateVolumes (&Volumes, &VolumeCount);
@@ -142,30 +207,38 @@ SfbBootRootIsEmpty (VOID)
   for (Index = 0; Index < VolumeCount; Index++) {
     EFI_FILE_PROTOCOL *Root = NULL;
     CHAR16 ConfigPath[SFB_PATH_CHARS];
-    CHAR16 ManagedPath[SFB_PATH_CHARS];
 
     if (EFI_ERROR (SfbOpenVolumeRoot (Volumes[Index], &Root)) ||
         Root == NULL) {
       continue;
     }
     FoundRoot = TRUE;
+
     if (!EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
                                  SFB_CONFIG_FILE_PATH, ConfigPath,
                                  ARRAY_SIZE (ConfigPath))) &&
-        SfbFileExists (Root, ConfigPath)) {
-      DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=populated\n"));
+        SfbRootHasUsableConfig (Root, SfbVolumeRootPrefix (Volumes[Index]),
+                                ConfigPath)) {
+      DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=populated-config\n"));
       Root->Close (Root);
       FreePool (Volumes);
       return FALSE;
     }
-    if (!EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
-                                 SFB_MANAGED_BOOT_NAME, ManagedPath,
-                                 ARRAY_SIZE (ManagedPath))) &&
-        SfbFileExists (Root, ManagedPath)) {
-      DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=populated\n"));
-      Root->Close (Root);
-      FreePool (Volumes);
-      return FALSE;
+
+    for (Which = 0; Which < ARRAY_SIZE (ManagedNames); Which++) {
+      CHAR16 ManagedPath[SFB_PATH_CHARS];
+
+      if (!EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
+                                   ManagedNames[Which], ManagedPath,
+                                   ARRAY_SIZE (ManagedPath))) &&
+          SfbFileExists (Root, ManagedPath)) {
+        DEBUG ((EFI_D_INFO,
+                "SFB: MARK boot-root reason=populated-managed path='%s'\n",
+                ManagedPath));
+        Root->Close (Root);
+        FreePool (Volumes);
+        return FALSE;
+      }
     }
     Root->Close (Root);
   }
@@ -474,16 +547,13 @@ SfbJoinRoot (IN CONST CHAR16 *RootPrefix,
 }
 
 /*
- * Offer the managed loader names the installers write, for a boot root that
- * holds one but no canoe.cfg.
+ * Offer managed loader names for a boot root that has no usable canoe.cfg.
+ * Each slot has an independent loader and matching sidecars; boot_backup.efi
+ * remains the single previous-generation fallback. The singular boot.efi row
+ * is retained here only for compatibility with pre-b2 writers.
  *
- * That combination is what a dd-only upgrade leaves behind: a new BDS written
- * straight to efisp, the installer never run, so the config it would have
- * authored is absent while boot.efi is sitting right there. Without this probe
- * such a device would come up to a menu offering nothing to boot.
- *
- * The titles match what the installers put in canoe.cfg, so the row does not
- * change its name the first time a config is written.
+ * The titles match the config labels used by the installers, so a row does not
+ * change its name when a config is authored later.
  */
 STATIC
 VOID
@@ -493,8 +563,10 @@ SfbAppendBootRootEntries (IN OUT SFB_MENU_STATE *Menu)
     CONST CHAR16  *Name;
     CONST CHAR16  *Title;
   } Known[] = {
-    { SFB_MANAGED_BOOT_NAME,   L"Android" },
-    { SFB_MANAGED_BACKUP_NAME, L"Android (previous)" }
+    { SFB_MANAGED_BOOT_NAME,      L"Android" },
+    { SFB_MANAGED_SLOT_A_NAME,    L"Android (slot A)" },
+    { SFB_MANAGED_SLOT_B_NAME,    L"Android (slot B)" },
+    { SFB_MANAGED_BACKUP_NAME,    L"Android (previous)" }
   };
 
   EFI_STATUS  Status;

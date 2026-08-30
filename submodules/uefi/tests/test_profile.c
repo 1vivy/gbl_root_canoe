@@ -86,21 +86,37 @@ static void TestExactProfileAbi(void)
 static void TestManagedPaths(void)
 {
     PATH(Boot, '\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i');
-    PATH(Backup, '\\', 'b', 'o', 'o', 't', '_', 'b', 'a', 'c', 'k', 'u', 'p', '.', 'e', 'f', 'i');
-    PATH(PersistBoot, '\\', 'e', 'f', 'i', 's', 'p', '\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i');
-    PATH(PersistBackupUpper, '\\', 'E', 'F', 'I', 'S', 'P', '\\', 'B', 'O', 'O', 'T', '_', 'B', 'A', 'C', 'K', 'U', 'P', '.', 'E', 'F', 'I');
+    PATH(SlotA, '\\', 'b', 'o', 'o', 't', '_', 'a', '.', 'e', 'f', 'i');
+    PATH(SlotB, '\\', 'b', 'o', 'o', 't', '_', 'b', '.', 'e', 'f', 'i');
+    PATH(Backup, '\\', 'b', 'o', 'o', 't', '_', 'b', 'a', 'c', 'k',
+         'u', 'p', '.', 'e', 'f', 'i');
+    PATH(PersistBoot, '\\', 'e', 'f', 'i', 's', 'p', '\\', 'b', 'o', 'o',
+         't', '.', 'e', 'f', 'i');
+    PATH(PersistSlotA, '\\', 'e', 'f', 'i', 's', 'p', '\\', 'b', 'o', 'o',
+         't', '_', 'a', '.', 'e', 'f', 'i');
+    PATH(PersistSlotB, '\\', 'e', 'f', 'i', 's', 'p', '\\', 'b', 'o', 'o',
+         't', '_', 'b', '.', 'e', 'f', 'i');
+    PATH(PersistBackupUpper, '\\', 'E', 'F', 'I', 'S', 'P', '\\', 'B', 'O',
+         'O', 'T', '_', 'B', 'A', 'C', 'K', 'U', 'P', '.', 'E', 'F', 'I');
     PATH(Relative, 'b', 'o', 'o', 't', '.', 'e', 'f', 'i');
-    PATH(Suffix, '\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i', '.', 'g', 'm', '2', 'p');
-    PATH(Other, '\\', 'e', 'f', 'i', '\\', 'b', 'o', 'o', 't', '\\', 'b', 'o', 'o', 't', 'a', 'a', '6', '4', '.', 'e', 'f', 'i');
+    PATH(Suffix, '\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i', '.', 'g',
+         'm', '2', 'p');
+    PATH(Other, '\\', 'e', 'f', 'i', '\\', 'b', 'o', 'o', 't', '\\', 'b',
+         'o', 'o', 't', 'a', 'a', '6', '4', '.', 'e', 'f', 'i');
     PATH(AliasDot, '\\', '.', '\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i');
-    PATH(AliasParent, '\\', 'e', 'f', 'i', 's', 'p', '\\', '.', '.', '\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i');
+    PATH(AliasParent, '\\', 'e', 'f', 'i', 's', 'p', '\\', '.', '.', '\\',
+         'b', 'o', 'o', 't', '.', 'e', 'f', 'i');
     PATH(AliasDouble, '\\', '\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i');
     PATH(AliasTrailing, '\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i', '\\');
 
-    // Given/When/Then: only the four canonical paths classify as managed.
+    // Given/When/Then: the eight canonical paths classify as managed.
     assert(SfbIsManagedAblPath(Boot));
+    assert(SfbIsManagedAblPath(SlotA));
+    assert(SfbIsManagedAblPath(SlotB));
     assert(SfbIsManagedAblPath(Backup));
     assert(SfbIsManagedAblPath(PersistBoot));
+    assert(SfbIsManagedAblPath(PersistSlotA));
+    assert(SfbIsManagedAblPath(PersistSlotB));
     assert(SfbIsManagedAblPath(PersistBackupUpper));
     assert(!SfbIsManagedAblPath(Relative));
     assert(!SfbIsManagedAblPath(Suffix));

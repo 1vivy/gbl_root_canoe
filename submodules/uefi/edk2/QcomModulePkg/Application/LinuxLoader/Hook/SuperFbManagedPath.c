@@ -32,18 +32,32 @@ SfbIsManagedAblPath (const SFB_PATH_CHAR16 *Path)
 {
   static const SFB_PATH_CHAR16 Boot[] =
     {'\\', 'b', 'o', 'o', 't', '.', 'e', 'f', 'i', 0};
+  static const SFB_PATH_CHAR16 SlotA[] =
+    {'\\', 'b', 'o', 'o', 't', '_', 'a', '.', 'e', 'f', 'i', 0};
+  static const SFB_PATH_CHAR16 SlotB[] =
+    {'\\', 'b', 'o', 'o', 't', '_', 'b', '.', 'e', 'f', 'i', 0};
   static const SFB_PATH_CHAR16 Backup[] =
     {'\\', 'b', 'o', 'o', 't', '_', 'b', 'a', 'c', 'k', 'u', 'p',
      '.', 'e', 'f', 'i', 0};
   static const SFB_PATH_CHAR16 PersistBoot[] =
     {'\\', 'e', 'f', 'i', 's', 'p', '\\', 'b', 'o', 'o', 't', '.',
      'e', 'f', 'i', 0};
+  static const SFB_PATH_CHAR16 PersistSlotA[] =
+    {'\\', 'e', 'f', 'i', 's', 'p', '\\', 'b', 'o', 'o', 't', '_',
+     'a', '.', 'e', 'f', 'i', 0};
+  static const SFB_PATH_CHAR16 PersistSlotB[] =
+    {'\\', 'e', 'f', 'i', 's', 'p', '\\', 'b', 'o', 'o', 't', '_',
+     'b', '.', 'e', 'f', 'i', 0};
   static const SFB_PATH_CHAR16 PersistBackup[] =
     {'\\', 'e', 'f', 'i', 's', 'p', '\\', 'b', 'o', 'o', 't', '_',
      'b', 'a', 'c', 'k', 'u', 'p', '.', 'e', 'f', 'i', 0};
 
   return SfbPathEquals (Path, Boot) ||
+         SfbPathEquals (Path, SlotA) ||
+         SfbPathEquals (Path, SlotB) ||
          SfbPathEquals (Path, Backup) ||
          SfbPathEquals (Path, PersistBoot) ||
+         SfbPathEquals (Path, PersistSlotA) ||
+         SfbPathEquals (Path, PersistSlotB) ||
          SfbPathEquals (Path, PersistBackup);
 }
