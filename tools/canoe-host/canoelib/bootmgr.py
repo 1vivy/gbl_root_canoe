@@ -120,13 +120,19 @@ def install(
     return _parse_install(result)
 
 
+def _has_backend_argument(argv: Sequence[str]) -> bool:
+    """Detect a global backend option without mistaking entry.set --image for one."""
+    backend_flags = ("--boot-root", "--source", "--ext4-image")
+    return any(argument.split("=", maxsplit=1)[0] in backend_flags for argument in argv)
+
+
 def route(toolkit: Toolkit, handle: Export | None, argv: Sequence[str]) -> None:
     """Forward one script-side command to ``canoe-bootmgr`` unchanged."""
     command: list[str | Path] = [_binary(toolkit)]
     if handle is not None:
         location_flag, location = _location(handle)
         command.extend((location_flag, location))
-    elif not any(argument in ("--boot-root", "--source", "--image") for argument in argv):
+    elif not _has_backend_argument(argv):
         command.extend(("--boot-root", toolkit.efisp))
     command.extend(argv)
     result = run(command)
