@@ -1,10 +1,10 @@
 # 链式启动第三方 UEFI 栈
 
-BDS 是链式启动选择器，不是引导管理器。它枚举候选镜像并启动其中一个，仅此而已：
-`LoadImage` 然后 `StartImage`，并把该行的 `options` 逐字节交过去。它不枚举 USB，
-不为其他操作系统实现引导管理器，也不携带任何载荷格式的加载器。
-
-因此，想被链式启动的东西，契约很短：**它必须是一个 UEFI 应用程序**。
+BDS 是只读的 UEFI 选择器。它会扫描保留卷上的已知 EFI 加载器与 BLS Type #1
+启动项，并启动用户选择的项目。普通启动项仍执行 `LoadImage` 后接
+`StartImage`，并逐字节交出该行的 `options`；BLS `linux` 行还会向 EFI stub
+内核发布 initrd 与设备树。BDS 不是通用操作系统 boot manager，不解析 Android
+boot 镜像或原始固件描述符，也不携带载荷加载器。
 
 ```text
 entry mu
@@ -22,6 +22,62 @@ entry mu
 加载基址与窗口大小，因此没有任何十六进制数需要人手抄写。早先的设计接受
 `<路径> <基址> <大小>`，四个设备周期中有两个耗在把这些数字和它们的路径前缀弄对上，
 这正是现存设计不再索取它们的原因。
+
+## BLS Type #1 启动项
+
+BLS 为可启动文件提供第二套声明命名空间。每个
+`loader/entries/<name>.conf` 文件对应一个 Type #1 启动项，并且必须包含且只包含
+一个 `linux` 或 `efi` 键。`linux` 行指向 EFI stub 内核，可以再指定一个 `initrd`、
+一个 `devicetree` 和命令行 `options`；`efi` 行指向普通 UEFI 应用，`options` 会
+作为不透明的 LoadOptions 传递。为兼容发行版文件，未知的标准 BLS 键会保留；格式
+错误、镜像缺失以及不支持的重复字段会被跳过。
+
+boot manager 会用 SHA-256 校验启动项及其引用的全部文件，再进行暂存：
+
+```bash
+# 本地启动根目录：
+sha256sum vmlinuz-canoe initramfs-canoe
+canoe-bootmgr --boot-root /path/to/efisp bls stage \
+  --name canoe-linux.conf --entry ./canoe-linux.conf \
+  --artifact ./vmlinuz-canoe,vmlinuz-canoe,<KERNEL_SHA256> \
+  --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
+
+# 直接 ext4 镜像或导出的块设备：
+canoe-bootmgr --source <ext4-image-or-block-device> bls stage \
+  --name canoe-linux.conf --entry ./canoe-linux.conf \
+  --artifact ./vmlinuz-canoe,vmlinuz-canoe,<KERNEL_SHA256> \
+  --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
+```
+
+`--artifact` 格式为 `SOURCE,DESTINATION,SHA256`；每个目标都必须被解析后的
+BLS 文件引用，摘要必须是 64 个十六进制字符。操作会在复制前和复制中校验源文件，
+只有全部文件通过后才写入 `loader/entries/<name>.conf`，失败时回滚整个集合。
+`--source` 与 `--ext4-image` 选择直接 ext4 后端；`--boot-root` 选择本地目录，
+不能与它们组合。
+
+### 两个路径命名空间
+
+两套声明语法相对于不同的根目录命名路径：
+
+| 声明 | 路径值 | persist ext4 解析结果 | FAT 解析结果 |
+| --- | --- | --- | --- |
+| `canoe.cfg` `image` | `mu/place.efi` | `\efisp\mu\place.efi` | `\mu\place.efi` |
+| `canoe.cfg` `options` | 载荷拥有的不透明值 | 原样传递；载荷路径从 `\` 开始 | 原样传递；载荷路径从 `\` 开始 |
+| BLS `linux`/`efi`/`initrd`/`devicetree` | 相对路径或带 `/` 的路径 | 加上 `\efisp\...` 前缀 | 卷根下的 `\...` |
+
+因此，放在 `persist/efisp/loader/entries` 的 BLS 文件可以写
+`linux /vmlinuz-canoe`，BDS 会打开 `\efisp\vmlinuz-canoe`。同一启动根目录中的
+Canoe 行则写成不带前缀的 `image mu/place.efi`。普通行的 `options` 属于被启动的
+载荷；如果载荷位于 persist，其中的路径必须包含 `\efisp`。
+
+### 发现的 BLS 行不是无人值守默认项
+
+BDS 将发现的 BLS 行追加在配置的 `canoe.cfg` 行之后。无人值守默认解析器只接受
+`canoe.cfg` 中不可移动介质上的普通 EFI 行；发现的 BLS `efi` 或 `linux` 行不能
+写入 `canoe.cfg default`。按住启动采样窗口内的音量上，进入菜单后选择 BLS 行并
+按电源键。若要重复进行无人值守测试，可把小型 wrapper UEFI 应用作为普通
+`canoe.cfg` 行，并将 wrapper 设为默认；wrapper 再选择或链式启动 BLS 文件。
+
 
 ## 为什么 BDS 不再提供载荷加载器
 
@@ -52,9 +108,9 @@ Project Mu 的 boot shim 所做的事，也是上游为何要携带一个 shim�
 | 你想启动的 | 应当以什么形式提供 | BDS 做什么 |
 | --- | --- | --- |
 | Project Mu / Aloha 固件描述符 | 一个在 `ExitBootServices` 之后放置它的 UEFI 应用 | 启动该 PE |
-| Linux | GRUB，或任何带 EFI stub 的内核 | 启动该 PE |
-| 另一个 bootloader，包括自行编译的 ABL | 它的 UEFI 应用形式 | 启动该 PE |
-| Android | 受管理的 `boot.efi` | 启动该 PE，并启用模式 hook |
+| Linux | 普通启动项或 BLS `linux` 启动项中的 GRUB，或 EFI stub 内核 | 启动该 PE；BLS 会发布 initrd/DTB |
+| 另一个 bootloader，包括自行编译的 ABL | 普通启动项或 BLS `efi` 启动项中的 UEFI 应用 | 启动该 PE |
+| Android | 受管理的 `boot_a.efi`、`boot_b.efi` 或 `boot_backup.efi` 三件套 | 启动该 PE，并启用模式 hook |
 
 指向自行编译 ABL 的 `canoe.cfg` 启动项是完全正当的：像 `abl2esp` 这类项目在被包装进
 `abl` 分区之前，其内层产物就是一个普通的 UEFI 应用。
@@ -64,5 +120,6 @@ Project Mu 的 boot shim 所做的事，也是上游为何要携带一个 shim�
 
 ## 不是受管理的启动
 
-不属于那四条受管理 Android 路径的启动项是直通的：`efisp` 递归保护与 Mode 1/2 策略
-hook 不会围绕它启用。这是正确的，因为此后机器归载荷所有，那些 hook 已无对象可管。
+不属于当前启动根目录受管理路径的启动项是直通的：`efisp` 递归保护与 Mode 1/2
+策略 hook 不会围绕它启用。所有 BLS 行和可移动介质行都属于此类。这是正确的，
+因为此后机器归载荷所有，那些 hook 已无对象可管。
