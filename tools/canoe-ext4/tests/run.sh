@@ -96,6 +96,7 @@ set -e
 assert_eq 0 "$code" 'dirty image with recovery'
 recovery_log=$(<"$TMP/dirty-recovery.err")
 assert_contains "$recovery_log" 'journal_recovery=completed' 'journal recovery marker'
+assert_contains "$recovery_log" 'journal_replay=performed' 'journal replay marker'
 
 # The mountinfo override is intentionally supported only for deterministic
 # tests; production reads /proc/self/mountinfo.
