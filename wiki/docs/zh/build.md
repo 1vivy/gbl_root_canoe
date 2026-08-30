@@ -97,16 +97,14 @@ fastboot flash efisp BDS.efi
 
 ## Windows 发布包
 
-Windows 压缩包附带 `fastboot.exe` 以及 Ext4Windows/WinFsp 工具。Ext4Windows
-默认只读挂载；安装必须使用：
+Windows 压缩包附带 `fastboot.exe` 与 `canoe-ext4.exe`（捆绑的用户态 ext4
+引擎）。无需盘符、文件系统驱动或挂载：`canoe.cmd install --slot <A|B>` 会
+通过 USB 标识识别导出的磁盘，并由 `canoe-bootmgr.exe` 直接对原始
+`\\.\PhysicalDrive<N>` 源执行启动根事务。手动探测磁盘可运行：
 
 ```text
-ext4windows.exe mount \\.\PhysicalDrive<N> Z: --rw
+canoe-ext4.exe inspect \\.\PhysicalDrive<N>
 ```
-
-如果工具无法连接导出的磁盘，请运行 `ext4windows.exe --scan`，手动挂载卷，然后
-重新运行带必需 `--slot` 与模式参数的
-`canoe.cmd install --boot-root <drive>:\efisp`。
 
 ## `patch_abl` 修改内容
 

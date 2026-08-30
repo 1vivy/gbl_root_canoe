@@ -44,6 +44,7 @@ jobs:
 
     - name: Build Toolkits
       run: |
+        bash tools/canoe-ext4/build-windows.sh
         make target_toolkit_linux
         make target_toolkit_windows
         make target_toolkit_android
@@ -82,9 +83,7 @@ jobs:
         test -f artifacts/toolkit_windows/bin/canoe-bootmgr.exe
         test -f artifacts/toolkit_windows/Platform-Tools/fastboot.exe
         test ! -e artifacts/toolkit_windows/Platform-Tools/adb.exe
-        test -f artifacts/toolkit_windows/ext4/ext4windows.exe
-        test -f artifacts/toolkit_windows/ext4/winfsp-x64.dll
-        test -f artifacts/toolkit_windows/ext4/winfsp-2.1.25156.msi
+        test -f artifacts/toolkit_windows/bin/canoe-ext4.exe
         test -x artifacts/toolkit_android/bin/patch_abl
         test -x artifacts/toolkit_android/bin/mode2_profile
         test -x artifacts/toolkit_android/bin/abl_tzmap

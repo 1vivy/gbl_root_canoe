@@ -107,16 +107,15 @@ vendor data.
 
 ## Windows package
 
-The Windows archive bundles `fastboot.exe` and the Ext4Windows/WinFsp tools.
-Ext4Windows defaults to read-only mounting; installation requires:
+The Windows archive bundles `fastboot.exe` and `canoe-ext4.exe`, the bundled
+userspace ext4 engine. No drive letter, filesystem driver, or mount is
+involved: `canoe.cmd install --slot <A|B>` discovers the exported disk by its
+USB identity and runs the boot-root transaction through `canoe-bootmgr.exe`
+against the raw `\\.\PhysicalDrive<N>` source. To probe a disk by hand:
 
 ```text
-ext4windows.exe mount \\.\PhysicalDrive<N> Z: --rw
+canoe-ext4.exe inspect \\.\PhysicalDrive<N>
 ```
-
-If it cannot attach the exported disk, run `ext4windows.exe --scan`, mount the
-volume manually, and rerun `canoe.cmd install --boot-root <drive>:\efisp` with
-the required `--slot` and mode.
 
 ## What `patch_abl` changes
 
