@@ -395,28 +395,53 @@ static void check_supported(const struct ext2_super_block *super) {
 
 #ifndef _WIN32
 static void recover_journal(const char *path, bool force) {
+    int output_pipe[2];
+    if (pipe(output_pipe) < 0)
+        fail(EXIT_IO, "cannot create journal recovery pipe");
     pid_t child = fork();
-    if (child < 0)
+    if (child < 0) {
+        close(output_pipe[0]);
+        close(output_pipe[1]);
         fail(EXIT_IO, "cannot start journal recovery");
+    }
     if (child == 0) {
-        int null_fd = open("/dev/null", O_WRONLY);
-        if (null_fd >= 0) {
-            (void)dup2(null_fd, STDOUT_FILENO);
-            (void)dup2(null_fd, STDERR_FILENO);
-            close(null_fd);
-        }
+        close(output_pipe[0]);
+        if (dup2(output_pipe[1], STDOUT_FILENO) < 0 ||
+            dup2(output_pipe[1], STDERR_FILENO) < 0)
+            _exit(127);
+        close(output_pipe[1]);
         if (force)
             execlp("e2fsck", "e2fsck", "-fy", path, (char *)NULL);
         else
             execlp("e2fsck", "e2fsck", "-p", path, (char *)NULL);
         _exit(127);
     }
+    close(output_pipe[1]);
+    char output[8192];
+    char chunk[4096];
+    size_t used = 0;
+    for (;;) {
+        ssize_t got = read(output_pipe[0], chunk, sizeof(chunk));
+        if (got <= 0)
+            break;
+        if (used + 1 < sizeof(output)) {
+            size_t copy = (size_t)got;
+            if (copy > sizeof(output) - used - 1)
+                copy = sizeof(output) - used - 1;
+            memcpy(output + used, chunk, copy);
+            used += copy;
+        }
+    }
+    close(output_pipe[0]);
     int status = 0;
     if (waitpid(child, &status, 0) < 0)
         fail(EXIT_IO, "cannot wait for journal recovery");
     if (!WIFEXITED(status) || (WEXITSTATUS(status) != 0 && WEXITSTATUS(status) != 1))
         fail(EXIT_IO, "journal recovery failed");
+    output[used] = '\0';
     fprintf(stderr, "journal_recovery=completed\n");
+    if (force && strstr(output, "recovering journal") != NULL)
+        fprintf(stderr, "journal_replay=performed\n");
 }
 #else
 static void recover_journal(const char *path, bool force) {
