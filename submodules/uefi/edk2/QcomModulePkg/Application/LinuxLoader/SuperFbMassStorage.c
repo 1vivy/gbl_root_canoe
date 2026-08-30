@@ -21,6 +21,7 @@
 
 #include <FastbootLib/FastbootMain.h>
 #include <Library/BaseLib.h>
+#include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
@@ -373,110 +374,157 @@ SfbMassStorageDrawTarget (IN CONST SFB_MASS_STORAGE_TARGET *Target,
  * footnote in the chooser.
  */
 STATIC
+VOID
+SfbDrawPersistWarning (IN VOID *Context)
+{
+  (VOID)Context;
+  Print (L"A host writing persist while the device is elsewhere can\r\n");
+  Print (L"corrupt canoe.cfg, boot.efi, or its sidecars.\r\n");
+  Print (L"\r\n");
+}
+
+STATIC
+SFB_MENU_ACTION
+SfbHandlePersistConfirm (IN VOID *Context,
+                         IN UINTN Row,
+                         IN SFB_KEY Key)
+{
+  BOOLEAN *Confirmed = (BOOLEAN *)Context;
+
+  *Confirmed = (BOOLEAN)(Key == SfbKeySelect && Row == 0);
+  return SfbMenuActionExit;
+}
+
+STATIC
 BOOLEAN
 SfbMassStorageConfirmPersist (VOID)
 {
-  STATIC CONST CHAR16 *Rows[] = {
-    L"Export persist",
-    L"Back"
+  STATIC SFB_MENU_ROW Rows[] = {
+    { L"Export persist", L" " },
+    { L"Back", L" " }
   };
-  UINTN Cursor = 0;
+  SFB_MENU_TEMPLATE Template;
+  BOOLEAN Confirmed = FALSE;
 
-  while (TRUE) {
-    SFB_KEY Key;
-
-    SfbBeginScreen (L"WARNING: live persist",
-                    L"The running system also owns this filesystem.");
-    Print (L"A host writing persist while the device is elsewhere can\r\n");
-    Print (L"corrupt canoe.cfg, boot.efi, or its sidecars.\r\n");
-    Print (L"\r\n");
-    SfbDrawRow ((BOOLEAN)(Cursor == 0), L" ", Rows[0]);
-    SfbDrawRow ((BOOLEAN)(Cursor == 1), L" ", Rows[1]);
-    SfbEndScreen (L"Vol Up/Down: move   Power: select");
-
-    Key = SfbWaitForKey (0);
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, ARRAY_SIZE (Rows), Key);
-      continue;
-    }
-    return (BOOLEAN)(Cursor == 0 && Key == SfbKeySelect);
-  }
+  ZeroMem (&Template, sizeof (Template));
+  Template.Title = L"WARNING: live persist";
+  Template.Subtitle = L"The running system also owns this filesystem.";
+  Template.Footer = L"Vol Up/Down: move   Power: select";
+  Template.Rows = Rows;
+  Template.RowCount = ARRAY_SIZE (Rows);
+  Template.Navigate = TRUE;
+  Template.Context = &Confirmed;
+  Template.Enter = SfbMenuNoopEnter;
+  Template.Exit = SfbMenuNoopExit;
+  Template.Handler = SfbHandlePersistConfirm;
+  Template.DrawHeader = SfbDrawPersistWarning;
+  (VOID)SfbRunMenu (&Template);
+  return Confirmed;
 }
 
-VOID
-SfbRunMassStorageMenu (VOID)
+typedef struct {
+  SFB_MASS_STORAGE_TARGET Targets[2];
+  UINTN                   Count;
+  SFB_MENU_TEMPLATE      *Template;
+} SFB_MASS_STORAGE_MENU_CONTEXT;
+
+STATIC
+EFI_STATUS
+SfbRefreshMassStorageMenu (IN VOID *Context)
 {
   STATIC CONST SFB_MASS_STORAGE_TARGET Probe[] = {
     { L"persist", "persist", NULL },
     { L"logfs",   "logfs",   NULL }
   };
-  SFB_MASS_STORAGE_TARGET Targets[ARRAY_SIZE (Probe)];
-  UINTN                   Count = 0;
-  UINTN                   Cursor = 0;
-  UINTN                   Index;
+  SFB_MASS_STORAGE_MENU_CONTEXT *State =
+    (SFB_MASS_STORAGE_MENU_CONTEXT *)Context;
+  UINTN Index;
 
-  while (TRUE) {
-    SFB_KEY Key;
+  /*
+   * Resolve on every redraw, not once on entry. An export tears down and
+   * rebuilds the partition tree, so a pointer cached before it is stale.
+   */
+  State->Count = 0;
+  for (Index = 0; Index < ARRAY_SIZE (Probe); Index++) {
+    EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
 
-    /*
-     * Resolve on every redraw, not once on entry. logfs is optional, and
-     * hiding an absent partition is less misleading than offering a row that
-     * can never start - but the size shown below dereferences this handle,
-     * and an export that has since returned tore the partition tree down and
-     * rebuilt it. A pointer cached before that is freed memory.
-     */
-    Count = 0;
-    for (Index = 0; Index < ARRAY_SIZE (Probe); Index++) {
-      EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
-
-      if (EFI_ERROR (SfbFindPartitionByName (Probe[Index].Name, &BlockIo)) ||
-          BlockIo == NULL) {
-        continue;
-      }
-      Targets[Count] = Probe[Index];
-      Targets[Count].BlockIo = BlockIo;
-      Count++;
-    }
-
-    if (Count == 0) {
-      Cursor = 0;
-    } else if (Cursor >= Count + 1) {
-      Cursor = Count;
-    }
-
-    SfbBeginScreen (L"USB Mass Storage",
-                    L"Choose one partition to export to the host.");
-    for (Index = 0; Index < Count; Index++) {
-      SfbMassStorageDrawTarget (&Targets[Index],
-                                (BOOLEAN)(Cursor == Index));
-    }
-    SfbDrawRow ((BOOLEAN)(Cursor == Count), L" ", L"Back");
-    SfbEndScreen (L"Vol Up/Down: move   Power: select");
-
-    Key = SfbWaitForKey (0);
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, Count + 1, Key);
+    if (EFI_ERROR (SfbFindPartitionByName (Probe[Index].Name, &BlockIo)) ||
+        BlockIo == NULL) {
       continue;
     }
-    if (Key != SfbKeySelect || Cursor == Count) {
-      return;
-    }
-
-    if (StrCmp (Targets[Cursor].Name, L"persist") == 0 &&
-        !SfbMassStorageConfirmPersist ()) {
-      continue;
-    }
-
-    {
-      EFI_STATUS Status;
-
-      Status = SfbMassStorageExportDisk (Targets[Cursor].Name,
-                                         Targets[Cursor].Tag);
-      if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
-        SfbReportStatus (L"Could not start mass storage", Status);
-      }
-    }
+    State->Targets[State->Count] = Probe[Index];
+    State->Targets[State->Count].BlockIo = BlockIo;
+    State->Count++;
   }
+  State->Template->RowCount = State->Count + 1;
+  if (State->Template->Cursor > State->Count) {
+    State->Template->Cursor = State->Count;
+  }
+  return EFI_SUCCESS;
+}
+
+STATIC
+VOID
+SfbDrawMassStorageMenuRow (IN VOID *Context,
+                           IN UINTN Row,
+                           IN BOOLEAN Selected)
+{
+  SFB_MASS_STORAGE_MENU_CONTEXT *State =
+    (SFB_MASS_STORAGE_MENU_CONTEXT *)Context;
+
+  if (Row == State->Count) {
+    SfbDrawRow (Selected, L" ", L"Back");
+  } else {
+    SfbMassStorageDrawTarget (&State->Targets[Row], Selected);
+  }
+}
+
+STATIC
+SFB_MENU_ACTION
+SfbHandleMassStorageMenuRow (IN VOID *Context,
+                             IN UINTN Row,
+                             IN SFB_KEY Key)
+{
+  SFB_MASS_STORAGE_MENU_CONTEXT *State =
+    (SFB_MASS_STORAGE_MENU_CONTEXT *)Context;
+  EFI_STATUS Status;
+
+  if (Row >= State->Count || Key != SfbKeySelect) {
+    return SfbMenuActionExit;
+  }
+  if (StrCmp (State->Targets[Row].Name, L"persist") == 0 &&
+      !SfbMassStorageConfirmPersist ()) {
+    return SfbMenuActionContinue;
+  }
+
+  Status = SfbMassStorageExportDisk (State->Targets[Row].Name,
+                                     State->Targets[Row].Tag);
+  if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
+    SfbReportStatus (L"Could not start mass storage", Status);
+  }
+  return SfbMenuActionRebuild;
+}
+
+VOID
+SfbRunMassStorageMenu (VOID)
+{
+  SFB_MASS_STORAGE_MENU_CONTEXT Context;
+  SFB_MENU_TEMPLATE             Template;
+
+  ZeroMem (&Context, sizeof (Context));
+  ZeroMem (&Template, sizeof (Template));
+  Context.Template = &Template;
+  Template.Title = L"USB Mass Storage";
+  Template.Subtitle = L"Choose one partition to export to the host.";
+  Template.Footer = L"Vol Up/Down: move   Power: select";
+  Template.Navigate = TRUE;
+  Template.Context = &Context;
+  Template.Enter = SfbMenuNoopEnter;
+  Template.Exit = SfbMenuNoopExit;
+  Template.Refresh = SfbRefreshMassStorageMenu;
+  Template.Handler = SfbHandleMassStorageMenuRow;
+  Template.DrawRow = SfbDrawMassStorageMenuRow;
+  (VOID)SfbRunMenu (&Template);
 }
 
 /*

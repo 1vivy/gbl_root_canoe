@@ -308,6 +308,34 @@ SfbOpenDirectory (IN EFI_HANDLE          Volume,
 
 /* ---- action menu for a chosen EFI application --------------------------- */
 
+typedef struct {
+  EFI_HANDLE       Volume;
+  CONST CHAR16    *FullPath;
+} SFB_DRIVER_MENU_CONTEXT;
+
+STATIC
+SFB_MENU_ACTION
+SfbHandleDriverMenuRow (IN VOID *Context,
+                        IN UINTN Row,
+                        IN SFB_KEY Key)
+{
+  SFB_DRIVER_MENU_CONTEXT *State = (SFB_DRIVER_MENU_CONTEXT *)Context;
+  EFI_STATUS               Status;
+
+  (VOID)Key;
+  if (Row != 0) {
+    return SfbMenuActionExit;
+  }
+  /* Load: start the driver, then connect controllers so it binds. */
+  Status = SfbLoadDriver (State->Volume, State->FullPath);
+  if (!EFI_ERROR (Status)) {
+    SfbConnectAll ();
+  }
+  SfbReportStatus (EFI_ERROR (Status) ? L"Driver load failed"
+                                      : L"Driver loaded", Status);
+  return SfbMenuActionContinue;
+}
+
 /*
  * A UEFI driver is loaded, not booted: it installs protocols and returns rather
  * than taking over the machine. Offer just that. Never unwinds to the boot menu
@@ -318,45 +346,64 @@ BOOLEAN
 SfbDriverActionMenu (IN EFI_HANDLE   Volume,
                      IN CONST CHAR16 *FullPath)
 {
-  STATIC CONST CHAR16  *Actions[] = {
-    L"Load",
-    L"Back"
+  STATIC SFB_MENU_ROW Rows[] = {
+    { L"Load", L" " },
+    { L"Back", L" " }
   };
+  SFB_DRIVER_MENU_CONTEXT Context;
+  SFB_MENU_TEMPLATE       Template;
 
-  UINTN  Cursor = 0;
+  ZeroMem (&Context, sizeof (Context));
+  ZeroMem (&Template, sizeof (Template));
+  Context.Volume = Volume;
+  Context.FullPath = FullPath;
+  Template.Title = L"EFI Driver";
+  Template.Subtitle = FullPath;
+  Template.Footer = L"Vol Up/Down: move   Power: select";
+  Template.Rows = Rows;
+  Template.RowCount = ARRAY_SIZE (Rows);
+  Template.Navigate = TRUE;
+  Template.Context = &Context;
+  Template.Enter = SfbMenuNoopEnter;
+  Template.Exit = SfbMenuNoopExit;
+  Template.Handler = SfbHandleDriverMenuRow;
+  (VOID)SfbRunMenu (&Template);
+  return FALSE;
+}
 
-  while (TRUE) {
-    UINTN       Index;
-    SFB_KEY     Key;
-    EFI_STATUS  Status;
+typedef struct {
+  SFB_BOOT_ENTRY Entry;
+  SFB_BOOT_MODE  Mode;
+} SFB_EFI_MENU_CONTEXT;
 
-    SfbBeginScreen (L"EFI Driver", FullPath);
+STATIC
+VOID
+SfbExitEfiMenu (IN VOID *Context)
+{
+  SFB_EFI_MENU_CONTEXT *State = (SFB_EFI_MENU_CONTEXT *)Context;
 
-    for (Index = 0; Index < ARRAY_SIZE (Actions); Index++) {
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), L" ", Actions[Index]);
-    }
+  SfbFreeEntry (&State->Entry);
+}
 
-    SfbEndScreen (L"Vol Up/Down: move   Power: select");
+STATIC
+SFB_MENU_ACTION
+SfbHandleEfiMenuRow (IN VOID *Context,
+                     IN UINTN Row,
+                     IN SFB_KEY Key)
+{
+  SFB_EFI_MENU_CONTEXT *State = (SFB_EFI_MENU_CONTEXT *)Context;
+  EFI_STATUS             Status;
 
-    Key = SfbWaitForKey (0);
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, ARRAY_SIZE (Actions), Key);
-      continue;
-    }
-
-    if (Cursor == 0) {
-      /* Load: start the driver, then connect controllers so it binds. */
-      Status = SfbLoadDriver (Volume, FullPath);
-      if (!EFI_ERROR (Status)) {
-        SfbConnectAll ();
-      }
-      SfbReportStatus (EFI_ERROR (Status) ? L"Driver load failed"
-                                          : L"Driver loaded", Status);
-      continue;
-    }
-
-    return FALSE;
+  (VOID)Key;
+  if (Row != 0) {
+    return SfbMenuActionExit;
   }
+  /* Browsed images are explicitly temporary and never become a menu row. */
+  Status = SfbLaunchEntry (&State->Entry, TRUE, State->Mode);
+  if (EFI_ERROR (Status)) {
+    SfbReportStatus (L"Boot failed", Status);
+  }
+  return SfbMenuActionContinue;
 }
 
 /*
@@ -368,18 +415,17 @@ BOOLEAN
 SfbEfiActionMenu (IN EFI_HANDLE    Volume,
                   IN CONST CHAR16  *FullPath,
                   IN CONST CHAR16  *Name,
-                  IN SFB_BOOT_MODE Mode)
+                  IN SFB_BOOT_MODE  Mode)
 {
-  STATIC CONST CHAR16  *Actions[] = {
-    L"Boot (this boot)",
-    L"Back"
+  STATIC SFB_MENU_ROW Rows[] = {
+    { L"Boot (this boot)", L" " },
+    { L"Back", L" " }
   };
-
-  EFI_STATUS         Status;
-  SFB_BOOT_ENTRY     Entry;
-  UINTN              Cursor = 0;
-  BOOLEAN            IsDriver = FALSE;
-  EFI_FILE_PROTOCOL  *Root = NULL;
+  SFB_EFI_MENU_CONTEXT Context;
+  SFB_MENU_TEMPLATE     Template;
+  EFI_FILE_PROTOCOL    *Root = NULL;
+  EFI_STATUS            Status;
+  BOOLEAN               IsDriver = FALSE;
 
   /* A driver image gets its own Load/Back menu rather than the boot actions. */
   if (!EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) && Root != NULL) {
@@ -390,42 +436,27 @@ SfbEfiActionMenu (IN EFI_HANDLE    Volume,
     return SfbDriverActionMenu (Volume, FullPath);
   }
 
-  Status = SfbMakeFileEntry (Volume, FullPath, Name, &Entry);
+  ZeroMem (&Context, sizeof (Context));
+  Status = SfbMakeFileEntry (Volume, FullPath, Name, &Context.Entry);
   if (EFI_ERROR (Status)) {
     SfbReportStatus (L"Cannot address that file", Status);
     return FALSE;
   }
+  Context.Mode = Mode;
 
-  while (TRUE) {
-    UINTN    Index;
-    SFB_KEY  Key;
-
-    SfbBeginScreen (L"EFI Application", FullPath);
-
-    for (Index = 0; Index < ARRAY_SIZE (Actions); Index++) {
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), L" ", Actions[Index]);
-    }
-
-    SfbEndScreen (L"Vol Up/Down: move   Power: select");
-
-    Key = SfbWaitForKey (0);
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, ARRAY_SIZE (Actions), Key);
-      continue;
-    }
-
-    if (Cursor == 0) {
-      /* Browsed images are explicitly temporary and never become a menu row. */
-      Status = SfbLaunchEntry (&Entry, TRUE, Mode);
-      if (EFI_ERROR (Status)) {
-        SfbReportStatus (L"Boot failed", Status);
-      }
-      continue;
-    }
-
-    SfbFreeEntry (&Entry);
-    return FALSE;
-  }
+  ZeroMem (&Template, sizeof (Template));
+  Template.Title = L"EFI Application";
+  Template.Subtitle = FullPath;
+  Template.Footer = L"Vol Up/Down: move   Power: select";
+  Template.Rows = Rows;
+  Template.RowCount = ARRAY_SIZE (Rows);
+  Template.Navigate = TRUE;
+  Template.Context = &Context;
+  Template.Enter = SfbMenuNoopEnter;
+  Template.Exit = SfbExitEfiMenu;
+  Template.Handler = SfbHandleEfiMenuRow;
+  (VOID)SfbRunMenu (&Template);
+  return FALSE;
 }
 
 /* ---- directory navigation ----------------------------------------------- */
@@ -584,58 +615,120 @@ SfbBrowseVolume (IN EFI_HANDLE    Volume,
 }
 
 /* ---- volume selection --------------------------------------------------- */
-
 typedef struct {
   CHAR16  Label[SFB_DESC_CHARS];
 } SFB_VOLUME_ROW;
 
+
+typedef struct {
+  EFI_HANDLE      *Volumes;
+  UINTN            VolumeCount;
+  SFB_VOLUME_ROW  *Rows;
+  SFB_BOOT_MODE    Mode;
+} SFB_PROGRAM_MENU_CONTEXT;
+
+STATIC
+VOID
+SfbDrawProgramMenuRow (IN VOID    *Context,
+                       IN UINTN    Row,
+                       IN BOOLEAN  Selected)
+{
+  SFB_PROGRAM_MENU_CONTEXT *State = (SFB_PROGRAM_MENU_CONTEXT *)Context;
+
+  if (Row == State->VolumeCount) {
+    SfbDrawRow (Selected, L" ", L"Back");
+  } else {
+    SfbDrawRow (Selected, L"[V]", State->Rows[Row].Label);
+  }
+}
+
+STATIC
+SFB_MENU_ACTION
+SfbHandleProgramMenuRow (IN VOID *Context,
+                         IN UINTN Row,
+                         IN SFB_KEY Key)
+{
+  SFB_PROGRAM_MENU_CONTEXT *State = (SFB_PROGRAM_MENU_CONTEXT *)Context;
+  CONST CHAR16             *Prefix;
+  CONST CHAR16             *BrowseRoot;
+
+  (VOID)Key;
+  if (Row >= State->VolumeCount) {
+    return SfbMenuActionExit;
+  }
+
+  Prefix = SfbVolumeRootPrefix (State->Volumes[Row]);
+  BrowseRoot = (Prefix[0] == L'\0') ? L"\\" : Prefix;
+  if (SfbBrowseVolume (State->Volumes[Row], State->Rows[Row].Label,
+                       BrowseRoot, State->Mode)) {
+    return SfbMenuActionExit;
+  }
+  return SfbMenuActionContinue;
+}
+
+STATIC
+VOID
+SfbExitProgramMenu (IN VOID *Context)
+{
+  SFB_PROGRAM_MENU_CONTEXT *State = (SFB_PROGRAM_MENU_CONTEXT *)Context;
+
+  if (State->Rows != NULL) {
+    FreePool (State->Rows);
+    State->Rows = NULL;
+  }
+  if (State->Volumes != NULL) {
+    FreePool (State->Volumes);
+    State->Volumes = NULL;
+  }
+}
+
 VOID
 SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
 {
-  EFI_STATUS      Status;
-  EFI_HANDLE      *Volumes = NULL;
-  UINTN           VolumeCount = 0;
-  SFB_VOLUME_ROW  *Rows = NULL;
-  UINTN           RowCount;
-  UINTN           Cursor = 0;
-  UINTN           Index;
+  EFI_STATUS                Status;
+  SFB_PROGRAM_MENU_CONTEXT  Context;
+  SFB_MENU_TEMPLATE         Template;
+  UINTN                     Index;
+
+  ZeroMem (&Context, sizeof (Context));
+  ZeroMem (&Template, sizeof (Template));
 
   /* Media may have been inserted since the loader started. */
   SfbStartFatStack ();
-
-  Status = SfbLocateVolumes (&Volumes, &VolumeCount);
-  if (EFI_ERROR (Status) || Volumes == NULL || VolumeCount == 0) {
+  Status = SfbLocateVolumes (&Context.Volumes, &Context.VolumeCount);
+  if (EFI_ERROR (Status) || Context.Volumes == NULL ||
+      Context.VolumeCount == 0) {
     SfbReportStatus (L"No boot volumes found",
                      EFI_ERROR (Status) ? Status : EFI_NOT_FOUND);
-    if (Volumes != NULL) {
-      FreePool (Volumes);
+    if (Context.Volumes != NULL) {
+      FreePool (Context.Volumes);
     }
     return;
   }
 
-  Rows = AllocateZeroPool (VolumeCount * sizeof (*Rows));
-  if (Rows == NULL) {
+  Context.Rows = AllocateZeroPool (Context.VolumeCount * sizeof (*Context.Rows));
+  if (Context.Rows == NULL) {
     SfbReportStatus (L"Out of memory", EFI_OUT_OF_RESOURCES);
-    FreePool (Volumes);
+    FreePool (Context.Volumes);
     return;
   }
+  Context.Mode = Mode;
 
-  for (Index = 0; Index < VolumeCount; Index++) {
+  for (Index = 0; Index < Context.VolumeCount; Index++) {
     EFI_FILE_PROTOCOL  *Root = NULL;
     CHAR16             Label[SFB_DESC_CHARS];
 
     Label[0] = L'\0';
-    if (!EFI_ERROR (SfbOpenVolumeRoot (Volumes[Index], &Root)) &&
+    if (!EFI_ERROR (SfbOpenVolumeRoot (Context.Volumes[Index], &Root)) &&
         Root != NULL) {
       SfbGetVolumeLabel (Root, Label, SFB_DESC_CHARS);
       Root->Close (Root);
     }
 
     /* Tag the ext4 persist volume so it is told apart from FAT media. */
-    if (SfbVolumeIsExt4 (Volumes[Index])) {
+    if (SfbVolumeIsExt4 (Context.Volumes[Index])) {
       if (Label[0] != L'\0') {
         if (RETURN_ERROR (StrCatS (Label, SFB_DESC_CHARS, L" (ext4)"))) {
-          /* Empty labels avoid presenting a truncated volume name as valid. */
           Label[0] = L'\0';
         }
       } else {
@@ -644,84 +737,74 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
     }
 
     if (Label[0] == L'\0') {
-      UnicodeSPrint (Rows[Index].Label, sizeof (Rows[Index].Label),
+      UnicodeSPrint (Context.Rows[Index].Label,
+                     sizeof (Context.Rows[Index].Label),
                      L"Volume %u", (UINT32)Index);
     } else {
-      UnicodeSPrint (Rows[Index].Label, sizeof (Rows[Index].Label),
+      UnicodeSPrint (Context.Rows[Index].Label,
+                     sizeof (Context.Rows[Index].Label),
                      L"Volume %u: %s", (UINT32)Index, Label);
     }
   }
 
-  /* One extra row for "Back". */
-  RowCount = VolumeCount + 1;
-
-  while (TRUE) {
-    UINTN    Start;
-    UINTN    Last;
-    SFB_KEY  Key;
-
-    SfbBeginScreen (L"EFI Program Selector", L"Choose a volume to browse.");
-
-    Start = SfbWindowStart (Cursor, RowCount, SFB_VISIBLE_ROWS);
-    Last = Start + SFB_VISIBLE_ROWS;
-    if (Last > RowCount) {
-      Last = RowCount;
-    }
-
-    for (Index = Start; Index < Last; Index++) {
-      if (Index == VolumeCount) {
-        SfbDrawRow ((BOOLEAN)(Index == Cursor), L" ", L"Back");
-      } else {
-        SfbDrawRow ((BOOLEAN)(Index == Cursor), L"[V]", Rows[Index].Label);
-      }
-    }
-
-    if (Last < RowCount) {
-      Print (L"    ... %u more\r\n", (UINT32)(RowCount - Last));
-    }
-
-    SfbEndScreen (L"Vol Up/Down: move   Power: select");
-
-    Key = SfbWaitForKey (0);
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, RowCount, Key);
-      continue;
-    }
-
-    if (Cursor == VolumeCount) {
-      break;
-    }
-
-    {
-      /* Browse from the volume's root: "\" for FAT, "\efisp" for the ext4
-       * persist volume. SfbVolumeRootPrefix gives "" for FAT, which here
-       * means the plain volume root. */
-      CONST CHAR16  *Prefix = SfbVolumeRootPrefix (Volumes[Cursor]);
-      CONST CHAR16  *BrowseRoot = (Prefix[0] == L'\0') ? L"\\" : Prefix;
-
-      if (SfbBrowseVolume (Volumes[Cursor], Rows[Cursor].Label, BrowseRoot,
-                           Mode)) {
-        break;
-      }
-    }
-  }
-
-  FreePool (Rows);
-  FreePool (Volumes);
+  Template.Title = L"EFI Program Selector";
+  Template.Subtitle = L"Choose a volume to browse.";
+  Template.Footer = L"Vol Up/Down: move   Power: select";
+  Template.RowCount = Context.VolumeCount + 1;
+  Template.Navigate = TRUE;
+  Template.Context = &Context;
+  Template.Enter = SfbMenuNoopEnter;
+  Template.Exit = SfbExitProgramMenu;
+  Template.Handler = SfbHandleProgramMenuRow;
+  Template.DrawRow = SfbDrawProgramMenuRow;
+  (VOID)SfbRunMenu (&Template);
 }
 
+
+typedef struct {
+  EFI_HANDLE     Volume;
+  CHAR16         ToolsPath[SFB_PATH_CHARS];
+  SFB_BOOT_MODE  Mode;
+} SFB_TOOLS_MENU_CONTEXT;
+
+STATIC
+SFB_MENU_ACTION
+SfbHandleToolsMenuRow (IN VOID *Context,
+                       IN UINTN Row,
+                       IN SFB_KEY Key)
+{
+  SFB_TOOLS_MENU_CONTEXT *State = (SFB_TOOLS_MENU_CONTEXT *)Context;
+
+  (VOID)Key;
+  if (Row != 0) {
+    return SfbMenuActionExit;
+  }
+  if (SfbBrowseVolume (State->Volume, L"EFI Tools", State->ToolsPath,
+                       State->Mode)) {
+    return SfbMenuActionExit;
+  }
+  return SfbMenuActionContinue;
+}
 
 VOID
 SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
 {
-  EFI_STATUS  Status;
-  EFI_HANDLE  *Volumes = NULL;
-  UINTN       VolumeCount = 0;
-  UINTN       Index;
+  EFI_STATUS               Status;
+  EFI_HANDLE              *Volumes = NULL;
+  UINTN                    VolumeCount = 0;
+  UINTN                    Index;
+  SFB_TOOLS_MENU_CONTEXT   Context;
+  SFB_MENU_TEMPLATE        Template;
+  STATIC SFB_MENU_ROW      Rows[] = {
+    { L"Browse EFI tools", L" " },
+    { L"Back", L" " }
+  };
+
+  ZeroMem (&Context, sizeof (Context));
+  ZeroMem (&Template, sizeof (Template));
 
   /* Media may have been inserted since the loader started. */
   SfbStartFatStack ();
-
   Status = SfbLocateVolumes (&Volumes, &VolumeCount);
   if (EFI_ERROR (Status) || Volumes == NULL) {
     SfbReportStatus (L"No EFI tools installed",
@@ -731,7 +814,6 @@ SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
 
   for (Index = 0; Index < VolumeCount; Index++) {
     CONST CHAR16       *Prefix = SfbVolumeRootPrefix (Volumes[Index]);
-    CHAR16             ToolsPath[SFB_PATH_CHARS];
     EFI_FILE_PROTOCOL  *Root = NULL;
     EFI_FILE_PROTOCOL  *Dir = NULL;
 
@@ -740,19 +822,16 @@ SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
      * volume with a non-empty root prefix. Tools on removable media are the
      * ordinary browser's job, not this row's.
      */
-    if (Prefix[0] == L'\0') {
-      continue;
-    }
-
-    if (RETURN_ERROR (StrCpyS (ToolsPath, SFB_PATH_CHARS, Prefix)) ||
-        EFI_ERROR (SfbJoinPath (ToolsPath, SFB_PATH_CHARS,
+    if (Prefix[0] == L'\0' ||
+        RETURN_ERROR (StrCpyS (Context.ToolsPath, SFB_PATH_CHARS, Prefix)) ||
+        EFI_ERROR (SfbJoinPath (Context.ToolsPath, SFB_PATH_CHARS,
                                 SFB_TOOLS_DIR_NAME))) {
       continue;
     }
 
     /* Probe before browsing: an absent directory must read as "nothing is
      * installed", not as the browse loop's "cannot read directory". */
-    Status = SfbOpenDirectory (Volumes[Index], ToolsPath, &Root, &Dir);
+    Status = SfbOpenDirectory (Volumes[Index], Context.ToolsPath, &Root, &Dir);
     if (EFI_ERROR (Status)) {
       continue;
     }
@@ -760,13 +839,19 @@ SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
       Dir->Close (Dir);
     }
     Root->Close (Root);
-
-    /*
-     * Hand the directory to the same browse loop the program selector uses, so
-     * the tools get the identical .efi action menus. ToolsPath is its floor:
-     * ".." there leaves the row rather than climbing into the boot root.
-     */
-    (VOID)SfbBrowseVolume (Volumes[Index], L"EFI Tools", ToolsPath, Mode);
+    Context.Volume = Volumes[Index];
+    Context.Mode = Mode;
+    Template.Title = L"EFI Tools";
+    Template.Subtitle = L"Choose an action.";
+    Template.Footer = L"Vol Up/Down: move   Power: select";
+    Template.Rows = Rows;
+    Template.RowCount = ARRAY_SIZE (Rows);
+    Template.Navigate = TRUE;
+    Template.Context = &Context;
+    Template.Enter = SfbMenuNoopEnter;
+    Template.Exit = SfbMenuNoopExit;
+    Template.Handler = SfbHandleToolsMenuRow;
+    (VOID)SfbRunMenu (&Template);
     FreePool (Volumes);
     return;
   }
