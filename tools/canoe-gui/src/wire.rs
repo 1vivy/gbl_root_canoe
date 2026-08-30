@@ -2,6 +2,7 @@ use serde::Deserialize;
 
 use crate::model::{BlsFile, ConfigDocument, ConfigEntry};
 use crate::protocol::ProtocolError;
+use crate::slot_model::{InstallReceipt, Slot, SlotStatus};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -24,6 +25,12 @@ enum Operation {
     BlsList,
     #[serde(rename = "bls.show")]
     BlsShow,
+    #[serde(rename = "slot.status")]
+    SlotStatus,
+    #[serde(rename = "install")]
+    Install,
+    #[serde(rename = "ota-apply")]
+    OtaApply,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -43,6 +50,11 @@ struct ResponseEnvelope {
     entry: Option<serde_json::Value>,
     mark: Option<String>,
     default: Option<String>,
+    active_slot: Option<Slot>,
+    inactive_slot: Option<Slot>,
+    source: Option<String>,
+    installed: Option<Vec<Slot>>,
+    receipt: Option<InstallReceipt>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +92,15 @@ pub enum Response {
     BlsShow {
         entry: BlsFile,
     },
+    SlotStatus {
+        status: SlotStatus,
+    },
+    Install {
+        receipt: InstallReceipt,
+    },
+    OtaApply {
+        receipt: InstallReceipt,
+    },
 }
 
 pub fn parse_response(bytes: &[u8]) -> Result<Response, ProtocolError> {
@@ -104,11 +125,11 @@ pub fn parse_response(bytes: &[u8]) -> Result<Response, ProtocolError> {
             .ok_or_else(|| missing("config")),
         Operation::EntryList => Ok(Response::EntryList {
             generation: required(envelope.generation, "generation")?,
-            entries: config_entries(envelope.entries)?,
+            entries: decode(envelope.entries, "entries")?,
         }),
         Operation::EntrySet => Ok(Response::EntrySet {
             generation: required(envelope.generation, "generation")?,
-            entry: config_entry(envelope.entry)?,
+            entry: decode(envelope.entry, "entry")?,
             mark: required(envelope.mark, "mark")?,
         }),
         Operation::EntryRemove => Ok(Response::EntryRemove {
@@ -127,31 +148,29 @@ pub fn parse_response(bytes: &[u8]) -> Result<Response, ProtocolError> {
             default: required(envelope.default, "default")?,
         }),
         Operation::BlsList => Ok(Response::BlsList {
-            entries: bls_entries(envelope.entries)?,
+            entries: decode(envelope.entries, "entries")?,
         }),
         Operation::BlsShow => Ok(Response::BlsShow {
-            entry: bls_entry(envelope.entry)?,
+            entry: decode(envelope.entry, "entry")?,
+        }),
+        Operation::SlotStatus => Ok(Response::SlotStatus {
+            status: SlotStatus {
+                active_slot: envelope.active_slot,
+                inactive_slot: envelope.inactive_slot,
+                source: required(envelope.source, "source")?,
+                installed: required(envelope.installed, "installed")?,
+            },
+        }),
+        Operation::Install => Ok(Response::Install {
+            receipt: required(envelope.receipt, "receipt")?,
+        }),
+        Operation::OtaApply => Ok(Response::OtaApply {
+            receipt: required(envelope.receipt, "receipt")?,
         }),
     }
 }
 
-fn config_entries(value: Option<serde_json::Value>) -> Result<Vec<ConfigEntry>, ProtocolError> {
-    take(value, "entries")
-}
-
-fn bls_entries(value: Option<serde_json::Value>) -> Result<Vec<BlsFile>, ProtocolError> {
-    take(value, "entries")
-}
-
-fn config_entry(value: Option<serde_json::Value>) -> Result<ConfigEntry, ProtocolError> {
-    take(value, "entry")
-}
-
-fn bls_entry(value: Option<serde_json::Value>) -> Result<BlsFile, ProtocolError> {
-    take(value, "entry")
-}
-
-fn take<T: serde::de::DeserializeOwned>(
+fn decode<T: serde::de::DeserializeOwned>(
     value: Option<serde_json::Value>,
     field: &str,
 ) -> Result<T, ProtocolError> {
