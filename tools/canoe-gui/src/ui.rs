@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::model::{BlsFile, ConfigDocument, ConfigEntry, Role};
-use crate::protocol::{BootmgrClient, cap_log_message};
+use crate::protocol::{BootRoot, BootmgrClient, cap_log_message};
 use crate::slot_model::SlotStatus;
 use crate::text::{TextKey, text};
 
@@ -64,6 +64,7 @@ pub(crate) struct GuiApp {
     pub(crate) bootmgr_path: PathBuf,
     pub(crate) root_path: PathBuf,
     pub(crate) root_input: String,
+    pub(crate) source_is_ext4: bool,
     pub(crate) screen: Screen,
     pub(crate) entries: Vec<ConfigEntry>,
     pub(crate) selected_id: Option<String>,
@@ -92,16 +93,19 @@ impl GuiApp {
         cc: &eframe::CreationContext<'_>,
         client: BootmgrClient,
         bootmgr_path: PathBuf,
-        root_path: PathBuf,
+        target: BootRoot,
         language_zh: bool,
     ) -> Self {
         install_fonts(&cc.egui_ctx);
+        let source_is_ext4 = matches!(target, BootRoot::Ext4Source(_));
+        let root_path = target.path().to_owned();
         let root_input = root_path.display().to_string();
         let mut app = Self {
             client,
             bootmgr_path,
             root_path,
             root_input,
+            source_is_ext4,
             screen: Screen::Entries,
             entries: Vec::new(),
             selected_id: None,

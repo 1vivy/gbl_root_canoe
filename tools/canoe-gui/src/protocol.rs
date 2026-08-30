@@ -14,6 +14,19 @@ pub use wire::Response;
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 1_000_000;
 const MAX_LOG_MESSAGE_CHARS: usize = 512;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BootRoot {
+    LocalDir(PathBuf),
+    Ext4Source(PathBuf),
+}
+
+impl BootRoot {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::LocalDir(path) | Self::Ext4Source(path) => path,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "verb")]
@@ -116,10 +129,18 @@ pub struct BootmgrClient {
 }
 
 impl BootmgrClient {
-    pub fn connect(program: &Path, root: &Path) -> Result<Self, ProtocolError> {
-        let mut child = Command::new(program)
-            .args(["--json", "--boot-root"])
-            .arg(root)
+    pub fn connect(program: &Path, root: &BootRoot) -> Result<Self, ProtocolError> {
+        let mut command = Command::new(program);
+        command.arg("--json");
+        match root {
+            BootRoot::LocalDir(path) => {
+                command.args(["--boot-root"]).arg(path);
+            }
+            BootRoot::Ext4Source(path) => {
+                command.args(["--source"]).arg(path);
+            }
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -209,7 +230,8 @@ mod tests {
         let fixture = directory.path().join("fixture-child");
         fs::write(&fixture, FIXTURE_SCRIPT)?;
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))?;
-        let mut client = BootmgrClient::connect(&fixture, PathBuf::from(".").as_path())?;
+        let mut client =
+            BootmgrClient::connect(&fixture, &super::BootRoot::LocalDir(PathBuf::from(".")))?;
 
         let response = client.request(&Request::EntryList)?;
         assert!(matches!(
@@ -229,12 +251,39 @@ mod tests {
         ));
         Ok(())
     }
+    #[test]
+    fn ext4_source_uses_global_source_flag() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempdir()?;
+        let fixture = directory.path().join("source-args-fixture");
+        fs::write(&fixture, SOURCE_ARGS_FIXTURE)?;
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))?;
+        let source = PathBuf::from("/tmp/canoe-test.ext4");
+        let mut client = BootmgrClient::connect(&fixture, &super::BootRoot::Ext4Source(source))?;
+        let response = client.request(&Request::SlotStatus {
+            slot: None,
+            bootctl_output: None,
+            gpt_active_slot: None,
+        })?;
+        assert!(matches!(response, Response::SlotStatus { .. }));
+        Ok(())
+    }
 
     const FIXTURE_SCRIPT: &str = r##"#!/bin/sh
 while IFS= read -r request; do
   case "$request" in
     *entry.list*) printf '%s\n' '{"ok":true,"operation":"entry.list","generation":3,"entries":[{"id":"android-a","title":"Android A","image":"boot_a.efi","options":null,"mode":1,"role":"active","unknown":[]}]}' ;;
     *bls.list*) echo '{"ok":true,"operation":"bls.list","entries":[{"name":"linux.conf","entry":{"title":"Canoe Linux","kind":"linux","image":"vmlinuz","initrd":null,"devicetree":null,"options":"root=/dev/vda","unknown":[],"rejected_lines":0}}]}' ;;
+    *slot.status*) echo '{"operation":"slot.status","ok":true,"active_slot":"a","inactive_slot":"b","source":"bootctl","installed":["a"]}' ;;
+  esac
+done
+"##;
+
+    const SOURCE_ARGS_FIXTURE: &str = r##"#!/bin/sh
+if [ "$1" != "--json" ] || [ "$2" != "--source" ] || [ "$3" != "/tmp/canoe-test.ext4" ]; then
+  exit 42
+fi
+while IFS= read -r request; do
+  case "$request" in
     *slot.status*) echo '{"operation":"slot.status","ok":true,"active_slot":"a","inactive_slot":"b","source":"bootctl","installed":["a"]}' ;;
   esac
 done

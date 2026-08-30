@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
-use crate::protocol::{BootmgrClient, ProtocolError, Request, Response};
+use crate::protocol::{BootRoot, BootmgrClient, ProtocolError, Request, Response};
 use crate::text::TextKey;
 use crate::ui::{EditorState, GuiApp, Screen};
-
 impl GuiApp {
     pub(crate) fn request(&mut self, request: Request) -> Option<Response> {
         let operation = request_name(&request);
@@ -14,8 +13,9 @@ impl GuiApp {
                 Some(response)
             }
             Err(error) => {
-                self.log(format!("{operation}: {error}"));
-                self.status = format!("{operation}: failed");
+                let detail = error.to_string();
+                self.log(format!("{operation}: {detail}"));
+                self.status = format!("{operation}: {}", crate::protocol::cap_log_message(&detail));
                 None
             }
         }
@@ -50,18 +50,27 @@ impl GuiApp {
             self.slot_status = Some(status);
         }
     }
-
     pub(crate) fn reconnect(&mut self) {
         let root = PathBuf::from(self.root_input.trim());
-        match BootmgrClient::connect(&self.bootmgr_path, &root) {
+        let target = if self.source_is_ext4 {
+            BootRoot::Ext4Source(root.clone())
+        } else {
+            BootRoot::LocalDir(root.clone())
+        };
+        match BootmgrClient::connect(&self.bootmgr_path, &target) {
             Ok(client) => {
                 self.client = client;
                 self.root_path = root;
                 self.status = self.label(TextKey::Connected).to_owned();
                 self.log(format!(
-                    "{}: {}",
+                    "{}: {} ({})",
                     self.label(TextKey::BootRoot),
-                    self.root_path.display()
+                    self.root_path.display(),
+                    if self.source_is_ext4 {
+                        self.label(TextKey::Ext4Source)
+                    } else {
+                        self.label(TextKey::LocalDirectory)
+                    }
                 ));
                 self.refresh();
             }
@@ -211,8 +220,13 @@ impl GuiApp {
     }
 
     pub(crate) fn record_error(&mut self, error: ProtocolError) {
-        self.status = self.label(TextKey::Disconnected).to_owned();
-        self.log(error.to_string());
+        let detail = error.to_string();
+        self.status = format!(
+            "{}: {}",
+            self.label(TextKey::Disconnected),
+            crate::protocol::cap_log_message(&detail)
+        );
+        self.log(detail);
     }
 }
 
