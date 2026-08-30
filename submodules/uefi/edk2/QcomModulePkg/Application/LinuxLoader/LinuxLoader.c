@@ -230,14 +230,21 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
             (UINT32)Mode, (UINT32)!EFI_ERROR (Status)));
 
     /*
-     * First-run is checked before key intent: a root that cannot be located or
-     * opened, or one with no image or menu, has no launchable destination, so
-     * fastboot is the only useful destination. Misreporting a fresh device as
-     * populated strands it instead of letting the PC install it.
+     * First-run is checked before key intent. A root that cannot be located or
+     * opened, or one with no launchable image/config, defaults to fastboot so
+     * the PC can install it. Volume Up on the first-run screen is an explicit
+     * opt-in to the normal menu, which can enumerate anything discovered in
+     * the meantime.
      */
     if (SfbBootRootIsEmpty ()) {
       DEBUG ((EFI_D_INFO, "SFB: MARK bootflow first-run=1\n"));
-      SfbShowFirstRunScreen ();
+      if (SfbShowFirstRunScreen ()) {
+        SfbShowEnteringMenu ();
+        if (!SfbRunBootMenu (Mode)) {
+          Status = EFI_SUCCESS;
+          goto stack_guard_update_default;
+        }
+      }
       EnterFastboot = TRUE;
     } else {
       /*
