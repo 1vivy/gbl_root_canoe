@@ -12,7 +12,7 @@ cleanup() {
     kill "$SERVER_PID" 2>/dev/null || :
     wait "$SERVER_PID" 2>/dev/null || :
   fi
-  rm -rf "$TMP"
+  if [ "${KEEP_TMP:-0}" != 1 ]; then rm -rf "$TMP"; fi
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -20,68 +20,62 @@ mkdir -p "$WEBROOT"
 cp -R "$ROOT/targets/magisk_module/module/webroot/." "$WEBROOT/"
 
 cat > "$WEBROOT/mock.js" <<'EOF'
-localStorage.setItem("blFlasherPendingTaskId", "stale-task");
-localStorage.setItem("blFlasherPendingTaskKind", "mode");
 window.__ksuMock = {
-  status: "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=other-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en",
-  failStatus: false,
-  suppliedAblAvailable: false,
-  suppliedVbmetaAvailable: false,
+  bootctlAvailable: true,
+  requests: [],
   toasts: [],
-  lastStartCommand: "",
-  lastStartModeCommand: "",
-  startModeFailure: false,
-  modeTaskNumber: 0,
-  lastModeTaskId: "",
+  entries: [{id: "android-a", title: "Android A", image: "boot_a.efi", role: "active", mode: 2, options: null, unknown: []}],
 };
 window.ksu = {
-  moduleInfo() {
-    return JSON.stringify({ moduleDir: "/data/adb/modules/fake" });
-  },
-  toast(message) {
-    window.__ksuMock.toasts.push(message);
-  },
+  toast(message) { window.__ksuMock.toasts.push(message); },
   exec(command, _options, callbackName) {
-    if (command.includes("test -s '/data/local/tmp/canoe/abl.img'")) {
-      window[callbackName](window.__ksuMock.suppliedAblAvailable ? 0 : 1, "", "");
+    const respond = (errno, stdout, stderr) => window.setTimeout(() => window[callbackName](errno, stdout, stderr), 0);
+    if (command === "getprop ro.boot.slot_suffix") {
+      respond(0, "_a\n", "");
       return;
     }
-    if (command.includes("test -s '/data/local/tmp/canoe/vbmeta.img'")) {
-      window[callbackName](window.__ksuMock.suppliedVbmetaAvailable ? 0 : 1, "", "");
+    if (command === "bootctl get-active-boot-slot") {
+      respond(window.__ksuMock.bootctlAvailable ? 0 : 1, window.__ksuMock.bootctlAvailable ? "0\n" : "", "");
       return;
     }
-    if (command.includes(" status")) {
-      if (window.__ksuMock.failStatus) {
-        window[callbackName](1, "", "status unavailable");
-      } else {
-        window[callbackName](0, window.__ksuMock.status, "");
-      }
+    const token = command.split(" ").pop();
+    let request;
+    try {
+      const padded = token.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (token.length % 4)) % 4);
+      request = JSON.parse(decodeURIComponent(escape(atob(padded))));
+    } catch (error) {
+      const padded = token.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (token.length % 4)) % 4);
       return;
     }
-    if (command.includes(" tail")) {
-      window[callbackName](0, "", "");
-      return;
-    }
-    if (command.includes(" start '")) {
-      window.__ksuMock.lastStartCommand = command;
-      window[callbackName](0, "STARTED=1|TASK_ID=flash-task", "");
-      return;
-    }
-    if (command.includes(" start-mode")) {
-      window.__ksuMock.lastStartModeCommand = command;
-      if (window.__ksuMock.startModeFailure) {
-        window[callbackName](1,
-          "STARTED=0|ERROR_CODE=MODE2_PROFILE_MISSING|ERROR=entry mode preflight failed", "");
+    window.__ksuMock.requests.push({ command, request });
+    switch (request.verb) {
+      case "slot.status":
+        respond(0, JSON.stringify({ok: true, operation: "slot.status", active_slot: "a", inactive_slot: "b", source: request.bootctl_output ? "bootctl" : "explicit", installed: ["a"]}), "");
         return;
-      }
-      window.__ksuMock.modeTaskNumber += 1;
-      const taskId = `mode-task-${window.__ksuMock.modeTaskNumber}`;
-      window.__ksuMock.lastModeTaskId = taskId;
-      window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=1|PID=100|STATE=running|MESSAGE=saving entry mode|UPDATED_AT=now|TASK_ID=${taskId}|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en`;
-      window[callbackName](0, `STARTED=1|TASK_ID=${taskId}`, "");
-      return;
+      case "entry.list":
+        respond(0, JSON.stringify({ok: true, operation: "entry.list", generation: 3, entries: window.__ksuMock.entries}), "");
+        return;
+      case "bls.list":
+        respond(0, JSON.stringify({ok: true, operation: "bls.list", entries: [{name: "android.conf", entry: {title: "Android", kind: "efi", image: "\\boot_a.efi", initrd: null, devicetree: null, options: "", unknown: [], rejected_lines: 0}}]}), "");
+        return;
+      case "default.get":
+        respond(0, JSON.stringify({ok: true, operation: "default.get", default: "android-a"}), "");
+        return;
+      case "default.set":
+        respond(0, JSON.stringify({ok: true, operation: "default.set", generation: 4, default: request.id}), "");
+        return;
+      case "entry.mode":
+        respond(0, JSON.stringify({ok: true, operation: "entry.mode", generation: 5}), "");
+        return;
+      case "install":
+        respond(0, JSON.stringify({ok: true, operation: "install", receipt: {active_slot: "a", installed: request.both ? ["a", "b"] : [request.inactive ? "b" : "a"], generation: 6, signer_changed: false, backup_present: true}}), "");
+        return;
+      case "ota-apply":
+        respond(0, JSON.stringify({ok: true, operation: "ota-apply", receipt: {active_slot: "a", installed: ["b"], generation: 7, signer_changed: false, backup_present: true}}), "");
+        return;
+      default:
+        respond(1, JSON.stringify({ok: false, error: {code: "request", message: `unknown ${request.verb}`}}), "");
     }
-    window[callbackName](0, "", "");
   }
 };
 EOF
@@ -98,177 +92,52 @@ const waitFor = async (predicate, message) => {
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
-const disabled = selector => document.querySelector(selector).disabled;
-const optionControls = [
-  "#updateEfispCheckbox",
-  "#debugModeCheckbox",
-  "#patchVendorBootCheckbox",
-  "#suppliedAblCheckbox",
-  "#suppliedVbmetaCheckbox"
-];
+const requests = () => window.__ksuMock.requests.map(item => item.request);
 
 try {
-  await waitFor(
-    () => document.querySelector("#preferredModeSelect")?.value === "2",
-    "saved Mode 2 did not render"
-  );
-  const labels = [...document.querySelectorAll("#preferredModeSelect option")]
-    .map(option => option.textContent);
-  assert(JSON.stringify(labels) === JSON.stringify([
-    "Mode 0 - Honest unlocked",
-    "Mode 1 - ABL fake locked",
-    "Mode 2 - KM/SPSS profile spoof"
-  ]), "boot mode labels are incomplete");
-  assert(document.querySelector("#saveModeButton").textContent === "Save",
-    "preferred mode Save action label is missing");
-  assert(localStorage.getItem("blFlasherPendingTaskId") === null,
-    "stale pending task was not reconciled");
-  assert(optionControls.length === 5, "unexpected Flash option control set");
-  const checkboxIds = [...document.querySelectorAll('input[type="checkbox"]')]
-    .map(input => input.id);
-  assert(JSON.stringify(checkboxIds) === JSON.stringify([
-    "updateEfispCheckbox",
-    "debugModeCheckbox",
-    "patchVendorBootCheckbox",
-    "suppliedAblCheckbox",
-    "suppliedVbmetaCheckbox"
-  ]), "Flash controls contain an unexpected checkbox");
-  assert(document.querySelector("#suppliedAblCheckbox") !== null,
-    "supplied ABL checkbox is missing");
-  assert(document.querySelector("#suppliedVbmetaCheckbox") !== null,
-    "supplied vbmeta checkbox is missing");
-  assert(document.querySelector("#lblSuppliedAbl").textContent === "Use supplied abl.img",
-    "supplied ABL label is incorrect");
-  assert(document.querySelector("#lblSuppliedVbmeta").textContent === "Use supplied vbmeta.img",
-    "supplied vbmeta label is incorrect");
-  assert(disabled("#suppliedAblCheckbox") && disabled("#suppliedVbmetaCheckbox"),
-    "missing supplied images must disable both checkboxes");
-  assert(document.querySelector("#suppliedAblHint").textContent.includes(
-    "/data/local/tmp/canoe/abl.img"), "ABL absence hint omitted its path");
-  assert(document.querySelector("#suppliedVbmetaHint").textContent.includes(
-    "/data/local/tmp/canoe/vbmeta.img"), "vbmeta absence hint omitted its path");
-  assert(document.querySelector("#lblPatchVendorBootHint").textContent.includes(
-    "Mode 2"), "vendor_boot hint does not describe the replacement workflow");
+  await waitFor(() => document.querySelector("#activeSlot").textContent === "A", "slot status was not rendered");
+  assert(document.querySelector("#slotSource").textContent.includes("bootctl"), "slot provenance omitted bootctl");
+  assert(document.querySelector("#entryTableBody tr[data-entry-id=android-a]"), "entry.list row was not rendered");
+  assert(document.querySelector("#blsTableBody td").textContent === "android.conf", "bls.list row was not rendered");
+  assert(document.querySelector("#entryDetail").textContent.includes("boot_a.efi"), "entry detail was not rendered");
+  assert(document.querySelector("#defaultSelect").value === "android-a", "default.get was not rendered");
+  assert(document.querySelector("meta[http-equiv=Content-Security-Policy]"), "CSP meta is missing");
 
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=defaulted-task|ENTRY_ID=android-a|ENTRY_MODE=1|ENTRY_MODE_DEFAULTED=1|CONFIG_READ_ERROR=0|USER_LANG=en";
+  document.querySelector("#installTarget").value = "inactive";
+  document.querySelector("#installTarget").dispatchEvent(new Event("change"));
+  assert(!document.querySelector("#inactiveConfirmation").hidden, "inactive confirmation was not shown");
+  assert(document.querySelector("#inactiveStatusConfirm").nextElementSibling.textContent.includes("I know the status"), "inactive confirmation label is missing");
+  const beforeRefusal = requests().length;
+  document.querySelector("#installButton").click();
+  await waitFor(() => document.querySelector("#taskMessage").textContent.includes("I know the status"), "inactive install was not gated");
+  assert(requests().length === beforeRefusal, "gated inactive install reached the core");
+
+  document.querySelector("#inactiveStatusConfirm").checked = true;
+  document.querySelector("#installButton").click();
+  await waitFor(() => requests().some(request => request.verb === "install"), "install request did not reach the core");
+  const installRequest = requests().find(request => request.verb === "install");
+  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "install did not settle");
+
+  document.querySelector("#saveEntryModeButton").click();
+  await waitFor(() => requests().some(request => request.verb === "entry.mode"), "entry.mode request did not reach the core");
+  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "mode did not settle");
+  document.querySelector("#saveDefaultButton").click();
+  await waitFor(() => requests().some(request => request.verb === "default.set"), "default.set request did not reach the core");
+  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "default did not settle");
+
+  document.querySelector("#otaButton").click();
+  await waitFor(() => requests().some(request => request.verb === "ota-apply"), "ota-apply request did not reach the core");
+  const otaRequest = requests().find(request => request.verb === "ota-apply");
+  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "OTA did not settle");
+  assert(otaRequest.target_slot === "b", "OTA did not target the inactive slot");
+  for (const item of window.__ksuMock.requests) {
+    if (item.request.verb !== "slot.status") assert(/^canoe-bootmgr --boot-root \/mnt\/vendor\/persist\/efisp --request-b64 [A-Za-z0-9_-]+$/.test(item.command), "core command contained an unsafe token");
+  }
+
+  window.__ksuMock.bootctlAvailable = false;
   document.querySelector("#refreshButton").click();
-  await waitFor(
-    () => document.querySelector("#modeStatusText").textContent ===
-      "This entry has no explicit mode; using the file fallback Mode 1",
-    "defaulted Mode 1 status was not rendered"
-  );
-  assert(document.querySelector("#preferredModeSelect").value === "1",
-    "defaulted raw Mode 1 was not selected");
-
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=1|PID=99|STATE=success|MESSAGE=busy|UPDATED_AT=now|TASK_ID=live-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
-  document.querySelector("#refreshButton").click();
-  await waitFor(() => disabled("#updateEfispCheckbox"), "busy controls were not disabled");
-  assert(optionControls.every(disabled), "a busy option checkbox remained enabled");
-  assert([
-    "#flashButton", "#bdsToolsButton", "#patchPartButton", "#clearLogButton",
-    "#preferredModeSelect", "#saveModeButton"
-  ].every(disabled), "a busy task action remained enabled");
-
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=idle-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
-  document.querySelector("#refreshButton").click();
-  await waitFor(() => !disabled("#saveModeButton"), "mode controls did not re-enable");
-  document.querySelector("#preferredModeSelect").value = "0";
-  document.querySelector("#saveModeButton").click();
-  assert(optionControls.every(disabled), "start request left an option enabled");
-  assert([
-    "#flashButton", "#bdsToolsButton", "#patchPartButton", "#clearLogButton",
-    "#preferredModeSelect", "#saveModeButton"
-  ].every(disabled), "start request left a task action enabled");
-  await waitFor(
-    () => document.querySelector("#stateChip").textContent.includes("running"),
-    "mode task did not enter running state"
-  );
-  assert(window.__ksuMock.lastStartModeCommand.includes(" start-mode '0'"),
-    "selected Mode 0 was not passed to the worker");
-
-  const successTaskId = window.__ksuMock.lastModeTaskId;
-  window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=entry mode saved|UPDATED_AT=now|TASK_ID=${successTaskId}|ENTRY_ID=android-a|ENTRY_MODE=0|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en`;
-  document.querySelector("#refreshButton").click();
-  await waitFor(
-    () => window.__ksuMock.toasts.includes("Boot-entry mode saved"),
-    "successful mode task did not complete through status polling"
-  );
-
-  await waitFor(() => !disabled("#saveModeButton"), "mode controls did not re-enable after success");
-  document.querySelector("#preferredModeSelect").value = "1";
-  document.querySelector("#saveModeButton").click();
-  await waitFor(() => window.__ksuMock.modeTaskNumber === 2,
-    "second mode task did not start");
-  const failedTaskId = window.__ksuMock.lastModeTaskId;
-  window.__ksuMock.status = `CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=error|MESSAGE=canoe.cfg write failed|UPDATED_AT=now|TASK_ID=${failedTaskId}|ENTRY_ID=android-a|ENTRY_MODE=1|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en`;
-  document.querySelector("#refreshButton").click();
-  await waitFor(
-    () => document.querySelector("#stateChip").textContent === "Status: error" &&
-      document.querySelector("#preferredModeSelect").value === "1",
-    "failed mode write did not refresh the backend error and actual raw mode"
-  );
-  assert(document.querySelector("#stateChip").textContent === "Status: error",
-    "failed mode write did not render the backend error state");
-  assert(window.__ksuMock.toasts.includes("Task finished (failed)"),
-    "failed mode write did not notify failure");
-
-  await waitFor(() => !disabled("#saveModeButton"), "mode controls did not re-enable after failure");
-  window.__ksuMock.startModeFailure = true;
-  document.querySelector("#preferredModeSelect").value = "2";
-  document.querySelector("#saveModeButton").click();
-  await waitFor(
-    () => document.querySelector("#modeStatusText").textContent ===
-      "Mode 2 profile is missing; install a valid boot.efi.gm2p first",
-    "missing Mode 2 profile error was not rendered"
-  );
-  assert(document.querySelector("#taskMessage").textContent ===
-    "Mode 2 profile is missing; install a valid boot.efi.gm2p first",
-    "missing Mode 2 profile error did not reach task status");
-  assert(window.__ksuMock.toasts.includes(
-    "Mode 2 profile is missing; install a valid boot.efi.gm2p first"),
-    "missing Mode 2 profile error did not reach the toast");
-
-  window.__ksuMock.suppliedAblAvailable = true;
-  window.__ksuMock.suppliedVbmetaAvailable = true;
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=idle-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
-  document.querySelector("#refreshButton").click();
-  await waitFor(() => !disabled("#suppliedAblCheckbox") && !disabled("#suppliedVbmetaCheckbox"),
-    "available supplied images did not enable their checkboxes");
-  document.querySelector("#suppliedAblCheckbox").checked = true;
-  document.querySelector("#suppliedVbmetaCheckbox").checked = true;
-  document.querySelector("#flashButton").click();
-  document.querySelector("#nextConfirmButton").click();
-  document.querySelector("#nextConfirmButton").click();
-  await waitFor(() => window.__ksuMock.lastStartCommand.includes("abl=supplied") &&
-    window.__ksuMock.lastStartCommand.includes("vbmeta=supplied"),
-    "both supplied image arguments were not passed to the worker");
-
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=flash-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
-  document.querySelector("#refreshButton").click();
-  await waitFor(() => !disabled("#flashButton"), "Flash action did not re-enable");
-  window.__ksuMock.lastStartCommand = "";
-  document.querySelector("#suppliedAblCheckbox").checked = false;
-  document.querySelector("#suppliedVbmetaCheckbox").checked = true;
-  document.querySelector("#flashButton").click();
-  document.querySelector("#nextConfirmButton").click();
-  document.querySelector("#nextConfirmButton").click();
-  await waitFor(() => window.__ksuMock.lastStartCommand.includes("vbmeta=supplied"),
-    "selected vbmeta source was not passed to the worker");
-  assert(!window.__ksuMock.lastStartCommand.includes("abl=supplied"),
-    "unselected ABL source was passed to the worker");
-
-  window.__ksuMock.status = "CURRENT_SLOT=_a|TARGET_SLOT=_b|RUNNING=0|PID=|STATE=success|MESSAGE=ready|UPDATED_AT=now|TASK_ID=flash-task|ENTRY_ID=android-a|ENTRY_MODE=2|ENTRY_MODE_DEFAULTED=0|CONFIG_READ_ERROR=0|USER_LANG=en";
-  document.querySelector("#refreshButton").click();
-  await waitFor(() => !disabled("#saveModeButton"), "controls did not re-enable after source test");
-
-  window.__ksuMock.failStatus = true;
-  document.querySelector("#refreshButton").click();
-  await waitFor(
-    () => document.querySelector("#stateChip").textContent === "Status Read Failed",
-    "status read failure was not rendered"
-  );
-  assert(!disabled("#refreshButton"), "status failure disabled manual refresh");
-  assert(optionControls.every(disabled), "status failure left an option enabled");
+  await waitFor(() => document.querySelector("#otaButton").disabled && document.querySelector("#otaHint").textContent.includes("OTA refused"), "OTA stayed enabled without bootctl/GPT metadata");
+  assert(document.querySelector("#otaHint").textContent.includes("OTA refused"), "metadata refusal was not explained");
 
   document.documentElement.dataset.testResult = "pass";
   document.body.insertAdjacentHTML("beforeend", '<pre id="webuiTestResult">WEBUI_TEST_PASS</pre>');
@@ -284,15 +153,10 @@ EOF
 python3 - "$WEBROOT/index.html" <<'PY'
 from pathlib import Path
 import sys
-
 path = Path(sys.argv[1])
 text = path.read_text()
 needle = '<script type="module" src="app.js"></script>'
-replacement = '\n'.join([
-    '<script src="mock.js"></script>',
-    needle,
-    '<script type="module" src="test-driver.js"></script>',
-])
+replacement = '\n'.join(['<script src="mock.js"></script>', needle, '<script type="module" src="test-driver.js"></script>'])
 if needle not in text:
     raise SystemExit("app.js script tag not found")
 path.write_text(text.replace(needle, replacement, 1))
@@ -311,22 +175,16 @@ else
 fi
 [ -n "$CHROME" ] || { echo "FAIL: no Chrome/Chromium binary for WebUI test" >&2; exit 1; }
 
-python3 -u -m http.server "$PORT" --bind 127.0.0.1 --directory "$WEBROOT" \
-  > "$TMP/server.log" 2>&1 &
+python3 -u -m http.server "$PORT" --bind 127.0.0.1 --directory "$WEBROOT" > "$TMP/server.log" 2>&1 &
 SERVER_PID=$!
 sleep 1
+"$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-background-networking --user-data-dir="$TMP/chrome" --virtual-time-budget=12000 --dump-dom "http://127.0.0.1:$PORT/" > "$TMP/dom.html" 2> "$TMP/chrome.log"
 
-"$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-  --disable-background-networking --user-data-dir="$TMP/chrome" \
-  --virtual-time-budget=12000 --dump-dom "http://127.0.0.1:$PORT/" \
-  > "$TMP/dom.html" 2> "$TMP/chrome.log"
-
-if ! grep -q 'data-test-result="pass"' "$TMP/dom.html" ||
-   ! grep -q 'WEBUI_TEST_PASS' "$TMP/dom.html"; then
+if ! grep -q 'data-test-result="pass"' "$TMP/dom.html" || ! grep -q 'WEBUI_TEST_PASS' "$TMP/dom.html"; then
   cat "$TMP/dom.html" >&2
   cat "$TMP/chrome.log" >&2
   echo "FAIL: browser-driven WebUI fixture" >&2
   exit 1
 fi
 
-echo "ok - browser-driven WebUI mode and task controls"
+echo "ok - browser-driven WebUI core protocol and slot controls"

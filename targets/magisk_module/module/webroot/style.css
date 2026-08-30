@@ -488,3 +488,79 @@ tbody tr:last-child td {
     padding: 12px;
   }
 }
+
+.control-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.control-row select,
+.text-input {
+  min-height: var(--control-height);
+  min-width: 0;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-control);
+  background: var(--control-bg);
+  color: var(--control-text);
+  font: inherit;
+}
+
+.control-row select {
+  flex: 1;
+}
+
+.field-label {
+  display: block;
+  margin-top: var(--space-4);
+  color: rgba(27, 20, 15, 0.68);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.text-input {
+  width: 100%;
+  margin-top: var(--space-2);
+}
+
+.entry-detail {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.entry-detail div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.entry-detail dt {
+  color: rgba(27, 20, 15, 0.58);
+  font-size: 13px;
+}
+
+.entry-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+h3 {
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: 16px;
+}
+
+.selected-row {
+  background: var(--accent-soft);
+}
+
+#otaButton,
+#installButton {
+  width: 100%;
+  margin-top: var(--space-4);
+}
