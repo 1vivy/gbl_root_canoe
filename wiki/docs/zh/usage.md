@@ -43,53 +43,68 @@ boot 处理函数在该镜像 kernel 段的开头识别出 `MZ` 签名，于是�
 
 ## 首次运行与菜单
 
-如果启动根目录中既没有 `canoe.cfg` 也没有 `boot.efi`，BDS 会显示首次运行
-信息并进入 Super Fastboot。此时没有可启动的启动项。
+`SfbBootRootIsEmpty` 会将无法定位或打开卷、没有可启动镜像的启动根目录，以及
+所有 `image` 都不存在的配置视为首次运行。BDS 显示首次运行界面，其中有两行：
 
-### 如何进入菜单，而不是直接启动默认项
+- **Enter boot menu (Volume Up)**
+- **Enter fastboot (default)**
 
-BDS 在启动时会**先采样音量上键一秒**，早于文件系统栈的初始化，以免初始化过程
-吃掉这次按键。
+光标从 **Enter fastboot** 开始，界面等待两秒。只有音量上会选择进入普通菜单；
+超时、音量下和电源键都会保留 fastboot 默认路径。这是刚刷入 BDS 后的安全路径：
+电脑端无需先准备菜单配置就能安装启动链。
 
-- **在这一秒内按住音量上**：立即进入菜单，不会尝试任何无人值守启动。
-- **未按住音量上**：BDS 直接启动 `canoe.cfg` 中 `default` 指定的启动项，不显示
-  菜单。只有当该启动返回或失败、或文件中没有 `default` 时，才会进入菜单。
+对于已填充的启动根目录，BDS 会在启动时、文件系统栈启动前先采样**一秒音量上**，
+因此初始化不会先吃掉这次按键。
 
-进入菜单后，倒计时**只作用于第一次绘制**：等待 `timeout` 秒后启动当前高亮的
-默认项。任意按键都会取消倒计时，之后每次绘制都无限等待。`timeout 0` 并不表示
-“永久等待”，而是立即启动默认项；因此用于测试新启动项的配置应当给一个充裕的
-`timeout`，而不是 0。
+- **在这一秒内按住音量上**——立即打开菜单，不尝试无人值守启动。
+- **未按住音量上**——BDS 不显示菜单，直接启动 `canoe.cfg` 中 `default` 指定的
+  启动项。只有该启动返回或失败，或文件中没有 `default` 时才进入菜单。
 
-新增手写启动项时这一点尤其重要：一个因为默认项先启动而始终没被选中的启动项，
-看起来和一个根本没被枚举出来的启动项完全一样。
+普通菜单打开后，若配置存在有效默认项，`timeout` 只作用于第一次绘制。按任意键
+会取消倒计时，之后重绘都无限等待。`timeout 0` 会立即启动默认项，而不是永久等待。
+BLS 行不是有效的 `canoe.cfg default`，因此测试 BLS 必须主动进入菜单。
 
-菜单包括：
+菜单按以下顺序构建：
 
-- **Reboot to Recovery**；
-- **USB Mass Storage**；
-- 文件存在时显示受管理的 `Android (slot A)`、`Android (slot B)` 与
-  `Android (previous)`；
-- `canoe.cfg` 中其他所有 `image` 存在的启动项，包括手写的第三方固件链式启动项
-  ——见[链式启动第三方 UEFI 固件](./chainload.md)；
-- 启动根目录 `tools/` 中文件对应的 **EFI Tools**。
+1. **Session boot mode**（只对下一次启动生效，不会保存）。
+2. `canoe.cfg` 中 `image` 存在的启动项。
+3. 配置缺失或无效时，探测启动根目录中的兼容路径 `boot.efi`、按槽位命名的
+   `boot_a.efi` 与 `boot_b.efi`，以及 `boot_backup.efi`。当前安装器只写按槽位
+   命名的文件与备份；`boot.efi` 只是 b2 以前的兼容探测。
+4. 每个卷上的 `\EFI\BOOT\BOOTAA64.EFI`。若存在 `\EFI\DESC` 则用它命名，否则
+   使用 `NONAME<n>`。
+5. `persist` ext4 启动根目录或可移动介质中 `\loader\entries\*.conf` 下的有效
+   BLS Type #1 启动项。见[链式启动与 BLS 启动项](./chainload.md)。
+6. 内置操作：**Enter Fastboot**、**Enter EFI Program Selector**、**EFI Tools**、
+   **USB Mass Storage**、**Reboot to Recovery**、**Power Off** 与 **Restart**。
 
-随附的 `SurfaceTools.efi` 清单工具可从 **EFI Tools** 打开。默认视图只枚举
-UEFI 协议 GUID、配置表 GUID、已加载镜像类别、内存描述符和已知的 Qualcomm
-策略协议是否存在；不会显示原始地址，也不会调用厂商方法。**Dump Passive
-Inventory to logfs** 会明确覆盖已挂载 `logfs` 卷上的
-`\SurfaceTools.log`，刷新文件内容并在返回 BDS 前关闭全部文件句柄。执行
-**Run Read-only Active Probes** 前必须再次按音量加键确认（电源键用于取消，
-因此长按菜单选择键不会授权调用）；该操作只调用五个已记录的读取方法，用于
-查询 CPU 最大索引、TrustZone 版本、Verified Boot 状态和 Keymaster 状态。
-调用成功时显示 `authorized`；工具不会据此推断策略已实际生效，且主动读取
+只有镜像存在时才显示配置行；镜像缺失会被跳过。BLS 文件无效或引用镜像缺失时
+也会被跳过。发现行排在配置行之后，且永远不会成为无人值守默认项：`default` 只能
+指向 `canoe.cfg` 行，默认解析器只选择不可移动介质上的普通 EFI 行。启动 BLS 时，
+按住音量上进入菜单，移动到该行后按电源键。若要无人值守测试，请把小型 wrapper
+UEFI 应用写入普通 `canoe.cfg` 行并将该行设为默认；wrapper 再选择或链式启动 BLS
+载荷。
+
+同一菜单还提供以下工具与操作：
+
+- **EFI Tools** 会列出启动根目录 `tools/` 下的文件。
+- **USB Mass Storage** 将一个分区导出为一个 USB 磁盘。`persist` 的 `/efisp` 中
+  有启动根目录；只有存在 `logfs` 时才提供它。导出正在使用的 `persist` 前 BDS
+  会警告。详见 [`mass-storage.md`](./mass-storage.md)。
+- **Reboot to Recovery** 直接重置进入 Recovery。这是内置重置操作，不是自定义镜像
+  解析器。
+
+随附的 `SurfaceTools.efi` 清单工具可从 **EFI Tools** 打开。默认视图只枚举 UEFI
+协议 GUID、配置表 GUID、已加载镜像类别、内存描述符和已知 Qualcomm 策略协议是否
+存在；不会显示原始地址，也不会调用厂商方法。**Dump Passive Inventory to logfs**
+会明确覆盖已挂载 `logfs` 卷上的 `\SurfaceTools.log`，刷新文件内容并在返回 BDS 前
+关闭全部文件句柄。执行 **Run Read-only Active Probes** 前必须再次按音量加键确认
+（电源键用于取消，因此长按菜单选择键不会授权调用）；该操作只调用五个已记录的
+读取方法，用于查询 CPU 最大索引、TrustZone 版本、Verified Boot 状态和 Keymaster
+状态。调用成功时显示 `authorized`；工具不会据此推断策略已实际生效，且主动读取
 方法不会写入持久状态。
 
-USB Mass Storage 会将一个分区作为一个 USB 磁盘导出。`persist` 的
-`/efisp` 中包含启动根目录；仅当 `logfs` 存在时才会提供它。导出正在使用的
-`persist` 文件系统前，BDS 会显示警告。电脑端流程见
-[`mass-storage.md`](./mass-storage.md)。
-
-也可以在 fastboot 中导出：
+USB Mass Storage 会将一个分区作为一个 USB 磁盘导出。也可以在 fastboot 中导出：
 
 ```bash
 fastboot oem mass-storage             # persist（默认）
@@ -110,9 +125,9 @@ Super Fastboot 等待主机时会显示自己的选项，用音量上/下移动�
 - **Power Off**；
 - **Restart**。
 
-这里提供 Recovery 是因为启动菜单中的同名项在 fastboot 中无法到达：菜单在
-fastboot 循环启动之前运行，而启动根目录为空的设备根本不会显示菜单。导出会话
-结束、安装完成后要进入 recovery，就用这一行。
+这里提供 Recovery 是因为进入 fastboot 后无法重新进入启动菜单：启动菜单在
+**Enter Fastboot** 之前运行，而首次运行也默认直接到此界面。完成电脑端安装或
+导出会话后要进入 Recovery，就用这里的 **Reboot to Recovery**。
 
 电脑端的重启目标现在会被遵守：
 
@@ -137,8 +152,9 @@ eject 在本硬件上确实会结束会话，但那是厂商栈的副作用而�
 
 - **Mode 0** 是不启用 hook 的直通模式，不读取也不写入 `DeviceInfo`；
 - **Mode 1** 投射锁定的 DeviceInfo 视图并应用受管理 hook；
-- **Mode 2** 还使用匹配的 120 字节 `boot.efi.gm2p` profile 和生成的映射。
-  它通过内核命令行禁止 `oplus_secure_guard_new`，无需重新打包 boot 镜像。
+- **Mode 2** 还使用受管理 `boot_a.efi`、`boot_b.efi` 或 `boot_backup.efi` 对应的
+  120 字节 `.gm2p` profile 和生成的映射。它通过内核命令行禁止
+  `oplus_secure_guard_new`，无需重新打包 boot 镜像。
 
 Mode 1 或 Mode 2 在观测状态不满足策略时可以修复 `DeviceInfo`。
 `devinfo-repair never` 会拒绝修复并如实以 Mode 0 继续，`asneeded` 允许修复。

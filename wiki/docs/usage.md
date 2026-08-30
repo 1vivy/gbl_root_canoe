@@ -46,40 +46,68 @@ explicit form and does not depend on the host tool's wrapping behaviour;
 
 ## First run and menu
 
-If the boot root has neither `canoe.cfg` nor `boot.efi`, BDS shows first-run
-information and enters Super Fastboot. There is no entry to launch yet.
+`SfbBootRootIsEmpty` treats a missing or unreachable volume, a root with no
+launchable image, and a config whose images are all absent as first run. BDS
+shows a first-run screen with two rows:
 
-### Reaching the menu instead of the default
+- **Enter boot menu (Volume Up)**
+- **Enter fastboot (default)**
 
-BDS samples **Volume Up for one second at startup**, before it brings up the
-filesystem stack, so the key is read before initialization can consume it.
+The cursor starts on **Enter fastboot** and that screen waits two seconds.
+Volume Up is the only key that opts into the normal menu; timeout, Volume Down,
+and Power preserve the fastboot default. This is the safe path for a freshly
+flashed BDS: the host can install the chain without any menu configuration.
+
+For a populated root, BDS samples **Volume Up for one second at startup**,
+before it brings up the filesystem stack, so the key is read before
+initialization can consume it.
 
 - **Volume Up held during that second** — the menu opens immediately and no
   unattended launch is attempted.
 - **Volume Up not held** — BDS launches the entry named by `default` in
-  `canoe.cfg` without showing the menu. The menu is reached only if that launch
+  `canoe.cfg` without showing the menu. The menu is reached if that launch
   returns or fails, or if the file names no `default`.
 
-Once the menu is up, the countdown applies to the **first draw only**: it waits
-`timeout` seconds and then launches the highlighted default. Any key press stops
-the countdown, and every later draw waits indefinitely. `timeout 0` does not
-mean "wait forever" — it launches the default immediately, so a config being
-used to test a new row wants a generous `timeout`, not a zero one.
+Once the normal menu is up, the configured `timeout` applies only to its first
+draw when a valid config default exists. A key cancels that countdown; later
+redraws wait indefinitely. `timeout 0` launches the default immediately rather
+than waiting forever. A BLS row is not a valid `canoe.cfg default`, so BLS
+tests must enter the menu deliberately.
 
-This matters when adding a hand-written row: a row that never gets selected
-because the default launched first looks exactly like a row that failed to
-enumerate.
+The menu is built in this order:
 
-The menu includes:
+1. **Session boot mode** (a next-launch override; it is never saved).
+2. Existing `canoe.cfg` rows whose `image` exists.
+3. If the config is absent or invalid, discovered boot-root compatibility rows
+   for `boot.efi`, per-slot `boot_a.efi` and `boot_b.efi`, and
+   `boot_backup.efi`. The current installer writes only the per-slot names and
+   backup; `boot.efi` is a pre-b2 compatibility probe.
+4. Per-volume `\EFI\BOOT\BOOTAA64.EFI` rows. `\EFI\DESC` supplies a label when
+   present; otherwise the row is named `NONAME<n>`.
+5. Usable BLS Type #1 rows from `\loader\entries\*.conf` on the persist ext4
+   boot root or removable media. See
+   [Chainloading and BLS entries](./chainload.md).
+6. Built-in actions: **Enter Fastboot**, **Enter EFI Program Selector**,
+   **EFI Tools**, **USB Mass Storage**, **Reboot to Recovery**, **Power Off**,
+   and **Restart**.
 
-- **Reboot to Recovery**
-- **USB Mass Storage**
-- configured `Android (slot A)`, `Android (slot B)`, and `Android (previous)`
-  rows when their managed files exist;
-- every other `canoe.cfg` row whose `image` exists, including hand-written ones
-  such as a third-party firmware chainload — see
-  [Chainloading a third-party UEFI firmware](./chainload.md);
-- **EFI Tools** for files in the boot root's `tools/` directory.
+Configured rows are shown only when their image exists; a missing image is
+skipped. A BLS row is also skipped when its referenced image is missing or its
+entry is invalid. Discovered rows are appended after configured rows and are
+never an unattended default: `default` names only a `canoe.cfg` row, and the
+default resolver selects only a non-removable plain EFI row. To boot a BLS
+entry, hold Volume Up, navigate to it, and press Power. For unattended testing,
+put a small wrapper UEFI application in a plain `canoe.cfg` row and make that
+plain row the default; the wrapper can then select or chain to the BLS payload.
+
+The menu includes the following session tools and actions in the same screen:
+
+- **EFI Tools** lists files in the boot root's `tools/` directory.
+- **USB Mass Storage** exports one partition as one USB disk. `persist` contains
+  `/efisp`; `logfs` is offered only when it exists. BDS warns before exporting
+  the live `persist` filesystem. See [`mass-storage.md`](./mass-storage.md).
+- **Reboot to Recovery** resets directly to recovery. It is a built-in reset
+  action, not a custom-image parser.
 
 The shipped `SurfaceTools.efi` inventory opens from **EFI Tools**. Its default
 views only enumerate UEFI protocol GUIDs, configuration-table GUIDs, loaded
@@ -94,12 +122,8 @@ version, verified-boot state, and Keymaster status. A successful call is
 reported as `authorized`; the tool does not infer that an observed policy is
 effective, and the active getters write no persistent state.
 
-USB Mass Storage exports one partition as one USB disk. `persist` contains the
-boot root at `/efisp`; `logfs` is offered only when it exists. BDS warns before
-exporting the live `persist` filesystem. See [`mass-storage.md`](./mass-storage.md)
-for the host procedure.
-
-The same export is available from fastboot:
+USB Mass Storage exports one partition as one USB disk. The same export is
+available from fastboot:
 
 ```bash
 fastboot oem mass-storage             # persist (default)
@@ -122,10 +146,10 @@ Up/Down and chosen with Power:
 - **Power Off**
 - **Restart**
 
-Recovery is here because the boot menu's row is out of reach from fastboot: the
-menu runs before the fastboot loop starts, and on a device whose boot root is
-empty it never runs at all. That row is what to reach for after an export
-session, when the install is done and the device should go to recovery.
+Recovery is here because the boot menu runs before the fastboot loop and cannot
+be re-entered after **Enter Fastboot**. First-run also defaults directly to this
+screen, so its **Reboot to Recovery** row is the recovery path after a host
+install or export session.
 
 From the host, the reboot target is honoured:
 
@@ -154,8 +178,9 @@ never saved. An entry's configured mode takes precedence, with file-global
 - **Mode 0** is a hook-free passthrough and neither reads nor writes
   `DeviceInfo`.
 - **Mode 1** projects the locked DeviceInfo view and applies the managed hooks.
-- **Mode 2** additionally uses the matching 120-byte `boot.efi.gm2p` profile and
-  the generated map. Its kernel cmdline blacklist handles
+- **Mode 2** additionally uses the matching 120-byte `.gm2p` profile for the
+  managed `boot_a.efi`, `boot_b.efi`, or `boot_backup.efi` loader and the
+  generated map. Its kernel cmdline blacklist handles
   `oplus_secure_guard_new` without repacking a boot image.
 
 A Mode 1 or Mode 2 launch may repair `DeviceInfo` when its observed state does
