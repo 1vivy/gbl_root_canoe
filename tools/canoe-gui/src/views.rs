@@ -9,6 +9,20 @@ impl GuiApp {
         ui.horizontal(|ui| {
             ui.heading("Canoe Boot Manager");
             ui.separator();
+            let local_label = self.label(TextKey::LocalDirectory);
+            if ui
+                .selectable_label(!self.source_is_ext4, local_label)
+                .clicked()
+            {
+                self.source_is_ext4 = false;
+            }
+            let ext4_label = self.label(TextKey::Ext4Source);
+            if ui
+                .selectable_label(self.source_is_ext4, ext4_label)
+                .clicked()
+            {
+                self.source_is_ext4 = true;
+            }
             ui.label(self.label(TextKey::BootRoot));
             ui.text_edit_singleline(&mut self.root_input);
             if ui.button(self.label(TextKey::Connect)).clicked() {

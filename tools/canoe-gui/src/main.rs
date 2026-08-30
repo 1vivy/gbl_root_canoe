@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::args::AppOptions;
-use crate::protocol::{BootmgrClient, ProtocolError, Request, Response};
+use crate::protocol::{BootRoot, BootmgrClient, ProtocolError, Request, Response};
 use crate::ui::GuiApp;
 use tempfile::TempDir;
 use thiserror::Error;
@@ -55,8 +55,11 @@ fn run() -> Result<(), AppError> {
 
 fn run_gui(options: AppOptions) -> Result<(), AppError> {
     let bootmgr = resolve_bootmgr(options.bootmgr.as_deref());
-    let client = BootmgrClient::connect(&bootmgr, &options.boot_root)?;
-    let root = options.boot_root.clone();
+    let target = options.source.map_or_else(
+        || BootRoot::LocalDir(options.boot_root.clone()),
+        BootRoot::Ext4Source,
+    );
+    let client = BootmgrClient::connect(&bootmgr, &target)?;
     let language_zh = options.lang_zh;
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default().with_inner_size([1_280.0, 800.0]),
@@ -70,7 +73,7 @@ fn run_gui(options: AppOptions) -> Result<(), AppError> {
                 cc,
                 client,
                 bootmgr,
-                root,
+                target,
                 language_zh,
             )))
         }),
@@ -91,7 +94,7 @@ fn run_smoke(options: &AppOptions) -> Result<(), AppError> {
 }
 
 fn run_smoke_requests(bootmgr: &Path, root: &Path) -> Result<(), AppError> {
-    let mut client = BootmgrClient::connect(bootmgr, root)?;
+    let mut client = BootmgrClient::connect(bootmgr, &BootRoot::LocalDir(root.to_owned()))?;
     let config = client.request(&Request::ConfigShow)?;
     if !matches!(config, Response::ConfigShow { .. }) {
         return Err(
