@@ -35,6 +35,7 @@ impl GuiApp {
                 (Screen::Editor, TextKey::Editor),
                 (Screen::Bls, TextKey::Bls),
                 (Screen::Controls, TextKey::Controls),
+                (Screen::Slots, TextKey::Slots),
                 (Screen::Config, TextKey::Config),
                 (Screen::Log, TextKey::Log),
             ] {

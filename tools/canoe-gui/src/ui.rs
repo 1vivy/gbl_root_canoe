@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::model::{BlsFile, ConfigDocument, ConfigEntry, Role};
 use crate::protocol::{BootmgrClient, cap_log_message};
+use crate::slot_model::SlotStatus;
 use crate::text::{TextKey, text};
 
 const MAX_LOG_ROWS: usize = 80;
@@ -15,6 +16,7 @@ pub(crate) enum Screen {
     Editor,
     Bls,
     Controls,
+    Slots,
     Config,
     Log,
 }
@@ -71,6 +73,15 @@ pub(crate) struct GuiApp {
     pub(crate) bls_detail: Option<BlsFile>,
     pub(crate) config: Option<ConfigDocument>,
     pub(crate) default: Option<String>,
+    pub(crate) slot_status: Option<SlotStatus>,
+    pub(crate) staged_input: String,
+    pub(crate) install_slot: String,
+    pub(crate) install_both: bool,
+    pub(crate) install_inactive: bool,
+    pub(crate) inactive_ack: bool,
+    pub(crate) ota_ack: bool,
+    pub(crate) bootctl_input: String,
+    pub(crate) gpt_input: String,
     pub(crate) logs: VecDeque<String>,
     pub(crate) language_zh: bool,
     pub(crate) status: String,
@@ -100,6 +111,15 @@ impl GuiApp {
             bls_detail: None,
             config: None,
             default: None,
+            slot_status: None,
+            staged_input: String::new(),
+            install_slot: String::new(),
+            install_both: false,
+            install_inactive: false,
+            inactive_ack: false,
+            ota_ack: false,
+            bootctl_input: String::new(),
+            gpt_input: String::new(),
             logs: VecDeque::new(),
             language_zh,
             status: String::new(),
@@ -126,6 +146,7 @@ impl eframe::App for GuiApp {
             Screen::Editor => self.render_editor(ui),
             Screen::Bls => self.render_bls(ui),
             Screen::Controls => self.render_controls(ui),
+            Screen::Slots => self.render_slots(ui),
             Screen::Config => self.render_config(ui),
             Screen::Log => self.render_log(ui),
         });

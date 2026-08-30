@@ -2,6 +2,7 @@ mod actions;
 mod args;
 mod model;
 mod protocol;
+mod slot_model;
 mod text;
 mod ui;
 mod views;

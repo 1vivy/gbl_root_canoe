@@ -1,5 +1,5 @@
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde::Serialize;
@@ -52,6 +52,43 @@ pub enum Request {
     BlsList,
     #[serde(rename = "bls.show")]
     BlsShow { name: String },
+    #[serde(rename = "slot.status")]
+    SlotStatus {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        slot: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bootctl_output: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gpt_active_slot: Option<String>,
+    },
+    #[serde(rename = "install")]
+    Install {
+        staged: PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        slot: Option<String>,
+        both: bool,
+        inactive: bool,
+        i_know_inactive_status: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        active_slot: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        bootctl_output: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gpt_active_slot: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<u8>,
+        allow_new_signer: bool,
+    },
+    #[serde(rename = "ota-apply")]
+    OtaApply {
+        target_slot: Option<String>,
+        bootctl_output: Option<String>,
+        gpt_active_slot: Option<String>,
+        staged: PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<u8>,
+        allow_new_signer: bool,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -181,6 +218,15 @@ mod tests {
         ));
         let response = client.request(&Request::BlsList)?;
         assert!(matches!(response, Response::BlsList { entries } if entries.len() == 1));
+        let response = client.request(&Request::SlotStatus {
+            slot: None,
+            bootctl_output: Some("current-slot=a".to_owned()),
+            gpt_active_slot: None,
+        })?;
+        assert!(matches!(
+            response,
+            Response::SlotStatus { status } if status.source == "bootctl"
+        ));
         Ok(())
     }
 
@@ -188,8 +234,8 @@ mod tests {
 while IFS= read -r request; do
   case "$request" in
     *entry.list*) printf '%s\n' '{"ok":true,"operation":"entry.list","generation":3,"entries":[{"id":"android-a","title":"Android A","image":"boot_a.efi","options":null,"mode":1,"role":"active","unknown":[]}]}' ;;
-    *bls.list*) printf '%s\n' '{"ok":true,"operation":"bls.list","entries":[{"name":"linux.conf","entry":{"title":"Canoe Linux","kind":"linux","image":"\\\\vmlinuz","initrd":null,"devicetree":null,"options":"root=/dev/vda","unknown":[],"rejected_lines":0}}]}' ;;
-    *) printf '%s\n' '{"ok":false,"error":{"code":"fixture","message":"unexpected request"}}' ;;
+    *bls.list*) echo '{"ok":true,"operation":"bls.list","entries":[{"name":"linux.conf","entry":{"title":"Canoe Linux","kind":"linux","image":"vmlinuz","initrd":null,"devicetree":null,"options":"root=/dev/vda","unknown":[],"rejected_lines":0}}]}' ;;
+    *slot.status*) echo '{"operation":"slot.status","ok":true,"active_slot":"a","inactive_slot":"b","source":"bootctl","installed":["a"]}' ;;
   esac
 done
 "##;
