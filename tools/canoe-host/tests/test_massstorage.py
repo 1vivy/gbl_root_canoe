@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from canoelib import massstorage
+from canoelib import massstorage_windows
 from canoelib.errors import CanoeError
 
 
@@ -195,6 +196,9 @@ def test_windows_export_returns_physical_drive_source(
             return 0
 
     monkeypatch.setattr(massstorage.os, "name", "nt")
+    monkeypatch.setattr(
+        massstorage_windows.shutil, "which", lambda name: f"/mock/{name}"
+    )
     monkeypatch.setattr(massstorage.subprocess, "run", powershell)
     monkeypatch.setattr(massstorage.subprocess, "Popen", lambda *_args, **_kwargs: Process())
 
