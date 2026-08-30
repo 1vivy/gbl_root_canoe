@@ -1,9 +1,11 @@
 # `canoe.cfg` — the boot-root contract
 
-`canoe.cfg` is the BDS menu state for 7.x. The BDS only reads this file; the
-host Python transaction and the device-side installer are the writers. The
-file lives under `persist/efisp`, while the raw `efisp` partition contains only
-`BDS.efi`.
+`canoe.cfg` is the BDS menu state for 7.x. The 7.0.0-b2 release keeps the
+grammar described below unchanged; it changes the managed Android file and row
+lifecycle from one shared loader to independent A/B triplets. The BDS only reads
+this file; the host `canoe-bootmgr` transaction and the device-side module are
+the writers. The file lives under `persist/efisp`, while the raw `efisp`
+partition contains only `BDS.efi`.
 
 ## Location and syntax
 
@@ -95,59 +97,80 @@ device's `Resources/Configs/<codename>.toml`, which match the `UEFI_FD` row of
 its `MemoryMapLib.c`; for a Project-Aloha config they are `StackBase` and
 `StackSize`. The values above are OnePlus 15 (`infiniti`).
 
-## The two managed rows
+## Managed A/B triplets
 
-Every install writes exactly the following managed rows and no other managed
-rows:
+The 7.0.0-b2 writer manages one complete triplet per installed slot:
 
-| Row | ID | Title | Image | Role | Written when |
-| --- | --- | --- | --- | --- | --- |
-| Active | `android-a` or `android-b` | `Android (slot A)` or `Android (slot B)` | `boot.efi` | `active` | Every install; always with `default` |
-| Backup | `android-backup` | `Android (previous)` | `boot_backup.efi` | `backup` | While `boot_backup.efi` is non-empty; removed when it is not |
+| Slot | ID | Title written by `canoe-bootmgr` | Image | Sidecars |
+| --- | --- | --- | --- | --- |
+| A | `android-a` | `Android A` | `boot_a.efi` | `boot_a.efi.gm2p`, `boot_a.efi.tzmap` |
+| B | `android-b` | `Android B` | `boot_b.efi` | `boot_b.efi.gm2p`, `boot_b.efi.tzmap` |
+| Previous generation | `android-backup` | `Android (previous)` | `boot_backup.efi` | `boot_backup.efi.gm2p`, `boot_backup.efi.tzmap` |
+
+`boot_a.efi` and `boot_b.efi` are independent managed loaders. Their `.gm2p`
+sidecar is exactly 120 bytes and their `.tzmap` sidecar is exactly 256 bytes;
+each sidecar must belong to the loader beside it. The backup triplet has the
+same sidecar sizes.
+
+The writer emits `android-a` and `android-b` only for slots that have a valid
+installed triplet. It never creates an empty placeholder row for the other
+slot. The installed active slot is marked `role active`; another installed
+slot is `role inactive`. `android-backup` exists only while
+`boot_backup.efi` and both matching sidecars form a valid previous generation.
+The installer refreshes managed rows and does not invent a `default`; set a
+desired default explicitly with the boot-manager default command.
 
 Hand-added rows are preserved verbatim. A row whose image is absent is not
-invented or compacted by the writer; the BDS simply cannot launch it until the
-image exists. The explicit migration for old `boot_a.efi` and `boot_b.efi` rows
-is the only exception: those loaders, their sidecars, and their corresponding
-`android-a`/`android-b` rows are removed and the migration is reported.
+invented or compacted by the writer; BDS simply skips it until the image exists.
+Managed row IDs are reserved for the writer, so a hand-written row using
+`android-a`, `android-b`, or `android-backup` is replaced on the next managed
+install.
 
-The active ID and title record the GPT slot that the installer labels as
-active. The `active` role is functional, not presentation-only. If it disagrees
-with the GPT active slot, BDS marks the entry `SlotMismatch`; when that row is
-the configured default, BDS withholds unattended launch and forces the menu.
-Re-run the installation with the correct slot to repair the label.
+The `active` role is functional metadata, not presentation. BDS compares a
+slot claim in an active row with the GPT active slot. If they disagree it
+marks the row `SlotMismatch`, and withholds unattended launch when that row is
+the configured default. Re-run an install with the correct explicit slot to
+repair the label. An install with an unknown slot is refused: use `--slot a`
+or `--slot b`; `--inactive` additionally requires known active-slot metadata
+and its explicit safety acknowledgement.
 
-`role backup` identifies the previous generation and is also functional menu
-metadata. The backup row is managed because its image is `boot_backup.efi`, a
-path understood by the BDS. A row naming `boot_a.efi` or `boot_b.efi` is not a
-managed slot row and its configured mode has no effect.
+## A/B generation lifecycle and legacy migration
 
-## A/B generation lifecycle
+An install updates the selected slot in place. Before committing the new
+triplet, `canoe-bootmgr` copies that slot's existing triplet to
+`boot_backup.efi` with its matching sidecars. Thus `boot_backup.efi` is the
+previous generation of the last-updated slot, not a permanent third slot. If
+the selected slot had no valid triplet, the backup triplet is removed. A
+`--both` install updates both slots in a defined transaction; the final
+backup is still the previous generation of the last slot updated.
 
-On the first install, the selected slot becomes the active row and
-`boot.efi` is the only generation. On an update, the live triplet is first
-moved to `boot_backup.efi`, with a sidecar removed when its matching source was
-absent; the new triplet becomes `boot.efi`. The backup row therefore carries the
-previous slot's loader and the previous generation together.
+The singular `boot.efi` name is retired from new installs. For migration,
+the writer accepts a complete legacy `boot.efi` triplet and copies it to the
+explicit target slot when that slot has no valid triplet, then removes the
+legacy files. A valid legacy triplet is removed without copying when the target
+already has a valid triplet; an incomplete legacy set is quarantined. After
+migration, only the per-slot names and (when present) `boot_backup.efi` remain.
+The old `boot.efi` name is retained only as a BDS compatibility probe for
+pre-b2 roots; it is not a current managed install destination.
 
-After an OTA, press the module's **Flash To Other Slot** action before rebooting.
-It derives the loader for the slot that will boot next and labels the new active
-row with that slot. If the action is skipped, the new slot has no managed loader
-and boots stock; no configuration row can make a stock ABL load BDS.
+After an OTA, keep the device in the running system and use the module's
+**Install to inactive slot** action before rebooting. It must receive target
+slot metadata, installs only that inactive slot, and refuses to relabel or
+fall back to the running slot. If it is skipped, the new slot has no managed
+loader and boots stock; no configuration row can make a stock ABL load BDS.
 
 ## Sidecars and modes
 
-Only the managed paths `boot.efi` and `boot_backup.efi` have sidecars read by
-BDS. For those paths, `.gm2p` is the 120-byte KeyMint profile and `.tzmap` is the
-256-byte TrustZone interface map belonging to that exact loader. Per-image
-sidecars are not honoured for every row: hand-added or `boot_a.efi`/`boot_b.efi`
-rows are passthrough rows, so their sidecars are never read.
+Only the managed paths `boot_a.efi`, `boot_b.efi`, and `boot_backup.efi` have
+sidecars interpreted by BDS. Per-image sidecars on hand-added rows are not
+honoured. A row with one of the managed paths on removable media is still a
+passthrough row; managed policy is for the device boot root only.
 
 Mode 0 is a hook-free passthrough. Mode 1 projects the locked DeviceInfo view
 and enables the normal managed hooks. Mode 2 additionally uses the matching
-profile. A menu mode is a session-only override for the next launch; it is never
-written to this file. A per-entry mode applies to that entry, with global
-`mode` as the fallback.
+profile for that managed loader. A menu mode is a session-only override for the
+next launch; it is never written to this file. A per-entry mode applies to that
+entry, with global `mode` as the fallback.
 
 A successful Mode 2 derivation means only that `vbmeta` parsed and carries a
 signature and public-key blob. It does not prove that the key is the OEM's; no
@@ -166,6 +189,10 @@ the chosen action before the decision.
 
 ## Example
 
+This hand-authored example has two valid slot triplets and a previous
+generation. The managed installer may choose different rows based on which
+triplets exist; it does not create a default automatically.
+
 ```text
 version 1
 generation 4
@@ -175,10 +202,16 @@ mode 1
 devinfo-repair asneeded
 
 entry android-a
-  title Android (slot A)
-  image boot.efi
+  title Android A
+  image boot_a.efi
   mode 1
   role active
+
+entry android-b
+  title Android B
+  image boot_b.efi
+  mode 1
+  role inactive
 
 entry android-backup
   title Android (previous)
@@ -190,7 +223,9 @@ entry android-backup
 ## Empty or invalid configuration
 
 No file, an invalid `version`, or a file with no usable entry is not itself an
-error. BDS probes the known managed paths `boot.efi` and `boot_backup.efi` and
-shows the menu rather than launching unattended when configuration is missing.
-An empty boot root with neither `canoe.cfg` nor `boot.efi` is first run and
-enters Super Fastboot so the operator can install the chain.
+error. BDS probes the known managed paths `boot.efi` (pre-b2 compatibility),
+`boot_a.efi`, `boot_b.efi`, and `boot_backup.efi`, then shows the menu rather
+than launching unattended when configuration is missing. An empty or
+unreachable boot root with none of those paths is first run: BDS shows its
+first-run screen, whose timeout/default is **Enter fastboot**; Volume Up is the
+only key that opts into the normal menu so discovered rows can be inspected.

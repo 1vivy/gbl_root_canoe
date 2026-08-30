@@ -1,8 +1,9 @@
 # `canoe.cfg`——启动根目录契约
 
-`canoe.cfg` 是 7.x 的 BDS 菜单状态。BDS 只读取该文件；电脑端 Python
-事务与设备端安装器负责写入。文件位于 `persist/efisp` 下，原始
-`efisp` 分区只包含 `BDS.efi`。
+`canoe.cfg` 是 7.x 的 BDS 菜单状态。7.0.0-b2 保持下文所述语法不变；
+本版本只将受管理 Android 文件与启动项的生命周期从共享加载器改为独立的
+A/B 三件套。BDS 只读取该文件；电脑端的 `canoe-bootmgr` 事务与设备端模块
+负责写入。文件位于 `persist/efisp` 下，原始 `efisp` 分区只包含 `BDS.efi`。
 
 ## 位置与语法
 
@@ -81,48 +82,62 @@ entry grub
 `size`，与其 `MemoryMapLib.c` 中的 `UEFI_FD` 行一致；对 Project-Aloha 配置，
 它们是 `StackBase` 与 `StackSize`。上面的取值来自一加 15（`infiniti`）。
 
-## 两个受管理启动项
+## 受管理的 A/B 三件套
 
-每次安装只会写入以下受管理启动项，不会写入其他受管理启动项：
+7.0.0-b2 写入每个已安装槽位的一组三件套：
 
-| 行 | ID | 标题 | 镜像 | role | 写入时机 |
-| --- | --- | --- | --- | --- | --- |
-| 活动 | `android-a` 或 `android-b` | `Android (slot A)` 或 `Android (slot B)` | `boot.efi` | `active` | 每次安装；始终带 `default` |
-| 备份 | `android-backup` | `Android (previous)` | `boot_backup.efi` | `backup` | `boot_backup.efi` 非空时；为空时删除 |
+| 槽位 | ID | `canoe-bootmgr` 写入的标题 | 镜像 | 附属文件 |
+| --- | --- | --- | --- | --- |
+| A | `android-a` | `Android A` | `boot_a.efi` | `boot_a.efi.gm2p`、`boot_a.efi.tzmap` |
+| B | `android-b` | `Android B` | `boot_b.efi` | `boot_b.efi.gm2p`、`boot_b.efi.tzmap` |
+| 上一世代 | `android-backup` | `Android (previous)` | `boot_backup.efi` | `boot_backup.efi.gm2p`、`boot_backup.efi.tzmap` |
+
+`boot_a.efi` 与 `boot_b.efi` 是相互独立的受管理加载器。每个 `.gm2p`
+附属文件必须正好 120 字节，`.tzmap` 必须正好 256 字节，并且必须属于
+旁边的那个加载器；备份三件套使用相同大小。
+
+写入器只会为拥有有效已安装三件套的槽位写入 `android-a` 或 `android-b`，
+不会为另一个槽位创建空占位行。安装器标记的活动槽位为 `role active`，
+另一个已安装槽位为 `role inactive`。只有 `boot_backup.efi` 与两个匹配的
+附属文件构成有效上一世代时，才保留 `android-backup`。安装器刷新受管理
+启动项，但不会自动创建 `default`；需要默认项时，使用 boot manager 的
+default 命令显式设置。
 
 手动添加的启动项会原样保留。镜像不存在时，写入器不会自行创建或压缩该行；
-BDS 会等到镜像出现后才能启动它。对旧的 `boot_a.efi` 与 `boot_b.efi` 行的
-显式迁移是唯一例外：删除这些加载器、对应附属文件以及
-`android-a`/`android-b` 行，并报告迁移结果。
+BDS 会等到镜像出现后才启动它。受管理 ID 保留给写入器使用；手写的
+`android-a`、`android-b` 或 `android-backup` 会在下一次受管理安装时被替换。
 
-活动 ID 与标题记录安装器标记的 GPT 活动槽位。`active` role 不是仅用于呈现：
-若它与 GPT 活动槽位不一致，BDS 会标记 `SlotMismatch`；当该行是配置的默认项
-时，BDS 会禁止无人值守启动并强制显示菜单。用正确槽位重新安装即可修复标记。
+`active` role 是功能性元数据，而不只是显示文字。BDS 会将 active 行对槽位
+的声明与 GPT 活动槽位比较；不一致时标记 `SlotMismatch`，若该行是默认项，
+则禁止无人值守启动。用正确的显式槽位重新安装即可修复标签。未知槽位会被
+拒绝：使用 `--slot a` 或 `--slot b`；`--inactive` 还要求已知活动槽位元数据
+以及明确的安全确认。
 
-`role backup` 标识上一世代，也参与 BDS 的菜单处理。备份行是受管理行，因为
-其镜像 `boot_backup.efi` 是 BDS 认识的路径。命名为 `boot_a.efi` 或 `boot_b.efi`
-的行不是受管理槽位行，其配置模式不会生效。
+## A/B 世代生命周期与旧版迁移
 
-## A/B 世代生命周期
+安装会原地更新选定槽位。提交新三件套前，`canoe-bootmgr` 将该槽位已有的
+三件套连同附属文件复制到 `boot_backup.efi`。因此 `boot_backup.efi` 是**最后
+更新槽位的上一世代**，而不是永久的第三个槽位。如果选定槽位没有有效三件套，
+就会移除备份三件套。`--both` 会在一个定义明确的事务中更新两个槽位；最终
+备份仍是最后更新槽位的上一世代。
 
-首次安装时，所选槽位成为活动行，`boot.efi` 是唯一的世代。更新时，先将当前
-三件套移动为 `boot_backup.efi`；如果匹配来源缺失，则删除相应附属文件；随后
-将新三件套设为 `boot.efi`。因此备份行同时承载上一槽位的加载器和上一世代。
+单一的 `boot.efi` 名称已从新安装中退役。迁移时，写入器接受完整的旧版
+`boot.efi` 三件套；如果显式目标槽位没有有效三件套，就把它复制到该槽位，
+随后删除旧文件。如果目标已有有效三件套，则直接删除完整的旧版三件套而不
+复制；不完整的旧版集合会被移入隔离区。迁移后只保留按槽位命名的文件，以及
+（存在时的）`boot_backup.efi`。旧 `boot.efi` 仅作为 BDS 对 b2 以前启动根
+目录的兼容探测，不是当前受管理安装目标。
 
-OTA 后，在重启前按下模块的 **Flash To Other Slot**。该操作为即将启动的槽位
-派生加载器，并用该槽位标记新的活动行。若跳过该操作，新槽位没有受管理加载器
-并会以原厂状态启动；任何配置行都不能让原厂 ABL 加载 BDS。
+OTA 后保持系统运行，在重启前使用模块的 **Install to inactive slot** 操作。
+该操作必须获得目标槽位元数据，只安装非活动槽位；它会拒绝把运行槽位重新标记
+为目标或静默回退。若跳过该操作，新槽位没有受管理加载器，会以原厂状态启动；
+任何配置行都不能让原厂 ABL 加载 BDS。
 
 ## 附属文件与模式
 
-BDS 只会读取受管理路径 `boot.efi` 与 `boot_backup.efi` 的附属文件。这些路径的
-`.gm2p` 是 120 字节 KeyMint profile，`.tzmap` 是 256 字节 TrustZone 接口映射，
-两者都必须属于对应的加载器。按镜像保存的附属文件并非每一行都有效：手动添加
-的行或 `boot_a.efi`/`boot_b.efi` 行属于直通行，BDS 永远不会读取它们的附属文件。
-
-Mode 0 是不启用 hook 的直通模式。Mode 1 投射锁定的 DeviceInfo 视图并启用普通
-受管理 hook。Mode 2 还使用匹配的 profile。菜单模式只是下一次启动的会话覆盖，
-不会写入文件。启动项自身的模式优先，全局 `mode` 只作为回退值。
+BDS 只会为受管理路径 `boot_a.efi`、`boot_b.efi` 与 `boot_backup.efi` 解释附属
+文件。手动启动项的按镜像附属文件不会生效。可移动介质上恰好命名为受管理路径
+的行仍是直通行；受管理策略只适用于设备启动根目录。
 
 成功的 Mode 2 派生只能说明 `vbmeta` 已解析并带有签名和公钥 blob，不能证明
 该密钥属于 OEM；本工具无法证明这一点。唯一的自动保护是检测公钥摘要是否相对
