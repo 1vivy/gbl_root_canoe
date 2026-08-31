@@ -133,6 +133,18 @@ version-check:
 			'targets/magisk_module/module/module.prop (versionCode)' "$$version_code" "$$actual"; \
 		fail=1; \
 	fi; \
+	if [ -f submodules/uefi/build/BDS.efi ] && command -v strings >/dev/null 2>&1; then \
+		if ! strings -a -e s submodules/uefi/build/BDS.efi | grep -Fq -- "$$version"; then \
+			printf 'version mismatch: %s publishes a stale canoe-bds fastboot variable, expected %s (run: make -C submodules/uefi build)\n' \
+				'submodules/uefi/build/BDS.efi' "$$version"; \
+			fail=1; \
+		fi; \
+		if ! strings -a -e l submodules/uefi/build/BDS.efi | grep -Fq -- "$$version"; then \
+			printf 'version mismatch: %s draws a stale menu credit, expected %s (run: make -C submodules/uefi build)\n' \
+				'submodules/uefi/build/BDS.efi' "$$version"; \
+			fail=1; \
+		fi; \
+	fi; \
 	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
 	printf 'Version check passed: %s (version code %s)\n' "$$version" "$$version_code"
 

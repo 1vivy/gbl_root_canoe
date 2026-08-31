@@ -12,6 +12,15 @@ build:
 	# builds the platform-driver fallback instead.
 	python3 embed_variant.py blobs/canoe-usbmsd.efi \
 		edk2/QcomModulePkg/Application/LinuxLoader/Generated/CanoeMsdVariantData.c
+	# EDK2 tracks sources and headers, but a changed build flag is invisible to
+	# it. Bumping CANOE_VERSION alone leaves every object holding the previous
+	# -DSFB_BDS_VERSION, and the relink then ships a BDS that reports the old
+	# version as both the `canoe-bds` fastboot variable and the menu credit.
+	# Record what the tree was compiled with and start clean when it moves.
+	@stamp=edk2/Build/.canoe-version; \
+	if [ ! -f $$stamp ] || [ "$$(cat $$stamp)" != '$(CANOE_VERSION)' ]; then \
+		rm -rf edk2/Build/RELEASE_CLANG35; \
+	fi
 	# Remove the previous output first. The EDK2 invocation below is tolerated
 	# with `|| true`, so an existence check alone would accept a FAILED rebuild
 	# whenever a stale artifact was still lying around, and the packages would
@@ -30,6 +39,7 @@ build:
 	fi
 	mkdir -p ./build
 	cp edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ./build/BDS.efi
+	@mkdir -p edk2/Build && printf '%s\n' '$(CANOE_VERSION)' > edk2/Build/.canoe-version
 	@echo "BDS built successfully: build/BDS.efi"
 
 # Build the standalone AndroidToolsPkg applications (RebootTools, ArbTools,

@@ -121,6 +121,18 @@ jobs:
           cmp "artifacts/toolkit_linux/$file" "artifacts/magisk_module/$file"
         done
 
+        # The version reaches the BDS as a -DSFB_BDS_VERSION build flag, which
+        # EDK2 does not track as a dependency: a bump with a warm build tree can
+        # relink a binary that still reports the previous version as both the
+        # `canoe-bds` fastboot variable (CHAR8) and the menu credit (CHAR16).
+        # Every package ships the same BDS, so assert the shipped bytes.
+        version="$(awk -F= '$1 ~ /CANOE_VERSION[ ]*$/ { gsub(/[ ]/, "", $2); print $2 }' version.mk)"
+        test -n "$version"
+        strings -a -e s artifacts/toolkit_linux/BDS.efi | grep -Fq -- "$version" || {
+          echo "shipped BDS.efi publishes a stale canoe-bds variable, expected $version"; exit 1; }
+        strings -a -e l artifacts/toolkit_linux/BDS.efi | grep -Fq -- "$version" || {
+          echo "shipped BDS.efi draws a stale menu credit, expected $version"; exit 1; }
+
         linux_patcher_type="$(file -b artifacts/toolkit_linux/bin/patch_abl)"
         case "$linux_patcher_type" in
           *"ELF 64-bit"*"x86-64"*) ;;
