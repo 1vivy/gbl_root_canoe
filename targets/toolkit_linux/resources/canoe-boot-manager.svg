@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">Canoe Boot Manager</title>
+  <desc id="desc">A blue canoe over a dark boot manager shield</desc>
+  <rect width="128" height="128" rx="20" fill="#14213d"/>
+  <path d="M24 76h80l-10 14H34z" fill="#fca311"/>
+  <path d="M30 63c13 10 55 10 68 0l-5 13H35z" fill="#fff"/>
+  <path d="M53 27h22v35H53z" fill="#4cc9f0"/>
+  <path d="M45 34h38v8H45zm0 14h38v8H45z" fill="#4cc9f0"/>
+</svg>

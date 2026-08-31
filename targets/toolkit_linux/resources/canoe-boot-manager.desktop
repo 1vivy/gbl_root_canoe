@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Canoe Boot Manager
+Comment=Configure and launch Canoe boot entries
+Exec=@CANOE_ROOT@/canoe-gui
+TryExec=@CANOE_ROOT@/canoe-gui
+Icon=@CANOE_ROOT@/canoe-boot-manager.svg
+Terminal=false
+Categories=System;Utility;
+StartupNotify=true
+StartupWMClass=canoe-boot-manager

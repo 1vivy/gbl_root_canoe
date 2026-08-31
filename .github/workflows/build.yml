@@ -84,14 +84,20 @@ jobs:
         test -x artifacts/toolkit_linux/bin/mode2_profile
         test -x artifacts/toolkit_linux/bin/abl_tzmap
         test -x artifacts/toolkit_linux/bin/canoe-bootmgr
+        test -x artifacts/toolkit_linux/bin/canoe-gui
+        test -x artifacts/toolkit_linux/canoe-gui
+        test -x artifacts/toolkit_linux/install-desktop-entry.sh
+        test -f artifacts/toolkit_linux/canoe-boot-manager.desktop
+        grep -Fq '@CANOE_ROOT@' artifacts/toolkit_linux/canoe-boot-manager.desktop
+        test -f artifacts/toolkit_linux/canoe-boot-manager.svg
         test -f artifacts/toolkit_windows/bin/patch_abl.exe
         test -f artifacts/toolkit_windows/bin/mode2_profile.exe
         test -f artifacts/toolkit_windows/bin/abl_tzmap.exe
         test -f artifacts/toolkit_windows/bin/canoe-bootmgr.exe
+        test -f artifacts/toolkit_windows/canoe-gui.exe
         test -f artifacts/toolkit_windows/Platform-Tools/fastboot.exe
         test ! -e artifacts/toolkit_windows/Platform-Tools/adb.exe
         test -f artifacts/toolkit_windows/bin/canoe-ext4.exe
-        test -x artifacts/toolkit_android/bin/patch_abl
         test -x artifacts/toolkit_android/bin/mode2_profile
         test -x artifacts/toolkit_android/bin/abl_tzmap
         test -x artifacts/toolkit_android/bin/canoe-bootmgr
@@ -203,10 +209,20 @@ jobs:
           *"ELF 64-bit"*"x86-64"*) ;;
           *) echo "unexpected Linux canoe-bootmgr: $linux_bootmgr_type"; exit 1 ;;
         esac
+        linux_gui_type="$(file -b artifacts/toolkit_linux/bin/canoe-gui)"
+        case "$linux_gui_type" in
+          *"ELF 64-bit"*"x86-64"*) ;;
+          *) echo "unexpected Linux canoe-gui: $linux_gui_type"; exit 1 ;;
+        esac
         windows_bootmgr_type="$(file -b artifacts/toolkit_windows/bin/canoe-bootmgr.exe)"
         case "$windows_bootmgr_type" in
           *"PE32+ executable"*"x86-64"*) ;;
           *) echo "unexpected Windows canoe-bootmgr: $windows_bootmgr_type"; exit 1 ;;
+        esac
+        windows_gui_type="$(file -b artifacts/toolkit_windows/canoe-gui.exe)"
+        case "$windows_gui_type" in
+          *"PE32+ executable"*"GUI"*"x86-64"*) ;;
+          *) echo "unexpected Windows canoe-gui (expected GUI PE32+): $windows_gui_type"; exit 1 ;;
         esac
         android_bootmgr_type="$(file -b artifacts/toolkit_android/bin/canoe-bootmgr)"
         case "$android_bootmgr_type" in
@@ -270,17 +286,36 @@ jobs:
             *__pycache__*) echo "__pycache__ leaked into $package archive"; exit 1 ;;
           esac
         done
+        for entry in bin/canoe-gui canoe-gui install-desktop-entry.sh canoe-boot-manager.desktop canoe-boot-manager.svg; do
+          unzip -Z1 release/toolkit_linux.zip | grep -Fxq "$entry" || {
+            echo "missing Linux toolkit archive member: $entry"; exit 1;
+          }
+        done
+        unzip -Z1 release/toolkit_windows.zip | grep -Fxq canoe-gui.exe || {
+          echo "missing Windows toolkit archive member: canoe-gui.exe"; exit 1;
+        }
 
         # The archive is the deliverable, so assert the modes inside the archive
         # rather than in the build tree they came from.
         rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
-        for exe in canoe \
+        for exe in canoe canoe-gui install-desktop-entry.sh \
                    bin/patch_abl bin/mode2_profile bin/abl_tzmap \
-                   bin/canoe-bootmgr bin/extractfv \
+                   bin/canoe-bootmgr bin/canoe-gui bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in archive: $exe"; exit 1; }
         done
         rm -rf modecheck
+        rm -rf winmodecheck && unzip -q -o release/toolkit_windows.zip -d winmodecheck
+        for exe in winmodecheck/canoe-gui.exe winmodecheck/bin/*.exe; do
+          test -f "$exe" || { echo "missing Windows executable: $exe"; exit 1; }
+          dlls="$(x86_64-w64-mingw32-objdump -p "$exe" | grep -i 'DLL Name' || true)"
+          printf '%s DLL imports:\n%s\n' "$exe" "$dlls"
+          case "$dlls" in
+            *libwinpthread-1.dll*|*libgcc_s_seh-1.dll*|*libstdc++-6.dll*)
+              echo "non-system MinGW runtime imported by $exe"; exit 1 ;;
+          esac
+        done
+        rm -rf winmodecheck
 
 
     # Each artifact carries the packaged .zip, not the loose tree: the zip is

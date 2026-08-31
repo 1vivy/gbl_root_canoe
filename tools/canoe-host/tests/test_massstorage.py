@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Sequence
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Literal
 
 import pytest
 
-from canoelib import massstorage
-from canoelib import massstorage_windows
+from canoelib import bootmgr, massstorage
 from canoelib.errors import CanoeError
+from canoelib.proc import Completed
 
 
 def test_local_boot_root_accepts_mount_and_efisp_directory(tmp_path: Path) -> None:
@@ -27,41 +26,6 @@ def test_local_boot_root_accepts_mount_and_efisp_directory(tmp_path: Path) -> No
     assert from_mount.source is None
     assert from_mount.owned is False
     assert from_efisp.boot_root == from_mount.boot_root
-
-
-def _usb_scsi_tree(root: Path, gadget: str, *, block: str = "sda") -> Path:
-    """Build the resolved sysfs shape of a USB SCSI disk."""
-    sys_block = root / "sys" / "block"
-    block_entry = sys_block / block
-    block_entry.mkdir(parents=True)
-    usb_device = root / "sys" / "devices" / "usb1" / "1-1"
-    usb_device.mkdir(parents=True)
-    vendor, product = gadget.split(":", maxsplit=1)
-    (usb_device / "idVendor").write_text(vendor, encoding="ascii")
-    (usb_device / "idProduct").write_text(product, encoding="ascii")
-    (root / "sys" / "bus" / "usb").mkdir(parents=True)
-    (usb_device / "subsystem").symlink_to(root / "sys" / "bus" / "usb")
-    (block_entry / "device").symlink_to(usb_device, target_is_directory=True)
-    return sys_block
-
-
-def test_usb_disks_read_identity_off_resolved_scsi_chain(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Given a USB SCSI tree, identify the disk and skip unrelated buses."""
-    sys_block = _usb_scsi_tree(tmp_path, massstorage._MSC_GADGET_ID)
-    monkeypatch.setattr(massstorage, "_SYS_BLOCK", sys_block)
-
-    disks = massstorage._usb_disks()
-
-    assert disks == {"sda": "05c6:f000"}
-    assert massstorage._exported_disks(disks) == ("sda",)
-
-
-def test_exported_disks_accept_canoe_variant_identity() -> None:
-    """Given the Canoe VID/PID, select its raw LUN."""
-    disks: dict[str, str | None] = {"sda": massstorage._MSC_CANOE_GADGET_ID}
-    assert massstorage._exported_disks(disks) == ("sda",)
 
 
 def test_local_boot_root_rejects_file_and_non_directory_efisp(tmp_path: Path) -> None:
@@ -129,80 +93,95 @@ def test_ext4_helper_reads_writes_and_reads_real_image(tmp_path: Path) -> None:
     assert read_back.stdout == payload
 
 
-def test_find_export_names_modeswitch_remediation_for_stock_identity(
+def _candidate(
+    path: str,
+    identity: str | None,
+    *,
+    mounted_at: str | None = None,
+    kind: Literal["block", "image", "dir"] = "block",
+) -> bootmgr.SourceCandidate:
+    """Build a detector row with the contract's stable defaults."""
+    return bootmgr.SourceCandidate(
+        kind=kind,
+        path=path,
+        identity=identity,
+        model="Canoe persist",
+        size_bytes=128 * 1024 * 1024,
+        boot_root="/efisp",
+        boot_root_present=True,
+        readable=True,
+        writable=False,
+        needs_privilege=True,
+        mounted_at=mounted_at,
+        why="test source",
+    )
+
+
+def test_bootmgr_detect_parses_canonical_source_response(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Given stock USB identity with no LUN, name its operator remediation."""
-    sys_block = _usb_scsi_tree(tmp_path, massstorage._MSC_GADGET_ID)
-    monkeypatch.setattr(massstorage, "_SYS_BLOCK", sys_block)
-    monkeypatch.setattr(massstorage, "_DEV_ROOT", tmp_path / "dev-missing")
+    """Given source.detect JSON, parse every field without a host-side detector."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "canoe-bootmgr").write_bytes(b"stub")
+    payload = (
+        '{"ok":true,"kind":"source.detect","sources":['
+        '{"kind":"block","path":"/dev/sda","identity":"1209:ca0e",'
+        '"model":"Canoe persist","size_bytes":134217728,"boot_root":"/efisp",'
+        '"boot_root_present":true,"readable":true,"writable":false,'
+        '"needs_privilege":true,"mounted_at":null,"why":"exported persist LUN"}]}'
+    )
+    monkeypatch.setattr(bootmgr, "run", lambda command: Completed(0, payload, ""))
 
-    with pytest.raises(CanoeError, match="DisableSwitching=1"):
-        massstorage._find_export(frozenset(), 0)
+    candidates = bootmgr.detect(bootmgr.Toolkit(tmp_path))
+
+    assert len(candidates) == 1
+    assert candidates[0].identity == "1209:ca0e"
+    assert candidates[0].path == "/dev/sda"
+    assert candidates[0].mounted_at is None
 
 
-def test_find_export_keeps_plain_timeout_for_canoe_identity(
+def test_detect_export_preserves_identity_and_mount_safety(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Given Canoe identity with no LUN, report only the missing device."""
-    sys_block = _usb_scsi_tree(tmp_path, massstorage._MSC_CANOE_GADGET_ID)
-    monkeypatch.setattr(massstorage, "_SYS_BLOCK", sys_block)
-    monkeypatch.setattr(massstorage, "_DEV_ROOT", tmp_path / "dev-missing")
+    """Given detector rows, reject foreign or mounted sources and select Canoe raw LUN."""
+    rows = (
+        _candidate("/dev/sda", "1209:ca0e", mounted_at="/run/media/persist"),
+        _candidate("/dev/sdb", "9999:0001"),
+        _candidate("/dev/sdc", "05c6:f000"),
+    )
+    monkeypatch.setattr(bootmgr, "detect", lambda toolkit: rows)
 
-    with pytest.raises(CanoeError, match=r"never presented a LUN\.$"):
-        massstorage._find_export(frozenset(), 0)
+    handle = massstorage._detect_export(tmp_path)
+
+    assert handle is not None
+    assert handle.source == Path("/dev/sdc")
+    assert handle.owned is True
+
+
+def test_find_export_reports_empty_detector_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Given no detector candidates, report an actionable no-LUN error."""
+    monkeypatch.setattr(bootmgr, "detect", lambda toolkit: ())
+
+    with pytest.raises(CanoeError, match="source detect returned no usable candidate"):
+        massstorage._find_export(tmp_path, 0)
 
 
 def test_export_adopts_live_session_without_reasking_fastboot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Given a live export, return its raw source without a second fastboot call."""
-    toolkit = tmp_path / "toolkit"
-    (toolkit / "Platform-Tools").mkdir(parents=True)
-    (toolkit / "Platform-Tools" / "fastboot").write_bytes(b"fastboot")
-    dev = tmp_path / "dev"
-    dev.mkdir()
-    (dev / "sda").write_bytes(b"")
+    """Given a live detector row, return its raw source without fastboot."""
+    row = _candidate("/dev/sda", "1209:ca0e")
+    monkeypatch.setattr(bootmgr, "detect", lambda toolkit: (row,))
 
-    def refuse(*_: Sequence[str], **__: bool) -> None:
+    def refuse(*_: object, **__: object) -> None:
         raise AssertionError("fastboot must not be re-issued during a live export")
 
-    monkeypatch.setattr(massstorage, "_DEV_ROOT", dev)
-    monkeypatch.setattr(massstorage, "_usb_disks", lambda: {"sda": massstorage._MSC_GADGET_ID})
     monkeypatch.setattr(massstorage.subprocess, "Popen", refuse)
 
-    handle = massstorage.export(toolkit)
+    handle = massstorage.export(tmp_path)
 
     assert handle.backend == "ext4"
-    assert handle.source == dev / "sda"
-    assert handle.node == dev / "sda"
-
-
-def test_windows_export_returns_physical_drive_source(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Given a new Windows USB disk, return its raw PhysicalDrive source."""
-    toolkit = tmp_path / "toolkit"
-    fastboot = toolkit / "Platform-Tools" / "fastboot"
-    fastboot.parent.mkdir(parents=True)
-    fastboot.write_bytes(b"fastboot")
-    queries = iter(("", "7\n"))
-
-    def powershell(_: Sequence[str | Path], **__: bool) -> SimpleNamespace:
-        return SimpleNamespace(returncode=0, stdout=next(queries), stderr="")
-
-    class Process:
-        def poll(self) -> int:
-            return 0
-
-    monkeypatch.setattr(massstorage.os, "name", "nt")
-    monkeypatch.setattr(
-        massstorage_windows.shutil, "which", lambda name: f"/mock/{name}"
-    )
-    monkeypatch.setattr(massstorage.subprocess, "run", powershell)
-    monkeypatch.setattr(massstorage.subprocess, "Popen", lambda *_args, **_kwargs: Process())
-
-    handle = massstorage.export(toolkit, timeout=1)
-
-    assert handle.backend == "ext4"
-    assert str(handle.source) == r"\\.\PhysicalDrive7"
+    assert handle.source == Path("/dev/sda")
+    assert handle.node == Path("/dev/sda")

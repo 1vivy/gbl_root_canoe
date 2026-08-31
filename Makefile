@@ -162,6 +162,7 @@ test:
 	cargo test --locked --manifest-path tools/mode2-profile/Cargo.toml
 	cargo test --locked --manifest-path tools/abl-tzmap/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
+	cargo test --locked --manifest-path tools/canoe-gui/Cargo.toml
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
 	$(MAKE) -C tools/canoe-ext4 test

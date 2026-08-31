@@ -112,11 +112,34 @@ export function renderEntries(entries, blsEntries, selectedId, defaultId, onSele
   entries.forEach((entry) => {
     const option = document.createElement("option");
     option.value = entry.id;
-    option.textContent = `${entry.id} - ${entry.title}`;
+    option.textContent = `Android · ${entry.id} · ${entry.title}`;
     defaultSelect.append(option);
   });
-  if (defaultId && entries.some((entry) => entry.id === defaultId)) defaultSelect.value = defaultId;
+  blsEntries.forEach((file) => {
+    const stem = file.name.split("/").pop().replace(/\.conf$/i, "").toLowerCase();
+    const option = document.createElement("option");
+    option.value = `bls:${stem}`;
+    option.textContent = `BLS · bls:${stem} · ${file.entry.title || file.name}`;
+    defaultSelect.append(option);
+  });
+  if (defaultId && (entries.some((entry) => entry.id === defaultId) || blsEntries.some((file) => {
+    const stem = file.name.split("/").pop().replace(/\.conf$/i, "").toLowerCase();
+    return defaultId === `bls:${stem}`;
+  }))) defaultSelect.value = defaultId;
   renderEntryDetail(entries.find((entry) => entry.id === selectedId) || entries[0]);
+}
+
+export function renderPolicy(policy) {
+  const menuMode = policy && policy.menu_mode === "menu" ? "menu" : "silent";
+  const keyWindow = Number.isInteger(policy?.key_window_ms) ? policy.key_window_ms : 1200;
+  const menuTimeout = Number.isInteger(policy?.menu_timeout_s) ? policy.menu_timeout_s : 5;
+  element("menuModeSelect").value = menuMode;
+  element("keyWindowInput").value = String(keyWindow);
+  element("menuTimeoutInput").value = String(menuTimeout);
+  element("menuTimeoutInput").disabled = menuMode === "silent";
+  element("menuModeHint").textContent = menuMode === "silent"
+    ? "Silent boots the persisted default unless VOL UP opens the menu."
+    : "Menu always opens after the key window; the countdown launches the default unless a key cancels it.";
 }
 
 export function renderMode(entry) {

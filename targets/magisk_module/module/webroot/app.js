@@ -1,5 +1,5 @@
 import { core, CoreError, readSlotStatus } from "./protocol.js";
-import { element, renderEntries, renderMode, renderSlot, setBusy } from "./render.js";
+import { element, renderEntries, renderMode, renderPolicy, renderSlot, setBusy } from "./render.js";
 import { toast } from "./kernelsu.js";
 
 const state = {
@@ -8,6 +8,7 @@ const state = {
   entries: [],
   blsEntries: [],
   defaultId: null,
+  policy: null,
   selectedId: null,
   busy: false,
 };
@@ -49,14 +50,17 @@ async function refreshEntries() {
   const entries = await core({ verb: "entry.list" });
   const bls = await core({ verb: "bls.list" });
   const defaultResult = await core({ verb: "default.get" });
+  const configResult = await core({ verb: "config.show" });
   state.entries = Array.isArray(entries.entries) ? entries.entries : [];
   state.blsEntries = Array.isArray(bls.entries) ? bls.entries : [];
   state.defaultId = typeof defaultResult.default === "string" ? defaultResult.default : null;
+  state.policy = configResult.config || configResult;
   if (!state.entries.some((entry) => entry.id === state.selectedId)) {
     state.selectedId = state.entries.length ? state.entries[0].id : null;
   }
   renderEntries(state.entries, state.blsEntries, state.selectedId, state.defaultId, selectEntry);
   renderMode(selectedEntry());
+  renderPolicy(state.policy);
   appendLog(JSON.stringify({ operation: "entry.list", count: state.entries.length, bls: state.blsEntries.length }));
 }
 
@@ -153,6 +157,17 @@ function saveDefault() {
   if (!id) return;
   return runAction(() => core({ verb: "default.set", id }));
 }
+function savePolicy() {
+  const menuMode = element("menuModeSelect").value;
+  const keyWindow = Number(element("keyWindowInput").value);
+  const menuTimeout = Number(element("menuTimeoutInput").value);
+  return runAction(() => core({
+    verb: "config.set-policy",
+    menu_mode: menuMode,
+    key_window_ms: keyWindow,
+    menu_timeout_s: menuTimeout,
+  }));
+}
 
 function saveMode() {
   const entry = selectedEntry();
@@ -169,6 +184,10 @@ function bind() {
   element("otaButton").addEventListener("click", ota);
   element("saveDefaultButton").addEventListener("click", saveDefault);
   element("saveEntryModeButton").addEventListener("click", saveMode);
+  element("savePolicyButton").addEventListener("click", savePolicy);
+  element("menuModeSelect").addEventListener("change", () => {
+    element("menuTimeoutInput").disabled = element("menuModeSelect").value === "silent";
+  });
   element("installTarget").addEventListener("change", () => {
     element("inactiveConfirmation").hidden = element("installTarget").value !== "inactive";
   });

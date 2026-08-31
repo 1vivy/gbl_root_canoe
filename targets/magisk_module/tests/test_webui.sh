@@ -25,6 +25,7 @@ window.__ksuMock = {
   requests: [],
   toasts: [],
   entries: [{id: "android-a", title: "Android A", image: "boot_a.efi", role: "active", mode: 2, options: null, unknown: []}],
+  policy: {menu_mode: "silent", key_window_ms: 1200, menu_timeout_s: 5},
 };
 window.ksu = {
   toast(message) { window.__ksuMock.toasts.push(message); },
@@ -56,12 +57,27 @@ window.ksu = {
         respond(0, JSON.stringify({ok: true, operation: "entry.list", generation: 3, entries: window.__ksuMock.entries}), "");
         return;
       case "bls.list":
-        respond(0, JSON.stringify({ok: true, operation: "bls.list", entries: [{name: "android.conf", entry: {title: "Android", kind: "efi", image: "\\boot_a.efi", initrd: null, devicetree: null, options: "", unknown: [], rejected_lines: 0}}]}), "");
+        respond(0, JSON.stringify({ok: true, operation: "bls.list", entries: [{name: "pmos.conf", entry: {title: "postmarketOS", kind: "linux", image: "\\vmlinuz", initrd: "\\initrd", devicetree: null, options: "", unknown: [], rejected_lines: 0}}]}), "");
         return;
       case "default.get":
         respond(0, JSON.stringify({ok: true, operation: "default.get", default: "android-a"}), "");
         return;
+      case "config.show":
+        respond(0, JSON.stringify({ok: true, operation: "config.show", config: window.__ksuMock.policy}), "");
+        return;
+      case "config.set-policy":
+        if (request.key_window_ms > 10000 || request.menu_timeout_s > 300) {
+          respond(0, JSON.stringify({ok: false, error: {code: "policy.range", message: "key_window_ms must be in 0..=10000"}}), "");
+          return;
+        }
+        window.__ksuMock.policy = {menu_mode: request.menu_mode, key_window_ms: request.key_window_ms, menu_timeout_s: request.menu_timeout_s};
+        respond(0, JSON.stringify({ok: true, operation: "config.policy", config: window.__ksuMock.policy, generation: 4, mark: "policy"}), "");
+        return;
       case "default.set":
+        if (request.id === "bls:missing") {
+          respond(0, JSON.stringify({ok: false, error: {code: "default.target", message: "default target bls:missing was not discovered"}}), "");
+          return;
+        }
         respond(0, JSON.stringify({ok: true, operation: "default.set", generation: 4, default: request.id}), "");
         return;
       case "entry.mode":
@@ -75,6 +91,7 @@ window.ksu = {
         return;
       default:
         respond(1, JSON.stringify({ok: false, error: {code: "request", message: `unknown ${request.verb}`}}), "");
+        return;
     }
   }
 };
@@ -95,12 +112,16 @@ const assert = (condition, message) => {
 const requests = () => window.__ksuMock.requests.map(item => item.request);
 
 try {
-  await waitFor(() => document.querySelector("#activeSlot").textContent === "A", "slot status was not rendered");
+  await waitFor(() => document.querySelector("#activeSlot").textContent === "A" && document.querySelector("#entryTableBody tr[data-entry-id='android-a']"), "slot status or entries were not rendered");
   assert(document.querySelector("#slotSource").textContent.includes("bootctl"), "slot provenance omitted bootctl");
-  assert(document.querySelector("#entryTableBody tr[data-entry-id=android-a]"), "entry.list row was not rendered");
-  assert(document.querySelector("#blsTableBody td").textContent === "android.conf", "bls.list row was not rendered");
+  assert(document.querySelector("#entryTableBody tr[data-entry-id='android-a']"), "entry.list row was not rendered");
+  assert(document.querySelector("#blsTableBody td").textContent === "pmos.conf", "bls.list row was not rendered");
   assert(document.querySelector("#entryDetail").textContent.includes("boot_a.efi"), "entry detail was not rendered");
   assert(document.querySelector("#defaultSelect").value === "android-a", "default.get was not rendered");
+  assert(document.querySelector("#defaultSelect option[value='bls:pmos']").textContent.includes("BLS"), "BLS default candidate was not rendered");
+  assert(document.querySelector("#menuModeSelect").value === "silent", "silent policy was not rendered");
+  assert(document.querySelector("#keyWindowInput").value === "1200", "key window was not rendered");
+  assert(document.querySelector("#menuTimeoutInput").value === "5" && document.querySelector("#menuTimeoutInput").disabled, "silent timeout control was not disabled");
   assert(document.querySelector("meta[http-equiv=Content-Security-Policy]"), "CSP meta is missing");
 
   document.querySelector("#installTarget").value = "inactive";
@@ -117,13 +138,33 @@ try {
   await waitFor(() => requests().some(request => request.verb === "install"), "install request did not reach the core");
   const installRequest = requests().find(request => request.verb === "install");
   await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "install did not settle");
+  document.querySelector("#menuModeSelect").value = "menu";
+  document.querySelector("#menuModeSelect").dispatchEvent(new Event("change"));
+  assert(!document.querySelector("#menuTimeoutInput").disabled, "menu timeout stayed disabled in Menu mode");
+  document.querySelector("#keyWindowInput").value = "2500";
+  document.querySelector("#menuTimeoutInput").value = "12";
+  document.querySelector("#savePolicyButton").click();
+  await waitFor(() => requests().some(request => request.verb === "config.set-policy"), "policy request did not reach the core");
+  const policyRequest = requests().find(request => request.verb === "config.set-policy");
+  assert(policyRequest.menu_mode === "menu" && policyRequest.key_window_ms === 2500 && policyRequest.menu_timeout_s === 12, "policy request fields were incorrect");
+  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "policy did not settle");
 
-  document.querySelector("#saveEntryModeButton").click();
-  await waitFor(() => requests().some(request => request.verb === "entry.mode"), "entry.mode request did not reach the core");
-  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "mode did not settle");
+  document.querySelector("#defaultSelect").value = "bls:pmos";
   document.querySelector("#saveDefaultButton").click();
-  await waitFor(() => requests().some(request => request.verb === "default.set"), "default.set request did not reach the core");
-  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "default did not settle");
+  await waitFor(() => requests().some(request => request.verb === "default.set" && request.id === "bls:pmos"), "BLS default.set request did not reach the core");
+  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "BLS default did not settle");
+  const missingOption = document.createElement("option");
+  missingOption.value = "bls:missing";
+  missingOption.textContent = "BLS · bls:missing · missing";
+  document.querySelector("#defaultSelect").append(missingOption);
+  document.querySelector("#defaultSelect").value = "bls:missing";
+  document.querySelector("#saveDefaultButton").click();
+  await waitFor(() => document.querySelector("#taskMessage").textContent.includes("default.target: default target bls:missing was not discovered"), "missing BLS refusal was not rendered");
+
+  document.querySelector("#keyWindowInput").value = "10001";
+  document.querySelector("#savePolicyButton").click();
+  await waitFor(() => document.querySelector("#taskMessage").textContent.includes("policy.range: key_window_ms must be in 0..=10000"), "policy range refusal was not rendered");
+  document.querySelector("#keyWindowInput").value = "1200";
 
   document.querySelector("#otaButton").click();
   await waitFor(() => requests().some(request => request.verb === "ota-apply"), "ota-apply request did not reach the core");

@@ -524,6 +524,10 @@ tbody tr:last-child td {
   width: 100%;
   margin-top: var(--space-2);
 }
+.text-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
 
 .entry-detail {
   display: grid;
