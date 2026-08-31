@@ -44,11 +44,16 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
         | Success::EntryMode { mark, .. } => format!("{mark}\n"),
         Success::DefaultGet { default, .. } => format!("{}\n", default.as_deref().unwrap_or("")),
         Success::DefaultSet { default, .. } => format!("default {default}\n"),
+        // An empty enumeration is a result, not silence: printing nothing left the
+        // operator unable to tell a working probe from a broken one.
+        Success::SourceDetect { sources, .. } if sources.is_empty() => {
+            "no candidate boot-root sources detected\n".to_owned()
+        }
         Success::SourceDetect { sources, .. } => sources
             .iter()
             .map(|source| {
                 format!(
-                    "{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{}{}\n",
                     match source.kind {
                         crate::detect::SourceKind::Block => "block",
                         crate::detect::SourceKind::Image => "image",
@@ -56,7 +61,12 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
                     },
                     source.path.display(),
                     source.identity.as_deref().map_or("", |identity| identity),
-                    source.model
+                    source.model,
+                    if source.needs_privilege {
+                        "\t(needs elevation)"
+                    } else {
+                        ""
+                    }
                 )
             })
             .collect(),

@@ -98,7 +98,7 @@ fn read_blocks(probe: &LinuxProbe, mounts: &[Mount]) -> Vec<SourceCandidate> {
             boot_root_present,
             readable,
             writable,
-            needs_privilege: !writable,
+            needs_privilege: !(readable && writable),
             mounted_at,
             why: "exported persist LUN (canoe identity)".to_owned(),
         });
@@ -203,7 +203,7 @@ fn add_dir_candidate(
         boot_root_present: path.join("efisp").is_dir() || path.join("canoe.cfg").is_file(),
         readable,
         writable,
-        needs_privilege: !writable,
+        needs_privilege: !(readable && writable),
         mounted_at: Some(path.to_path_buf()),
         why: why.to_owned(),
     });
@@ -225,7 +225,7 @@ fn add_block_alias(
         boot_root_present: false,
         readable,
         writable,
-        needs_privilege: !writable,
+        needs_privilege: !(readable && writable),
         mounted_at: None,
         why: "Android /dev/block/by-name/persist".to_owned(),
     });
@@ -235,18 +235,28 @@ fn boot_root_exists(mount: &Path) -> bool {
     mount.join("efisp").is_dir() || mount.join("canoe.cfg").is_file() || mount.ends_with("efisp")
 }
 
+/// Whether *this* process can read and write the node.
+///
+/// Mode bits alone answer a different question. `/dev/sda` is `brw-rw---- root:disk`,
+/// so `mode & 0o222` is set for a caller who is not root and not in `disk`, and
+/// `fs::metadata` succeeds for anyone who can traverse `/dev`. Reporting those as
+/// access made every Linux candidate claim it needed no privilege, and the operator
+/// only learned otherwise when the attach failed. Ask the kernel with the effective
+/// ids instead.
 fn access(path: &Path) -> (bool, bool) {
-    let Ok(metadata) = fs::metadata(path) else {
-        return (false, false);
-    };
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = metadata.permissions().mode();
-        return (true, mode & 0o222 != 0);
+        use nix::fcntl::AtFlags;
+        use nix::unistd::{AccessFlags, faccessat};
+        let reachable =
+            |mode| faccessat(None, path, mode, AtFlags::AT_EACCESS).is_ok();
+        return (reachable(AccessFlags::R_OK), reachable(AccessFlags::W_OK));
     }
     #[cfg(not(unix))]
     {
+        let Ok(metadata) = fs::metadata(path) else {
+            return (false, false);
+        };
         (true, !metadata.permissions().readonly())
     }
 }

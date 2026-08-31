@@ -41,14 +41,18 @@ pub struct SourceCandidate {
 /// USB identities presented by a BDS mass-storage export.
 pub const EXPORT_IDENTITIES: [&str; 2] = ["05c6:f000", "1209:ca0e"];
 
-/// Return whether a source is a readable, unmounted Canoe block export.
+/// Return whether a source is an unmounted Canoe block export.
+///
+/// Deliberately independent of whether the caller can open it. This answers what
+/// the node *is*, so a live export is still adopted rather than started twice when
+/// the operator has not elevated yet; whether privilege is needed to use it is a
+/// separate axis the candidate reports as `needs_privilege`.
 pub fn is_export_candidate(candidate: &SourceCandidate) -> bool {
     candidate.kind == SourceKind::Block
         && candidate
             .identity
             .as_deref()
             .is_some_and(|identity| EXPORT_IDENTITIES.contains(&identity))
-        && candidate.readable
         && candidate.mounted_at.is_none()
 }
 
@@ -129,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn export_candidate_accepts_supported_unmounted_readable_block() {
+    fn export_candidate_accepts_supported_unmounted_block() {
         assert!(super::is_export_candidate(&candidate()));
     }
 
@@ -148,10 +152,14 @@ mod tests {
     }
 
     #[test]
-    fn export_candidate_rejects_unreadable_source() {
+    fn export_candidate_still_identifies_an_export_the_caller_cannot_open() {
+        // The node is an export whether or not this process has been elevated.
+        // Rejecting it here made an unprivileged caller start a second export
+        // over a live one instead of adopting it.
         let mut value = candidate();
         value.readable = false;
-        assert!(!super::is_export_candidate(&value));
+        value.writable = false;
+        assert!(super::is_export_candidate(&value));
     }
 
     #[test]
