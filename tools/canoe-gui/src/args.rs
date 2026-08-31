@@ -6,6 +6,7 @@ use thiserror::Error;
 pub struct AppOptions {
     pub smoke: bool,
     pub boot_root: PathBuf,
+    pub boot_root_seen: bool,
     pub source: Option<PathBuf>,
     pub bootmgr: Option<PathBuf>,
     pub lang_zh: bool,
@@ -70,6 +71,7 @@ pub fn parse() -> Result<AppOptions, ArgsError> {
     Ok(AppOptions {
         smoke,
         boot_root,
+        boot_root_seen,
         source,
         bootmgr,
         lang_zh,

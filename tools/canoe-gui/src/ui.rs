@@ -2,16 +2,18 @@ use eframe::egui;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::connect::remembered_source;
+use crate::detect::SourceCandidate;
 use crate::model::{BlsFile, ConfigDocument, ConfigEntry, Role};
 use crate::protocol::{BootRoot, BootmgrClient, cap_log_message};
 use crate::slot_model::SlotStatus;
 use crate::text::{TextKey, text};
-
 const MAX_LOG_ROWS: usize = 80;
 const CJK_FONT: &[u8] = include_bytes!("../assets/NotoSansCJK-Regular.ttc");
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Screen {
+    Connect,
     Entries,
     Editor,
     Bls,
@@ -60,7 +62,7 @@ impl EditorState {
     }
 }
 pub(crate) struct GuiApp {
-    pub(crate) client: BootmgrClient,
+    pub(crate) client: Option<BootmgrClient>,
     pub(crate) bootmgr_path: PathBuf,
     pub(crate) root_path: PathBuf,
     pub(crate) root_input: String,
@@ -86,27 +88,40 @@ pub(crate) struct GuiApp {
     pub(crate) logs: VecDeque<String>,
     pub(crate) language_zh: bool,
     pub(crate) status: String,
+    pub(crate) candidates: Vec<SourceCandidate>,
+    pub(crate) manual_source: String,
+    pub(crate) source_is_block: bool,
+    pub(crate) elevation: Option<crate::elevate::ElevationAction>,
 }
 
 impl GuiApp {
     pub(crate) fn new(
         cc: &eframe::CreationContext<'_>,
-        client: BootmgrClient,
+        client: Option<BootmgrClient>,
         bootmgr_path: PathBuf,
-        target: BootRoot,
+        target: Option<BootRoot>,
         language_zh: bool,
     ) -> Self {
         install_fonts(&cc.egui_ctx);
-        let source_is_ext4 = matches!(target, BootRoot::Ext4Source(_));
-        let root_path = target.path().to_owned();
+        let source_is_ext4 = target
+            .as_ref()
+            .is_some_and(|root| matches!(root, BootRoot::Ext4Source(_)));
+        let root_path = target
+            .as_ref()
+            .map_or_else(PathBuf::new, |root| root.path().to_owned());
         let root_input = root_path.display().to_string();
+        let screen = if client.is_some() {
+            Screen::Entries
+        } else {
+            Screen::Connect
+        };
         let mut app = Self {
             client,
             bootmgr_path,
             root_path,
             root_input,
             source_is_ext4,
-            screen: Screen::Entries,
+            screen,
             entries: Vec::new(),
             selected_id: None,
             editor: EditorState::default(),
@@ -127,11 +142,24 @@ impl GuiApp {
             logs: VecDeque::new(),
             language_zh,
             status: String::new(),
+            candidates: Vec::new(),
+            manual_source: String::new(),
+            source_is_block: false,
+            elevation: None,
         };
-        app.refresh();
+        if app.client.is_some() {
+            app.refresh();
+        } else {
+            if let Some((is_ext4, source)) = remembered_source() {
+                app.source_is_ext4 = is_ext4;
+                app.manual_source = source.clone();
+                app.root_input = source;
+            }
+            app.refresh_sources();
+        }
+
         app
     }
-
     pub(crate) fn label(&self, key: TextKey) -> &'static str {
         text(key, self.language_zh)
     }
@@ -144,8 +172,13 @@ impl GuiApp {
 
 impl eframe::App for GuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.screen == Screen::Connect {
+            self.render_connect(ui);
+            return;
+        }
         egui::Panel::top("header").show(ui, |ui| self.header(ui));
         egui::CentralPanel::default().show(ui, |ui| match self.screen {
+            Screen::Connect => self.render_connect(ui),
             Screen::Entries => self.render_entries(ui),
             Screen::Editor => self.render_editor(ui),
             Screen::Bls => self.render_bls(ui),

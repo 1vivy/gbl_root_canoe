@@ -46,6 +46,14 @@ impl ConfigEntry {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MenuMode {
+    Silent,
+    Menu,
+}
+
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum DeviceInfoRepair {
     #[serde(rename = "asneeded")]
@@ -58,11 +66,28 @@ pub enum DeviceInfoRepair {
 pub struct ConfigDocument {
     pub entries: Vec<ConfigEntry>,
     pub generation: u32,
-    pub timeout: u8,
+    #[serde(default = "default_menu_mode")]
+    pub menu_mode: MenuMode,
+    #[serde(default = "default_key_window")]
+    pub key_window_ms: u32,
+    #[serde(default = "default_menu_timeout")]
+    pub menu_timeout_s: u32,
     pub default: Option<String>,
     pub mode: u8,
     pub devinfo_repair: DeviceInfoRepair,
     pub unknown: Vec<RawLine>,
+}
+
+const fn default_menu_mode() -> MenuMode {
+    MenuMode::Silent
+}
+
+const fn default_key_window() -> u32 {
+    1_200
+}
+
+const fn default_menu_timeout() -> u32 {
+    5
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::detect::SourceCandidate;
 use crate::model::{BlsFile, ConfigDocument, ConfigEntry};
 use crate::protocol::ProtocolError;
 use crate::slot_model::{InstallReceipt, Slot, SlotStatus};
@@ -9,6 +10,10 @@ use crate::slot_model::{InstallReceipt, Slot, SlotStatus};
 enum Operation {
     #[serde(rename = "config.show")]
     ConfigShow,
+    #[serde(rename = "config.policy")]
+    ConfigPolicy,
+    #[serde(rename = "source.detect")]
+    SourceDetect,
     #[serde(rename = "entry.list")]
     EntryList,
     #[serde(rename = "entry.set")]
@@ -50,6 +55,7 @@ struct ResponseEnvelope {
     entry: Option<serde_json::Value>,
     mark: Option<String>,
     default: Option<String>,
+    sources: Option<Vec<SourceCandidate>>,
     active_slot: Option<Slot>,
     inactive_slot: Option<Slot>,
     source: Option<String>,
@@ -61,6 +67,14 @@ struct ResponseEnvelope {
 pub enum Response {
     ConfigShow {
         config: ConfigDocument,
+    },
+    ConfigPolicy {
+        config: ConfigDocument,
+        generation: u32,
+        mark: String,
+    },
+    SourceDetect {
+        sources: Vec<SourceCandidate>,
     },
     EntryList {
         generation: u32,
@@ -123,6 +137,14 @@ pub fn parse_response(bytes: &[u8]) -> Result<Response, ProtocolError> {
             .config
             .map(|config| Response::ConfigShow { config })
             .ok_or_else(|| missing("config")),
+        Operation::ConfigPolicy => Ok(Response::ConfigPolicy {
+            config: required(envelope.config, "config")?,
+            generation: required(envelope.generation, "generation")?,
+            mark: required(envelope.mark, "mark")?,
+        }),
+        Operation::SourceDetect => Ok(Response::SourceDetect {
+            sources: required(envelope.sources, "sources")?,
+        }),
         Operation::EntryList => Ok(Response::EntryList {
             generation: required(envelope.generation, "generation")?,
             entries: decode(envelope.entries, "entries")?,

@@ -5,7 +5,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::model::Role;
+use crate::model::{MenuMode, Role};
 
 #[path = "wire.rs"]
 mod wire;
@@ -14,6 +14,10 @@ pub use wire::Response;
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 1_000_000;
 const MAX_LOG_MESSAGE_CHARS: usize = 512;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BootRoot {
     LocalDir(PathBuf),
@@ -33,6 +37,17 @@ impl BootRoot {
 pub enum Request {
     #[serde(rename = "config.show")]
     ConfigShow,
+    #[serde(rename = "config.set-policy")]
+    ConfigSetPolicy {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        menu_mode: Option<MenuMode>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key_window_ms: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        menu_timeout_s: Option<u32>,
+    },
+    #[serde(rename = "source.detect")]
+    SourceDetect,
     #[serde(rename = "entry.list")]
     EntryList,
     #[serde(rename = "entry.set")]
@@ -116,6 +131,8 @@ pub enum ProtocolError {
     ResponseTooLarge,
     #[error("boot manager returned an empty response")]
     EmptyResponse,
+    #[error("boot manager exited with status {code:?}")]
+    Exited { code: Option<i32> },
     #[error("malformed boot manager response: {0}")]
     Malformed(String),
     #[error("boot manager rejected request ({code}): {message}")]
@@ -132,14 +149,24 @@ impl BootmgrClient {
     pub fn connect(program: &Path, root: &BootRoot) -> Result<Self, ProtocolError> {
         let mut command = Command::new(program);
         command.arg("--json");
-        match root {
-            BootRoot::LocalDir(path) => {
-                command.args(["--boot-root"]).arg(path);
-            }
-            BootRoot::Ext4Source(path) => {
-                command.args(["--source"]).arg(path);
-            }
-        }
+        append_root_arguments(&mut command, root);
+        Self::spawn(command)
+    }
+
+    pub fn connect_probe(program: &Path) -> Result<Self, ProtocolError> {
+        Self::connect(program, &BootRoot::LocalDir(PathBuf::from(".")))
+    }
+
+    #[cfg(not(windows))]
+    pub fn connect_pkexec(program: &Path, root: &BootRoot) -> Result<Self, ProtocolError> {
+        let mut command = Command::new("pkexec");
+        command.arg(program).arg("--json");
+        append_root_arguments(&mut command, root);
+        Self::spawn(command)
+    }
+
+    fn spawn(mut command: Command) -> Result<Self, ProtocolError> {
+        configure_command(&mut command);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -170,13 +197,41 @@ impl BootmgrClient {
         bytes.push(b'\n');
         self.stdin.write_all(&bytes)?;
         self.stdin.flush()?;
-        let line = read_bounded_line(&mut self.stdout)?;
+        let line = match read_bounded_line(&mut self.stdout) {
+            Ok(line) => line,
+            Err(error @ ProtocolError::Io(_)) => {
+                if let Ok(Some(status)) = self.child.try_wait() {
+                    return Err(ProtocolError::Exited { code: status.code() });
+                }
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         if line.is_empty() {
             return Err(ProtocolError::EmptyResponse);
         }
         wire::parse_response(&line)
     }
 }
+fn append_root_arguments(command: &mut Command, root: &BootRoot) {
+    match root {
+        BootRoot::LocalDir(path) => {
+            command.args(["--boot-root"]).arg(path);
+        }
+        BootRoot::Ext4Source(path) => {
+            command.args(["--source"]).arg(path);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn configure_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn configure_command(_command: &mut Command) {}
 
 impl Drop for BootmgrClient {
     fn drop(&mut self) {
@@ -213,79 +268,7 @@ fn read_bounded_line(reader: &mut impl BufRead) -> Result<Vec<u8>, ProtocolError
 pub fn cap_log_message(message: &str) -> String {
     message.chars().take(MAX_LOG_MESSAGE_CHARS).collect()
 }
-
 #[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+#[path = "protocol_tests.rs"]
+mod tests;
 
-    use tempfile::tempdir;
-
-    use super::{BootmgrClient, Request, Response};
-
-    #[test]
-    fn client_round_trips_recorded_fixture_responses() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempdir()?;
-        let fixture = directory.path().join("fixture-child");
-        fs::write(&fixture, FIXTURE_SCRIPT)?;
-        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))?;
-        let mut client =
-            BootmgrClient::connect(&fixture, &super::BootRoot::LocalDir(PathBuf::from(".")))?;
-
-        let response = client.request(&Request::EntryList)?;
-        assert!(matches!(
-            response,
-            Response::EntryList { generation: 3, .. }
-        ));
-        let response = client.request(&Request::BlsList)?;
-        assert!(matches!(response, Response::BlsList { entries } if entries.len() == 1));
-        let response = client.request(&Request::SlotStatus {
-            slot: None,
-            bootctl_output: Some("current-slot=a".to_owned()),
-            gpt_active_slot: None,
-        })?;
-        assert!(matches!(
-            response,
-            Response::SlotStatus { status } if status.source == "bootctl"
-        ));
-        Ok(())
-    }
-    #[test]
-    fn ext4_source_uses_global_source_flag() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempdir()?;
-        let fixture = directory.path().join("source-args-fixture");
-        fs::write(&fixture, SOURCE_ARGS_FIXTURE)?;
-        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))?;
-        let source = PathBuf::from("/tmp/canoe-test.ext4");
-        let mut client = BootmgrClient::connect(&fixture, &super::BootRoot::Ext4Source(source))?;
-        let response = client.request(&Request::SlotStatus {
-            slot: None,
-            bootctl_output: None,
-            gpt_active_slot: None,
-        })?;
-        assert!(matches!(response, Response::SlotStatus { .. }));
-        Ok(())
-    }
-
-    const FIXTURE_SCRIPT: &str = r##"#!/bin/sh
-while IFS= read -r request; do
-  case "$request" in
-    *entry.list*) printf '%s\n' '{"ok":true,"operation":"entry.list","generation":3,"entries":[{"id":"android-a","title":"Android A","image":"boot_a.efi","options":null,"mode":1,"role":"active","unknown":[]}]}' ;;
-    *bls.list*) echo '{"ok":true,"operation":"bls.list","entries":[{"name":"linux.conf","entry":{"title":"Canoe Linux","kind":"linux","image":"vmlinuz","initrd":null,"devicetree":null,"options":"root=/dev/vda","unknown":[],"rejected_lines":0}}]}' ;;
-    *slot.status*) echo '{"operation":"slot.status","ok":true,"active_slot":"a","inactive_slot":"b","source":"bootctl","installed":["a"]}' ;;
-  esac
-done
-"##;
-
-    const SOURCE_ARGS_FIXTURE: &str = r##"#!/bin/sh
-if [ "$1" != "--json" ] || [ "$2" != "--source" ] || [ "$3" != "/tmp/canoe-test.ext4" ]; then
-  exit 42
-fi
-while IFS= read -r request; do
-  case "$request" in
-    *slot.status*) echo '{"operation":"slot.status","ok":true,"active_slot":"a","inactive_slot":"b","source":"bootctl","installed":["a"]}' ;;
-  esac
-done
-"##;
-}

@@ -6,16 +6,20 @@ use crate::ui::{EditorState, GuiApp, Screen};
 impl GuiApp {
     pub(crate) fn request(&mut self, request: Request) -> Option<Response> {
         let operation = request_name(&request);
-        match self.client.request(&request) {
+        let result = self.client.as_mut().map(|client| client.request(&request));
+        let Some(result) = result else {
+            self.status = self.label(TextKey::Disconnected).to_owned();
+            return None;
+        };
+        match result {
             Ok(response) => {
                 self.log(format!("{operation}: ok"));
                 self.status = format!("{operation}: ok");
                 Some(response)
             }
             Err(error) => {
-                let detail = error.to_string();
-                self.log(format!("{operation}: {detail}"));
-                self.status = format!("{operation}: {}", crate::protocol::cap_log_message(&detail));
+                let target = self.current_target();
+                self.record_error_for(&error, &target);
                 None
             }
         }
@@ -59,8 +63,10 @@ impl GuiApp {
         };
         match BootmgrClient::connect(&self.bootmgr_path, &target) {
             Ok(client) => {
-                self.client = client;
+                self.client = Some(client);
                 self.root_path = root;
+                self.screen = Screen::Entries;
+                self.elevation = None;
                 self.status = self.label(TextKey::Connected).to_owned();
                 self.log(format!(
                     "{}: {} ({})",
@@ -72,9 +78,32 @@ impl GuiApp {
                         self.label(TextKey::LocalDirectory)
                     }
                 ));
+                crate::connect::remember_source(&target);
                 self.refresh();
             }
-            Err(error) => self.record_error(error),
+            Err(error) => self.record_error_for(&error, &target),
+        }
+    }
+
+    pub(crate) fn refresh_sources(&mut self) {
+        self.source_is_block = false;
+        match BootmgrClient::connect_probe(&self.bootmgr_path) {
+            Ok(mut client) => match client.request(&Request::SourceDetect) {
+                Ok(Response::SourceDetect { sources }) => {
+                    self.candidates = sources;
+                    self.status.clear();
+                    self.elevation = None;
+                }
+                Ok(_) => self.status = "source.detect returned wrong operation".to_owned(),
+                Err(error) => self.record_error_for(
+                    &error,
+                    &BootRoot::LocalDir(PathBuf::from(".")),
+                ),
+            },
+            Err(error) => self.record_error_for(
+                &error,
+                &BootRoot::LocalDir(PathBuf::from(".")),
+            ),
         }
     }
 
@@ -137,6 +166,28 @@ impl GuiApp {
             self.refresh();
         }
     }
+    pub(crate) fn set_policy(
+        &mut self,
+        menu_mode: crate::model::MenuMode,
+        key_window_ms: u32,
+        menu_timeout_s: u32,
+    ) {
+        if let Err(error) = crate::policy::validate(key_window_ms, menu_timeout_s) {
+            self.status = error.to_string();
+            self.log(&self.status.clone());
+            return;
+        }
+        if let Some(Response::ConfigPolicy { config, .. }) =
+            self.request(Request::ConfigSetPolicy {
+                menu_mode: Some(menu_mode),
+                key_window_ms: Some(key_window_ms),
+                menu_timeout_s: Some(menu_timeout_s),
+            })
+        {
+            self.default = config.default.clone();
+            self.config = Some(config);
+        }
+    }
 
     pub(crate) fn show_bls(&mut self, name: String) {
         self.selected_bls = Some(name.clone());
@@ -145,91 +196,37 @@ impl GuiApp {
         }
     }
 
-    pub(crate) fn install(&mut self) {
-        let staged = self.staged_input.trim();
-        if staged.is_empty() {
-            self.log("install refused: staged path is required");
-            return;
-        }
-        if self.install_inactive && !self.inactive_ack {
-            self.log("install refused: inactive-slot acknowledgment is required");
-            return;
-        }
-        let slot = optional_input(&self.install_slot);
-        let active_slot = self
-            .slot_status
-            .as_ref()
-            .and_then(|status| status.active_slot)
-            .map(|slot| slot.label().to_owned());
-        let request = Request::Install {
-            staged: PathBuf::from(staged),
-            slot,
-            both: self.install_both,
-            inactive: self.install_inactive,
-            i_know_inactive_status: self.inactive_ack,
-            active_slot,
-            bootctl_output: optional_input(&self.bootctl_input),
-            gpt_active_slot: optional_input(&self.gpt_input),
-            mode: None,
-            allow_new_signer: false,
-        };
-        if let Some(Response::Install { receipt }) = self.request(request) {
-            self.log(format!(
-                "install receipt: generation {}, {} installed",
-                receipt.generation,
-                receipt.installed.len()
-            ));
-            self.refresh();
+
+    fn current_target(&self) -> BootRoot {
+        let path = PathBuf::from(self.root_input.trim());
+        if self.source_is_ext4 {
+            BootRoot::Ext4Source(path)
+        } else {
+            BootRoot::LocalDir(path)
         }
     }
-
-    pub(crate) fn ota_apply(&mut self) {
-        if !self.ota_ack {
-            self.log("ota-apply refused: explicit inactive-slot confirmation is required");
+    pub(crate) fn record_error_for(&mut self, error: &ProtocolError, target: &BootRoot) {
+        if matches!(error, ProtocolError::Exited { code: Some(126) }) {
+            self.elevation = None;
+            self.status.clear();
             return;
         }
-        let Some(status) = self.slot_status.clone() else {
-            self.log("ota-apply refused: inactive slot metadata unavailable");
-            return;
-        };
-        let Some(target) = status.inactive_slot else {
-            self.log("ota-apply refused: inactive slot metadata unavailable");
-            return;
-        };
-        let staged = self.staged_input.trim();
-        if staged.is_empty() {
-            self.log("ota-apply refused: staged path is required");
-            return;
-        }
-        let request = Request::OtaApply {
-            target_slot: Some(target.label().to_owned()),
-            bootctl_output: optional_input(&self.bootctl_input),
-            gpt_active_slot: optional_input(&self.gpt_input),
-            staged: PathBuf::from(staged),
-            mode: None,
-            allow_new_signer: false,
-        };
-        if let Some(Response::OtaApply { receipt }) = self.request(request) {
-            self.log(format!(
-                "ota-apply receipt: generation {}, {} installed",
-                receipt.generation,
-                receipt.installed.len()
-            ));
-            self.refresh();
-        }
-    }
-
-    pub(crate) fn record_error(&mut self, error: ProtocolError) {
         let detail = error.to_string();
         self.status = format!(
             "{}: {}",
             self.label(TextKey::Disconnected),
             crate::protocol::cap_log_message(&detail)
         );
+        self.elevation = if self.source_is_block {
+            crate::elevate::action_for(error, &self.bootmgr_path, target)
+        } else {
+            None
+        };
         self.log(detail);
     }
-}
 
+
+}
 fn optional_input(value: &str) -> Option<String> {
     (!value.trim().is_empty()).then(|| value.trim().to_owned())
 }
@@ -237,6 +234,8 @@ fn optional_input(value: &str) -> Option<String> {
 fn request_name(request: &Request) -> &'static str {
     match request {
         Request::ConfigShow => "config.show",
+        Request::ConfigSetPolicy { .. } => "config.set-policy",
+        Request::SourceDetect => "source.detect",
         Request::EntryList => "entry.list",
         Request::EntrySet { .. } => "entry.set",
         Request::EntryRemove { .. } => "entry.remove",

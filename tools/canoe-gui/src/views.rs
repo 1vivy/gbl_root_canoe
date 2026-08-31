@@ -15,6 +15,7 @@ impl GuiApp {
                 .clicked()
             {
                 self.source_is_ext4 = false;
+                self.source_is_block = false;
             }
             let ext4_label = self.label(TextKey::Ext4Source);
             if ui
@@ -22,6 +23,7 @@ impl GuiApp {
                 .clicked()
             {
                 self.source_is_ext4 = true;
+                self.source_is_block = false;
             }
             ui.label(self.label(TextKey::BootRoot));
             ui.text_edit_singleline(&mut self.root_input);
