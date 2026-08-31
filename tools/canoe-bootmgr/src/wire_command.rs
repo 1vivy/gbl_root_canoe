@@ -1,10 +1,10 @@
 use crate::artifact::ArtifactSpec;
 use crate::build::BuildArgs;
 use crate::cli::{
-    BlsCommand, BlsStageArgs, Command, ConfigCommand, DefaultCommand, DefaultSetArgs,
-    EntryCommand, EntryIdArgs, EntryModeArgs, EntrySetArgs, GraftArgs, InstallArgs, OtaApplyArgs,
-    PolicyArgs, SlotCommand, SlotStatusArgs, SourceCommand, VendorBootCommand,
-    VendorBootPatchArgs,
+    BlsCommand, BlsStageArgs, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand,
+    EntryIdArgs, EntryModeArgs, EntrySetArgs, FastbootCommand, FastbootEndExportArgs,
+    FastbootFetchArgs, GraftArgs, InstallArgs, OtaApplyArgs, PolicyArgs, SlotCommand,
+    SlotStatusArgs, SourceCommand, VendorBootCommand, VendorBootPatchArgs,
 };
 use crate::wire::JsonRequest;
 
@@ -16,6 +16,7 @@ impl JsonRequest {
                 vbmeta,
                 staged,
                 tools,
+                efisp_tools,
                 keep_unpatched,
                 patch_log,
                 probe,
@@ -24,6 +25,7 @@ impl JsonRequest {
                 vbmeta,
                 staged,
                 tools,
+                efisp_tools,
                 keep_unpatched,
                 patch_log,
                 probe,
@@ -173,6 +175,12 @@ impl JsonRequest {
             }),
             Self::VendorBootPatch { input, output } => Command::VendorBoot {
                 command: VendorBootCommand::Patch(VendorBootPatchArgs { input, output }),
+            },
+            Self::FastbootEndExport { node } => Command::Fastboot {
+                command: FastbootCommand::EndExport(FastbootEndExportArgs { node }),
+            },
+            Self::FastbootFetch { partition, output } => Command::Fastboot {
+                command: FastbootCommand::Fetch(FastbootFetchArgs { partition, output }),
             },
         }
     }

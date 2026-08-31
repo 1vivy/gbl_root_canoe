@@ -1,10 +1,11 @@
 use std::path::Path;
+use std::time::Duration;
 
 use crate::backend::{Backend, BackendError, BootRoot};
 use crate::build::{self, BuildArgs, BuildOutcome};
 use crate::cli::{
     BlsCommand, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand, EntrySetArgs,
-    PolicyArgs, SourceCommand, Success,
+    FastbootCommand, PolicyArgs, SourceCommand, Success,
 };
 use crate::config::{ConfigDocument, EntryRequest, PolicyUpdate};
 pub use crate::errors::AppError;
@@ -17,6 +18,9 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     };
     if let Command::Build(args) = command {
         return build_command(args);
+    }
+    if let Command::Fastboot { command } = command {
+        return fastboot_command(command);
     }
     let backend = Backend::from_paths(
         cli.boot_root.as_deref(),
@@ -31,6 +35,9 @@ pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, App
     if let Command::Build(args) = &command {
         return build_command(args);
     }
+    if let Command::Fastboot { command } = &command {
+        return fastboot_command(command);
+    }
     let backend = Backend::local(root)?;
     execute_command(&backend, &command)
 }
@@ -42,6 +49,9 @@ pub fn execute_request_cli(
     let command = request.into_command();
     if let Command::Build(args) = &command {
         return build_command(args);
+    }
+    if let Command::Fastboot { command } = &command {
+        return fastboot_command(command);
     }
     let backend = Backend::from_paths(
         cli.boot_root.as_deref(),
@@ -63,7 +73,45 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
         Command::Install(args) => extra_ops::install_command(backend, args),
         Command::OtaApply(args) => extra_ops::ota_apply(backend, args),
         Command::Graft(args) => extra_ops::graft_command(args),
+        Command::Fastboot { command } => fastboot_command(command),
         Command::VendorBoot { command } => extra_ops::vendorboot_command(command),
+    }
+}
+
+fn fastboot_command(command: &FastbootCommand) -> Result<Success, AppError> {
+    match command {
+        FastbootCommand::EndExport(args) => {
+            crate::fastboot::end_export(&args.node).map_err(end_export_error)?;
+            Ok(Success::FastbootEndExport {
+                ok: true,
+                node: args.node.display().to_string(),
+            })
+        }
+        FastbootCommand::Fetch(args) => {
+            let fastboot = crate::fastboot::binary(None)?;
+            crate::fastboot::fetch(
+                &fastboot,
+                &args.partition,
+                &args.output,
+                Duration::from_secs(30),
+            )?;
+            Ok(Success::FastbootFetch {
+                ok: true,
+                partition: args.partition.clone(),
+                output: args.output.display().to_string(),
+            })
+        }
+    }
+}
+
+fn end_export_error(error: crate::fastboot::FastbootError) -> AppError {
+    let message = error.to_string();
+    if message.to_ascii_lowercase().contains("permission denied") {
+        AppError::Request(format!(
+            "fastboot end-export needs permission to open the raw block node: {message}"
+        ))
+    } else {
+        AppError::Fastboot(error)
     }
 }
 
@@ -221,9 +269,10 @@ fn default_command(backend: &dyn BootRoot, command: &DefaultCommand) -> Result<S
 }
 
 fn default_target(args: &DefaultSetArgs) -> Result<&str, AppError> {
-    args.target.as_deref().or(args.id.as_deref()).ok_or_else(|| {
-        AppError::Request("default set requires a TARGET".to_owned())
-    })
+    args.target
+        .as_deref()
+        .or(args.id.as_deref())
+        .ok_or_else(|| AppError::Request("default set requires a TARGET".to_owned()))
 }
 
 fn bls_target_exists(backend: &dyn BootRoot, target: &str) -> Result<bool, AppError> {

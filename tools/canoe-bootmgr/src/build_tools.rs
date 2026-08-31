@@ -7,7 +7,6 @@ use std::process::{Command, Output};
 
 use thiserror::Error;
 
-
 #[derive(Debug, Error)]
 pub enum ToolError {
     #[error("build tool `{tool}` could not be resolved or is not executable")]
@@ -40,11 +39,36 @@ pub fn resolve_tools(preferred: Option<&Path>) -> Result<ToolPaths, ToolError> {
     let executable_dir = env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(Path::to_path_buf));
-    let extractfv = resolve_one("extractfv", preferred, environment.as_deref(), executable_dir.as_deref())?;
-    let patch_abl = resolve_one("patch_abl", preferred, environment.as_deref(), executable_dir.as_deref())?;
-    let mode2_profile = resolve_one("mode2_profile", preferred, environment.as_deref(), executable_dir.as_deref())?;
-    let abl_tzmap = resolve_one("abl_tzmap", preferred, environment.as_deref(), executable_dir.as_deref())?;
-    Ok(ToolPaths { extractfv, patch_abl, mode2_profile, abl_tzmap })
+    let extractfv = resolve_one(
+        "extractfv",
+        preferred,
+        environment.as_deref(),
+        executable_dir.as_deref(),
+    )?;
+    let patch_abl = resolve_one(
+        "patch_abl",
+        preferred,
+        environment.as_deref(),
+        executable_dir.as_deref(),
+    )?;
+    let mode2_profile = resolve_one(
+        "mode2_profile",
+        preferred,
+        environment.as_deref(),
+        executable_dir.as_deref(),
+    )?;
+    let abl_tzmap = resolve_one(
+        "abl_tzmap",
+        preferred,
+        environment.as_deref(),
+        executable_dir.as_deref(),
+    )?;
+    Ok(ToolPaths {
+        extractfv,
+        patch_abl,
+        mode2_profile,
+        abl_tzmap,
+    })
 }
 
 fn resolve_one(
@@ -71,7 +95,9 @@ fn resolve_one(
     candidates
         .into_iter()
         .find(|candidate| is_executable(candidate))
-        .ok_or_else(|| ToolError::Unavailable { tool: name.to_owned() })
+        .ok_or_else(|| ToolError::Unavailable {
+            tool: name.to_owned(),
+        })
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -144,7 +170,10 @@ impl WorkDir {
                 Err(error) => return Err(error),
             }
         }
-        Err(io::Error::new(io::ErrorKind::AlreadyExists, "temporary workdir names exhausted"))
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "temporary workdir names exhausted",
+        ))
     }
 
     pub fn path(&self) -> &Path {

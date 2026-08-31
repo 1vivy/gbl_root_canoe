@@ -1,9 +1,8 @@
+use crate::artifact::ArtifactSpec;
+use crate::cli::{CliDeviceInfoRepair, CliMenuMode, CliRole};
 use serde::Deserialize;
 use std::path::PathBuf;
 use thiserror::Error;
-use crate::artifact::ArtifactSpec;
-use crate::cli::{CliDeviceInfoRepair, CliMenuMode, CliRole};
-
 
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 #[path = "wire_command.rs"]
@@ -21,6 +20,8 @@ pub enum JsonRequest {
         staged: Option<PathBuf>,
         #[serde(default)]
         tools: Option<PathBuf>,
+        #[serde(default)]
+        efisp_tools: Option<PathBuf>,
         #[serde(default)]
         keep_unpatched: Option<PathBuf>,
         #[serde(default)]
@@ -128,6 +129,10 @@ pub enum JsonRequest {
     },
     #[serde(rename = "vendorboot.patch", alias = "vendor_boot.patch")]
     VendorBootPatch { input: PathBuf, output: PathBuf },
+    #[serde(rename = "fastboot.end-export")]
+    FastbootEndExport { node: PathBuf },
+    #[serde(rename = "fastboot.fetch")]
+    FastbootFetch { partition: String, output: PathBuf },
 }
 
 #[derive(Debug, Error)]
@@ -139,7 +144,6 @@ pub enum RequestError {
     #[error("request base64url: {0}")]
     Base64(String),
 }
-
 
 pub fn parse_json(bytes: &[u8]) -> Result<JsonRequest, RequestError> {
     if bytes.len() > MAX_REQUEST_BYTES {
@@ -213,6 +217,8 @@ mod tests {
             serde_json::json!({"verb":"ota-apply","staged":"a"}),
             serde_json::json!({"verb":"vbmeta.graft","vbmeta":"a","recovery":"b","output":"c"}),
             serde_json::json!({"verb":"vendorboot.patch","input":"a","output":"b"}),
+            serde_json::json!({"verb":"fastboot.end-export","node":"a"}),
+            serde_json::json!({"verb":"fastboot.fetch","partition":"boot","output":"a"}),
         ];
         for request in requests {
             let bytes = serde_json::to_vec(&request).expect("request JSON");

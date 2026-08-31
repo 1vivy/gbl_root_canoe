@@ -110,7 +110,10 @@ fn binary_prefers_bundled_platform_extension_order() {
     let extended = platform_tools.join("fastboot.exe");
     fs::write(&unextended, b"bundled").expect("unextended");
     fs::write(&extended, b"extended").expect("extended");
-    assert_eq!(fastboot::binary(Some(root.path())).expect("binary"), unextended);
+    assert_eq!(
+        fastboot::binary(Some(root.path())).expect("binary"),
+        unextended
+    );
 }
 
 #[test]
@@ -120,7 +123,10 @@ fn binary_uses_bundled_extension_when_unextended_missing() {
     fs::create_dir(&platform_tools).expect("platform tools");
     let extended = platform_tools.join("fastboot.exe");
     fs::write(&extended, b"extended").expect("extended");
-    assert_eq!(fastboot::binary(Some(root.path())).expect("binary"), extended);
+    assert_eq!(
+        fastboot::binary(Some(root.path())).expect("binary"),
+        extended
+    );
 }
 
 #[test]
@@ -143,11 +149,147 @@ fn binary_falls_back_to_search_path_and_names_both_bundled_candidates_on_error()
 }
 
 #[test]
+fn start_stop_unit_cdb_encodes_load_eject_and_start_bits() {
+    assert_eq!(
+        fastboot::start_stop_unit_cdb(true, false),
+        [0x1B, 0, 0, 0, 0b10, 0]
+    );
+    assert_eq!(
+        fastboot::start_stop_unit_cdb(false, true),
+        [0x1B, 0, 0, 0, 0b01, 0]
+    );
+}
+
+#[test]
+fn flash_succeeds_and_reports_stderr_on_command_failure() {
+    {
+        let root = TempDir::new().expect("fixture");
+        let image = root.path().join("boot.img");
+        fs::write(&image, b"image").expect("image");
+        let (_guard, fastboot) = script(root.path(), "exit 0");
+        fastboot::flash(&fastboot, "boot", &image, Duration::from_secs(1)).expect("flash success");
+    }
+
+    let root = TempDir::new().expect("fixture");
+    let image = root.path().join("boot.img");
+    fs::write(&image, b"image").expect("image");
+    let (_guard, fastboot) = script(root.path(), "echo flash-failed >&2; exit 7");
+    let error = fastboot::flash(&fastboot, "boot", &image, Duration::from_secs(1))
+        .expect_err("flash failure");
+    assert!(error.to_string().contains("flash-failed"));
+}
+
+#[test]
+fn flash_refuses_missing_image_without_spawning() {
+    let root = TempDir::new().expect("fixture");
+    let argv = root.path().join("argv");
+    fs::write(&argv, b"").expect("argv log");
+    let (_guard, fastboot) = script(
+        root.path(),
+        &format!("printf '%s\\n' \"$@\" > {}", argv.display()),
+    );
+    let error = fastboot::flash(
+        &fastboot,
+        "boot",
+        &root.path().join("missing.img"),
+        Duration::from_secs(1),
+    )
+    .expect_err("missing image");
+    assert!(matches!(error, FastbootError::Command { .. }));
+    assert!(fs::read(&argv).expect("argv log").is_empty());
+}
+
+#[test]
+fn fetch_writes_destination_and_reports_stderr_on_command_failure() {
+    {
+        let root = TempDir::new().expect("fixture");
+        let destination = root.path().join("fetched.img");
+        let (_guard, fastboot) = script(root.path(), "printf fetched > \"$3\"; exit 0");
+        fastboot::fetch(&fastboot, "boot", &destination, Duration::from_secs(1))
+            .expect("fetch success");
+        assert_eq!(fs::read(&destination).expect("destination"), b"fetched");
+    }
+
+    let root = TempDir::new().expect("fixture");
+    let destination = root.path().join("fetched.img");
+    let (_guard, fastboot) = script(root.path(), "echo fetch-failed >&2; exit 7");
+    let error = fastboot::fetch(&fastboot, "boot", &destination, Duration::from_secs(1))
+        .expect_err("fetch failure");
+    assert!(error.to_string().contains("fetch-failed"));
+}
+
+#[test]
+fn fetch_refuses_empty_partition_without_spawning() {
+    let root = TempDir::new().expect("fixture");
+    let argv = root.path().join("argv");
+    fs::write(&argv, b"").expect("argv log");
+    let (_guard, fastboot) = script(
+        root.path(),
+        &format!("printf '%s\\n' \"$@\" > {}", argv.display()),
+    );
+    let error = fastboot::fetch(
+        &fastboot,
+        "",
+        &root.path().join("fetched.img"),
+        Duration::from_secs(1),
+    )
+    .expect_err("empty partition");
+    assert!(matches!(error, FastbootError::Command { .. }));
+    assert!(fs::read(&argv).expect("argv log").is_empty());
+}
+
+#[test]
+fn fetch_refuses_missing_destination_directory_without_spawning() {
+    let root = TempDir::new().expect("fixture");
+    let argv = root.path().join("argv");
+    fs::write(&argv, b"").expect("argv log");
+    let (_guard, fastboot) = script(
+        root.path(),
+        &format!("printf '%s\\n' \"$@\" > {}", argv.display()),
+    );
+    let error = fastboot::fetch(
+        &fastboot,
+        "boot",
+        &root.path().join("missing/fetched.img"),
+        Duration::from_secs(1),
+    )
+    .expect_err("missing destination directory");
+    assert!(matches!(error, FastbootError::Command { .. }));
+    assert!(fs::read(&argv).expect("argv log").is_empty());
+}
+
+#[test]
+fn reboot_accepts_known_targets_and_rejects_unknown_target_without_spawning() {
+    for target in ["bootloader", "fastboot", "recovery"] {
+        let root = TempDir::new().expect("fixture");
+        let (_guard, fastboot) = script(root.path(), "exit 0");
+        fastboot::reboot(&fastboot, Some(target), Duration::from_secs(1)).expect("accepted target");
+    }
+
+    let root = TempDir::new().expect("fixture");
+    let argv = root.path().join("argv");
+    fs::write(&argv, b"").expect("argv log");
+    let (_guard, fastboot) = script(
+        root.path(),
+        &format!("printf '%s\\n' \"$@\" > {}", argv.display()),
+    );
+    let error = fastboot::reboot(&fastboot, Some("android"), Duration::from_secs(1))
+        .expect_err("unknown target");
+    assert!(matches!(error, FastbootError::Command { .. }));
+    assert!(fs::read(&argv).expect("argv log").is_empty());
+}
+
+#[test]
+fn end_export_reports_a_missing_node() {
+    let root = TempDir::new().expect("fixture");
+    assert!(fastboot::end_export(&root.path().join("missing-node")).is_err());
+}
+
+#[test]
 fn export_adopts_existing_node_without_spawning() {
     let root = TempDir::new().expect("fixture");
     let marker = root.path().join("spawned");
-    let (_guard, fastboot) =
-        script(root.path(), &format!("echo spawned > {}", marker.display()));
+    let (_guard, fastboot) = script(root.path(), &format!("echo spawned > {}", marker.display()));
     let exported = fastboot::export(&fastboot, "persist", Duration::ZERO, || {
         Ok(Some(PathBuf::from("/dev/sdb")))
     })
@@ -163,7 +305,11 @@ fn export_spawns_then_discovers_node() {
     let marker = root.path().join("spawned");
     let (_guard, fastboot) = script(
         root.path(),
-        &format!("echo spawned > {}; {} 0.2", marker.display(), system_tool("sleep").display()),
+        &format!(
+            "echo spawned > {}; {} 0.2",
+            marker.display(),
+            system_tool("sleep").display()
+        ),
     );
     let exported = fastboot::export(&fastboot, "persist", Duration::from_secs(1), || {
         if marker.exists() {
@@ -192,8 +338,10 @@ fn export_timeout_terminates_spawned_child() {
     );
     // Half a second, not tens of milliseconds: the child must have time to
     // install its TERM trap on a loaded machine before the deadline fires.
-    let error = fastboot::export(&fastboot, "persist", Duration::from_millis(500), || Ok(None))
-        .expect_err("timeout");
+    let error = fastboot::export(&fastboot, "persist", Duration::from_millis(500), || {
+        Ok(None)
+    })
+    .expect_err("timeout");
     assert!(matches!(error, FastbootError::Timeout { .. }));
     assert!(marker.exists());
 }

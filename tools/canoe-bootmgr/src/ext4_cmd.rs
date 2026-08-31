@@ -75,12 +75,16 @@ impl Ext4Dir {
             .to_str()
             .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
         let target = self.remote(path);
-        let parent = target.rsplit_once('/').map_or(
-            "/",
-            |(parent, _)| if parent.is_empty() { "/" } else { parent },
-        );
+        let parent =
+            target.rsplit_once('/').map_or(
+                "/",
+                |(parent, _)| if parent.is_empty() { "/" } else { parent },
+            );
         self.command(&["--recover", "--mkdir-p", "mkdir", source, parent], None)?;
-        self.command(&["--recover", "write", source, target.as_str()], Some(bytes))?;
+        self.command(
+            &["--recover", "write", source, target.as_str()],
+            Some(bytes),
+        )?;
         Ok(())
     }
 

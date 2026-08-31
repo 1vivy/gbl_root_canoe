@@ -46,7 +46,11 @@ impl Fixture {
     }
 
     pub fn run(&self, fail: &str, probe: bool) -> Output {
-        self.run_with_aux(fail, probe, None, None)
+        self.run_with_options(fail, probe, None, None, None)
+    }
+
+    pub fn run_with_efisp_tools(&self, fail: &str, efisp_tools: &Path) -> Output {
+        self.run_with_options(fail, false, None, None, Some(efisp_tools))
     }
 
     pub fn run_with_aux(
@@ -55,6 +59,17 @@ impl Fixture {
         probe: bool,
         keep: Option<&Path>,
         patch_log: Option<&Path>,
+    ) -> Output {
+        self.run_with_options(fail, probe, keep, patch_log, None)
+    }
+
+    fn run_with_options(
+        &self,
+        fail: &str,
+        probe: bool,
+        keep: Option<&Path>,
+        patch_log: Option<&Path>,
+        efisp_tools: Option<&Path>,
     ) -> Output {
         let binary = env!("CARGO_BIN_EXE_canoe-bootmgr");
         let mut command = Command::new(binary);
@@ -81,6 +96,9 @@ impl Fixture {
             if let Some(path) = patch_log {
                 command.args(["--patch-log"]).arg(path);
             }
+            if let Some(path) = efisp_tools {
+                command.args(["--efisp-tools"]).arg(path);
+            }
         }
         command.output().expect("run build")
     }
@@ -88,7 +106,13 @@ impl Fixture {
     pub fn staged_names(&self) -> Vec<String> {
         fs::read_dir(&self.staged)
             .expect("staged entries")
-            .map(|entry| entry.expect("entry").file_name().to_string_lossy().into_owned())
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect()
     }
 }

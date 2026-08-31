@@ -169,3 +169,60 @@ pub fn relaunch_as_admin() -> Result<(), String> {
     }
     Ok(())
 }
+
+/// How a source must be attached, decided BEFORE the attempt.
+///
+/// Elevation used to be error recovery: attach unelevated, fail, then offer
+/// pkexec. A raw block export is root-owned, so that path always failed first
+/// and showed the operator a permission error for a requirement we already
+/// knew about. `canoe-ext4: cannot open source` and the failed SCSI eject were
+/// both this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttachPlan {
+    /// A directory or image the operator can already read.
+    Direct,
+    /// A privileged source on a platform with pkexec.
+    Elevated,
+    /// Windows cannot elevate one child; the whole program restarts.
+    WindowsAdmin,
+}
+
+/// Decide how to attach, from what the detector already reported.
+pub(crate) fn attach_plan(needs_privilege: bool, is_block: bool, windows: bool) -> AttachPlan {
+    if !needs_privilege || !is_block {
+        return AttachPlan::Direct;
+    }
+    if windows {
+        AttachPlan::WindowsAdmin
+    } else {
+        AttachPlan::Elevated
+    }
+}
+
+#[cfg(test)]
+mod attach_plan_tests {
+    use super::{AttachPlan, attach_plan};
+
+    #[test]
+    fn a_privileged_block_source_is_elevated_before_the_attempt() {
+        assert_eq!(attach_plan(true, true, false), AttachPlan::Elevated);
+    }
+
+    #[test]
+    fn windows_restarts_the_program_instead() {
+        assert_eq!(attach_plan(true, true, true), AttachPlan::WindowsAdmin);
+    }
+
+    #[test]
+    fn a_readable_source_is_attached_directly() {
+        assert_eq!(attach_plan(false, true, false), AttachPlan::Direct);
+        assert_eq!(attach_plan(false, false, false), AttachPlan::Direct);
+    }
+
+    #[test]
+    fn a_directory_is_never_elevated_even_if_unreadable() {
+        // A directory the operator cannot read is their own permissions problem;
+        // pkexec would hide it rather than explain it.
+        assert_eq!(attach_plan(true, false, false), AttachPlan::Direct);
+    }
+}

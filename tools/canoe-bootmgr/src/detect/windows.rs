@@ -9,7 +9,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
     GET_LENGTH_INFORMATION, IOCTL_DISK_GET_LENGTH_INFO, IOCTL_STORAGE_QUERY_PROPERTY,
-    PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR, STORAGE_DESCRIPTOR_HEADER,
+    PropertyStandardQuery, STORAGE_DESCRIPTOR_HEADER, STORAGE_DEVICE_DESCRIPTOR,
     STORAGE_PROPERTY_QUERY, StorageDeviceProperty,
 };
 
@@ -150,8 +150,8 @@ fn query_descriptor(handle: HANDLE) -> Option<DescriptorInfo> {
     let descriptor = unsafe { &*descriptor };
     let offset = descriptor.ProductIdOffset;
     let vendor = descriptor.VendorIdOffset;
-    let product = read_descriptor_string(&output, vendor)
-        .or_else(|| read_descriptor_string(&output, offset));
+    let product =
+        read_descriptor_string(&output, vendor).or_else(|| read_descriptor_string(&output, offset));
     Some(DescriptorInfo { model: product })
 }
 
@@ -184,12 +184,13 @@ fn query_capacity(handle: HANDLE) -> u64 {
     }
 }
 
-
 fn read_descriptor_string(output: &[u8], offset: u32) -> Option<String> {
     let start = usize::try_from(offset).ok()?;
     let tail = output.get(start..)?;
-    let end = tail.iter().position(|value| *value == 0).map_or(tail.len(), |value| value);
+    let end = tail
+        .iter()
+        .position(|value| *value == 0)
+        .map_or(tail.len(), |value| value);
     let value = String::from_utf8_lossy(&tail[..end]).trim().to_owned();
     (!value.is_empty()).then_some(value)
 }
-

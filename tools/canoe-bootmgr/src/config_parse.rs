@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use crate::config::{
-    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, MenuMode, MAX_BYTES,
-    MAX_GENERATION, MAX_KEY_WINDOW_MS, MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, RawLine, Role,
+    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, MAX_BYTES, MAX_GENERATION,
+    MAX_KEY_WINDOW_MS, MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, MenuMode, RawLine, Role,
     canonical_image, printable, valid_id, validate_policy_range, validate_title,
 };
 
@@ -191,11 +191,7 @@ fn parse_number(value: &str, maximum: u64, fallback: u32) -> u32 {
         .unwrap_or(fallback)
 }
 
-fn parse_policy_number(
-    value: &str,
-    field: &'static str,
-    maximum: u32,
-) -> Result<u32, ConfigError> {
+fn parse_policy_number(value: &str, field: &'static str, maximum: u32) -> Result<u32, ConfigError> {
     let parsed = value.parse::<u32>().map_err(|_| ConfigError::Field {
         field: field.to_owned(),
         reason: format!("expected an unsigned integer, got {value:?}"),

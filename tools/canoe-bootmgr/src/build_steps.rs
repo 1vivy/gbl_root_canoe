@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use crate::build::{arg, file_size, file_size_exact, BuildError};
+use crate::build::{BuildError, arg, file_size, file_size_exact};
 use crate::build_tools::{self, ToolOutput, ToolPaths, WorkDir};
 
 const LOADER_NAME: &str = "LinuxLoader.efi";
@@ -52,7 +52,13 @@ pub(crate) fn derive_profile(
 ) -> Result<(), BuildError> {
     run_step(
         &tools.mode2_profile,
-        vec![arg("derive"), arg("--vbmeta"), arg(vbmeta), arg("--out"), arg(output)],
+        vec![
+            arg("derive"),
+            arg("--vbmeta"),
+            arg(vbmeta),
+            arg("--out"),
+            arg(output),
+        ],
         "mode2_profile derive",
     )?;
     run_step(

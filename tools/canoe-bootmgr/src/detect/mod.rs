@@ -57,7 +57,7 @@ pub fn is_export_candidate(candidate: &SourceCandidate) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{LinuxProbe, detect_linux, default_probe};
+pub use linux::{LinuxProbe, default_probe, detect_linux};
 #[cfg(windows)]
 pub use windows::detect_windows;
 
@@ -78,7 +78,7 @@ pub fn detect_sources() -> Result<Vec<SourceCandidate>, DetectError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SourceKind, detect_linux, LinuxProbe};
+    use super::{LinuxProbe, SourceKind, detect_linux};
     use std::fs;
     use tempfile::TempDir;
 

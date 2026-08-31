@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::BlsStageReceipt;
 use crate::backend::BlsFile;
-pub use crate::cli_extra::{
-    BlsStageArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs,
-    VendorBootCommand, VendorBootPatchArgs,
-};
 use crate::build::{BuildArgs, BuildProbeReceipt, BuildReceipt};
+pub use crate::cli_extra::{
+    BlsStageArgs, FastbootCommand, FastbootEndExportArgs, FastbootFetchArgs, GraftArgs,
+    InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs, VendorBootCommand, VendorBootPatchArgs,
+};
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
 use crate::graft::GraftReceipt;
@@ -104,6 +104,10 @@ pub enum Command {
     /// Graft official recovery vbmeta onto a custom recovery image.
     #[command(name = "vbmeta-graft", visible_alias = "graft")]
     Graft(GraftArgs),
+    Fastboot {
+        #[command(subcommand)]
+        command: FastbootCommand,
+    },
     VendorBoot {
         #[command(subcommand)]
         command: VendorBootCommand,
@@ -330,7 +334,11 @@ pub enum Success {
         installed: Vec<Slot>,
     },
     #[serde(rename = "build")]
-    Build { ok: bool, kind: &'static str, receipt: BuildReceipt },
+    Build {
+        ok: bool,
+        kind: &'static str,
+        receipt: BuildReceipt,
+    },
     #[serde(rename = "build.probe")]
     BuildProbe {
         ok: bool,
@@ -345,6 +353,14 @@ pub enum Success {
     VbmetaGraft { ok: bool, receipt: GraftReceipt },
     #[serde(rename = "vendorboot.patch")]
     VendorBootPatch { ok: bool, receipt: PatchReceipt },
+    #[serde(rename = "fastboot.end-export")]
+    FastbootEndExport { ok: bool, node: String },
+    #[serde(rename = "fastboot.fetch")]
+    FastbootFetch {
+        ok: bool,
+        partition: String,
+        output: String,
+    },
 }
 impl CliRole {
     pub(crate) const fn as_str(self) -> &'static str {

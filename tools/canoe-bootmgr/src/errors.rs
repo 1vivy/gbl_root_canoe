@@ -5,6 +5,7 @@ use crate::backend::BackendError;
 use crate::build::BuildError;
 use crate::config::ConfigError;
 use crate::detect::DetectError;
+use crate::fastboot::FastbootError;
 use crate::graft::GraftError;
 use crate::slots::SlotError;
 use crate::vendorboot::VendorBootError;
@@ -27,6 +28,8 @@ pub enum AppError {
     Detect(#[from] DetectError),
     #[error(transparent)]
     Build(#[from] BuildError),
+    #[error(transparent)]
+    Fastboot(#[from] FastbootError),
     #[error("request: {0}")]
     Request(String),
     #[error("install: {0}")]

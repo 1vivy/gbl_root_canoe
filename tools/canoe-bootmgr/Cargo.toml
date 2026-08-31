@@ -36,6 +36,7 @@ windows-sys = { version = "0.61", features = [
 sha2 = "0.10"
 
 [target.'cfg(unix)'.dependencies]
+libc = "0.2"
 nix = { version = "0.29", features = ["signal", "fs"] }
 
 [dev-dependencies]

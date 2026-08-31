@@ -76,9 +76,16 @@ impl GuiApp {
             Ok(identity) => {
                 let silent =
                     identity.bds_version.is_none() && identity.current_slot.is_none();
+                let reported_slot = identity.current_slot.is_some();
                 self.identity.note = silent
                     .then(|| "no fastboot device answered; identity unknown".to_owned());
                 self.identity.identity = Some(identity);
+                // The probe is asynchronous, so the slot resolved at startup was
+                // resolved without it. Re-ask now that the device has answered,
+                // otherwise the page keeps showing a slot nobody reported.
+                if reported_slot && self.client.is_some() {
+                    self.refresh();
+                }
             }
             Err(error) => {
                 self.identity.identity = None;

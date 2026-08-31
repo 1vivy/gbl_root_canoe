@@ -23,6 +23,8 @@ pub struct BuildArgs {
     pub staged: Option<PathBuf>,
     #[cfg_attr(feature = "cli", arg(long))]
     pub tools: Option<PathBuf>,
+    #[cfg_attr(feature = "cli", arg(long = "efisp-tools"))]
+    pub efisp_tools: Option<PathBuf>,
     #[cfg_attr(feature = "cli", arg(long))]
     pub keep_unpatched: Option<PathBuf>,
     #[cfg_attr(feature = "cli", arg(long))]
@@ -37,6 +39,7 @@ pub struct BuildReceipt {
     pub loader_bytes: u64,
     pub gm2p_bytes: u64,
     pub tzmap_bytes: u64,
+    pub tools_staged: usize,
     pub gbl_patched: bool,
     pub loader_sha256: String,
     pub gm2p_sha256: String,
@@ -68,7 +71,10 @@ pub enum BuildError {
     #[error(transparent)]
     Tool(#[from] ToolError),
     #[error("build step {step} failed: {diagnostic}")]
-    StepFailed { step: &'static str, diagnostic: String },
+    StepFailed {
+        step: &'static str,
+        diagnostic: String,
+    },
     #[error("build step {step}: {message}")]
     Invalid { step: &'static str, message: String },
 }
@@ -125,8 +131,8 @@ fn run_full(args: &BuildArgs, staged: &Path, vbmeta: &Path) -> Result<BuildOutco
 
 fn run_probe(args: &BuildArgs) -> Result<BuildOutcome, BuildError> {
     let tools = build_tools::resolve_tools(args.tools.as_deref())?;
-    let workdir = WorkDir::new()
-        .map_err(|source| io_error("create workdir", Path::new("."), source))?;
+    let workdir =
+        WorkDir::new().map_err(|source| io_error("create workdir", Path::new("."), source))?;
     let loader = build_steps::extract_loader(&tools, &workdir, &args.abl)?;
     let patched = workdir.path().join("patched.efi");
     let (gbl_patched, _) = build_steps::patch_loader(&tools, &loader, &patched)?;
@@ -137,14 +143,10 @@ fn run_probe(args: &BuildArgs) -> Result<BuildOutcome, BuildError> {
     }))
 }
 
-fn derive_full(
-    args: &BuildArgs,
-    staged: &Path,
-    vbmeta: &Path,
-) -> Result<BuildReceipt, BuildError> {
+fn derive_full(args: &BuildArgs, staged: &Path, vbmeta: &Path) -> Result<BuildReceipt, BuildError> {
     let tools = build_tools::resolve_tools(args.tools.as_deref())?;
-    let workdir = WorkDir::new()
-        .map_err(|source| io_error("create workdir", Path::new("."), source))?;
+    let workdir =
+        WorkDir::new().map_err(|source| io_error("create workdir", Path::new("."), source))?;
     let loader = build_steps::extract_loader(&tools, &workdir, &args.abl)?;
     let unpatched_sha256 = hash(&loader, "hash unpatched loader")?;
     let boot = staged.join("boot.efi");
@@ -153,11 +155,16 @@ fn derive_full(
     build_steps::derive_profile(&tools, vbmeta, &gm2p)?;
     let tzmap = staged.join("boot.efi.tzmap");
     build_steps::derive_tzmap(&tools, &loader, &tzmap)?;
+    let tools_staged = match args.efisp_tools.as_deref() {
+        Some(source) => crate::build_efisp_tools::stage(source, staged)?,
+        None => 0,
+    };
     let receipt = BuildReceipt {
         staged: staged.to_owned(),
         loader_bytes: file_size(&boot, "boot.efi")?,
         gm2p_bytes: file_size_exact(&gm2p, GM2P_BYTES, "mode2_profile output")?,
         tzmap_bytes: file_size_exact(&tzmap, TZMAP_BYTES, "abl_tzmap output")?,
+        tools_staged,
         gbl_patched,
         loader_sha256: hash(&boot, "hash boot.efi")?,
         gm2p_sha256: hash(&gm2p, "hash gm2p")?,

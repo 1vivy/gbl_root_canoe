@@ -1,8 +1,11 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod actions;
+mod actions_build;
 mod actions_install;
+mod actions_provision;
 mod args;
+mod build_model;
 mod client;
 mod connect;
 mod detect;
@@ -10,17 +13,23 @@ mod elevate;
 mod export;
 mod export_control;
 mod export_drive;
+mod flow;
 mod helper;
 mod identity;
 mod model;
 mod policy;
 mod protocol;
+mod session;
 mod slot_model;
+mod slot_view;
 mod text;
 mod ui;
 mod views;
 mod views_connect;
+mod views_device;
+mod views_install;
 mod views_slots;
+mod views_status;
 mod views_secondary;
 mod wire;
 use std::fs;

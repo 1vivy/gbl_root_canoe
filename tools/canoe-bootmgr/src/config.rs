@@ -19,10 +19,7 @@ pub enum ConfigError {
     #[error("canoe.cfg field {field}: {reason}")]
     Field { field: String, reason: String },
     #[error("policy.range: {field} must be in 0..={maximum}")]
-    PolicyRange {
-        field: &'static str,
-        maximum: u32,
-    },
+    PolicyRange { field: &'static str, maximum: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -159,7 +156,6 @@ pub struct PolicyUpdate {
     pub key_window_ms: Option<u32>,
     pub menu_timeout_s: Option<u32>,
 }
-
 
 pub(crate) fn validate_request(request: &EntryRequest) -> Result<(), ConfigError> {
     if !valid_id(&request.id) {

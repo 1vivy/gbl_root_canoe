@@ -26,14 +26,79 @@ mod tests {
         assert_eq!(document["receipt"]["gbl_patched"], true);
         assert_eq!(fixture.staged_names().len(), 3);
         let calls = fs::read_to_string(&fixture.calls).expect("argv log");
-        let names: Vec<&str> = calls.lines().map(|line| line.split('\t').next().expect("tool name")).collect();
-        assert_eq!(names, ["extractfv", "patch_abl", "mode2_profile", "mode2_profile", "abl_tzmap", "abl_tzmap", "abl_tzmap"]);
+        let names: Vec<&str> = calls
+            .lines()
+            .map(|line| line.split('\t').next().expect("tool name"))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "extractfv",
+                "patch_abl",
+                "mode2_profile",
+                "mode2_profile",
+                "abl_tzmap",
+                "abl_tzmap",
+                "abl_tzmap"
+            ]
+        );
         assert!(calls.contains("\t-o\t"));
         assert!(calls.contains("\t-v\t"));
         assert!(calls.contains("\tderive\t--vbmeta\t"));
         assert!(calls.contains("\tderive\t/tmp/"));
         assert!(calls.contains("\t--allow-incomplete"));
         assert!(calls.contains("\t--allow-zero-digest"));
+    }
+
+    #[test]
+    fn efisp_tools_are_staged_and_counted() {
+        let fixture = Fixture::new();
+        let efisp_tools = fixture.root.path().join("efisp-tools");
+        fs::create_dir(&efisp_tools).expect("efisp tools");
+        fs::write(efisp_tools.join("beta.efi"), b"beta").expect("beta tool");
+        fs::write(efisp_tools.join("alpha.efi"), b"alpha").expect("alpha tool");
+
+        let output = fixture.run_with_efisp_tools("", &efisp_tools);
+        assert!(output.status.success());
+        assert_eq!(json(&output)["receipt"]["tools_staged"], 2);
+        assert_eq!(
+            fs::read(fixture.staged.join("tools/alpha.efi")).expect("alpha staged"),
+            b"alpha"
+        );
+        assert_eq!(
+            fs::read(fixture.staged.join("tools/beta.efi")).expect("beta staged"),
+            b"beta"
+        );
+    }
+
+    #[test]
+    fn no_efisp_tools_leaves_no_tools_directory_and_reports_zero() {
+        let fixture = Fixture::new();
+        let output = fixture.run("", false);
+        assert!(output.status.success());
+        assert_eq!(json(&output)["receipt"]["tools_staged"], 0);
+        assert!(!fixture.staged.join("tools").exists());
+    }
+
+    #[test]
+    fn failed_build_removes_staged_efisp_tools() {
+        let fixture = Fixture::new();
+        let efisp_tools = fixture.root.path().join("efisp-tools");
+        fs::create_dir(&efisp_tools).expect("efisp tools");
+        fs::write(efisp_tools.join("tool.efi"), b"tool").expect("tool");
+        fs::create_dir(fixture.staged.join("tools")).expect("staged tools");
+        fs::write(fixture.staged.join("tools/stale.efi"), b"stale").expect("stale tool");
+
+        let output = fixture.run_with_efisp_tools("tzmap-verify", &efisp_tools);
+        assert!(!output.status.success());
+        assert!(!fixture.staged.join("tools").exists());
+    }
+
+    #[test]
+    fn missing_efisp_tools_directory_fails() {
+        let fixture = Fixture::new();
+        let output = fixture.run_with_efisp_tools("", &fixture.root.path().join("missing"));
+        assert!(!output.status.success());
     }
 
     #[test]
@@ -47,8 +112,17 @@ mod tests {
     #[test]
     fn every_worker_failure_removes_the_staged_triplet() {
         for failure in [
-            "extract", "no-loader", "patch", "empty-boot", "mode2-derive", "mode2-validate",
-            "wrong-gm2p", "tzmap-derive", "tzmap-validate", "tzmap-verify", "wrong-tzmap",
+            "extract",
+            "no-loader",
+            "patch",
+            "empty-boot",
+            "mode2-derive",
+            "mode2-validate",
+            "wrong-gm2p",
+            "tzmap-derive",
+            "tzmap-validate",
+            "tzmap-verify",
+            "wrong-tzmap",
         ] {
             let fixture = Fixture::new();
             for name in ["boot.efi", "boot.efi.gm2p", "boot.efi.tzmap"] {
@@ -56,7 +130,10 @@ mod tests {
             }
             let output = fixture.run(failure, false);
             assert!(!output.status.success(), "failure case {failure}");
-            assert!(fixture.staged_names().is_empty(), "stale output for {failure}");
+            assert!(
+                fixture.staged_names().is_empty(),
+                "stale output for {failure}"
+            );
         }
     }
 
@@ -68,7 +145,9 @@ mod tests {
         let output = success.run_with_aux("", false, Some(&keep), Some(&patch_log));
         assert!(output.status.success());
         assert_eq!(fs::read(&keep).expect("keep output"), b"unpatched-loader");
-        assert!(String::from_utf8_lossy(&fs::read(&patch_log).expect("patch log")).contains("patch ok"));
+        assert!(
+            String::from_utf8_lossy(&fs::read(&patch_log).expect("patch log")).contains("patch ok")
+        );
 
         let failure = Fixture::new();
         let keep = failure.root.path().join("keep.efi");
@@ -101,7 +180,12 @@ mod tests {
         assert!(!output.status.success());
         let document = json(&output);
         assert_eq!(document["ok"], false);
-        assert!(document["error"]["message"].as_str().expect("error message").contains("abl_tzmap"));
+        assert!(
+            document["error"]["message"]
+                .as_str()
+                .expect("error message")
+                .contains("abl_tzmap")
+        );
         assert!(fixture.staged_names().is_empty());
     }
 }

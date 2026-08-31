@@ -1,5 +1,6 @@
 use serde::Deserialize;
 
+use crate::build_model::{BuildReceipt, PatchReceipt};
 use crate::detect::SourceCandidate;
 use crate::model::{BlsFile, ConfigDocument, ConfigEntry};
 use crate::protocol::ProtocolError;
@@ -32,6 +33,12 @@ enum Operation {
     BlsShow,
     #[serde(rename = "slot.status")]
     SlotStatus,
+    #[serde(rename = "fastboot.end-export")]
+    FastbootEndExport,
+    #[serde(rename = "build")]
+    Build,
+    #[serde(rename = "vendorboot.patch")]
+    VendorBootPatch,
     #[serde(rename = "install")]
     Install,
     #[serde(rename = "ota-apply")]
@@ -60,7 +67,8 @@ struct ResponseEnvelope {
     inactive_slot: Option<Slot>,
     source: Option<String>,
     installed: Option<Vec<Slot>>,
-    receipt: Option<InstallReceipt>,
+    receipt: Option<serde_json::Value>,
+    node: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +122,15 @@ pub enum Response {
     },
     OtaApply {
         receipt: InstallReceipt,
+    },
+    Build {
+        receipt: BuildReceipt,
+    },
+    FastbootEndExport {
+        node: String,
+    },
+    VendorBootPatch {
+        receipt: PatchReceipt,
     },
 }
 
@@ -184,10 +201,19 @@ pub fn parse_response(bytes: &[u8]) -> Result<Response, ProtocolError> {
             },
         }),
         Operation::Install => Ok(Response::Install {
-            receipt: required(envelope.receipt, "receipt")?,
+            receipt: decode(envelope.receipt, "receipt")?,
         }),
         Operation::OtaApply => Ok(Response::OtaApply {
-            receipt: required(envelope.receipt, "receipt")?,
+            receipt: decode(envelope.receipt, "receipt")?,
+        }),
+        Operation::FastbootEndExport => Ok(Response::FastbootEndExport {
+            node: envelope.node.unwrap_or_default(),
+        }),
+        Operation::Build => Ok(Response::Build {
+            receipt: decode(envelope.receipt, "receipt")?,
+        }),
+        Operation::VendorBootPatch => Ok(Response::VendorBootPatch {
+            receipt: decode(envelope.receipt, "receipt")?,
         }),
     }
 }

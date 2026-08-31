@@ -86,7 +86,9 @@ fn classify_failure(
 ) -> ExportFailure {
     match error {
         FastbootError::NotFound { .. } => ExportFailure::NoFastboot(error.to_string()),
-        FastbootError::Spawn { .. } => ExportFailure::Spawn(error.to_string()),
+        FastbootError::Spawn { .. }
+        | FastbootError::Command { .. }
+        | FastbootError::Unsupported { .. } => ExportFailure::Spawn(error.to_string()),
         FastbootError::Discovery { message } => ExportFailure::Discovery(message),
         FastbootError::InvalidTimeout { .. } => ExportFailure::Discovery(error.to_string()),
         FastbootError::Timeout { timeout } => {

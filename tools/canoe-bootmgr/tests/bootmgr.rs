@@ -181,6 +181,63 @@ fn cli_jsonl_returns_one_response_per_request() {
 }
 
 #[test]
+fn fastboot_end_export_protocol_round_trip_has_operation() {
+    let request = serde_json::json!({"verb":"fastboot.end-export","node":"/dev/sdz"});
+    let command =
+        canoe_bootmgr::wire::parse_json(&serde_json::to_vec(&request).expect("request JSON"))
+            .expect("wire request")
+            .into_command();
+    let canoe_bootmgr::cli::Command::Fastboot {
+        command: canoe_bootmgr::cli::FastbootCommand::EndExport(args),
+    } = command
+    else {
+        panic!("fastboot end-export command");
+    };
+    let response = canoe_bootmgr::cli::Success::FastbootEndExport {
+        ok: true,
+        node: args.node.display().to_string(),
+    };
+    let document: serde_json::Value = serde_json::from_slice(
+        &canoe_bootmgr::output::json_success(&response).expect("response JSON"),
+    )
+    .expect("JSON response");
+    assert_eq!(document["operation"], "fastboot.end-export");
+    assert_eq!(document["node"], "/dev/sdz");
+}
+
+#[test]
+fn jsonl_fastboot_end_export_missing_node_returns_error_envelope() {
+    let node = tempfile::tempdir()
+        .expect("node directory")
+        .path()
+        .join("missing-node");
+    let input = format!(
+        "{{\"verb\":\"fastboot.end-export\",\"node\":\"{}\"}}\n",
+        node.display()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"))
+        .arg("--json")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .expect("stdin")
+                .write_all(input.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("run JSONL CLI");
+    assert!(!output.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(document["ok"], false);
+    assert!(document.get("operation").is_none());
+    assert!(document["error"]["message"].as_str().is_some());
+}
+
+#[test]
 fn request_b64_accepts_base64url_json() {
     let directory = tempfile::tempdir().expect("temporary root");
     let token = "eyJ2ZXJiIjoiZGVmYXVsdC5nZXQifQ";

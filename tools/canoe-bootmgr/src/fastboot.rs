@@ -1,11 +1,20 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use thiserror::Error;
+
+#[path = "fastboot_command.rs"]
+mod fastboot_command;
+#[path = "fastboot_export.rs"]
+mod fastboot_export;
+#[path = "fastboot_fetch.rs"]
+mod fastboot_fetch;
+
+pub use fastboot_export::{Exported, export, export_seconds};
+pub use fastboot_fetch::fetch;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
@@ -15,9 +24,7 @@ pub struct Identity {
 
 #[derive(Debug, Error)]
 pub enum FastbootError {
-    #[error(
-        "fastboot binary not found; expected bundled {first} or {second} or fastboot on PATH"
-    )]
+    #[error("fastboot binary not found; expected bundled {first} or {second} or fastboot on PATH")]
     NotFound { first: PathBuf, second: PathBuf },
     #[error("could not start fastboot at {path}: {source}")]
     Spawn {
@@ -31,13 +38,10 @@ pub enum FastbootError {
     Discovery { message: String },
     #[error("mass-storage discovery timeout must be finite and non-negative: {value}")]
     InvalidTimeout { value: f64 },
-}
-
-#[derive(Debug)]
-pub struct Exported {
-    pub node: PathBuf,
-    pub adopted: bool,
-    _child: Option<Child>,
+    #[error("fastboot command {command} failed: {detail}")]
+    Command { command: String, detail: String },
+    #[error("fastboot operation {operation} is unsupported on this platform")]
+    Unsupported { operation: &'static str },
 }
 
 #[cfg(windows)]
@@ -120,6 +124,9 @@ fn getvar(fastboot: &Path, name: &str, timeout: Duration) -> Option<String> {
 }
 
 fn getvar_once(fastboot: &Path, name: &str, timeout: Duration) -> Option<String> {
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
     let mut child = Command::new(fastboot)
         .arg("getvar")
         .arg(name)
@@ -168,109 +175,74 @@ fn parse_getvar(stderr: &str, name: &str) -> Option<String> {
     None
 }
 
-/// Start or adopt a BDS mass-storage export and return its raw block node.
-pub fn export<F>(
+/// Flash an existing image to an explicitly named partition.
+pub fn flash(
     fastboot: &Path,
-    target: &str,
+    partition: &str,
+    image: &Path,
     timeout: Duration,
-    mut find: F,
-) -> Result<Exported, FastbootError>
-where
-    F: FnMut() -> Result<Option<PathBuf>, FastbootError>,
-{
-    if let Some(node) = find()? {
-        return Ok(Exported {
-            node,
-            adopted: true,
-            _child: None,
-        });
+) -> Result<(), FastbootError> {
+    if partition.is_empty() {
+        return Err(command_error("flash", "partition name must not be empty"));
     }
-    let mut child = Command::new(fastboot)
-        .arg("oem")
-        .arg(format!("mass-storage:{target}"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|source| FastbootError::Spawn {
-            path: fastboot.to_owned(),
-            source,
-        })?;
-    let deadline = Instant::now().checked_add(timeout);
-    loop {
-        match find() {
-            Ok(Some(node)) => {
-                return Ok(Exported {
-                    node,
-                    adopted: false,
-                    _child: Some(child),
-                });
-            }
-            Ok(None) => {}
-            Err(error) => {
-                terminate_child(&mut child);
-                return Err(error);
-            }
-        }
-        let Some(deadline) = deadline else {
-            terminate_child(&mut child);
-            return Err(FastbootError::Timeout { timeout });
-        };
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            terminate_child(&mut child);
-            return Err(FastbootError::Timeout { timeout });
-        }
-        thread::sleep(remaining.min(Duration::from_millis(100)));
+    if !image.is_file() {
+        return Err(command_error(
+            "flash",
+            &format!("image is not an existing regular file: {}", image.display()),
+        ));
     }
+    fastboot_command::run(
+        fastboot,
+        &[
+            OsString::from("flash"),
+            OsString::from(partition),
+            image.into(),
+        ],
+        timeout,
+    )
 }
 
-/// Validate seconds and invoke [`export`] for callers that receive floating-point input.
-pub fn export_seconds<F>(
+/// Reboot into the normal target or one of fastboot's supported special targets.
+pub fn reboot(
     fastboot: &Path,
-    target: &str,
-    timeout: f64,
-    find: F,
-) -> Result<Exported, FastbootError>
-where
-    F: FnMut() -> Result<Option<PathBuf>, FastbootError>,
-{
-    if !timeout.is_finite() || timeout < 0.0 {
-        return Err(FastbootError::InvalidTimeout { value: timeout });
+    target: Option<&str>,
+    timeout: Duration,
+) -> Result<(), FastbootError> {
+    if let Some(target) = target
+        && !matches!(target, "bootloader" | "fastboot" | "recovery")
+    {
+        return Err(command_error(
+            "reboot",
+            &format!("unsupported target: {target}"),
+        ));
     }
-    let timeout = Duration::try_from_secs_f64(timeout)
-        .map_err(|_| FastbootError::InvalidTimeout { value: timeout })?;
-    export(fastboot, target, timeout, find)
+    let mut args = vec![OsString::from("reboot")];
+    if let Some(target) = target {
+        args.push(OsString::from(target));
+    }
+    fastboot_command::run(fastboot, &args, timeout)
 }
 
-fn terminate_child(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{Signal, kill};
-        use nix::unistd::Pid;
-        if let Ok(pid) = i32::try_from(child.id()) {
-            let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-    }
-    let Some(deadline) = Instant::now().checked_add(Duration::from_secs(1)) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return;
-    };
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) | Err(_) => return,
-            Ok(None) => {}
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return;
-        }
-        thread::sleep(remaining.min(Duration::from_millis(10)));
+/// Build a six-byte SCSI START STOP UNIT command descriptor block.
+pub fn start_stop_unit_cdb(load_eject: bool, start: bool) -> [u8; 6] {
+    [
+        0x1B,
+        0,
+        0,
+        0,
+        (u8::from(load_eject) << 1) | u8::from(start),
+        0,
+    ]
+}
+
+/// End a BDS mass-storage export through its raw block node.
+pub fn end_export(node: &Path) -> Result<(), FastbootError> {
+    fastboot_export::end_export(node)
+}
+
+fn command_error(command: &str, detail: &str) -> FastbootError {
+    FastbootError::Command {
+        command: command.to_owned(),
+        detail: detail.to_owned(),
     }
 }

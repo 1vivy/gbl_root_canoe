@@ -1,7 +1,7 @@
 use crate::config::{
-    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, EntryRequest, MenuMode,
-    PolicyUpdate, MAX_ENTRIES, MAX_GENERATION, Role, canonical_image, validate_mode,
-    validate_policy, validate_request,
+    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, EntryRequest, MAX_ENTRIES,
+    MAX_GENERATION, MenuMode, PolicyUpdate, Role, canonical_image, validate_mode, validate_policy,
+    validate_request,
 };
 
 impl ConfigDocument {

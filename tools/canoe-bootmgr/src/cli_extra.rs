@@ -92,6 +92,29 @@ pub struct GraftArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum FastbootCommand {
+    /// End a BDS mass-storage export through its raw block node.
+    #[command(name = "end-export")]
+    EndExport(FastbootEndExportArgs),
+    /// Fetch a fastboot partition image to a local file.
+    Fetch(FastbootFetchArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootEndExportArgs {
+    #[arg(long)]
+    pub node: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootFetchArgs {
+    #[arg(long)]
+    pub partition: String,
+    #[arg(long = "out")]
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum VendorBootCommand {
     /// Append Canoe's fixed-offset module blacklist to vendor_boot.
     Patch(VendorBootPatchArgs),

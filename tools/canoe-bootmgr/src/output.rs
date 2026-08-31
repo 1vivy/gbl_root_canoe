@@ -139,6 +139,12 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             "patched {} ({} bytes, changed={})\n",
             receipt.output, receipt.bytes, receipt.changed
         ),
+        Success::FastbootEndExport { node, .. } => {
+            format!("ended mass-storage export for {node}\n")
+        }
+        Success::FastbootFetch {
+            partition, output, ..
+        } => format!("fetched {partition} to {output}\n"),
     };
     let mut bytes = text.into_bytes();
     if !bytes.ends_with(b"\n") {

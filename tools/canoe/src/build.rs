@@ -76,6 +76,11 @@ pub fn derive(toolkit: &Toolkit, options: &BuildOptions) -> Result<bool, CanoeEr
         vbmeta: Some(toolkit.vbmeta_image()),
         staged: Some(toolkit.efisp()),
         tools: Some(toolkit.bin()),
+        // The CLI derives straight into the toolkit's own efisp directory, and
+        // stage.rs copies efisp/tools into the staged set from there. Handing
+        // that same directory back as a staging input would copy it onto
+        // itself, so the wizard path keeps its existing division of labour.
+        efisp_tools: None,
         keep_unpatched: Some(toolkit.abl_original()),
         patch_log: Some(toolkit.patch_log()),
         probe: false,

@@ -114,7 +114,11 @@ fn emit_success(cli: &Cli, success: &crate::cli::Success) -> i32 {
 fn emit_json_success(success: &crate::cli::Success) -> i32 {
     match output::json_success(success) {
         Ok(bytes) if bytes.len() <= MAX_RESPONSE_BYTES => emit_bytes(&bytes, EXIT_OK),
-        Ok(_) => emit_json_error("response-too-large", "response exceeds 1 MiB", EXIT_OPERATION),
+        Ok(_) => emit_json_error(
+            "response-too-large",
+            "response exceeds 1 MiB",
+            EXIT_OPERATION,
+        ),
         Err(error) => emit_json_error("output", &error.to_string(), EXIT_OPERATION),
     }
 }

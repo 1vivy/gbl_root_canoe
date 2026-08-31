@@ -66,6 +66,11 @@ struct _SFB_USB_MSD_PROTOCOL {
  * point is dangling by the time it would be used. Taking the name makes the
  * stale pointer unrepresentable instead of merely unlikely.
  *
+ * Returns EFI_MEDIA_CHANGED when the host ended the session itself, by issuing
+ * SCSI START STOP UNIT with LOEJ set to the exported LUN. Only the bundled
+ * driver reports that; the resident platform driver never does, so an export
+ * served by it still ends the ways below.
+ *
  * Returns EFI_ABORTED when the operator stopped the session with Volume Down,
  * which is the ordinary ending: an unplug or link loss no longer ends it, so
  * replugging resumes the same session rather than needing a new one.
