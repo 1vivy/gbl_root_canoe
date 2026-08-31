@@ -32,10 +32,11 @@ impl Ext4Dir {
             .source
             .to_str()
             .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
+        let entries_dir = self.remote("/loader/entries");
         let output = Command::new(&self.helper)
-            .args(["list", source, "/loader/entries"])
+            .args(["list", source, entries_dir.as_str()])
             .output()
-            .map_err(|error| io("list BLS files", Path::new("/loader/entries"), error))?;
+            .map_err(|error| io("list BLS files", Path::new(&entries_dir), error))?;
         if output.status.code() == Some(7) {
             return Ok(());
         }
@@ -121,7 +122,8 @@ fn sync_tree(backend: &Ext4Dir, root: &Path, current: &Path) -> Result<(), Ext4E
                 .source
                 .to_str()
                 .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
-            backend.command(&["--recover", "--mkdir-p", "mkdir", source, &remote], None)?;
+            let target = backend.remote(&remote);
+            backend.command(&["--recover", "--mkdir-p", "mkdir", source, &target], None)?;
             sync_tree(backend, root, &path)?;
         } else {
             backend.write_path(

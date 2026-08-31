@@ -1,6 +1,7 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -12,6 +13,17 @@ mod ext4_bootroot;
 mod ext4_cmd;
 #[path = "ext4_sync.rs"]
 mod ext4_sync;
+
+/// The boot root inside an exported volume.
+///
+/// `fastboot oem mass-storage:persist` exports the whole persist partition, and
+/// the boot root on it is the `efisp` directory the BDS opens as `\efisp\...`.
+/// A bare image handed to `--ext4-image` is usually the boot root itself. Which
+/// one this source is gets resolved by looking, never assumed: writing a boot
+/// root to a persist volume's root leaves the BDS reading an untouched `efisp`
+/// and scatters Canoe files through a vendor partition, and the install reports
+/// success either way.
+const BOOT_ROOT_DIR: &str = "/efisp";
 
 const KNOWN_FILES: [&str; 17] = [
     "/canoe.cfg",
@@ -58,6 +70,7 @@ struct Listed {
 pub struct Ext4Dir {
     source: PathBuf,
     helper: PathBuf,
+    prefix: String,
 }
 
 impl Ext4Dir {
@@ -85,7 +98,26 @@ impl Ext4Dir {
                 helper.display()
             )));
         }
-        Ok(Self { source, helper })
+        let prefix = resolve_prefix(&source, &helper)?;
+        Ok(Self {
+            source,
+            helper,
+            prefix,
+        })
+    }
+
+    /// The boot root this source resolved to, empty when it is the volume root.
+    pub fn boot_root_prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Map a boot-root-relative path onto the volume.
+    pub(super) fn remote(&self, path: &str) -> String {
+        if self.prefix.is_empty() {
+            path.to_owned()
+        } else {
+            format!("{}{path}", self.prefix)
+        }
     }
 
     pub fn with_temp_root<T, F>(&self, action: F) -> Result<T, Ext4Error>
@@ -157,6 +189,33 @@ fn locate_helper() -> Result<PathBuf, Ext4Error> {
     Err(Ext4Error::Operation(
         "canoe-ext4 helper not found; set CANOE_EXT4 or place it beside canoe-bootmgr".to_owned(),
     ))
+}
+
+/// Decide whether this source carries its boot root under [`BOOT_ROOT_DIR`] or is
+/// the boot root itself.
+///
+/// A probe that cannot answer is an error, not an assumption: a dirty or mounted
+/// volume must not silently resolve to the volume root and be written there.
+fn resolve_prefix(source: &Path, helper: &Path) -> Result<String, Ext4Error> {
+    let source_arg = source
+        .to_str()
+        .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
+    let output = Command::new(helper)
+        .args(["list", source_arg, BOOT_ROOT_DIR])
+        .output()
+        .map_err(|error| io("probe boot root", Path::new(BOOT_ROOT_DIR), error))?;
+    if output.status.success() {
+        return Ok(BOOT_ROOT_DIR.to_owned());
+    }
+    if output.status.code() == Some(7) {
+        return Ok(String::new());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(Ext4Error::Operation(if detail.is_empty() {
+        format!("cannot probe {BOOT_ROOT_DIR} on {source_arg}")
+    } else {
+        detail
+    }))
 }
 
 fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Ext4Error {

@@ -44,16 +44,17 @@ impl Ext4Dir {
     }
 
     pub(super) fn read_path(&self, path: &str) -> Result<Option<Vec<u8>>, Ext4Error> {
+        let target = self.remote(path);
         let output = Command::new(&self.helper)
             .args([
                 "read",
                 self.source
                     .to_str()
                     .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?,
-                path,
+                target.as_str(),
             ])
             .output()
-            .map_err(|source| io("read", Path::new(path), source))?;
+            .map_err(|source| io("read", Path::new(&target), source))?;
         if output.status.success() {
             return Ok(Some(output.stdout));
         }
@@ -62,7 +63,7 @@ impl Ext4Dir {
         }
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
         Err(Ext4Error::Operation(if detail.is_empty() {
-            format!("read failed: {path}")
+            format!("read failed: {target}")
         } else {
             detail
         }))
@@ -73,13 +74,13 @@ impl Ext4Dir {
             .source
             .to_str()
             .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
-        let parent =
-            path.rsplit_once('/').map_or(
-                "/",
-                |(parent, _)| if parent.is_empty() { "/" } else { parent },
-            );
+        let target = self.remote(path);
+        let parent = target.rsplit_once('/').map_or(
+            "/",
+            |(parent, _)| if parent.is_empty() { "/" } else { parent },
+        );
         self.command(&["--recover", "--mkdir-p", "mkdir", source, parent], None)?;
-        self.command(&["--recover", "write", source, path], Some(bytes))?;
+        self.command(&["--recover", "write", source, target.as_str()], Some(bytes))?;
         Ok(())
     }
 
@@ -88,10 +89,11 @@ impl Ext4Dir {
             .source
             .to_str()
             .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
+        let target = self.remote(path);
         let output = Command::new(&self.helper)
-            .args(["--recover", "remove", source, path])
+            .args(["--recover", "remove", source, target.as_str()])
             .output()
-            .map_err(|source| io("remove", Path::new(path), source))?;
+            .map_err(|source| io("remove", Path::new(&target), source))?;
         if output.status.success() || output.status.code() == Some(7) {
             return Ok(());
         }

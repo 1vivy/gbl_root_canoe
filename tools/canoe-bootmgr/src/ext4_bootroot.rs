@@ -28,14 +28,12 @@ impl BootRoot for Ext4Dir {
             .source
             .to_str()
             .ok_or_else(|| BackendError::Ext4("source path is not UTF-8".to_owned()))?;
+        let entries_dir = self.remote("/loader/entries");
         let output = Command::new(&self.helper)
-            .args(["list", source, "/loader/entries"])
+            .args(["list", source, entries_dir.as_str()])
             .output()
             .map_err(|error| {
-                BackendError::Ext4(format!(
-                    "list BLS files {}: {error}",
-                    Path::new("/loader/entries").display()
-                ))
+                BackendError::Ext4(format!("list BLS files {entries_dir}: {error}"))
             })?;
         if output.status.code() == Some(7) {
             return Ok(Vec::new());
