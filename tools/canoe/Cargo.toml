@@ -1,0 +1,14 @@
+[package]
+name = "canoe"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Canoe host command-line tool"
+
+[[bin]]
+name = "canoe"
+path = "src/main.rs"
+
+[dependencies]
+canoe_bootmgr = { path = "../canoe-bootmgr" }
