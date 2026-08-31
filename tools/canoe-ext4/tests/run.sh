@@ -76,8 +76,8 @@ for image in "$IMAGE_DIR"/*.img; do
 done
 assert_eq 20 "$variants" 'feature-variant count'
 
-# A dirty image is fail-closed unless recovery is explicitly requested. Setting
-# RECOVER as well as the state bit makes e2fsck enter its journal-replay path.
+# A dirty image is fail-closed unless recovery is explicitly requested. The
+# incompatibility RECOVER bit plus invalid state makes the journal replay path.
 dirty="$TMP/dirty.img"
 cp "$IMAGE_DIR/16m-1024b-baseline.img" "$dirty"
 debugfs -w -R 'set_super_value state 0' "$dirty" >/dev/null 2>&1
@@ -97,6 +97,44 @@ assert_eq 0 "$code" 'dirty image with recovery'
 recovery_log=$(<"$TMP/dirty-recovery.err")
 assert_contains "$recovery_log" 'journal_recovery=completed' 'journal recovery marker'
 assert_contains "$recovery_log" 'journal_replay=performed' 'journal replay marker'
+
+# When a Windows cross binary is supplied, repeat the same dirty-journal
+# replay case under Wine and prove the replay entry point is present in the
+# executable.  The normal host-only suite intentionally does not require Wine.
+WINDOWS_BIN=${CANOE_EXT4_WINDOWS_BIN:-}
+if [ -n "$WINDOWS_BIN" ]; then
+    if [ -z "${WINEPATH:-}" ] && [ -d /usr/x86_64-w64-mingw32/bin ]; then
+        WINEPATH=/usr/x86_64-w64-mingw32/bin
+        export WINEPATH
+    fi
+    command -v x86_64-w64-mingw32-nm >/dev/null 2>&1 ||
+        fail "cross nm is required for Windows recovery verification"
+    symbols=$(x86_64-w64-mingw32-nm "$WINDOWS_BIN")
+    assert_contains "$symbols" 'ext2fs_run_ext3_journal' \
+        'Windows journal replay symbol'
+    command -v wine >/dev/null 2>&1 ||
+        fail "Wine is required for Windows recovery verification"
+    windows_dirty="$TMP/windows-dirty.img"
+    cp "$IMAGE_DIR/16m-1024b-baseline.img" "$windows_dirty"
+    debugfs -w -R 'set_super_value state 0' "$windows_dirty" >/dev/null 2>&1
+    debugfs -w -R 'set_super_value feature_incompat 0x2c6' "$windows_dirty" >/dev/null 2>&1
+    set +e
+    printf '%s\n' 'windows recovered write' |
+        wine "$WINDOWS_BIN" --recover write "$windows_dirty" /persist/config/settings.conf \
+            >/dev/null 2>"$TMP/windows-dirty-recovery.err"
+    code=$?
+    set -e
+    assert_eq 0 "$code" 'Windows dirty image with recovery'
+    windows_recovery_log=$(<"$TMP/windows-dirty-recovery.err")
+    assert_contains "$windows_recovery_log" 'journal_recovery=completed' \
+        'Windows journal recovery marker'
+    assert_contains "$windows_recovery_log" 'journal_replay=performed' \
+        'Windows journal replay marker'
+    windows_content=$(wine "$WINDOWS_BIN" read "$windows_dirty" \
+        /persist/config/settings.conf | tr -d '\r')
+    assert_eq 'windows recovered write' "$windows_content" \
+        'Windows recovered write content'
+fi
 
 # The mountinfo override is intentionally supported only for deterministic
 # tests; production reads /proc/self/mountinfo.

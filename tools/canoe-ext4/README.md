@@ -40,8 +40,7 @@ and close it before returning success.
 | ---: | --- |
 | 0 | Success |
 | 2 | Usage or invalid path |
-| 3 | Unsupported/unknown filesystem feature |
-| 4 | Dirty filesystem; rerun with `--recover` |
+| 4 | Dirty filesystem; rerun with `--recover` (recovery is never implicit) |
 | 5 | Source is mounted |
 | 6 | I/O, locking, recovery, or filesystem I/O failure |
 | 7 | Requested path does not exist |
@@ -78,6 +77,9 @@ E2FSPROGS_SRC=/tmp/e2fsprogs ZLIB_PREFIX=/tmp/zlib-mingw sh build-windows.sh
 
 The first configure run is slow (every MinGW probe compiles); results are
 cached in the build directory, so reruns are fast. On Windows the helper uses
-`libext2fs`' `windows_io_manager` against `\\.\PhysicalDrive<N>`: clean reads
-and writes behave as on Linux, while journal recovery of a dirty source stays
-unavailable and is refused with exit code 4 rather than attempted.
+`libext2fs`' `windows_io_manager` against `\\.\PhysicalDrive<N>`. The e2fsprogs
+journal replay objects (`debugfs/journal.c`, `e2fsck/revoke.c`, and
+`e2fsck/recovery.c`) are linked into the helper and use the manager's
+read/write, block-size, and flush callbacks. Consequently dirty-source
+recovery is available on Windows under the same explicit `--recover`
+authorization as Linux; discard/zeroout are not part of the replay path.
