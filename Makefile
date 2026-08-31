@@ -68,7 +68,8 @@ bump:
 		printf 'Invalid VERSION_CODE: %s\n' "$$version_code" >&2; \
 		exit 2; \
 	}; \
-	trap 'rm -f version.mk.tmp tools/canoe-host/canoelib/version.py.tmp targets/magisk_module/module/module.prop.tmp' EXIT HUP INT TERM; \
+	mkdir -p tools/canoe/src; \
+	trap 'rm -f version.mk.tmp tools/canoe/src/version.rs.tmp targets/magisk_module/module/module.prop.tmp' EXIT HUP INT TERM; \
 	printf '%s\n' \
 		'# Single source of truth for Canoe versions.' \
 		'# `make bump` regenerates every derived file.' \
@@ -77,18 +78,15 @@ bump:
 		'CANOE_VERSION_CODE = '"$$version_code" > version.mk.tmp; \
 	if ! cmp -s version.mk.tmp version.mk; then mv version.mk.tmp version.mk; else rm version.mk.tmp; fi; \
 	printf '%s\n' \
-		'"""Build version generated from version.mk by ``make bump``.' \
+		'//! Build version generated from version.mk by `make bump`.' \
+		'//!' \
+		'//! `make version-check` verifies that this generated module stays synchronized.' \
 		'' \
-		'``make version-check`` verifies that this generated module stays synchronized.' \
-		'"""' \
-		'' \
-		'from typing import Final' \
-		'' \
-		"VERSION: Final = \"$$version\"" > tools/canoe-host/canoelib/version.py.tmp; \
-	if ! cmp -s tools/canoe-host/canoelib/version.py.tmp tools/canoe-host/canoelib/version.py; then \
-		mv tools/canoe-host/canoelib/version.py.tmp tools/canoe-host/canoelib/version.py; \
+		"pub const VERSION: &str = \"$$version\";" > tools/canoe/src/version.rs.tmp; \
+	if ! cmp -s tools/canoe/src/version.rs.tmp tools/canoe/src/version.rs; then \
+		mv tools/canoe/src/version.rs.tmp tools/canoe/src/version.rs; \
 	else \
-		rm tools/canoe-host/canoelib/version.py.tmp; \
+		rm tools/canoe/src/version.rs.tmp; \
 	fi; \
 	sed -e "s/^version=.*/version=$$version/" \
 		-e "s/^versionCode=.*/versionCode=$$version_code/" \
@@ -105,14 +103,14 @@ version-check:
 	version='$(CANOE_VERSION)'; \
 	version_code='$(CANOE_VERSION_CODE)'; \
 	fail=0; \
-	if [ -f tools/canoe-host/canoelib/version.py ]; then \
-		actual="$$(awk -F= '$$1 == "VERSION: Final " { value=$$2; sub(/^[ \t]*/, "", value); sub(/[ \t]*$$/, "", value); gsub(/"/, "", value); print value; found=1 } END { if (!found) print "<missing>" }' tools/canoe-host/canoelib/version.py)"; \
+	if [ -f tools/canoe/src/version.rs ]; then \
+		actual="$$(awk -F= '$$1 == "pub const VERSION: &str " { value=$$2; gsub(/["; ]/, "", value); print value; found=1 } END { if (!found) print "<missing>" }' tools/canoe/src/version.rs)"; \
 	else \
 		actual='<missing>'; \
 	fi; \
 	if [ "$$actual" != "$$version" ]; then \
 		printf 'version mismatch: %s expected %s actual %s\n' \
-			'tools/canoe-host/canoelib/version.py' "$$version" "$$actual"; \
+			'tools/canoe/src/version.rs' "$$version" "$$actual"; \
 		fail=1; \
 	fi; \
 	if [ -f targets/magisk_module/module/module.prop ]; then \
@@ -163,13 +161,13 @@ test:
 	cargo test --locked --manifest-path tools/abl-tzmap/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe-gui/Cargo.toml
+	cargo test --locked --manifest-path tools/canoe/Cargo.toml
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
 	$(MAKE) -C tools/canoe-ext4 test
 	sh targets/magisk_module/tests/test_flows.sh
 	sh targets/magisk_module/tests/test_webui.sh
 	sh targets/toolkit_android/tests/test_build_script.sh
-	python3 -m pytest tools/canoe-host
 
 # Download a pinned package asset without ever exposing a partial archive to
 # subsequent builds. Package Makefiles invoke this target with absolute

@@ -240,7 +240,8 @@ recovery, select **Reboot to Recovery** in the BDS menu or open the recovery
 entry through **EFI Tools**.
 ## Boot policy and source detection
 
-The host CLI exposes the same policy writer as every other Canoe surface:
+The native `canoe` CLI exposes the same policy writer as every other Canoe
+surface:
 
 ```bash
 canoe config set-policy [--menu-mode silent|menu] \
@@ -250,7 +251,7 @@ canoe default set bls:pmos
 canoe source detect --json
 ```
 
-These commands delegate to `canoe-bootmgr`; the Python host never edits
+These commands delegate to `canoe-bootmgr`; the native host never edits
 `canoe.cfg`. `default set bls:<stem>` is accepted only when that BLS Type #1
 row is discovered by the same detector used by `bls list`.
 

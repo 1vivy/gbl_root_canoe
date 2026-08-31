@@ -30,18 +30,36 @@ CANOE_VERSION_CODE = 14
 
 ## 电脑端命令界面
 
-电脑端工具包是 Python 3.11 程序。Linux 使用 `./canoe`；Windows 压缩包内附带
-embeddable 解释器，使用 `canoe.cmd`。
+电脑端工具包在归档根目录提供原生 `canoe` 二进制（Windows 为
+`canoe.exe`），并与 `canoe-gui`、`bin/canoe-bootmgr` 并列。不再需要安装
+Python，也不再捆绑解释器。
 
 ```text
 canoe
 canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
+canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] \
               [--vendor-boot IMG] [--allow-new-signer]
-canoe config set-policy [--menu-mode silent|menu] \
-                        [--key-window-ms N] [--menu-timeout-s N]
-canoe default set TARGET
-canoe source detect --json
+canoe entry|config|default|bls|slot|source ...
+canoe -h | --help | --version
+canoe --non-interactive <command> ...
+```
+
+不带参数时，`canoe` 启动交互式五种场景问卷。`--non-interactive` 会被接受并
+丢弃，以保持兼容；`entry|config|default|bls|slot|source` 子命令会原样转发给
+`canoe-bootmgr`。
+
+使用以下命令构建原生电脑端二进制：
+
+```bash
+cargo build --locked --release --manifest-path tools/canoe/Cargo.toml
+```
+
+该 crate 要求 Rust `rust-version = 1.85`。为 Windows 目标交叉构建时，使用
+rustup 工具链：
+
+```bash
+cargo build --locked --release --target x86_64-pc-windows-gnu \
+  --manifest-path tools/canoe/Cargo.toml
 ```
 
 ## `canoe-bootmgr build`
@@ -82,12 +100,7 @@ canoe-bootmgr build --abl <ABL_IMAGE> --probe [--tools <DIR>]
 
 `canoe build` 只是这个统一编排器的电脑端便利入口，不再维护独立的派生实现。
 
-## 电脑端命令界面
-
-电脑端工具包是 Python 3.11 程序。Linux 使用 `./canoe`；Windows 压缩包内附带
-embeddable 解释器，使用 `canoe.cmd`。
-
-不带参数的 `canoe` 启动五种场景的交互问卷。`canoe build` 派生已修补 ABL 和
+`canoe` 不带参数时启动交互式五种场景问卷。`canoe build` 派生已修补 ABL 和
 两个附属文件。默认读取 `images/abl.img` 与 `images/vbmeta.img`；`--abl` 与
 `--vbmeta` 会先将提供文件复制到这些规范路径，再开始派生。镜像必须与正在
 启动的固件匹配。默认路径使用原厂镜像；明确提供的 Custom ROM `vbmeta` 可在
@@ -144,8 +157,9 @@ fastboot flash efisp BDS.efi
 
 ## Windows 发布包
 
-Windows 压缩包附带 `fastboot.exe` 与 `canoe-ext4.exe`（捆绑的用户态 ext4
-引擎）。无需盘符、文件系统驱动或挂载：`canoe.cmd install --slot <A|B>` 会请求
+Windows 压缩包附带原生 `canoe.exe`、`fastboot.exe` 与 `canoe-ext4.exe`（捆绑的
+用户态 ext4 引擎）。不需要安装 Python，也不再捆绑解释器或使用启动脚本。无需
+盘符、文件系统驱动或挂载：`canoe.exe install --slot <A|B>` 会请求
 `canoe-bootmgr source detect --json` 获取导出源，并由 `canoe-bootmgr.exe`
 直接对原始 `\\.\PhysicalDrive<N>` 源执行启动根事务。手动探测磁盘可运行：
 

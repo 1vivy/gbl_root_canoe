@@ -52,12 +52,16 @@ host permission required is permission to open the source device.
 ### 1. Host install
 
 This is the first installation from a Linux or Windows computer. The device
-must already be in Super Fastboot before the host surface runs:
+must already be in Super Fastboot before the native host surface runs:
 
 ```text
 Linux:   ./canoe
-Windows: canoe.cmd
+Windows: canoe.exe
 ```
+
+The Windows archive needs no Python installation or bundled interpreter; the
+native `canoe.exe` is shipped at the archive root and no launcher script is
+required.
 
 `canoe` detects Super Fastboot by reading the `canoe-bds` fastboot variable. If
 that variable is absent, it warns that `fastboot oem mass-storage:persist` does
@@ -212,9 +216,10 @@ explicitly supplied `vbmeta` path and otherwise keeps the safe mode selection.
 
 ## Windows host tools
 
-The Windows archive bundles `canoe-bootmgr.exe`, `canoe-ext4.exe`, and the
-platform-tools fastboot executable. The helper operates on the raw source
-selected by export discovery:
+The Windows archive bundles the native `canoe.exe` at its root, plus
+`canoe-bootmgr.exe`, `canoe-ext4.exe`, and the platform-tools fastboot
+executable. No Python installation or bundled interpreter is needed. The helper
+operates on the raw source selected by export discovery:
 
 ```text
 canoe-ext4.exe inspect \\.\PhysicalDrive<N>

@@ -40,7 +40,7 @@ printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 
 `canoe install` 会请求 `canoe-bootmgr source detect --json`，选择第一个身份为
 `1209:ca0e` 或兼容身份 `05c6:f000`、可读且未挂载的 block 行。这是唯一的
-USB 源探测实现；Python 主机不再遍历 sysfs 或查询 PowerShell。超时或中断后，
+USB 源探测实现；原生主机不再遍历 sysfs 或查询 PowerShell。超时或中断后，
 再次运行会接管 `source detect` 已报告的同一磁盘，而不是在 BDS 导出循环中再次
 请求导出。
 
@@ -79,27 +79,27 @@ canoe install --boot-root /path/to/persist/efisp --slot a --mode 1
 
 ## Windows 原始磁盘安装
 
-Windows 压缩包附带 `canoe-bootmgr.exe`、`canoe-ext4.exe` 和 `fastboot.exe`。
-选择新枚举的 USB 物理磁盘后，boot manager 将其
-`\\.\PhysicalDrive<N>` 原始路径直接交给 helper：
+Windows 压缩包附带原生 `canoe.exe`、`canoe-bootmgr.exe`、
+`canoe-ext4.exe` 和 `fastboot.exe`。选择新枚举的 USB 物理磁盘后，boot manager
+将其 `\\.\PhysicalDrive<N>` 原始路径直接交给 helper：
 
 ```text
-canoe.cmd install --slot a --mode 1
+canoe.exe install --slot a --mode 1
 ```
 
-不使用盘符挂载或第三方文件系统驱动。打包时必须提供 `canoe-ext4.exe`；如果
-当前主机无法原生构建，可运行 `tools/canoe-ext4/build-windows.sh` 后将输出
-传给打包输入覆盖参数。缺少该输入会使构建失败，不会静默删除 Windows 支持。
+不需要安装 Python，也不再捆绑解释器或使用启动脚本。不使用盘符挂载或第三方
+文件系统驱动。打包时必须提供 `canoe-ext4.exe`；如果当前主机无法原生构建，
+可运行 `tools/canoe-ext4/build-windows.sh` 后将输出传给打包输入覆盖参数。
+缺少该输入会使构建失败，不会静默删除 Windows 支持。
 
 操作完成后在**设备上按音量下**，这是唯一的会话取消控制。
 
 配置格式见规范版 [`canoe.cfg 契约`](./canoe-cfg.md)。
 ## 探测与连接源
-
 `canoe-bootmgr source detect --json` 是只读的，枚举候选源不需要提权。每行会
 报告源类型（`block`、`image` 或 `dir`）、路径、身份、型号、大小、启动根目录
-是否存在、读写能力、`needs_privilege`、挂载点和原因。主机 Python 不再遍历
-sysfs 或查询 PowerShell；USB 源探测只有这一份实现。示例空结果为：
+是否存在、读写能力、`needs_privilege`、挂载点和原因。原生主机不遍历 sysfs
+或查询 PowerShell；USB 源探测只有这一份实现。示例空结果为：
 
 ```json
 {"ok":true,"kind":"source.detect","sources":[]}

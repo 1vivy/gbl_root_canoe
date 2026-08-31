@@ -44,13 +44,16 @@ fastboot flash efisp BDS.efi
 
 ### 1. 电脑端首次安装
 
-这是从 Linux 或 Windows 电脑执行首次安装的流程。运行主机界面前，设备
+这是从 Linux 或 Windows 电脑执行首次安装的流程。运行原生主机界面前，设备
 必须已经处于 Super Fastboot：
 
 ```text
 Linux：   ./canoe
-Windows： canoe.cmd
+Windows： canoe.exe
 ```
+
+Windows 压缩包不需要安装 Python，也不再捆绑解释器或使用启动脚本；原生
+`canoe.exe` 位于归档根目录。
 
 `canoe` 通过读取 `canoe-bds` fastboot 变量检测 Super Fastboot。如果该变量
 缺失，程序会警告 `fastboot oem mass-storage:persist` 在 BDS 之外不存在，
@@ -105,7 +108,7 @@ canoe-gui --zh --source /path/to/persist.ext4
 配置和 BLS 行，并提供安装与 OTA 后操作；GUI 不实现另一个配置写入器。
 
 ### Super Fastboot fastboot 变量
-| --- | --- |
+| 变量 | 值及含义 |
 | `canoe-bds` | 项目版本。该变量存在即是设备运行 Super Fastboot 的确定信号。 |
 | `current-slot` | `a` 或 `b`。当 GPT 未标记任何槽位或同时标记两个槽位时，不发布该变量。 |
 
@@ -155,7 +158,10 @@ WebUI，按下 **Install to inactive slot**。该操作要求目标槽位元数�
 然后调用捆绑的本地目录后端：
 
 ```sh
-
+su -c sh ./build.sh --mode 0
+su -c sh ./build.sh --mode 1
+su -c sh ./build.sh --mode 1 --abl /path/abl.img --vbmeta /path/vbmeta.img
+```
 该包装器只接受 Mode 0 和 Mode 1；它只改变启动根目录树，验证所有生成文件，
 失败时删除完整暂存集，并且不写入分区。对于已准备好的暂存目录，等价的
 设备端命令是：
@@ -184,9 +190,10 @@ canoe-bootmgr --boot-root /mnt/vendor/persist/efisp install \
 
 ## Windows 电脑端工具
 
-Windows 压缩包内附带 `canoe-bootmgr.exe`、`canoe-ext4.exe` 和
-`fastboot.exe`。选择导出的 USB 物理磁盘后，boot manager 将
-`\\\\.\\PhysicalDrive<N>` 原始源直接交给 helper：
+Windows 压缩包在根目录附带原生 `canoe.exe`，以及
+`canoe-bootmgr.exe`、`canoe-ext4.exe` 和 `fastboot.exe`。不需要安装 Python，
+也不再捆绑解释器或使用启动脚本。选择导出的 USB 物理磁盘后，boot manager
+将 `\\\\.\\PhysicalDrive<N>` 原始源直接交给 helper：
 
 ```text
 canoe-ext4.exe inspect \\\\.\\PhysicalDrive<N>

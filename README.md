@@ -46,13 +46,13 @@ default unless Volume Up explicitly opens the menu.
 ### 1. Host install
 
 The operator flashes a vulnerable ABL and BDS with fastboot, enters Super
-Fastboot, and runs the interactive host program. The host requests:
+Fastboot, and runs the native host program. The host requests:
 
 ```bash
 fastboot flash abl <vulnerable>.img       # when the installed ABL is fixed
 fastboot flash efisp BDS.efi
 ./canoe
-# Windows: canoe.cmd
+# Windows: canoe.exe
 ```
 
 The questionnaire waits for matching stock `images/abl.img` and
@@ -116,14 +116,24 @@ writers are not part of the release surface.
 
 ## Command surface
 
-The host entry point is the same on Linux and Windows (`canoe` or `canoe.cmd`):
+The host entry point is the native `canoe` binary on Linux and `canoe.exe` on
+Windows, shipped at the toolkit archive root. No Python installation or
+bundled interpreter is needed.
 
 ```text
 canoe
 canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
+canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] \
               [--vendor-boot IMG] [--allow-new-signer]
+canoe entry|config|default|bls|slot|source ...
+canoe -h | --help | --version
+canoe --non-interactive <command> ...
 ```
+
+With no arguments, `canoe` starts the interactive five-scenario questionnaire.
+`--non-interactive` is accepted and discarded for compatibility. The
+`entry|config|default|bls|slot|source` verbs are forwarded verbatim to
+`canoe-bootmgr`.
 
 The canonical single-writer API is `canoe-bootmgr`:
 
@@ -137,7 +147,6 @@ canoe-bootmgr ... bls list
 `--boot-root` selects a local directory; `--source` and `--ext4-image` select
 the direct ext4 backend and are mutually exclusive with it. The host `canoe`
 surface uses the BDS export as its direct source when `--boot-root` is omitted.
-The host implementation is Python and never invokes a shell.
 
 The bilingual graphical surface uses the same protocol:
 

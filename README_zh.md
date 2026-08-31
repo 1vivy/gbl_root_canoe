@@ -38,14 +38,14 @@ image。启动根目录为空、缺失、无法访问或不可用时，首次运
 
 ### 1. 电脑端首次安装
 
-操作员使用 fastboot 刷入带漏洞的 ABL 和 BDS，进入 Super Fastboot，再运行主机
-界面：
+操作员使用 fastboot 刷入带漏洞的 ABL 和 BDS，进入 Super Fastboot，再运行原生
+主机程序：
 
 ```bash
 fastboot flash abl <vulnerable>.img       # 当前 ABL 已修复时执行
 fastboot flash efisp BDS.efi
 ./canoe
-# Windows：canoe.cmd
+# Windows：canoe.exe
 ```
 
 问卷会等待匹配的原厂 `images/abl.img` 和 `images/vbmeta.img`，询问槽位与模式，
@@ -100,14 +100,22 @@ su -c sh ./build.sh --mode 1
 
 ## 命令界面
 
-Linux 与 Windows 使用同一电脑端入口（`canoe` 或 `canoe.cmd`）：
+Linux 使用原生 `canoe`，Windows 使用原生 `canoe.exe`；二者都位于工具包归档
+根目录。不需要安装 Python，也不再捆绑解释器或使用启动脚本。
 
 ```text
 canoe
 canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
+canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] \
               [--vendor-boot IMG] [--allow-new-signer]
+canoe entry|config|default|bls|slot|source ...
+canoe -h | --help | --version
+canoe --non-interactive <command> ...
 ```
+
+不带参数时，`canoe` 启动交互式五种场景问卷。`--non-interactive` 会被接受并
+丢弃，以保持兼容；`entry|config|default|bls|slot|source` 子命令会原样转发给
+`canoe-bootmgr`。
 
 规范的单一写入 API 是 `canoe-bootmgr`：
 
@@ -119,8 +127,7 @@ canoe-bootmgr ... bls list
 ```
 
 `--boot-root` 选择本地目录；`--source` 与 `--ext4-image` 选择直接 ext4 后端，
-并与其互斥。省略 `--boot-root` 时，电脑端 `canoe` 界面使用 BDS 导出的直接
-源。电脑端实现是 Python，不会调用 shell。
+并与其互斥。省略 `--boot-root` 时，电脑端 `canoe` 使用 BDS 导出的直接源。
 
 双语图形界面使用同一协议：
 

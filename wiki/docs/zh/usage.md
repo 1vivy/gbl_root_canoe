@@ -210,7 +210,7 @@ fastboot reboot
 **Reboot to Recovery**，或通过 **EFI Tools** 打开 Recovery 启动项。
 ## 启动策略与源探测
 
-电脑端 `canoe` 将策略修改转交给唯一的 `canoe-bootmgr` 写入器：
+电脑端原生 `canoe` 将策略修改转交给唯一的 `canoe-bootmgr` 写入器：
 
 ```bash
 canoe config set-policy [--menu-mode silent|menu] \

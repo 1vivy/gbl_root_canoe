@@ -3,7 +3,7 @@ include ../../version.mk
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_canoe_gui submodule_canoe_ext4 submodule_ablfvextractor \
-	submodule_vbmetafixer canoe_host build
+	submodule_vbmetafixer canoe build
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -77,11 +77,11 @@ submodule_vbmetafixer: copy_resources
 		   [ ! -f build/toolkit/bin/vbmetabackup ]; then $(MAKE) clean build; fi
 	cp ../../tools/vbmetafixer/build/toolkit/bin/vbmetaport ./build/toolkit/bin/vbmetaport
 	cp ../../tools/vbmetafixer/build/toolkit/bin/vbmetabackup ./build/toolkit/bin/vbmetabackup
-canoe_host: copy_resources
-	cp -r ../../tools/canoe-host/canoelib ./build/toolkit/canoelib
-	find ./build/toolkit/canoelib -type d -name __pycache__ -prune -exec rm -rf {} +
-	cp ../../tools/canoe-host/canoe ./build/toolkit/canoe
+canoe: copy_resources
+	cargo build --locked --release --manifest-path ../../tools/canoe/Cargo.toml
+	test -x ../../tools/canoe/target/release/canoe
+	cp ../../tools/canoe/target/release/canoe ./build/toolkit/canoe
 	chmod +x ./build/toolkit/canoe
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_gui submodule_canoe_ext4 submodule_ablfvextractor submodule_vbmetafixer canoe_host
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_gui submodule_canoe_ext4 submodule_ablfvextractor submodule_vbmetafixer canoe
 	# zip
 	cd build/toolkit && zip -r ../toolkit_linux.zip ./

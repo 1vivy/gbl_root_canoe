@@ -3,15 +3,10 @@ include ../../version.mk
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_canoe_gui submodule_ablfvextractor submodule_vbmetafixer \
-	canoe_host python_embed platform_tools ext4_tools build
+	canoe platform_tools ext4_tools build
 
 ROOT_DIR := $(abspath ../..)
 
-PYTHON_EMBED_VERSION ?= 3.14.7
-PYTHON_EMBED_SHA256 ?= d297e5ff019966817ad8502465176139f2d3d840fa4ed84b13bed399a6ab1f15
-PYTHON_EMBED_URL ?= https://www.python.org/ftp/python/$(PYTHON_EMBED_VERSION)/python-$(PYTHON_EMBED_VERSION)-embed-amd64.zip
-PYTHON_EMBED_CACHE ?= $(ROOT_DIR)/.cache/python-embed
-PYTHON_EMBED_ARCHIVE = $(PYTHON_EMBED_CACHE)/python-$(PYTHON_EMBED_VERSION)-embed-amd64.zip
 
 PLATFORM_TOOLS_URL ?= https://dl.google.com/android/repository/platform-tools_r37.0.0-win.zip
 PLATFORM_TOOLS_SHA256 ?= 4fe305812db074cea32903a489d061eb4454cbc90a49e8fea677f4b7af764918
@@ -83,23 +78,11 @@ submodule_vbmetafixer: copy_resources
 		   [ ! -f build/toolkit_win/bin/vbmetabackup.exe ]; then $(MAKE) build_windows; fi
 	cp ../../tools/vbmetafixer/build/toolkit_win/bin/vbmetaport.exe ./build/toolkit/bin/vbmetaport.exe
 	cp ../../tools/vbmetafixer/build/toolkit_win/bin/vbmetabackup.exe ./build/toolkit/bin/vbmetabackup.exe
-canoe_host: copy_resources
-	# Keep one user-facing launcher; the package is an internal implementation detail.
-	cp -r ../../tools/canoe-host/canoelib ./build/toolkit/canoelib
-	find ./build/toolkit/canoelib -type d -name __pycache__ -prune -exec rm -rf {} +
-	cp ../../tools/canoe-host/canoe ./build/toolkit/canoe
-	cp ../../tools/canoe-host/canoe.cmd ./build/toolkit/canoe.cmd
-	chmod +x ./build/toolkit/canoe
-python_embed: copy_resources
-	$(MAKE) -C "$(ROOT_DIR)" fetch-verified \
-		FETCH_URL="$(PYTHON_EMBED_URL)" \
-		FETCH_SHA256="$(PYTHON_EMBED_SHA256)" \
-		FETCH_DEST="$(PYTHON_EMBED_ARCHIVE)"
-	@set -eu; \
-	rm -rf build/toolkit/python; \
-	mkdir -p build/toolkit/python; \
-	unzip -q "$(PYTHON_EMBED_ARCHIVE)" -d build/toolkit/python; \
-	test -f build/toolkit/python/python.exe
+canoe: copy_resources
+	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/canoe/Cargo.toml
+	test -f ../../tools/canoe/target/x86_64-pc-windows-gnu/release/canoe.exe
+	cp ../../tools/canoe/target/x86_64-pc-windows-gnu/release/canoe.exe ./build/toolkit/canoe.exe
+	chmod +x ./build/toolkit/canoe.exe
 platform_tools: copy_resources
 	$(MAKE) -C "$(ROOT_DIR)" fetch-verified \
 		FETCH_URL="$(PLATFORM_TOOLS_URL)" \
@@ -130,5 +113,5 @@ ext4_tools: copy_resources
 	}
 	mkdir -p build/toolkit/bin
 	cp "$(CANOE_EXT4_WINDOWS)" ./build/toolkit/bin/canoe-ext4.exe
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_gui submodule_ablfvextractor submodule_vbmetafixer canoe_host python_embed platform_tools ext4_tools
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_gui submodule_ablfvextractor submodule_vbmetafixer canoe platform_tools ext4_tools
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./

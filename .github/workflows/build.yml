@@ -14,13 +14,6 @@ jobs:
     - uses: actions/checkout@v4
     - name: Check version consistency
       run: make version-check
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.12'
-
-    - name: Install pytest
-      run: python3 -m pip install pytest
 
     - name: Install dependencies
       run: |
@@ -105,20 +98,9 @@ jobs:
         test -f artifacts/toolkit_windows/bin/extractfv.exe
         test -x artifacts/toolkit_android/bin/extractfv
         test -x artifacts/magisk_module/bin/extractfv
-        # One launcher, not four. `canoe` with no arguments is the interactive
-        # wizard; `canoe build|install` are the non-interactive subcommands CI
-        # and scripts use.
-        test -x "artifacts/toolkit_linux/canoe"
-        # Both halves must ship: the .cmd only picks the interpreter, and the
-        # extensionless file beside it is the script that interpreter runs.
-        test -f "artifacts/toolkit_windows/canoe"
-        test -f "artifacts/toolkit_windows/canoe.cmd"
-        test -f artifacts/toolkit_windows/python/python.exe
+        test -x artifacts/toolkit_linux/canoe
+        test -f artifacts/toolkit_windows/canoe.exe
         test -f artifacts/toolkit_android/build.sh
-        for package in toolkit_linux toolkit_windows; do
-          test -d "artifacts/$package/canoelib"
-          test -z "$(find "artifacts/$package" -type d -name __pycache__ -print -quit)"
-        done
         test -f artifacts/magisk_module/customize.sh
         test -f artifacts/magisk_module/bin/bl_flasher.sh
         test -f artifacts/magisk_module/bin/canoe_vendor_boot.sh
@@ -205,6 +187,11 @@ jobs:
           *"ELF 64-bit"*"x86-64"*) ;;
           *) echo "unexpected Linux canoe-bootmgr: $linux_bootmgr_type"; exit 1 ;;
         esac
+        linux_canoe_type="$(file -b artifacts/toolkit_linux/canoe)"
+        case "$linux_canoe_type" in
+          *"ELF 64-bit"*"x86-64"*) ;;
+          *) echo "unexpected Linux canoe: $linux_canoe_type"; exit 1 ;;
+        esac
         linux_gui_type="$(file -b artifacts/toolkit_linux/bin/canoe-gui)"
         case "$linux_gui_type" in
           *"ELF 64-bit"*"x86-64"*) ;;
@@ -214,6 +201,11 @@ jobs:
         case "$windows_bootmgr_type" in
           *"PE32+ executable"*"x86-64"*) ;;
           *) echo "unexpected Windows canoe-bootmgr: $windows_bootmgr_type"; exit 1 ;;
+        esac
+        windows_canoe_type="$(file -b artifacts/toolkit_windows/canoe.exe)"
+        case "$windows_canoe_type" in
+          *"PE32+ executable"*"x86-64"*) ;;
+          *) echo "unexpected Windows canoe: $windows_canoe_type"; exit 1 ;;
         esac
         windows_gui_type="$(file -b artifacts/toolkit_windows/canoe-gui.exe)"
         case "$windows_gui_type" in
@@ -278,17 +270,15 @@ jobs:
         done
         for package in toolkit_linux toolkit_windows; do
           archive_entries="$(unzip -Z1 "release/$package.zip")"
-          case "$archive_entries" in
-            *__pycache__*) echo "__pycache__ leaked into $package archive"; exit 1 ;;
-          esac
+          if printf '%s\n' "$archive_entries" | grep -Eq '(^|/)canoelib(/|$)|(^|/)python(/|$)|(^|/)[^/]*\.py$|(^|/)canoe\.cmd$'; then
+            echo "Python member leaked into $package archive"; exit 1
+          fi
         done
-        for entry in bin/canoe-gui canoe-gui; do
-          unzip -Z1 release/toolkit_linux.zip | grep -Fxq "$entry" || {
-            echo "missing Linux toolkit archive member: $entry"; exit 1;
-          }
-        done
-        unzip -Z1 release/toolkit_windows.zip | grep -Fxq canoe-gui.exe || {
-          echo "missing Windows toolkit archive member: canoe-gui.exe"; exit 1;
+        unzip -Z1 release/toolkit_linux.zip | grep -Eq '^(\./)?canoe$' || {
+          echo "missing Linux toolkit archive member: canoe"; exit 1;
+        }
+        unzip -Z1 release/toolkit_windows.zip | grep -Eq '^(\./)?canoe\.exe$' || {
+          echo "missing Windows toolkit archive member: canoe.exe"; exit 1;
         }
 
         # The archive is the deliverable, so assert the modes inside the archive
@@ -302,7 +292,8 @@ jobs:
         done
         rm -rf modecheck
         rm -rf winmodecheck && unzip -q -o release/toolkit_windows.zip -d winmodecheck
-        for exe in winmodecheck/canoe-gui.exe winmodecheck/bin/*.exe; do
+        test -x winmodecheck/canoe.exe || { echo "not executable in archive: canoe.exe"; exit 1; }
+        for exe in winmodecheck/canoe.exe winmodecheck/canoe-gui.exe winmodecheck/bin/*.exe; do
           test -f "$exe" || { echo "missing Windows executable: $exe"; exit 1; }
           dlls="$(x86_64-w64-mingw32-objdump -p "$exe" | grep -i 'DLL Name' || true)"
           printf '%s DLL imports:\n%s\n' "$exe" "$dlls"

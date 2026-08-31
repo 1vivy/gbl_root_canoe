@@ -26,7 +26,7 @@ features:
     details: Super Fastboot command reference — boot menu, mass storage, lock/unlock BL, flash, and reboot
     link: /usage
   - title: USB Mass Storage
-    details: Export persist or logfs, repair the boot root, and mount ext4 on Windows with the bundled tool
+    details: Export persist or logfs, repair the boot root, and access ext4 on Windows with the bundled tool without mounting it
     link: /mass-storage
   - title: OTA
     details: Press Flash To Other Slot after installing an OTA and before rebooting; includes anti-rollback cautions

@@ -32,18 +32,37 @@ the `canoe-bds` fastboot variable.
 
 ## Host command surface
 
-The host toolkit is a Python 3.11 package. Linux uses `./canoe`; the Windows
-archive includes an embeddable interpreter and uses `canoe.cmd`.
+The host toolkit ships a native `canoe` binary at the archive root (`canoe.exe`
+on Windows), alongside `canoe-gui` and `bin/canoe-bootmgr`. No Python
+installation or bundled interpreter is required.
 
 ```text
 canoe
 canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
+canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] \
               [--vendor-boot IMG] [--allow-new-signer]
-canoe config set-policy [--menu-mode silent|menu] \
-                        [--key-window-ms N] [--menu-timeout-s N]
-canoe default set TARGET
-canoe source detect --json
+canoe entry|config|default|bls|slot|source ...
+canoe -h | --help | --version
+canoe --non-interactive <command> ...
+```
+
+With no arguments, `canoe` starts the interactive five-scenario questionnaire.
+`--non-interactive` is accepted and discarded for compatibility. The
+`entry|config|default|bls|slot|source` verbs are forwarded verbatim to
+`canoe-bootmgr`.
+
+Build the native host binary with:
+
+```bash
+cargo build --locked --release --manifest-path tools/canoe/Cargo.toml
+```
+
+The crate requires Rust `rust-version = 1.85`. Use the rustup toolchain when
+cross-building the Windows target:
+
+```bash
+cargo build --locked --release --target x86_64-pc-windows-gnu \
+  --manifest-path tools/canoe/Cargo.toml
 ```
 
 ## `canoe-bootmgr build`
@@ -156,12 +175,13 @@ vendor data.
 
 ## Windows package
 
-The Windows archive bundles `fastboot.exe` and `canoe-ext4.exe`, the bundled
-userspace ext4 engine. No drive letter, filesystem driver, or mount is
-involved: `canoe.cmd install --slot <A|B>` asks `canoe-bootmgr source detect --json`
-for the exported source and runs the boot-root transaction through
-`canoe-bootmgr.exe` against the raw `\\.\PhysicalDrive<N>` source. To probe a
-disk by hand:
+The Windows archive bundles the native `canoe.exe`, `fastboot.exe`, and
+`canoe-ext4.exe`, the bundled userspace ext4 engine. No Python installation or
+bundled interpreter is needed, and no launcher script is used. No drive letter,
+filesystem driver, or mount is involved: `canoe.exe install --slot <A|B>` asks
+`canoe-bootmgr source detect --json` for the exported source and runs the
+boot-root transaction through `canoe-bootmgr.exe` against the raw
+`\\.\PhysicalDrive<N>` source. To probe a disk by hand:
 
 ```text
 canoe-ext4.exe inspect \\.\PhysicalDrive<N>

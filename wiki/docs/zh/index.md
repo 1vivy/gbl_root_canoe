@@ -26,7 +26,7 @@ features:
     details: Super Fastboot 命令参考——启动菜单、Mass Storage、BL 回锁/解锁、刷写与重启
     link: /zh/usage
   - title: USB Mass Storage
-    details: 导出 persist 或 logfs，修复启动根目录，并使用内置工具在 Windows 挂载 ext4
+    details: 导出 persist 或 logfs，修复启动根目录，并使用内置工具在 Windows 无需挂载即可访问 ext4
     link: /zh/mass-storage
   - title: OTA 更新
     details: 安装 OTA 后、重启前按下 Flash To Other Slot，并了解 anti-rollback 注意事项

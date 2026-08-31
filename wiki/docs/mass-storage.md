@@ -48,7 +48,7 @@ printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 `canoe install` asks `canoe-bootmgr source detect --json` for candidates and
 uses the first readable, unmounted block row whose identity is `1209:ca0e` or
 the compatibility identity `05c6:f000`. This is the only USB source detector;
-the Python host does not walk sysfs or query PowerShell. A run that timed out
+the native host does not walk sysfs or query PowerShell. A run that timed out
 or was interrupted can therefore be repeated against the same live session:
 it adopts the disk already reported by `source detect` instead of asking the
 BDS for a second export.
@@ -91,19 +91,21 @@ canoe install --boot-root /path/to/persist/efisp --slot a --mode 1
 
 ## Windows raw-disk install
 
-The Windows package bundles `canoe-bootmgr.exe`, `canoe-ext4.exe`, and
-`fastboot.exe`. After selecting the newly enumerated USB physical disk, the
-boot manager passes its `\\.\PhysicalDrive<N>` source directly to the helper:
+The Windows package bundles the native `canoe.exe`, `canoe-bootmgr.exe`,
+`canoe-ext4.exe`, and `fastboot.exe`. After selecting the newly enumerated USB
+physical disk, the boot manager passes its `\\.\PhysicalDrive<N>` source
+directly to the helper:
 
 ```text
-canoe.cmd install --slot a --mode 1
+canoe.exe install --slot a --mode 1
 ```
 
-No drive-letter filesystem mount or third-party filesystem driver is used.
-The package build requires `canoe-ext4.exe`; if a native build is unavailable,
-provide the output of `tools/canoe-ext4/build-windows.sh` through the package
-input override. Missing input fails the build rather than dropping Windows
-support.
+No Python installation or bundled interpreter is needed, and no launcher script
+is used. No drive-letter filesystem mount or third-party filesystem driver is
+used. The package build requires `canoe-ext4.exe`; if a native build is
+unavailable, provide the output of `tools/canoe-ext4/build-windows.sh` through
+the package input override. Missing input fails the build rather than dropping
+Windows support.
 
 Press **Volume Down on the device** after the operation. This is the only
 session-cancellation control.
