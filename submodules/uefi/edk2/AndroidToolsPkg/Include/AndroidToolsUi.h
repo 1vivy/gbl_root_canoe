@@ -174,6 +174,17 @@ AtReportNextRow (
 } while (FALSE)
 
 /**
+  Show an already-built report on the console without taking ownership of it.
+  The caller retains ownership and may dump the same report before or after
+  this call.
+**/
+VOID
+AtUiShowBuiltReport (
+  IN CONST CHAR16   *Title,
+  IN CONST AT_REPORT *Report
+  );
+
+/**
   Build Source's report, page it on the console (volume keys page, power
   returns), and free it. Reports the build status instead when it fails.
 **/

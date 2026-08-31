@@ -122,12 +122,35 @@ image classes, memory descriptors, and known Qualcomm policy protocol presence;
 they do not print raw addresses or call vendor methods. **Dump Passive Inventory
 to logfs** explicitly overwrites `\SurfaceTools.log` on the already-mounted
 `logfs` volume, flushes it, and closes every file handle before returning to
-BDS. **Run Read-only Active Probes** requires a separate Volume Up confirmation
-(Power cancels, so a held menu-select key cannot authorize the calls) before
-calling exactly five documented getters for the maximum CPU index, TrustZone
-version, verified-boot state, and Keymaster status. A successful call is
-reported as `authorized`; the tool does not infer that an observed policy is
-effective, and the active getters write no persistent state.
+BDS; this passive dump is unchanged. **Run Read-only Policy Probe** requires a
+separate Volume Up confirmation (Power cancels, so a held menu-select key
+cannot authorize the calls) before issuing up to seven read-only calls from a
+fixed allowlist: the existing getters for the maximum CPU index, TrustZone
+version, verified-boot state, and Keymaster status, plus a TrustZone secure-state
+read and an applied-debug-policy readback. The active report is built exactly
+once, written exactly once to the dedicated `\SurfacePolicy.log` on `logfs`,
+and the same in-memory report is then shown; the dump and the UI never re-run
+the calls. The file is bounded ASCII `key=value` rows under `[Policy.v1]`,
+introduced by `SurfaceTools policy probe`, `format=1`, `encoding=ASCII`,
+`policy_payload=complete_hex`, and `physical_effectiveness=not_observed`.
+
+The policy readback supports only SCM protocol revisions `0x40001` (the
+960-byte revision-2 layout) and `0x50002` (the 1220-byte revision-5 layout),
+reached through the same verified `ScmSipSysCall` prefix with no tail access.
+Any other reported size or revision — and any canary corruption or parse
+failure — is reported with deterministic status rows and no semantic decoding.
+Whenever the policy SCM call returns successfully, the complete 960- or
+1220-byte response is also emitted in 32-byte hexadecimal chunks named
+`policy.raw.<offset>`, including its root hashes and serial-number array. The
+log additionally carries the raw secure-state common/status words, validated
+policy fields, and separately named vendor predicates (`production`,
+`debug-disabled`, `image-cert-debug-disabled`, `secure-device`) alongside the
+named basic and extended flag bits. Unknown and OEM bits remain raw only. A
+successful call is reported as `authorized`; it proves only that the firmware
+authorized the
+readback, never that EUD, SWD, or JTAG debugging is physically effective. The
+probe calls do not alter firmware or debug state; the active flow only replaces
+the explicitly named `\SurfacePolicy.log`.
 
 USB Mass Storage exports one partition as one USB disk. The same export is
 available from fastboot:

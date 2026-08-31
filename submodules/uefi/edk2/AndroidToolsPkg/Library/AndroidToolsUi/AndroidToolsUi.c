@@ -398,37 +398,36 @@ AtMovePage (
 }
 
 VOID
-AtUiShowReport (
-  IN CONST AT_REPORT_SOURCE *Source
+AtUiShowBuiltReport (
+  IN CONST CHAR16   *Title,
+  IN CONST AT_REPORT *Report
   )
 {
-  AT_REPORT   Report;
-  EFI_STATUS  Status;
   UINTN       Start;
   UINTN       End;
   UINTN       Index;
   AT_KEY      Key;
   CHAR16      Subtitle[64];
 
-  Status = Source->Builder (&Report);
-  if (EFI_ERROR (Status)) {
-    AtUiReportStatus (Source->Title, Status);
+  if (Title == NULL || Report == NULL ||
+      (Report->Count != 0 && Report->Rows == NULL) ||
+      Report->Count > Report->Capacity) {
     return;
   }
 
   Start = 0;
   while (TRUE) {
     End = Start + AT_REPORT_PAGE_ROWS;
-    if (End > Report.Count) {
-      End = Report.Count;
+    if (End > Report->Count) {
+      End = Report->Count;
     }
     UnicodeSPrint (Subtitle, sizeof (Subtitle), L"Rows %Lu-%Lu of %Lu%s",
-                   (UINT64)((Report.Count == 0) ? 0 : Start + 1),
-                   (UINT64)End, (UINT64)Report.Count,
-                   Report.Truncated ? L" (truncated)" : L"");
-    AtUiBeginScreen (Source->Title, Subtitle);
+                   (UINT64)((Report->Count == 0) ? 0 : Start + 1),
+                   (UINT64)End, (UINT64)Report->Count,
+                   Report->Truncated ? L" (truncated)" : L"");
+    AtUiBeginScreen (Title, Subtitle);
     for (Index = Start; Index < End; Index++) {
-      Print (L"%s\r\n", Report.Rows[Index].Text);
+      Print (L"%s\r\n", Report->Rows[Index].Text);
     }
     AtUiEndScreen (L"Vol+/- page, power back");
 
@@ -437,10 +436,27 @@ AtUiShowReport (
       break;
     }
     if (Key == AtKeyUp) {
-      Start = AtMovePage (Start, Report.Count, AT_REPORT_PAGE_ROWS, FALSE);
+      Start = AtMovePage (Start, Report->Count, AT_REPORT_PAGE_ROWS, FALSE);
     } else if (Key == AtKeyDown) {
-      Start = AtMovePage (Start, Report.Count, AT_REPORT_PAGE_ROWS, TRUE);
+      Start = AtMovePage (Start, Report->Count, AT_REPORT_PAGE_ROWS, TRUE);
     }
   }
+}
+
+VOID
+AtUiShowReport (
+  IN CONST AT_REPORT_SOURCE *Source
+  )
+{
+  AT_REPORT  Report;
+  EFI_STATUS Status;
+
+  Status = Source->Builder (&Report);
+  if (EFI_ERROR (Status)) {
+    AtUiReportStatus (Source->Title, Status);
+    return;
+  }
+
+  AtUiShowBuiltReport (Source->Title, &Report);
   AtReportFree (&Report);
 }

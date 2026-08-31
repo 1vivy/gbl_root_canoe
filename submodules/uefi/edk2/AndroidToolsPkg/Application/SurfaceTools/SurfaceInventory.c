@@ -31,6 +31,7 @@
 #include <Protocol/SimpleFileSystem.h>
 
 #include "SurfaceInventory.h"
+#include "SurfaceScmProbes.h"
 
 CONST AT_REPORT_SOURCE gStPassiveReports[ST_PASSIVE_REPORT_COUNT] = {
   { L"Execution Summary",     StBuildSummaryReport },
@@ -86,9 +87,7 @@ typedef struct {
 } ST_TABLE;
 
 STATIC BOOLEAN HasScmQuery (VOID *P) {
-  QCOM_SCM_PROTOCOL *S = P;
-  return S->Revision == QCOM_SCM_PROTOCOL_REVISION &&
-         S->ScmGetVersion != NULL;
+  return StScmProtocolSupportsSip ((QCOM_SCM_PROTOCOL *)P);
 }
 STATIC BOOLEAN HasQseeDispatch (VOID *P) {
   QCOM_QSEECOM_PROTOCOL *Q = P;

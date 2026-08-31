@@ -106,11 +106,27 @@ boot 处理函数在该镜像 kernel 段的开头识别出 `MZ` 签名，于是�
 协议 GUID、配置表 GUID、已加载镜像类别、内存描述符和已知 Qualcomm 策略协议是否
 存在；不会显示原始地址，也不会调用厂商方法。**Dump Passive Inventory to logfs**
 会明确覆盖已挂载 `logfs` 卷上的 `\SurfaceTools.log`，刷新文件内容并在返回 BDS 前
-关闭全部文件句柄。执行 **Run Read-only Active Probes** 前必须再次按音量加键确认
-（电源键用于取消，因此长按菜单选择键不会授权调用）；该操作只调用五个已记录的
-读取方法，用于查询 CPU 最大索引、TrustZone 版本、Verified Boot 状态和 Keymaster
-状态。调用成功时显示 `authorized`；工具不会据此推断策略已实际生效，且主动读取
-方法不会写入持久状态。
+关闭全部文件句柄；该被动导出保持不变。执行 **Run Read-only Policy Probe** 前必须
+再次按音量上键确认（电源键用于取消，因此长按菜单选择键不会授权调用）；该操作最多
+发出固定白名单中的七个只读调用：原有的 CPU 最大索引、TrustZone 版本、Verified
+Boot 状态和 Keymaster 状态读取方法，外加一次 TrustZone 安全状态读取和一次已应用
+调试策略回读。主动报告只构建一次，只写入 `logfs` 上专用的 `\SurfacePolicy.log`
+一次，随后在界面展示同一份内存中的报告；导出与界面都不会重新执行这些调用。文件为
+`[Policy.v1]` 下有界的 ASCII `key=value` 行，开头为 `SurfaceTools policy probe`、
+`format=1`、`encoding=ASCII`、`policy_payload=complete_hex` 与
+`physical_effectiveness=not_observed`。
+
+策略回读仅支持 SCM 协议修订 `0x40001`（960 字节 revision-2 布局）与 `0x50002`
+（1220 字节 revision-5 布局），两者都通过与 `ScmSipSysCall` 相同的已验证协议前缀
+访问，不做尾部访问。报告的大小或修订不匹配、canary 损坏或解析失败时，会输出确定性
+状态行，但不做语义解码。策略 SCM 调用成功时，完整的 960 或 1220 字节响应也会按
+32 字节十六进制块输出为 `policy.raw.<offset>`，包括 root 哈希和序列号数组。日志还
+包含原始安全状态 common/status 字、经过验证的策略字段，以及单独命名的厂商谓词
+（`production`、`debug-disabled`、`image-cert-debug-disabled`、`secure-device`），
+并同时列出基本与扩展标志位。未知位与 OEM 位仅以原始形式保留。调用成功时显示
+`authorized`；这只
+证明固件授权了此次回读，绝不证明 EUD、SWD 或 JTAG 调试在物理上实际生效。探测调用
+不会更改固件或调试状态；主动流程只会替换明确命名的 `\SurfacePolicy.log`。
 
 USB Mass Storage 会将一个分区作为一个 USB 磁盘导出。也可以在 fastboot 中导出：
 

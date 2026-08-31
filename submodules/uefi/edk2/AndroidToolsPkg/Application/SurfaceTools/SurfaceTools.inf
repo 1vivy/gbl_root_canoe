@@ -11,7 +11,7 @@
   BASE_NAME                      = SurfaceTools
   FILE_GUID                      = 8347084D-122A-4EC1-8F60-902A94859197
   MODULE_TYPE                    = UEFI_APPLICATION
-  VERSION_STRING                 = 0.1
+  VERSION_STRING                 = 0.2
   ENTRY_POINT                    = SurfaceToolsEntry
 
 [Sources]
@@ -24,6 +24,10 @@
   SurfaceProbes.c
   SurfaceModel.h
   SurfaceModel.c
+  SurfaceScmProbes.c
+  SurfaceScmProbes.h
+  SurfacePolicy.c
+  SurfacePolicy.h
 
 [Packages]
   ArmPkg/ArmPkg.dec
@@ -35,6 +39,7 @@
   AndroidToolsUi
   BaseLib
   BaseMemoryLib
+  CacheMaintenanceLib
   DebugLib
   MemoryAllocationLib
   PrintLib

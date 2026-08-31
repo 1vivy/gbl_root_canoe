@@ -89,8 +89,10 @@ test_log: test_log.c \
 	$(CC) $(CFLAGS) -DNO_MSABI_VA_FUNCS -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 test_surface: test_surface.c \
-	../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.c \
-	../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.h
+  ../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.c \
+  ../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.h \
+  ../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfacePolicy.c \
+  ../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfacePolicy.h
 	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 clean:
