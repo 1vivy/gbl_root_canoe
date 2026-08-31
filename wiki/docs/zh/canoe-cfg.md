@@ -1,9 +1,9 @@
 # `canoe.cfg`——启动根目录契约
 
-`canoe.cfg` 是 7.x 的 BDS 菜单状态。7.0.0-b2 保持下文所述语法不变；
-本版本只将受管理 Android 文件与启动项的生命周期从共享加载器改为独立的
-A/B 三件套。BDS 只读取该文件；电脑端的 `canoe-bootmgr` 事务与设备端模块
-负责写入。文件位于 `persist/efisp` 下，原始 `efisp` 分区只包含 `BDS.efi`。
+`canoe.cfg` 是 7.x 的 BDS 菜单状态。7.0.0-b2 使用显式启动策略；新安装默认
+为 Silent，写入器与 BDS 共享下文语法。BDS 只读取该文件；电脑端
+`canoe-bootmgr` 事务与设备端模块负责写入。文件位于 `persist/efisp` 下，
+原始 `efisp` 分区只包含 `BDS.efi`。
 
 ## 位置与语法
 
@@ -29,10 +29,42 @@ ID 为 1–31 个 `[A-Za-z0-9._-]` 字符；标题为 1–47 个可打印 ASCII 
 | --- | --- | --- | --- |
 | `version` | `1` | 必需 | 配置格式版本 |
 | `generation` | `0..4294967295` | `0` | 递增的安装世代编号 |
-| `timeout` | `0..60` | `5` | 无操作时启动默认项前等待的秒数 |
-| `default` | 启动项 ID | 无 | 无人操作时启动的启动项 |
+| `menu-mode` | `silent`、`menu` | 新安装为 `silent` | 启动策略 |
+| `key-window` | `0..=10000` | `1200` | 音量键采样窗口（毫秒） |
+| `menu-timeout` | `0..=300` | `5` | 菜单倒计时（秒），仅 Menu 模式生效 |
+| `default` | 启动项 ID 或 `bls:<stem>` | 无 | 无人操作时启动的启动项 |
 | `mode` | `0`、`1`、`2` | `1` | 没有自身模式的启动项的回退模式 |
 | `devinfo-repair` | `asneeded`、`never` | `asneeded` | 是否允许受管理启动修复 `DeviceInfo` |
+
+`key-window` 的有效范围含两端。`key-window 0` 表示不采样：Silent 模式立即
+启动默认项，Menu 模式仍会打开菜单。Silent 模式在窗口内按住音量上键会打开
+菜单并无限等待输入；音量下键进入现有 fastboot 路径；没有按键则立即启动默认项。
+Menu 模式在窗口内检测到音量下键先进入 fastboot，随后总是打开菜单。菜单按
+`menu-timeout` 秒倒计时后启动默认项；任意按键会取消倒计时并使菜单无限等待。
+`menu-timeout 0` 表示永不自动启动。
+
+写入器不会写出 `timeout`。BDS 仅将 b2 之前的 `timeout N` 行作为兼容别名接受，
+等同于 `menu-mode menu` 加 `menu-timeout N`；它不是拒绝行，当前工具也不会写出它。
+
+`default` 可以指向可解析的 `canoe.cfg` 启动项，也可以指向发现的 BLS Type #1
+启动项 `bls:<stem>`。stem 是去掉 `.conf` 扩展名后的 ASCII 小写名称，必须匹配
+`^[a-z0-9._-]{1,63}$`（例如 `loader/entries/pmOS.conf` 变为 `bls:pmos`）。
+BLS 默认项保持直通：没有受管理附属文件、模式钩子或槽位语义。USB 上的 BLS
+行不能作为无人值守默认项。默认项无法解析（包括未发现的 `bls:<stem>`）时，
+BDS 打开菜单，显示现有拒绝/提示界面并等待输入；绝不会回退到其他启动项。
+完整的写入器语法为：
+
+```text
+version 1
+generation N
+menu-mode silent|menu
+key-window 1200
+menu-timeout 5
+default android-a          # or: default bls:pmos
+mode 0|1|2
+devinfo-repair asneeded|never
+```
+
 
 启动项块内允许 `title`、`image`、`options`、`mode` 与 `role`。启动项自身的
 `mode` 优先于全局回退值。全局键出现在启动项内会被拒绝，不会追溯应用。
@@ -156,7 +188,9 @@ Mode 1 或 Mode 2 启动在观测状态不满足请求模式时可以修复 `Dev
 ```text
 version 1
 generation 4
-timeout 5
+menu-mode silent
+key-window 1200
+menu-timeout 5
 default android-a
 mode 1
 devinfo-repair asneeded

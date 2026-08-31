@@ -45,15 +45,13 @@ mode-switching 4G modem whose packaged config ejects the device between
 printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 ```
 
-`canoe install` names this remediation when its wait times out *and* the
-session came up on the stock identity.
-
-`canoe install` finds the LUN by its USB identity (`1209:ca0e`, or `05c6:f000`
-when the resident fallback served the session) rather than by watching for a
-new disk name. A run that timed out or was interrupted can therefore be
-repeated against the same live session: it adopts the disk already on the bus
-instead of asking the BDS for a second export, which the BDS would not answer
-while it sits in its export loop.
+`canoe install` asks `canoe-bootmgr source detect --json` for candidates and
+uses the first readable, unmounted block row whose identity is `1209:ca0e` or
+the compatibility identity `05c6:f000`. This is the only USB source detector;
+the Python host does not walk sysfs or query PowerShell. A run that timed out
+or was interrupted can therefore be repeated against the same live session:
+it adopts the disk already reported by `source detect` instead of asking the
+BDS for a second export.
 
 ## Host install through the export
 
@@ -112,3 +110,24 @@ session-cancellation control.
 
 For the configuration format, see the normative
 [`canoe.cfg` contract](./canoe-cfg.md).
+## Detecting and attaching sources
+
+`canoe-bootmgr source detect --json` is non-mutating and does not require
+privilege to enumerate candidates. It reports each source's kind (`block`,
+`image`, or `dir`), path, identity, model, size, boot-root presence,
+readability, writability, `needs_privilege`, mount point, and explanation:
+
+```json
+{"ok":true,"kind":"source.detect","sources":[]}
+```
+
+The GUI Connect screen uses the same response and provides one-click attach,
+Refresh, and manual directory/image/device selection. Directory and image
+sources never need elevation. On access denial, Linux offers **Retry with
+pkexec** plus a copyable `sudo` command; Windows offers **Restart as
+Administrator**. Neither surface silently escalates.
+
+Windows supports explicit dirty-journal recovery through `canoe-ext4.exe
+--recover`; code 4 means the filesystem is dirty and recovery is never
+implicit. The Windows helper links the e2fsprogs journal/revoke/recovery
+objects required for replay.

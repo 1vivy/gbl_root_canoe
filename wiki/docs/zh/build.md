@@ -19,7 +19,7 @@ Android 工具包和模块构建要求 `NDK_PATH` 指向 Android NDK。归档位
 仓库根目录的 `version.mk` 是版本的唯一来源，并且只包含以下变量：
 
 ```make
-CANOE_VERSION = 7.0.0-b1
+CANOE_VERSION = 7.0.0-b2
 CANOE_VERSION_CODE = 14
 ```
 
@@ -38,6 +38,10 @@ canoe
 canoe build [--abl IMG] [--vbmeta IMG]
 canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
               [--vendor-boot IMG] [--allow-new-signer]
+canoe config set-policy [--menu-mode silent|menu] \
+                        [--key-window-ms N] [--menu-timeout-s N]
+canoe default set TARGET
+canoe source detect --json
 ```
 
 不带参数的 `canoe` 启动五种场景的交互问卷。`canoe build` 派生已修补 ABL 和
@@ -98,9 +102,9 @@ fastboot flash efisp BDS.efi
 ## Windows 发布包
 
 Windows 压缩包附带 `fastboot.exe` 与 `canoe-ext4.exe`（捆绑的用户态 ext4
-引擎）。无需盘符、文件系统驱动或挂载：`canoe.cmd install --slot <A|B>` 会
-通过 USB 标识识别导出的磁盘，并由 `canoe-bootmgr.exe` 直接对原始
-`\\.\PhysicalDrive<N>` 源执行启动根事务。手动探测磁盘可运行：
+引擎）。无需盘符、文件系统驱动或挂载：`canoe.cmd install --slot <A|B>` 会请求
+`canoe-bootmgr source detect --json` 获取导出源，并由 `canoe-bootmgr.exe`
+直接对原始 `\\.\PhysicalDrive<N>` 源执行启动根事务。手动探测磁盘可运行：
 
 ```text
 canoe-ext4.exe inspect \\.\PhysicalDrive<N>
@@ -122,3 +126,33 @@ canoe-ext4.exe inspect \\.\PhysicalDrive<N>
 
 编辑 UEFI 源码后，请使用 `UEFI_REBUILD=1 make target_<name>` 重建目标，或先运行
 `make clean`。本项目没有单独的通用构建。
+## 图形界面与归档布局
+
+Linux 归档包含发布版 `bin/canoe-gui`、根目录 `canoe-gui` 启动器、
+`canoe-boot-manager.desktop` 及随包 SVG 图标。从任意当前目录双击或运行
+`./canoe-gui`；启动器会设置随包的 boot manager 路径。Windows 归档将无控制台
+的 `canoe-gui.exe` 放在根目录，辅助程序保留在 `bin/`。Android 与 Magisk
+归档不包含 GUI。
+
+GUI 的 Connect 界面运行 `source detect`，提供一键连接、Refresh 和手动目录/
+镜像/设备选择，并在平台配置目录记住上次成功源。目录与镜像不需要提权；设备
+访问被拒绝时，Linux 显示 `pkexec`/sudo 重试，Windows 显示 **Restart as
+Administrator**。
+
+Windows helper 支持显式脏日志恢复：`canoe-ext4.exe --recover`；退出码 4 表示
+文件系统脏，恢复不会隐式执行。
+
+## 设备系列构件来源
+
+设备系列 Linux 构件在本仓库之外维护。当前来源为
+`FantomTchi7/kaanapali-mainline-linux` 的 `OnePlus-15-WIP` 分支，提交
+`2d1ab8738563b8771e18b5939f00bb3361dd873a2`（2026-04-22）。板级 DTS 是
+`arch/arm64/boot/dts/qcom/kaanapali-oneplus-infiniti.dts`，使用
+`make ARCH=arm64 ... arch/arm64/boot/dts/qcom/kaanapali-oneplus-infiniti.dtb`
+构建；它声明 `compatible = "oneplus,infiniti"` 与 `dr_mode = "peripheral"`，
+没有 `stdout-path`，且禁用 `uart7`/`uart18`。arm64 defconfig 具体启用
+`EFI=y`/`EFI_STUB=y`，使用未压缩 `Image`。`persist` 下 H3 BLS 路径为
+`\\efisp\\vmlinuz-canoe`、`\\efisp\\initramfs-canoe` 和
+`\\efisp\\dtbs\\kaanapali-oneplus-infiniti.dtb`；标记端点为
+`telnet 192.168.42.1:2323`。完整来源与准备脚本位于 `.work/device-series`，
+不属于仓库源码。

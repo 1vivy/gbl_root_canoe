@@ -21,7 +21,7 @@ The repository-root `version.mk` is the single source of truth and contains
 exactly:
 
 ```make
-CANOE_VERSION = 7.0.0-b1
+CANOE_VERSION = 7.0.0-b2
 CANOE_VERSION_CODE = 14
 ```
 
@@ -40,6 +40,10 @@ canoe
 canoe build [--abl IMG] [--vbmeta IMG]
 canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
               [--vendor-boot IMG] [--allow-new-signer]
+canoe config set-policy [--menu-mode silent|menu] \
+                        [--key-window-ms N] [--menu-timeout-s N]
+canoe default set TARGET
+canoe source detect --json
 ```
 
 `canoe` with no arguments starts the interactive five-scenario questionnaire.
@@ -109,9 +113,10 @@ vendor data.
 
 The Windows archive bundles `fastboot.exe` and `canoe-ext4.exe`, the bundled
 userspace ext4 engine. No drive letter, filesystem driver, or mount is
-involved: `canoe.cmd install --slot <A|B>` discovers the exported disk by its
-USB identity and runs the boot-root transaction through `canoe-bootmgr.exe`
-against the raw `\\.\PhysicalDrive<N>` source. To probe a disk by hand:
+involved: `canoe.cmd install --slot <A|B>` asks `canoe-bootmgr source detect --json`
+for the exported source and runs the boot-root transaction through
+`canoe-bootmgr.exe` against the raw `\\.\PhysicalDrive<N>` source. To probe a
+disk by hand:
 
 ```text
 canoe-ext4.exe inspect \\.\PhysicalDrive<N>
@@ -135,3 +140,38 @@ The `abl` partition must then be downgraded with a compatible vulnerable image.
 After editing UEFI sources, rebuild a target with
 `UEFI_REBUILD=1 make target_<name>`, or run `make clean` first. There is no
 separate generic build.
+
+## GUI and archive layout
+
+The Linux archive contains `bin/canoe-gui` (release build), a root-level
+`canoe-gui` launcher, `canoe-boot-manager.desktop`, and the shipped SVG icon.
+Double-click the root `canoe-gui` or run it from any current directory; the
+launcher supplies the bundled boot manager path. The Windows archive places the
+no-console `canoe-gui.exe` at its root; helper binaries remain in `bin/`.
+Android and Magisk archives contain no GUI.
+
+The GUI Connect screen runs `source detect`, offers attach, Refresh, and manual
+directory/image/device selection, and remembers the last successful source in
+the platform config directory. Elevation is not needed for directory or image
+sources. Access-denied device operations show an explicit Linux `pkexec`/sudo
+retry or Windows **Restart as Administrator** action.
+
+The Windows helper supports explicit dirty-journal recovery with
+`canoe-ext4.exe --recover`; code 4 reports a dirty filesystem, and recovery is
+never implicit.
+
+## Device-series artifact provenance
+The device-series Linux artifacts are maintained outside this repository. The
+current provenance is `FantomTchi7/kaanapali-mainline-linux`, branch
+`OnePlus-15-WIP`, commit `2d1ab8738563b8771e18b5939f00bb3361dd873a2` (2026-04-22).
+The board DTS is
+`arch/arm64/boot/dts/qcom/kaanapali-oneplus-infiniti.dts`; build its DTB with
+`make ARCH=arm64 ... arch/arm64/boot/dts/qcom/kaanapali-oneplus-infiniti.dtb`.
+It declares `compatible = "oneplus,infiniti"` and `dr_mode = "peripheral"`;
+there is no `stdout-path`, and `uart7`/`uart18` are disabled. The arm64
+defconfig materializes `EFI=y` and `EFI_STUB=y`; use an uncompressed `Image`.
+H3 BLS paths under `persist` are `\\efisp\\vmlinuz-canoe`,
+`\\efisp\\initramfs-canoe`, and
+`\\efisp\\dtbs\\kaanapali-oneplus-infiniti.dtb`. The marker endpoint is
+`telnet 192.168.42.1:2323`. Full provenance and the preparation script remain
+under `.work/device-series`; they are not repository source files.

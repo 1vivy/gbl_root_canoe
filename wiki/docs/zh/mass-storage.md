@@ -38,13 +38,11 @@ fastboot oem mass-storage:logfs       # logfs
 printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 ```
 
-只有在超时且会话确实以原始身份枚举时，`canoe install` 才会给出这一处置
-方法。
-
-`canoe install` 通过 USB 身份（`1209:ca0e`，驻留驱动回退时为 `05c6:f000`）
-识别 LUN，而不是等待新的磁盘名出现；因此超时或中断过的运行可以直接对同一
-个仍在进行的会话重试：它会接管总线上已经存在的磁盘，而不是再次请求导出——
-BDS 处于导出循环中时并不会响应 fastboot。
+`canoe install` 会请求 `canoe-bootmgr source detect --json`，选择第一个身份为
+`1209:ca0e` 或兼容身份 `05c6:f000`、可读且未挂载的 block 行。这是唯一的
+USB 源探测实现；Python 主机不再遍历 sysfs 或查询 PowerShell。超时或中断后，
+再次运行会接管 `source detect` 已报告的同一磁盘，而不是在 BDS 导出循环中再次
+请求导出。
 
 ## 通过导出执行电脑端安装
 
@@ -96,3 +94,22 @@ canoe.cmd install --slot a --mode 1
 操作完成后在**设备上按音量下**，这是唯一的会话取消控制。
 
 配置格式见规范版 [`canoe.cfg 契约`](./canoe-cfg.md)。
+## 探测与连接源
+
+`canoe-bootmgr source detect --json` 是只读的，枚举候选源不需要提权。每行会
+报告源类型（`block`、`image` 或 `dir`）、路径、身份、型号、大小、启动根目录
+是否存在、读写能力、`needs_privilege`、挂载点和原因。主机 Python 不再遍历
+sysfs 或查询 PowerShell；USB 源探测只有这一份实现。示例空结果为：
+
+```json
+{"ok":true,"kind":"source.detect","sources":[]}
+```
+
+图形 Connect 界面使用相同结果，支持一键连接、Refresh 以及手动目录/镜像/设备
+选择。目录和镜像不需要提权。访问被拒绝时，Linux 提供 **Retry with pkexec**
+和可复制的 `sudo` 命令，Windows 提供 **Restart as Administrator**，不会静默
+提权。
+
+Windows 支持显式脏日志恢复：使用 `canoe-ext4.exe --recover`；退出码 4 表示
+文件系统脏，恢复从不隐式执行。Windows helper 链接了日志回放所需的
+e2fsprogs journal/revoke/recovery 对象。
