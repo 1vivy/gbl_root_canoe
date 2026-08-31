@@ -252,6 +252,72 @@ fn dual_slot_install_writes_independent_rows_and_sidecars() {
 }
 
 #[test]
+fn install_carries_staged_efi_tools_into_the_boot_root() {
+    let root = tempfile::tempdir().expect("root");
+    let staged = staged_root(&root, b"new", 3);
+    fs::create_dir_all(staged.join("tools")).expect("staged tools");
+    fs::write(staged.join("tools/UsbTools.efi"), b"usb").expect("usb tool");
+    fs::write(staged.join("tools/RebootTools.efi"), b"reboot").expect("reboot tool");
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"slot":"a"}),
+    )
+    .expect("install");
+    assert_eq!(
+        fs::read(root.path().join("tools/UsbTools.efi")).expect("installed usb tool"),
+        b"usb"
+    );
+    assert_eq!(
+        fs::read(root.path().join("tools/RebootTools.efi")).expect("installed reboot tool"),
+        b"reboot"
+    );
+}
+
+#[test]
+fn install_without_staged_tools_leaves_the_boot_root_tools_untouched() {
+    let root = tempfile::tempdir().expect("root");
+    fs::create_dir_all(root.path().join("tools")).expect("existing tools");
+    fs::write(root.path().join("tools/UsbTools.efi"), b"resident").expect("resident tool");
+    let staged = staged_root(&root, b"new", 4);
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"slot":"a"}),
+    )
+    .expect("install");
+    assert_eq!(
+        fs::read(root.path().join("tools/UsbTools.efi")).expect("resident tool"),
+        b"resident"
+    );
+}
+
+#[test]
+fn failed_install_restores_the_previous_tool_generation() {
+    let root = tempfile::tempdir().expect("root");
+    fs::create_dir_all(root.path().join("tools")).expect("existing tools");
+    fs::write(root.path().join("tools/UsbTools.efi"), b"resident").expect("resident tool");
+    let staged = staged_root(&root, b"new", 5);
+    fs::create_dir_all(staged.join("tools")).expect("staged tools");
+    fs::write(staged.join("tools/UsbTools.efi"), b"replacement").expect("replacement tool");
+    // A signer change with no override refuses after the tools are committed,
+    // so this exercises rollback rather than an early argument rejection.
+    fs::write(root.path().join("boot_a.efi"), b"old").expect("old loader");
+    let mut resident = vec![0_u8; 120];
+    resident[0x38..0x58].fill(9);
+    fs::write(root.path().join("boot_a.efi.gm2p"), resident).expect("old gm2p");
+    fs::write(root.path().join("boot_a.efi.tzmap"), vec![9_u8; 256]).expect("old tzmap");
+    let error = request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"slot":"a"}),
+    )
+    .expect_err("signer change must refuse");
+    assert!(error.to_string().contains("signer"));
+    assert_eq!(
+        fs::read(root.path().join("tools/UsbTools.efi")).expect("resident tool"),
+        b"resident"
+    );
+}
+
+#[test]
 fn second_install_demotes_previous_generation_and_migrates_legacy() {
     let root = tempfile::tempdir().expect("root");
     let first = staged_root(&root, b"first", 1);

@@ -39,9 +39,10 @@ pub fn install(root: &Path, input: &InstallInput) -> Result<InstallReceipt, Slot
     } else {
         vec![input.target]
     };
-    let snapshot = snapshot(root)?;
+    let tools = crate::slot_tools::staged(&input.staged)?;
+    let snapshot = snapshot(root, &tools)?;
     let mut moved = Vec::new();
-    let result = install_inner(root, input, active, &installed, &mut moved);
+    let result = install_inner(root, input, active, &installed, &tools, &mut moved);
     match result {
         Ok(receipt) => Ok(receipt),
         Err(error) => {
@@ -59,6 +60,7 @@ fn install_inner(
     input: &InstallInput,
     active: Slot,
     installed: &[Slot],
+    tools: &[PathBuf],
     moved: &mut Vec<PathBuf>,
 ) -> Result<InstallReceipt, SlotError> {
     for slot in installed {
@@ -72,6 +74,7 @@ fn install_inner(
         demote(root, *slot)?;
         commit_slot(root, *slot, &input.staged)?;
     }
+    crate::slot_tools::commit(root, tools)?;
     let mut config = read_config(root)?;
     let rows = managed_rows(root, &mut config, active, input.mode)?;
     let generation = config
@@ -346,7 +349,7 @@ fn hex_digest(path: &Path) -> Result<String, SlotError> {
         .collect())
 }
 
-fn copy_file(source: &Path, destination: &Path) -> Result<(), SlotError> {
+pub(crate) fn copy_file(source: &Path, destination: &Path) -> Result<(), SlotError> {
     let bytes = fs::read(source).map_err(|error| io("read", source, error))?;
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| io("create directory", parent, error))?;
@@ -393,7 +396,10 @@ fn remove_if_present(path: &Path) -> Result<(), SlotError> {
     }
 }
 
-fn snapshot(root: &Path) -> Result<HashMap<PathBuf, Option<Vec<u8>>>, SlotError> {
+fn snapshot(
+    root: &Path,
+    tools: &[PathBuf],
+) -> Result<HashMap<PathBuf, Option<Vec<u8>>>, SlotError> {
     let mut all = Vec::new();
     for slot in [Slot::A, Slot::B] {
         all.extend(slots::triplet_paths(root, slot));
@@ -401,6 +407,7 @@ fn snapshot(root: &Path) -> Result<HashMap<PathBuf, Option<Vec<u8>>>, SlotError>
     all.extend(slots::backup_paths(root));
     all.extend(slots::legacy_paths(root));
     all.extend([root.join("canoe.cfg"), root.join(".canoe.gen")]);
+    all.extend(crate::slot_tools::destinations(root, tools));
     all.into_iter()
         .map(|path| {
             let value = match fs::read(&path) {
@@ -425,7 +432,7 @@ fn restore_snapshot(snapshot: &HashMap<PathBuf, Option<Vec<u8>>>) {
     }
 }
 
-fn io(operation: &'static str, path: &Path, source: std::io::Error) -> SlotError {
+pub(crate) fn io(operation: &'static str, path: &Path, source: std::io::Error) -> SlotError {
     SlotError::Io {
         slot: "root".to_owned(),
         operation,
