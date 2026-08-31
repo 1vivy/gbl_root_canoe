@@ -9,7 +9,8 @@ pub use crate::cli_extra::{
     BlsStageArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs,
     VendorBootCommand, VendorBootPatchArgs,
 };
-use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, Role};
+use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
+use crate::detect::SourceCandidate;
 use crate::graft::GraftReceipt;
 use crate::slot_transaction::InstallReceipt;
 use crate::slots::Slot;
@@ -84,6 +85,10 @@ pub enum Command {
         #[command(subcommand)]
         command: BlsCommand,
     },
+    Source {
+        #[command(subcommand)]
+        command: SourceCommand,
+    },
     Slot {
         #[command(subcommand)]
         command: SlotCommand,
@@ -106,6 +111,8 @@ pub enum Command {
 pub enum ConfigCommand {
     /// Show the parsed canonical configuration.
     Show,
+    /// Change one or more global boot policy values.
+    SetPolicy(PolicyArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -118,6 +125,16 @@ pub enum EntryCommand {
     Remove(EntryIdArgs),
     /// Change only one persisted row's launch mode.
     Mode(EntryModeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PolicyArgs {
+    #[arg(long, value_enum)]
+    pub menu_mode: Option<CliMenuMode>,
+    #[arg(long)]
+    pub key_window_ms: Option<u32>,
+    #[arg(long)]
+    pub menu_timeout_s: Option<u32>,
 }
 
 #[derive(Debug, Args)]
@@ -136,8 +153,6 @@ pub struct EntrySetArgs {
     pub mode: Option<u8>,
     #[arg(long)]
     pub global_mode: Option<u8>,
-    #[arg(long)]
-    pub timeout: Option<u8>,
     #[arg(long, value_enum)]
     pub devinfo_repair: Option<CliDeviceInfoRepair>,
     #[arg(long)]
@@ -163,7 +178,16 @@ pub enum DefaultCommand {
     /// Print the configured default row.
     Get,
     /// Persist a new default row.
-    Set(EntryIdArgs),
+    Set(DefaultSetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct DefaultSetArgs {
+    #[arg(value_name = "TARGET")]
+    pub target: Option<String>,
+    /// Compatibility spelling for older callers.
+    #[arg(long)]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -179,6 +203,27 @@ pub enum BlsCommand {
     Stage(BlsStageArgs),
 }
 
+#[derive(Debug, Subcommand)]
+pub enum SourceCommand {
+    /// Enumerate candidate Canoe and Android boot roots.
+    Detect,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CliMenuMode {
+    Silent,
+    Menu,
+}
+
+impl From<CliMenuMode> for MenuMode {
+    fn from(value: CliMenuMode) -> Self {
+        match value {
+            CliMenuMode::Silent => Self::Silent,
+            CliMenuMode::Menu => Self::Menu,
+        }
+    }
+}
 #[derive(Debug, Clone, Copy, ValueEnum, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CliRole {
@@ -220,6 +265,14 @@ impl From<CliDeviceInfoRepair> for DeviceInfoRepair {
 pub enum Success {
     #[serde(rename = "config.show")]
     ConfigShow { ok: bool, config: ConfigDocument },
+    #[serde(rename = "config.policy")]
+    ConfigPolicy {
+        ok: bool,
+        kind: &'static str,
+        config: ConfigDocument,
+        generation: u32,
+        mark: String,
+    },
     #[serde(rename = "entry.list")]
     EntryList {
         ok: bool,
@@ -252,6 +305,12 @@ pub enum Success {
         ok: bool,
         generation: u32,
         default: String,
+    },
+    #[serde(rename = "source.detect")]
+    SourceDetect {
+        ok: bool,
+        kind: &'static str,
+        sources: Vec<SourceCandidate>,
     },
     #[serde(rename = "bls.list")]
     BlsList { ok: bool, entries: Vec<BlsFile> },

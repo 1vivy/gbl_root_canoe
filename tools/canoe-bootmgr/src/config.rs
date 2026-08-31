@@ -4,7 +4,10 @@ use thiserror::Error;
 pub const MAX_BYTES: usize = 8192;
 pub const MAX_ENTRIES: usize = 24;
 pub const MAX_GENERATION: u32 = u32::MAX;
-pub const MAX_TIMEOUT: u8 = 60;
+pub const MAX_KEY_WINDOW_MS: u32 = 10_000;
+pub const MAX_MENU_TIMEOUT_S: u32 = 300;
+pub const DEFAULT_KEY_WINDOW_MS: u32 = 1200;
+pub const DEFAULT_MENU_TIMEOUT_S: u32 = 5;
 pub const MAX_TITLE_CHARS: usize = 47;
 pub const MAX_PATH_CHARS: usize = 198;
 pub const MAX_OPTIONS_CHARS: usize = 383;
@@ -15,6 +18,11 @@ pub enum ConfigError {
     Invalid(String),
     #[error("canoe.cfg field {field}: {reason}")]
     Field { field: String, reason: String },
+    #[error("policy.range: {field} must be in 0..={maximum}")]
+    PolicyRange {
+        field: &'static str,
+        maximum: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -45,6 +53,33 @@ impl Role {
             Self::Inactive => "inactive",
             Self::Backup => "backup",
             Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MenuMode {
+    Silent,
+    Menu,
+}
+
+impl MenuMode {
+    pub(crate) fn parse(value: &str) -> Result<Self, ConfigError> {
+        match value {
+            "silent" => Ok(Self::Silent),
+            "menu" => Ok(Self::Menu),
+            _ => Err(ConfigError::Field {
+                field: "menu-mode".to_owned(),
+                reason: format!("expected silent or menu, got {value:?}"),
+            }),
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Silent => "silent",
+            Self::Menu => "menu",
         }
     }
 }
@@ -96,7 +131,9 @@ pub struct ConfigEntry {
 pub struct ConfigDocument {
     pub entries: Vec<ConfigEntry>,
     pub generation: u32,
-    pub timeout: u8,
+    pub menu_mode: MenuMode,
+    pub key_window_ms: u32,
+    pub menu_timeout_s: u32,
     pub default: Option<String>,
     pub mode: u8,
     pub devinfo_repair: DeviceInfoRepair,
@@ -112,10 +149,17 @@ pub struct EntryRequest {
     pub role: Role,
     pub mode: Option<u8>,
     pub global_mode: Option<u8>,
-    pub timeout: Option<u8>,
     pub devinfo_repair: Option<DeviceInfoRepair>,
     pub make_default: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PolicyUpdate {
+    pub menu_mode: Option<MenuMode>,
+    pub key_window_ms: Option<u32>,
+    pub menu_timeout_s: Option<u32>,
+}
+
 
 pub(crate) fn validate_request(request: &EntryRequest) -> Result<(), ConfigError> {
     if !valid_id(&request.id) {
@@ -140,13 +184,6 @@ pub(crate) fn validate_request(request: &EntryRequest) -> Result<(), ConfigError
     if let Some(mode) = request.global_mode {
         validate_mode(mode)?;
     }
-    if let Some(timeout) = request.timeout {
-        if timeout > MAX_TIMEOUT {
-            return Err(ConfigError::Invalid(format!(
-                "timeout must be in 0..{MAX_TIMEOUT}"
-            )));
-        }
-    }
     Ok(())
 }
 
@@ -156,6 +193,41 @@ pub(crate) fn valid_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+pub(crate) fn valid_bls_stem(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+pub(crate) fn valid_default_target(value: &str) -> bool {
+    value
+        .strip_prefix("bls:")
+        .map_or_else(|| valid_id(value), valid_bls_stem)
+}
+
+pub(crate) fn validate_policy(update: PolicyUpdate) -> Result<(), ConfigError> {
+    if let Some(value) = update.key_window_ms {
+        validate_policy_range("key_window_ms", value, MAX_KEY_WINDOW_MS)?;
+    }
+    if let Some(value) = update.menu_timeout_s {
+        validate_policy_range("menu_timeout_s", value, MAX_MENU_TIMEOUT_S)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_policy_range(
+    field: &'static str,
+    value: u32,
+    maximum: u32,
+) -> Result<(), ConfigError> {
+    if value > maximum {
+        return Err(ConfigError::PolicyRange { field, maximum });
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_title(value: &str) -> Result<(), ConfigError> {

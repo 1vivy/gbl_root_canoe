@@ -34,6 +34,7 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
     let text = match success {
         Success::ConfigShow { config, .. } => String::from_utf8(config.serialize()?)
             .map_err(|_| ConfigError::Invalid("serialized config is not UTF-8".to_owned()))?,
+        Success::ConfigPolicy { mark, .. } => format!("{mark}\n"),
         Success::EntryList { entries, .. } => entries
             .iter()
             .map(|entry| format!("{}\t{}\t{}\n", entry.id, entry.title, entry.image))
@@ -43,6 +44,22 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
         | Success::EntryMode { mark, .. } => format!("{mark}\n"),
         Success::DefaultGet { default, .. } => format!("{}\n", default.as_deref().unwrap_or("")),
         Success::DefaultSet { default, .. } => format!("default {default}\n"),
+        Success::SourceDetect { sources, .. } => sources
+            .iter()
+            .map(|source| {
+                format!(
+                    "{}\t{}\t{}\t{}\n",
+                    match source.kind {
+                        crate::detect::SourceKind::Block => "block",
+                        crate::detect::SourceKind::Image => "image",
+                        crate::detect::SourceKind::Dir => "dir",
+                    },
+                    source.path.display(),
+                    source.identity.as_deref().map_or("", |identity| identity),
+                    source.model
+                )
+            })
+            .collect(),
         Success::BlsList { entries, .. } => entries
             .iter()
             .map(|entry| {

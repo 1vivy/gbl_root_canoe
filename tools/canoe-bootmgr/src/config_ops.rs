@@ -1,6 +1,7 @@
 use crate::config::{
-    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, EntryRequest, MAX_ENTRIES,
-    MAX_GENERATION, Role, canonical_image, validate_mode, validate_request,
+    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, EntryRequest, MenuMode,
+    PolicyUpdate, MAX_ENTRIES, MAX_GENERATION, Role, canonical_image, validate_mode,
+    validate_policy, validate_request,
 };
 
 impl ConfigDocument {
@@ -9,7 +10,9 @@ impl ConfigDocument {
         Self {
             entries: Vec::new(),
             generation: 0,
-            timeout: 5,
+            menu_mode: MenuMode::Silent,
+            key_window_ms: 1200,
+            menu_timeout_s: 5,
             default: None,
             mode: 1,
             devinfo_repair: DeviceInfoRepair::AsNeeded,
@@ -50,12 +53,6 @@ impl ConfigDocument {
             })
         });
         validate_mode(mode)?;
-        if let Some(global_mode) = request.global_mode {
-            self.mode = global_mode;
-        }
-        if let Some(timeout) = request.timeout {
-            self.timeout = timeout;
-        }
         if let Some(repair) = request.devinfo_repair {
             self.devinfo_repair = repair;
         }
@@ -117,7 +114,6 @@ impl ConfigDocument {
                 role: row.role,
                 mode: Some(row.mode),
                 global_mode: None,
-                timeout: None,
                 devinfo_repair: None,
                 make_default: false,
             })?;
@@ -160,16 +156,39 @@ impl ConfigDocument {
         self.bump_generation()
     }
 
-    pub fn set_default(&mut self, id: &str) -> Result<u32, ConfigError> {
-        if self.entry(id).is_none() {
-            return Err(ConfigError::Invalid(format!("no such entry: {id}")));
+    pub fn set_default(&mut self, target: &str) -> Result<u32, ConfigError> {
+        if !crate::config::valid_default_target(target) {
+            return Err(ConfigError::Invalid(format!(
+                "invalid default target: {target}"
+            )));
+        }
+        if !target.starts_with("bls:") && self.entry(target).is_none() {
+            return Err(ConfigError::Invalid(format!("no such entry: {target}")));
         }
         if self.generation == MAX_GENERATION {
             return Err(ConfigError::Invalid(
                 "generation cannot be bumped past 4294967295".to_owned(),
             ));
         }
-        self.default = Some(id.to_owned());
+        self.default = Some(target.to_owned());
+        self.bump_generation()
+    }
+    pub fn set_policy(&mut self, update: PolicyUpdate) -> Result<u32, ConfigError> {
+        validate_policy(update)?;
+        if self.generation == MAX_GENERATION {
+            return Err(ConfigError::Invalid(
+                "generation cannot be bumped past 4294967295".to_owned(),
+            ));
+        }
+        if let Some(menu_mode) = update.menu_mode {
+            self.menu_mode = menu_mode;
+        }
+        if let Some(key_window_ms) = update.key_window_ms {
+            self.key_window_ms = key_window_ms;
+        }
+        if let Some(menu_timeout_s) = update.menu_timeout_s {
+            self.menu_timeout_s = menu_timeout_s;
+        }
         self.bump_generation()
     }
 
@@ -195,11 +214,7 @@ impl ConfigDocument {
     }
 
     fn repair_default(&mut self) {
-        if self
-            .default
-            .as_deref()
-            .is_some_and(|id| self.entry(id).is_some())
-        {
+        if self.default.is_some() {
             return;
         }
         self.default = self

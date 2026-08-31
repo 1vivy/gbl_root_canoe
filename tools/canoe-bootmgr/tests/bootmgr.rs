@@ -31,7 +31,6 @@ fn request(id: &str, image: &str) -> EntryRequest {
         role: Role::Other,
         mode: None,
         global_mode: None,
-        timeout: None,
         devinfo_repair: None,
         make_default: false,
     }

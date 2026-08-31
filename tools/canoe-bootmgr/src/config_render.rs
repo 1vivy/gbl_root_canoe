@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 
 use crate::config::{
-    ConfigDocument, ConfigError, MAX_BYTES, MAX_ENTRIES, MAX_OPTIONS_CHARS, MAX_TIMEOUT,
-    canonical_image, valid_id, validate_mode, validate_title,
+    ConfigDocument, ConfigError, MAX_BYTES, MAX_ENTRIES, MAX_OPTIONS_CHARS, PolicyUpdate,
+    canonical_image, valid_default_target, valid_id, validate_mode, validate_policy,
+    validate_title,
 };
 
 pub(crate) fn serialize(config: &ConfigDocument) -> Result<Vec<u8>, ConfigError> {
@@ -10,7 +11,9 @@ pub(crate) fn serialize(config: &ConfigDocument) -> Result<Vec<u8>, ConfigError>
     let mut lines = vec![
         "version 1".to_owned(),
         format!("generation {}", config.generation),
-        format!("timeout {}", config.timeout),
+        format!("menu-mode {}", config.menu_mode.as_str()),
+        format!("key-window {}", config.key_window_ms),
+        format!("menu-timeout {}", config.menu_timeout_s),
     ];
     if let Some(default) = &config.default {
         lines.push(format!("default {default}"));
@@ -50,7 +53,12 @@ fn validate_document(config: &ConfigDocument) -> Result<(), ConfigError> {
             "config must contain 1..{MAX_ENTRIES} entries"
         )));
     }
-    if config.timeout > MAX_TIMEOUT || config.mode > 2 {
+    validate_policy(PolicyUpdate {
+        menu_mode: Some(config.menu_mode),
+        key_window_ms: Some(config.key_window_ms),
+        menu_timeout_s: Some(config.menu_timeout_s),
+    })?;
+    if config.mode > 2 {
         return Err(ConfigError::Invalid(
             "invalid global launch policy".to_owned(),
         ));
@@ -58,10 +66,10 @@ fn validate_document(config: &ConfigDocument) -> Result<(), ConfigError> {
     if config
         .default
         .as_deref()
-        .is_some_and(|id| !config.entries.iter().any(|entry| entry.id == id))
+        .is_some_and(|target| !valid_default_target(target))
     {
         return Err(ConfigError::Invalid(
-            "default entry does not exist".to_owned(),
+            "default target is not a valid entry id or BLS stem".to_owned(),
         ));
     }
     let mut ids = HashSet::new();

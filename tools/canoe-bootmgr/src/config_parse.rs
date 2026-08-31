@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use crate::config::{
-    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, MAX_BYTES, MAX_GENERATION,
-    MAX_OPTIONS_CHARS, MAX_TIMEOUT, RawLine, Role, canonical_image, printable, valid_id,
-    validate_title,
+    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, MenuMode, MAX_BYTES,
+    MAX_GENERATION, MAX_KEY_WINDOW_MS, MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, RawLine, Role,
+    canonical_image, printable, valid_id, validate_policy_range, validate_title,
 };
 
 #[derive(Default)]
@@ -34,7 +34,9 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
 
     let mut version_seen = false;
     let mut generation = 0;
-    let mut timeout = 5;
+    let mut menu_mode = MenuMode::Silent;
+    let mut key_window_ms = 1200;
+    let mut menu_timeout_s = 5;
     let mut global_mode = 1;
     let mut repair = DeviceInfoRepair::AsNeeded;
     let mut default = None;
@@ -99,7 +101,19 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
         }
         match key {
             "generation" => generation = parse_number(value, MAX_GENERATION as u64, generation),
-            "timeout" => timeout = parse_timeout(value, timeout),
+            "menu-mode" => {
+                menu_mode = MenuMode::parse(value)?;
+            }
+            "key-window" => {
+                key_window_ms = parse_policy_number(value, "key_window_ms", MAX_KEY_WINDOW_MS)?;
+            }
+            "menu-timeout" => {
+                menu_timeout_s = parse_policy_number(value, "menu_timeout_s", MAX_MENU_TIMEOUT_S)?;
+            }
+            "timeout" => {
+                menu_timeout_s = parse_policy_number(value, "menu_timeout_s", MAX_MENU_TIMEOUT_S)?;
+                menu_mode = MenuMode::Menu;
+            }
             "mode" => global_mode = parse_mode(value).unwrap_or(global_mode),
             "devinfo-repair" => repair = DeviceInfoRepair::parse(value).unwrap_or(repair),
             "default" => default = (!value.is_empty()).then(|| value.to_owned()),
@@ -115,12 +129,13 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
             "canoe.cfg has no usable entry".to_owned(),
         ));
     }
-    let resolved_default = default.filter(|id| entries.iter().any(|entry| entry.id == *id));
     Ok(ConfigDocument {
         entries,
         generation,
-        timeout,
-        default: resolved_default,
+        menu_mode,
+        key_window_ms,
+        menu_timeout_s,
+        default,
         mode: global_mode,
         devinfo_repair: repair,
         unknown,
@@ -176,12 +191,17 @@ fn parse_number(value: &str, maximum: u64, fallback: u32) -> u32 {
         .unwrap_or(fallback)
 }
 
-fn parse_timeout(value: &str, fallback: u8) -> u8 {
-    value
-        .parse::<u8>()
-        .ok()
-        .filter(|number| *number <= MAX_TIMEOUT)
-        .unwrap_or(fallback)
+fn parse_policy_number(
+    value: &str,
+    field: &'static str,
+    maximum: u32,
+) -> Result<u32, ConfigError> {
+    let parsed = value.parse::<u32>().map_err(|_| ConfigError::Field {
+        field: field.to_owned(),
+        reason: format!("expected an unsigned integer, got {value:?}"),
+    })?;
+    validate_policy_range(field, parsed, maximum)?;
+    Ok(parsed)
 }
 
 fn parse_mode(value: &str) -> Option<u8> {

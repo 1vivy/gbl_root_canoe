@@ -1,21 +1,28 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 use thiserror::Error;
-
 use crate::artifact::ArtifactSpec;
-use crate::cli::{
-    BlsCommand, BlsStageArgs, CliDeviceInfoRepair, CliRole, Command, DefaultCommand, EntryCommand,
-    EntryIdArgs, EntryModeArgs, EntrySetArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand,
-    SlotStatusArgs, VendorBootCommand, VendorBootPatchArgs,
-};
+use crate::cli::{CliDeviceInfoRepair, CliMenuMode, CliRole};
+
 
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
+#[path = "wire_command.rs"]
+mod wire_command;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "verb")]
 pub enum JsonRequest {
     #[serde(rename = "config.show")]
     ConfigShow,
+    #[serde(rename = "config.set-policy")]
+    ConfigSetPolicy {
+        #[serde(default)]
+        menu_mode: Option<CliMenuMode>,
+        #[serde(default)]
+        key_window_ms: Option<u32>,
+        #[serde(default)]
+        menu_timeout_s: Option<u32>,
+    },
     #[serde(rename = "entry.list")]
     EntryList,
     #[serde(rename = "entry.set")]
@@ -31,8 +38,6 @@ pub enum JsonRequest {
         #[serde(default)]
         global_mode: Option<u8>,
         #[serde(default)]
-        timeout: Option<u8>,
-        #[serde(default)]
         devinfo_repair: Option<CliDeviceInfoRepair>,
         #[serde(default)]
         default: bool,
@@ -45,6 +50,8 @@ pub enum JsonRequest {
     DefaultGet,
     #[serde(rename = "default.set")]
     DefaultSet { id: String },
+    #[serde(rename = "source.detect")]
+    SourceDetect,
     #[serde(rename = "bls.list")]
     BlsList,
     #[serde(rename = "bls.show")]
@@ -117,143 +124,6 @@ pub enum RequestError {
     Base64(String),
 }
 
-impl JsonRequest {
-    pub fn into_command(self) -> Command {
-        match self {
-            Self::ConfigShow => Command::Config {
-                command: crate::cli::ConfigCommand::Show,
-            },
-            Self::EntryList => Command::Entry {
-                command: EntryCommand::List,
-            },
-            Self::EntrySet {
-                id,
-                title,
-                image,
-                options,
-                role,
-                mode,
-                global_mode,
-                timeout,
-                devinfo_repair,
-                default,
-            } => Command::Entry {
-                command: EntryCommand::Set(EntrySetArgs {
-                    id,
-                    title,
-                    image,
-                    options,
-                    role,
-                    mode,
-                    global_mode,
-                    timeout,
-                    devinfo_repair,
-                    default,
-                }),
-            },
-            Self::EntryRemove { id } => Command::Entry {
-                command: EntryCommand::Remove(EntryIdArgs { id }),
-            },
-            Self::EntryMode { id, mode } => Command::Entry {
-                command: EntryCommand::Mode(EntryModeArgs { id, mode }),
-            },
-            Self::DefaultGet => Command::Default {
-                command: DefaultCommand::Get,
-            },
-            Self::DefaultSet { id } => Command::Default {
-                command: DefaultCommand::Set(EntryIdArgs { id }),
-            },
-            Self::BlsList => Command::Bls {
-                command: BlsCommand::List,
-            },
-            Self::BlsShow { name } => Command::Bls {
-                command: BlsCommand::Show { name },
-            },
-            Self::BlsStage {
-                name,
-                entry,
-                artifacts,
-            } => Command::Bls {
-                command: BlsCommand::Stage(BlsStageArgs {
-                    name,
-                    entry,
-                    artifacts: artifacts
-                        .into_iter()
-                        .map(|artifact| {
-                            format!(
-                                "{},{},{}",
-                                artifact.source.display(),
-                                artifact.destination,
-                                artifact.sha256
-                            )
-                        })
-                        .collect(),
-                }),
-            },
-            Self::SlotStatus {
-                slot,
-                bootctl_output,
-                gpt_active_slot,
-            } => Command::Slot {
-                command: SlotCommand::Status(SlotStatusArgs {
-                    slot,
-                    bootctl_output,
-                    gpt_active_slot,
-                }),
-            },
-            Self::Install {
-                staged,
-                slot,
-                both,
-                inactive,
-                i_know_inactive_status,
-                active_slot,
-                bootctl_output,
-                gpt_active_slot,
-                mode,
-                allow_new_signer,
-            } => Command::Install(InstallArgs {
-                staged,
-                slot,
-                both,
-                inactive,
-                i_know_inactive_status,
-                active_slot,
-                bootctl_output,
-                gpt_active_slot,
-                mode,
-                allow_new_signer,
-            }),
-            Self::OtaApply {
-                target_slot,
-                bootctl_output,
-                gpt_active_slot,
-                staged,
-                mode,
-                allow_new_signer,
-            } => Command::OtaApply(OtaApplyArgs {
-                target_slot,
-                bootctl_output,
-                gpt_active_slot,
-                staged,
-                mode,
-                allow_new_signer,
-            }),
-            Self::VbmetaGraft {
-                vbmeta,
-                recovery,
-                output,
-            } => Command::Graft(GraftArgs {
-                vbmeta,
-                recovery,
-                output,
-            }),
-            Self::VendorBootPatch { input, output } => Command::VendorBoot {
-                command: VendorBootCommand::Patch(VendorBootPatchArgs { input, output }),
-            },
-        }
-    }
-}
 
 pub fn parse_json(bytes: &[u8]) -> Result<JsonRequest, RequestError> {
     if bytes.len() > MAX_REQUEST_BYTES {
@@ -300,5 +170,37 @@ fn base64_value(byte: u8) -> Option<u8> {
         b'-' => Some(62),
         b'_' => Some(63),
         _ => None,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::parse_json;
+
+    #[test]
+    fn every_dotted_verb_deserializes() {
+        let requests = [
+            serde_json::json!({"verb":"config.show"}),
+            serde_json::json!({"verb":"config.set-policy"}),
+            serde_json::json!({"verb":"entry.list"}),
+            serde_json::json!({"verb":"entry.set","id":"a","title":"A","image":"a.efi","role":"other"}),
+            serde_json::json!({"verb":"entry.remove","id":"a"}),
+            serde_json::json!({"verb":"entry.mode","id":"a","mode":1}),
+            serde_json::json!({"verb":"default.get"}),
+            serde_json::json!({"verb":"default.set","id":"a"}),
+            serde_json::json!({"verb":"source.detect"}),
+            serde_json::json!({"verb":"bls.list"}),
+            serde_json::json!({"verb":"bls.show","name":"a.conf"}),
+            serde_json::json!({"verb":"bls.stage","name":"a","entry":"a.conf","artifacts":[]}),
+            serde_json::json!({"verb":"slot.status"}),
+            serde_json::json!({"verb":"install","staged":"a"}),
+            serde_json::json!({"verb":"ota-apply","staged":"a"}),
+            serde_json::json!({"verb":"vbmeta.graft","vbmeta":"a","recovery":"b","output":"c"}),
+            serde_json::json!({"verb":"vendorboot.patch","input":"a","output":"b"}),
+        ];
+        for request in requests {
+            let bytes = serde_json::to_vec(&request).expect("request JSON");
+            let parsed = parse_json(&bytes).expect("dotted verb");
+            let _ = parsed.into_command();
+        }
     }
 }

@@ -4,8 +4,8 @@ mod cli_extra;
 mod config_ops;
 mod config_parse;
 mod config_render;
+pub mod detect;
 mod extra_ops;
-
 pub mod artifact;
 pub mod backend;
 pub mod bls;

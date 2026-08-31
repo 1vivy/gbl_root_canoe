@@ -5,9 +5,11 @@ use thiserror::Error;
 use crate::artifact::ArtifactError;
 use crate::backend::{Backend, BackendError, BootRoot};
 use crate::cli::{
-    BlsCommand, Command, ConfigCommand, DefaultCommand, EntryCommand, EntrySetArgs, Success,
+    BlsCommand, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand,
+    EntrySetArgs, PolicyArgs, SourceCommand, Success,
 };
-use crate::config::{ConfigDocument, ConfigError, EntryRequest};
+use crate::config::{ConfigDocument, ConfigError, EntryRequest, PolicyUpdate};
+use crate::detect::DetectError;
 use crate::extra_ops;
 use crate::graft::GraftError;
 use crate::slots::SlotError;
@@ -28,8 +30,12 @@ pub enum AppError {
     Slot(#[from] SlotError),
     #[error(transparent)]
     VendorBoot(#[from] VendorBootError),
+    #[error(transparent)]
+    Detect(#[from] DetectError),
     #[error("request: {0}")]
     Request(String),
+    #[error("default.target: {0}")]
+    DefaultTarget(String),
     #[error("command output: {0}")]
     Output(std::io::Error),
 }
@@ -67,18 +73,50 @@ pub fn execute_request_cli(
 
 fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppError> {
     match command {
-        Command::Config {
-            command: ConfigCommand::Show,
-        } => config_show(backend),
+        Command::Config { command } => config_command(backend, command),
         Command::Entry { command } => entry_command(backend, command),
         Command::Default { command } => default_command(backend, command),
         Command::Bls { command } => bls_command(backend, command),
+        Command::Source { command } => source_command(command),
         Command::Slot { command } => extra_ops::slot_command(backend, command),
         Command::Install(args) => extra_ops::install_command(backend, args),
         Command::OtaApply(args) => extra_ops::ota_apply(backend, args),
         Command::Graft(args) => extra_ops::graft_command(args),
         Command::VendorBoot { command } => extra_ops::vendorboot_command(command),
     }
+}
+
+fn source_command(command: &SourceCommand) -> Result<Success, AppError> {
+    match command {
+        SourceCommand::Detect => Ok(Success::SourceDetect {
+            ok: true,
+            kind: "source.detect",
+            sources: crate::detect::detect_sources()?,
+        }),
+    }
+}
+
+fn config_command(backend: &Backend, command: &ConfigCommand) -> Result<Success, AppError> {
+    match command {
+        ConfigCommand::Show => config_show(backend),
+        ConfigCommand::SetPolicy(args) => config_policy(backend, args),
+    }
+}
+fn config_policy(backend: &dyn BootRoot, args: &PolicyArgs) -> Result<Success, AppError> {
+    let mut config = read_existing(backend)?;
+    let generation = config.set_policy(PolicyUpdate {
+        menu_mode: args.menu_mode.map(Into::into),
+        key_window_ms: args.key_window_ms,
+        menu_timeout_s: args.menu_timeout_s,
+    })?;
+    backend.write_config(&config)?;
+    Ok(Success::ConfigPolicy {
+        ok: true,
+        kind: "config.policy",
+        config,
+        generation,
+        mark: format!("CANOE-MARK: config-policy generation={generation}"),
+    })
 }
 
 fn config_show(backend: &dyn BootRoot) -> Result<Success, AppError> {
@@ -136,7 +174,6 @@ fn entry_set(backend: &dyn BootRoot, args: &EntrySetArgs) -> Result<Success, App
         role: args.role.into(),
         mode: args.mode,
         global_mode: args.global_mode,
-        timeout: args.timeout,
         devinfo_repair: args.devinfo_repair.map(Into::into),
         make_default: args.default,
     })?;
@@ -169,18 +206,39 @@ fn default_command(backend: &dyn BootRoot, command: &DefaultCommand) -> Result<S
             default: read_or_empty(backend)?.default,
         }),
         DefaultCommand::Set(args) => {
+            let target = default_target(args)?;
+            if target.starts_with("bls:") && !bls_target_exists(backend, target)? {
+                return Err(AppError::DefaultTarget(format!(
+                    "BLS row does not exist: {target}"
+                )));
+            }
             let mut config = read_existing(backend)?;
-            let generation = config.set_default(&args.id)?;
+            let generation = config.set_default(target)?;
             backend.write_config(&config)?;
             Ok(Success::DefaultSet {
                 ok: true,
                 generation,
-                default: args.id.clone(),
+                default: target.to_owned(),
             })
         }
     }
 }
 
+fn default_target(args: &DefaultSetArgs) -> Result<&str, AppError> {
+    args.target.as_deref().or(args.id.as_deref()).ok_or_else(|| {
+        AppError::Request("default set requires a TARGET".to_owned())
+    })
+}
+
+fn bls_target_exists(backend: &dyn BootRoot, target: &str) -> Result<bool, AppError> {
+    let Some(stem) = target.strip_prefix("bls:") else {
+        return Ok(false);
+    };
+    Ok(backend.list_bls()?.iter().any(|file| {
+        let name = file.name.to_ascii_lowercase();
+        name.strip_suffix(".conf").is_some_and(|name| name == stem)
+    }))
+}
 fn bls_command(backend: &Backend, command: &BlsCommand) -> Result<Success, AppError> {
     match command {
         BlsCommand::List => Ok(Success::BlsList {
