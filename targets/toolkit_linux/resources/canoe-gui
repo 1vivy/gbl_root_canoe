@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export CANOE_BOOTMGR_BIN="$script_dir/bin/canoe-bootmgr"
+exec "$script_dir/bin/canoe-gui" "$@"

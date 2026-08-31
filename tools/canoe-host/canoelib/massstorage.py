@@ -1,15 +1,15 @@
-"""Discover a BDS export without mounting it.
+"""Discover a BDS export through the canonical source detector.
 
 The exported LUN is an ext4 block device, not a host filesystem.  The host
-keeps USB and fastboot discovery here, then passes the source directly to
-``canoe-bootmgr``.  ``local_boot_root`` is deliberately the only directory
-backend and exists for local tests and already-mounted operator workflows.
+keeps only fastboot session ownership and passes the source selected by
+``canoe-bootmgr source detect`` directly to the boot manager.
+``local_boot_root`` remains the directory backend for already-mounted
+operator workflows and tests.
 """
 
 from __future__ import annotations
 
 import math
-import os
 import shutil
 import subprocess
 import tempfile
@@ -18,9 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Final, Literal
 
+from . import bootmgr
 from .errors import CanoeError
-from .layout import platform_names
-from .massstorage_windows import export as export_windows
+from .layout import Toolkit, platform_names
 from .ui import note
 
 __all__: Final = ("Export", "export", "fastboot_binary", "local_boot_root", "release")
@@ -39,15 +39,6 @@ class Export:
     backend: Backend
 
 
-_SYS_BLOCK: Final = Path("/sys/block")
-_DEV_ROOT: Final = Path("/dev")
-_USB_MODESWITCH_OVERRIDE: Final = Path("/etc/usb_modeswitch.d")
-_MSC_GADGET_ID: Final = "05c6:f000"
-# The BDS rewrites the resident export driver's presentation to this Canoe
-# identity before the session starts.  The stock identity remains accepted
-# because older firmware can retain its own USB presentation.
-_MSC_CANOE_GADGET_ID: Final = "1209:ca0e"
-_MSC_GADGET_IDS: Final = frozenset({_MSC_GADGET_ID, _MSC_CANOE_GADGET_ID})
 
 
 def _write_probe(directory: Path, description: str) -> None:
@@ -87,54 +78,6 @@ def local_boot_root(path: Path) -> Export:
     return Export(boot_root=boot_root, source=None, node=None, owned=False, backend="local")
 
 
-def _usb_gadget(device: Path) -> Path | None:
-    """Return the USB device node behind a sysfs block device, if any."""
-    try:
-        resolved = device.resolve(strict=True)
-    except OSError:
-        return None
-    for node in (resolved, *resolved.parents):
-        if node.name == "sys" or node == Path(node.root):
-            break
-        try:
-            subsystem = (node / "subsystem").resolve(strict=True)
-        except OSError:
-            continue
-        if subsystem.name == "usb" and (node / "idVendor").is_file():
-            return node
-    return None
-
-
-def _gadget_id(gadget: Path) -> str | None:
-    """Read a USB device's ``vid:pid`` in lowercase sysfs spelling."""
-    try:
-        vendor = (gadget / "idVendor").read_text(encoding="utf-8").strip()
-        product = (gadget / "idProduct").read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return f"{vendor.lower()}:{product.lower()}"
-
-
-def _usb_disks() -> dict[str, str | None]:
-    """Map every USB-backed whole disk to its gadget identity."""
-    try:
-        entries = sorted(_SYS_BLOCK.iterdir())
-    except OSError as exc:
-        raise CanoeError(f"could not inspect {_SYS_BLOCK}: {exc}") from exc
-    disks: dict[str, str | None] = {}
-    for entry in entries:
-        if entry.is_dir():
-            gadget = _usb_gadget(entry / "device")
-            if gadget is not None:
-                disks[entry.name] = _gadget_id(gadget)
-    return disks
-
-
-def _exported_disks(disks: dict[str, str | None]) -> tuple[str, ...]:
-    """Return USB disks carrying either supported Canoe export identity."""
-    return tuple(name for name, gadget in disks.items() if gadget in _MSC_GADGET_IDS)
-
-
 def _ext4_export(node: Path | PurePath) -> Export:
     """Describe a raw export for the boot-manager ext4 backend."""
     return Export(boot_root=None, source=node, node=node, owned=True, backend="ext4")
@@ -150,37 +93,33 @@ def _stop_export_process(process: subprocess.Popen[bytes]) -> None:
             _ = process.wait()
 
 
-def _stock_identity_hint(disks: dict[str, str | None]) -> str:
-    """Name the modeswitch trap only when the stock identity showed up."""
-    if _MSC_GADGET_ID not in disks.values():
-        return ""
-    return (
-        f" The session came up with the stock {_MSC_GADGET_ID} identity rather than"
-        f" {_MSC_CANOE_GADGET_ID}, so the device used its own driver; stock"
-        " usb_modeswitch rules eject that identity mid-scan. Create"
-        f" {_USB_MODESWITCH_OVERRIDE / _MSC_GADGET_ID} containing"
-        " 'DisableSwitching=1' and retry."
-    )
+def _detect_export(toolkit_root: Path) -> Export | None:
+    """Return the first supported and unmounted block source, if present."""
+    for candidate in bootmgr.detect(Toolkit(toolkit_root)):
+        if (
+            candidate.kind == "block"
+            and candidate.identity in ("05c6:f000", "1209:ca0e")
+            and candidate.readable
+            and candidate.mounted_at is None
+        ):
+            return _ext4_export(Path(candidate.path))
+    return None
 
 
-def _find_export(before: frozenset[str], timeout: float) -> Export:
-    """Wait for a Canoe export LUN, preferring identity over novelty."""
+def _find_export(toolkit_root: Path, timeout: float) -> Export:
+    """Wait for a supported, unmounted block source from canoe-bootmgr."""
     deadline = time.monotonic() + timeout
     while True:
-        disks = _usb_disks()
-        for name in _exported_disks(disks) or tuple(sorted(set(disks) - before)):
-            node = _DEV_ROOT / name
-            if node.exists():
-                return _ext4_export(node)
+        export_handle = _detect_export(toolkit_root)
+        if export_handle is not None:
+            return export_handle
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            remedy = _stock_identity_hint(disks)
             raise CanoeError(
-                "mass-storage export did not expose a new USB SCSI disk within"
-                f" {timeout:g}s; the device enumerated but never presented a LUN.{remedy}"
+                "mass-storage export did not expose an unmounted Canoe block source "
+                f"within {timeout:g}s; source detect returned no usable candidate"
             )
         time.sleep(min(0.1, remaining))
-
 
 def fastboot_binary(toolkit_root: Path | None = None) -> Path:
     """Resolve the bundled fastboot first, then the operator's PATH copy."""
@@ -202,16 +141,11 @@ def export(toolkit_root: Path, *, target: str = "persist", timeout: float = 60.0
         raise CanoeError(
             f"mass-storage discovery timeout must be finite and non-negative: {timeout}"
         )
+    existing = _detect_export(toolkit_root)
+    if existing is not None:
+        note(f"Adopting the mass-storage export already live at {existing.source}")
+        return existing
     fastboot = fastboot_binary(toolkit_root)
-    if os.name == "nt":
-        windows = export_windows(toolkit_root, target, timeout, fastboot)
-        return _ext4_export(windows.node)
-    disks = _usb_disks()
-    for name in _exported_disks(disks):
-        node = _DEV_ROOT / name
-        if node.exists():
-            note(f"Adopting the mass-storage export already live at {node}")
-            return _ext4_export(node)
     try:
         process = subprocess.Popen(  # noqa: S603 - fixed fastboot argv
             [str(fastboot), "oem", f"mass-storage:{target}"],
@@ -221,7 +155,7 @@ def export(toolkit_root: Path, *, target: str = "persist", timeout: float = 60.0
     except OSError as exc:
         raise CanoeError(f"could not start fastboot mass-storage export: {exc}") from exc
     try:
-        return _find_export(frozenset(disks), timeout)
+        return _find_export(toolkit_root, timeout)
     except CanoeError:
         _stop_export_process(process)
         raise

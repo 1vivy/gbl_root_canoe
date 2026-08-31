@@ -54,9 +54,28 @@
       <section class="panel map-panel">
         <div class="panel-heading"><h2>BLS Type #1 entries</h2><span class="caption">bls.list</span></div>
         <div class="table-wrap"><table><thead><tr><th>File</th><th>Title</th><th>Kind</th><th>Image</th></tr></thead><tbody id="blsTableBody"><tr><td colspan="4" class="empty-row">Reading loader/entries...</td></tr></tbody></table></div>
-        <h3>Default and install</h3>
+        <h3>Default and boot policy</h3>
         <div class="control-row"><select id="defaultSelect" aria-label="Default entry"></select><button class="ghost-button" id="saveDefaultButton" data-action type="button">Save default</button></div>
-        <label class="field-label" for="stagePath">Staged boot-root directory</label>
+        <fieldset class="mode-control">
+          <legend>Boot menu policy</legend>
+          <label class="field-label" for="menuModeSelect">Startup mode</label>
+          <select class="text-input" id="menuModeSelect" aria-describedby="menuModeHint">
+            <option value="silent">Silent</option>
+            <option value="menu">Menu</option>
+          </select>
+          <p class="caption mode-status" id="menuModeHint">Silent boots the persisted default unless VOL UP opens the menu.</p>
+          <div class="control-row">
+            <label class="field-label" for="keyWindowInput">VOL UP / VOL DOWN window (ms)</label>
+            <input class="text-input" id="keyWindowInput" type="number" min="0" max="10000" step="1" inputmode="numeric" />
+          </div>
+          <div class="control-row">
+            <label class="field-label" for="menuTimeoutInput">Menu countdown (seconds)</label>
+            <input class="text-input" id="menuTimeoutInput" type="number" min="0" max="300" step="1" inputmode="numeric" />
+          </div>
+          <p class="caption mode-status">Menu mode always opens the menu; any key cancels its countdown and waits for input.</p>
+          <button class="ghost-button" id="savePolicyButton" data-action type="button">Save boot policy</button>
+        </fieldset>
+        <h3>Install and stage</h3>
         <input class="text-input" id="stagePath" value="/data/adb/modules/fake_bl_efisp/tmp/staged" autocomplete="off" />
         <label class="field-label" for="installTarget">Install target</label>
         <select id="installTarget"><option value="active">Active slot</option><option value="inactive">Inactive slot</option><option value="both">Both slots</option></select>

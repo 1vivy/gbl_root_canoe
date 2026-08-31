@@ -16,11 +16,11 @@ The host uses Python 3.11 and the standard library only. Child processes receive
 argv lists through `canoe.proc.run`; the host never invokes a shell. Linux and
 Windows therefore use the same argument handling and transaction semantics.
 
-`canoe-bootmgr` is the single boot-root transaction and configuration writer.
-The host adapter only discovers the export and forwards the canonical request.
+`canoe-bootmgr` is the single boot-root transaction, configuration writer, and
+source detector. The host adapter invokes `canoe-bootmgr source detect --json`,
+selects a supported unmounted source, and forwards the canonical request.
 For a USB export, `canoe-bootmgr` receives the raw block-device source and its
 `canoe-ext4` backend performs journal recovery, locking, write-back, and close.
-No kernel filesystem mount, FUSE layer, or root-owned directory is involved.
 The local `--boot-root` directory form remains available for tests and for an
 operator who has already mounted persist outside Canoe.
 
@@ -32,22 +32,22 @@ fastboot. The host installer never writes either partition.
 ```text
 canoe
 canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] \
-              [--vendor-boot IMG] [--allow-new-signer]
+canoe install [--boot-root PATH] --slot a|b [--mode 0|1|2] ...
 canoe entry set|remove|mode ...
+canoe config set-policy ...
 canoe default get|set ...
 canoe bls list|show|stage ...
+canoe source detect ...
 canoe slot status ...
 ```
 
 With no arguments, `canoe` runs the interactive questionnaire. `build` defaults
 to `images/abl.img` and `images/vbmeta.img`; explicit image arguments are
 copied into those canonical locations before derivation. `install` requires the
-slot because an export has no slot metadata; the request is forwarded to the
 boot manager, which applies the slot safety rules. When `--boot-root` is absent,
-`canoe` starts `fastboot oem mass-storage:persist`, discovers the Canoe USB
-identity (`1209:ca0e`, with stock `05c6:f000` retained for compatibility), and
-passes that block device directly to the boot manager.
+`canoe` starts `fastboot oem mass-storage:persist`, asks `canoe-bootmgr source
+detect --json` for candidates, and passes the supported unmounted block device
+directly to the boot manager.
 
 Entry, default, BLS, and slot commands are thin routes to the bundled
 `canoe-bootmgr` human CLI. They do not implement a second config grammar or

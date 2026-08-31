@@ -2,8 +2,8 @@ include ../../version.mk
 
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
-	submodule_ablfvextractor submodule_vbmetafixer canoe_host python_embed \
-	platform_tools ext4_tools build
+	submodule_canoe_gui submodule_ablfvextractor submodule_vbmetafixer \
+	canoe_host python_embed platform_tools ext4_tools build
 
 ROOT_DIR := $(abspath ../..)
 
@@ -66,6 +66,10 @@ submodule_canoe_bootmgr: copy_resources
 	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
 	test -f ../../tools/canoe-bootmgr/target/x86_64-pc-windows-gnu/release/canoe-bootmgr.exe
 	cp ../../tools/canoe-bootmgr/target/x86_64-pc-windows-gnu/release/canoe-bootmgr.exe ./build/toolkit/bin/canoe-bootmgr.exe
+submodule_canoe_gui: copy_resources
+	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/canoe-gui/Cargo.toml
+	test -f ../../tools/canoe-gui/target/x86_64-pc-windows-gnu/release/canoe-gui.exe
+	cp ../../tools/canoe-gui/target/x86_64-pc-windows-gnu/release/canoe-gui.exe ./build/toolkit/canoe-gui.exe
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_windows
 	cp ../../submodules/ablfvextractor/build/extractfv.exe ./build/toolkit/bin/extractfv.exe
@@ -126,5 +130,5 @@ ext4_tools: copy_resources
 	}
 	mkdir -p build/toolkit/bin
 	cp "$(CANOE_EXT4_WINDOWS)" ./build/toolkit/bin/canoe-ext4.exe
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor submodule_vbmetafixer canoe_host python_embed platform_tools ext4_tools
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_gui submodule_ablfvextractor submodule_vbmetafixer canoe_host python_embed platform_tools ext4_tools
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./
