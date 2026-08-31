@@ -38,6 +38,20 @@ pub struct SourceCandidate {
     pub why: String,
 }
 
+/// USB identities presented by a BDS mass-storage export.
+pub const EXPORT_IDENTITIES: [&str; 2] = ["05c6:f000", "1209:ca0e"];
+
+/// Return whether a source is a readable, unmounted Canoe block export.
+pub fn is_export_candidate(candidate: &SourceCandidate) -> bool {
+    candidate.kind == SourceKind::Block
+        && candidate
+            .identity
+            .as_deref()
+            .is_some_and(|identity| EXPORT_IDENTITIES.contains(&identity))
+        && candidate.readable
+        && candidate.mounted_at.is_none()
+}
+
 #[cfg(target_os = "linux")]
 pub use linux::{LinuxProbe, detect_linux, default_probe};
 #[cfg(windows)]
@@ -95,5 +109,55 @@ mod tests {
         assert_eq!(block.identity.as_deref(), Some("1209:ca0e"));
         assert_eq!(block.mounted_at.as_deref(), Some(mount.as_path()));
         assert_eq!(block.size_bytes, 262144 * 512);
+    }
+
+    fn candidate() -> super::SourceCandidate {
+        super::SourceCandidate {
+            kind: super::SourceKind::Block,
+            path: "/dev/sdb".into(),
+            identity: Some("1209:ca0e".to_owned()),
+            model: "Canoe".to_owned(),
+            size_bytes: 1,
+            boot_root: "/efisp".into(),
+            boot_root_present: false,
+            readable: true,
+            writable: true,
+            needs_privilege: false,
+            mounted_at: None,
+            why: "test".to_owned(),
+        }
+    }
+
+    #[test]
+    fn export_candidate_accepts_supported_unmounted_readable_block() {
+        assert!(super::is_export_candidate(&candidate()));
+    }
+
+    #[test]
+    fn export_candidate_rejects_non_block_kind() {
+        let mut value = candidate();
+        value.kind = super::SourceKind::Dir;
+        assert!(!super::is_export_candidate(&value));
+    }
+
+    #[test]
+    fn export_candidate_rejects_unknown_identity() {
+        let mut value = candidate();
+        value.identity = Some("android".to_owned());
+        assert!(!super::is_export_candidate(&value));
+    }
+
+    #[test]
+    fn export_candidate_rejects_unreadable_source() {
+        let mut value = candidate();
+        value.readable = false;
+        assert!(!super::is_export_candidate(&value));
+    }
+
+    #[test]
+    fn export_candidate_rejects_mounted_source() {
+        let mut value = candidate();
+        value.mounted_at = Some("/media/canoe".into());
+        assert!(!super::is_export_candidate(&value));
     }
 }

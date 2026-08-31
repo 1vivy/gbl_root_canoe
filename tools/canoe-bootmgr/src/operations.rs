@@ -1,46 +1,15 @@
 use std::path::Path;
 
-use thiserror::Error;
-
-use crate::artifact::ArtifactError;
 use crate::backend::{Backend, BackendError, BootRoot};
-use crate::build::{self, BuildArgs, BuildError, BuildOutcome};
+use crate::build::{self, BuildArgs, BuildOutcome};
 use crate::cli::{
     BlsCommand, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand, EntrySetArgs,
     PolicyArgs, SourceCommand, Success,
 };
-use crate::config::{ConfigDocument, ConfigError, EntryRequest, PolicyUpdate};
-use crate::detect::DetectError;
+use crate::config::{ConfigDocument, EntryRequest, PolicyUpdate};
+pub use crate::errors::AppError;
 use crate::extra_ops;
-use crate::graft::GraftError;
-use crate::slots::SlotError;
-use crate::vendorboot::VendorBootError;
 use crate::wire::JsonRequest;
-#[derive(Debug, Error)]
-pub enum AppError {
-    #[error(transparent)]
-    Backend(#[from] BackendError),
-    #[error(transparent)]
-    Config(#[from] ConfigError),
-    #[error(transparent)]
-    Artifact(#[from] ArtifactError),
-    #[error(transparent)]
-    Graft(#[from] GraftError),
-    #[error(transparent)]
-    Slot(#[from] SlotError),
-    #[error(transparent)]
-    VendorBoot(#[from] VendorBootError),
-    #[error(transparent)]
-    Detect(#[from] DetectError),
-    #[error(transparent)]
-    Build(#[from] BuildError),
-    #[error("request: {0}")]
-    Request(String),
-    #[error("default.target: {0}")]
-    DefaultTarget(String),
-    #[error("command output: {0}")]
-    Output(std::io::Error),
-}
 
 pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     let Some(command) = cli.command.as_ref() else {

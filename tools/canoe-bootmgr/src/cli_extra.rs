@@ -42,6 +42,29 @@ pub struct InstallArgs {
     pub allow_new_signer: bool,
 }
 
+impl TryFrom<&InstallArgs> for crate::InstallRequest {
+    type Error = crate::AppError;
+
+    fn try_from(args: &InstallArgs) -> Result<Self, Self::Error> {
+        if args.both || args.inactive || args.i_know_inactive_status {
+            return Err(crate::AppError::Request(
+                "install request requires an explicit single slot".to_owned(),
+            ));
+        }
+        let slot_text = args
+            .slot
+            .as_deref()
+            .ok_or_else(|| crate::AppError::Request("install requires --slot a|b".to_owned()))?;
+        let slot = crate::slots::parse_slot(slot_text).map_err(crate::AppError::Slot)?;
+        Ok(Self {
+            staged: args.staged.clone(),
+            slot,
+            mode: args.mode.unwrap_or(0),
+            allow_new_signer: args.allow_new_signer,
+        })
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct OtaApplyArgs {
     #[arg(long, value_name = "A|B")]

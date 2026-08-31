@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "cli")]
 use clap::Args;
 use serde::Serialize;
 use thiserror::Error;
@@ -9,25 +10,24 @@ use thiserror::Error;
 use crate::build_cleanup::{self, Cleanup};
 use crate::build_steps;
 use crate::build_tools::{self, ToolError, WorkDir};
-
 pub(crate) const GM2P_BYTES: u64 = 120;
 pub(crate) const TZMAP_BYTES: u64 = 256;
-
-#[derive(Debug, Args, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "cli", derive(Args))]
 pub struct BuildArgs {
-    #[arg(long)]
+    #[cfg_attr(feature = "cli", arg(long))]
     pub abl: PathBuf,
-    #[arg(long)]
+    #[cfg_attr(feature = "cli", arg(long))]
     pub vbmeta: Option<PathBuf>,
-    #[arg(long)]
+    #[cfg_attr(feature = "cli", arg(long))]
     pub staged: Option<PathBuf>,
-    #[arg(long)]
+    #[cfg_attr(feature = "cli", arg(long))]
     pub tools: Option<PathBuf>,
-    #[arg(long)]
+    #[cfg_attr(feature = "cli", arg(long))]
     pub keep_unpatched: Option<PathBuf>,
-    #[arg(long)]
+    #[cfg_attr(feature = "cli", arg(long))]
     pub patch_log: Option<PathBuf>,
-    #[arg(long)]
+    #[cfg_attr(feature = "cli", arg(long))]
     pub probe: bool,
 }
 
@@ -171,6 +171,35 @@ fn derive_full(
         build_cleanup::write_aux(path, patch_output.as_bytes(), "write patch log")?;
     }
     Ok(receipt)
+}
+
+/// Verify a generated TrustZone map against its extracted ABL input.
+pub fn verify_tzmap(
+    tools_dir: Option<&Path>,
+    sidecar: &Path,
+    abl: &Path,
+    allow_zero_digest: bool,
+) -> Result<(), BuildError> {
+    let tools = build_tools::resolve_tools(tools_dir)?;
+    let mut args = vec![
+        arg("verify"),
+        arg("--sidecar"),
+        arg(sidecar),
+        arg("--abl"),
+        arg(abl),
+    ];
+    if allow_zero_digest {
+        args.push(arg("--allow-zero-digest"));
+    }
+    let output = build_tools::run(&tools.abl_tzmap, &args)?;
+    if output.success {
+        Ok(())
+    } else {
+        Err(BuildError::StepFailed {
+            step: "abl_tzmap verify",
+            diagnostic: build_tools::diagnostic(&output),
+        })
+    }
 }
 
 pub(crate) fn arg(value: impl AsRef<Path>) -> std::ffi::OsString {
