@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from . import bootmgr, massstorage, sfb, vendorboot
+from . import bootmgr, massstorage, sfb
 from .errors import CanoeError
 from .layout import GM2P_BYTES, TZMAP_BYTES, Toolkit, require_exact, require_nonempty
 from .proc import Completed, run
@@ -197,7 +197,7 @@ def _run(argv: Sequence[str]) -> None:
         _stage_local(toolkit, staging)
         if options.vendor_boot is not None:
             patched_vendor = toolkit.root / "work" / "vendor_boot_patched.img"
-            vendorboot.patch_cmdline(options.vendor_boot, patched_vendor)
+            bootmgr.patch_vendor_boot(toolkit, options.vendor_boot, patched_vendor)
         if options.boot_root is None:
             try:
                 identity = sfb.identify(toolkit.root)

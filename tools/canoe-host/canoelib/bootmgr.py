@@ -198,6 +198,13 @@ def detect(toolkit: Toolkit) -> tuple[SourceCandidate, ...]:
     return _parse_detect(result)
 
 
+def patch_vendor_boot(toolkit: Toolkit, image: Path, out: Path) -> None:
+    """Amend a vendor_boot command line through the canonical patcher."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    result = run([_binary(toolkit), "--json", "vendor-boot", "patch", image, out])
+    if not result.ok:
+        raise _failure(result)
+
 
 def install(
     toolkit: Toolkit,

@@ -274,17 +274,6 @@ verify_abl_metadata() {
   return 0
 }
 
-# Download $1 into $2 using whichever fetcher is available.
-download_url() {
-  if command -v wget >/dev/null 2>&1; then
-    timeout 60 wget -O "$2" "$1" >/dev/null 2>&1
-  elif command -v curl >/dev/null 2>&1; then
-    timeout 60 curl -fL -o "$2" "$1" >/dev/null 2>&1
-  else
-    return 1
-  fi
-}
-
 # Fetch an older ABL with the GBL vulnerability. Looks up the local module
 # bundle first, then the cloud. On success, leaves the image at
 # $RUNTIME_DIR/repo_abl.img and returns 0; otherwise returns 1.
