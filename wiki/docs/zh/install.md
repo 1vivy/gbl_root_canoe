@@ -64,11 +64,11 @@ Windows： canoe.cmd
 fastboot oem mass-storage:persist
 ```
 
-主机会识别导出的 Canoe USB 磁盘（`1209:ca0e`；旧固件的
-`05c6:f000` 也会接受），然后把原始源直接交给 `canoe-bootmgr`。不会创建
-盘符或主机文件系统目录。`canoe-bootmgr` 通过 `canoe-ext4` 路由所有启动
-根目录读写；helper 在缺少 `/efisp` 时创建它，并以同一事务提交选定槽位的
-三件套、配置、附属文件并保留回滚：
+主机会请求 `canoe-bootmgr source detect --json`，选择身份为 `1209:ca0e`（旧固件
+也可能为 `05c6:f000`）且可读、未挂载的第一个 block 行，然后把原始源直接交给
+`canoe-bootmgr`。不会创建盘符或主机文件系统目录。`canoe-bootmgr` 通过
+`canoe-ext4` 路由所有启动根目录读写；helper 在缺少 `/efisp` 时创建它，并以同一
+事务提交选定槽位的三件套、配置、附属文件并保留回滚：
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
@@ -230,3 +230,27 @@ BDS 菜单还提供 **USB Mass Storage** 与 **Reboot to Recovery**，以及已�
 Mode 1 会向系统投射锁定的 DeviceInfo 视图。TEE 可能拒绝为此前状态下写入
 的 userdata 提供数据密钥，所以旧数据无论如何都不可读。
 `canoe.cfg` 使用 `devinfo-repair asneeded`；格式化数据才能让新状态一致。
+
+## 策略、源探测与图形界面
+
+策略修改通过唯一的启动根目录写入器完成：
+
+```bash
+canoe config set-policy --menu-mode silent --key-window-ms 1200 \
+  --menu-timeout-s 5
+canoe default set android-a
+canoe default set bls:pmos
+canoe source detect --json
+```
+
+`default set bls:<stem>` 会使用与 `bls list` 相同的发现结果，找不到目标时拒绝
+写入。`source detect` 只读且枚举时不需要提权；需要访问权限时报告
+`needs_privilege`。
+
+Linux 工具包双击根目录的 `canoe-gui` 即可启动，也可从任意当前目录运行
+`./canoe-gui`；它会找到随包提供的 `bin/canoe-gui` 与 `bin/canoe-bootmgr`。
+Windows 双击根目录的 `canoe-gui.exe`，辅助程序留在 `bin/`，且不打开控制台。
+Connect 界面显示探测结果，支持一键连接、Refresh 和手动目录/镜像/设备选择，
+并记住平台配置目录中的上次成功源。目录和镜像不需要提权；设备访问被拒绝时，
+Linux 提供 **Retry with pkexec** 和可复制的 `sudo` 命令，Windows 提供
+**Restart as Administrator**；图形界面不会静默提权。

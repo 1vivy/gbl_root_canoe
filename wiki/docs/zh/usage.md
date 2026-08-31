@@ -53,16 +53,25 @@ boot 处理函数在该镜像 kernel 段的开头识别出 `MZ` 签名，于是�
 超时、音量下和电源键都会保留 fastboot 默认路径。这是刚刷入 BDS 后的安全路径：
 电脑端无需先准备菜单配置就能安装启动链。
 
-对于已填充的启动根目录，BDS 会在启动时、文件系统栈启动前先采样**一秒音量上**，
-因此初始化不会先吃掉这次按键。
+对于已填充的启动根目录，BDS 会在启动时按 `menu-mode` 读取策略，并采样
+`key-window` 毫秒：
 
-- **在这一秒内按住音量上**——立即打开菜单，不尝试无人值守启动。
-- **未按住音量上**——BDS 不显示菜单，直接启动 `canoe.cfg` 中 `default` 指定的
-  启动项。只有该启动返回或失败，或文件中没有 `default` 时才进入菜单。
+- **Silent 模式**（新安装默认）：窗口内按音量上会打开菜单并无限等待；音量下
+  进入现有 fastboot 路径；没有按键则立即启动配置的默认项。
+- **Menu 模式**：窗口内按音量下进入 fastboot，随后总是打开菜单。菜单按
+  `menu-timeout` 秒倒计时后启动默认项；任意按键会取消倒计时并使菜单无限等待。
 
-普通菜单打开后，若配置存在有效默认项，`timeout` 只作用于第一次绘制。按任意键
-会取消倒计时，之后重绘都无限等待。`timeout 0` 会立即启动默认项，而不是永久等待。
-BLS 行不是有效的 `canoe.cfg default`，因此测试 BLS 必须主动进入菜单。
+`key-window` 范围为 `0..=10000` 毫秒，默认 `1200`；零表示不采样。
+`menu-timeout` 范围为 `0..=300` 秒，默认 `5`，仅 Menu 模式生效；零表示永不
+自动启动。默认项无法解析（包括未发现的 `bls:<stem>`）时，BDS 显示现有
+拒绝/提示界面并等待，不会回退到其他启动项。
+
+默认项可以是 Android 行，也可以是发现的 BLS Type #1 行，例如
+`default bls:pmos`。BLS 默认项是直通行（无附属文件、钩子或槽位语义），USB
+上的 BLS 行不能作为无人值守默认项。
+`canoe-bootmgr --json config show` 会返回 `menu_mode`、`key_window_ms` 与
+`menu_timeout_s`；不再返回旧的 `timeout_seconds` 字段。
+
 
 菜单按以下顺序构建：
 
@@ -79,11 +88,10 @@ BLS 行不是有效的 `canoe.cfg default`，因此测试 BLS 必须主动进入
    **USB Mass Storage**、**Reboot to Recovery**、**Power Off** 与 **Restart**。
 
 只有镜像存在时才显示配置行；镜像缺失会被跳过。BLS 文件无效或引用镜像缺失时
-也会被跳过。发现行排在配置行之后，且永远不会成为无人值守默认项：`default` 只能
-指向 `canoe.cfg` 行，默认解析器只选择不可移动介质上的普通 EFI 行。启动 BLS 时，
-按住音量上进入菜单，移动到该行后按电源键。若要无人值守测试，请把小型 wrapper
-UEFI 应用写入普通 `canoe.cfg` 行并将该行设为默认；wrapper 再选择或链式启动 BLS
-载荷。
+也会被跳过。只有设备启动根目录中发现的 BLS 行，且 `default bls:<stem>` 指向
+已发现的 stem 时，才可作为无人值守默认项。该 BLS 默认项保持直通，不使用附属
+文件、钩子或槽位语义；USB 上的 BLS 行仍不符合条件。交互启动 BLS 时，按住
+音量上进入菜单，移动到该行后按电源键。
 
 同一菜单还提供以下工具与操作：
 
@@ -200,3 +208,25 @@ fastboot reboot
 此 BDS 的 fastboot `reboot` 处理器只支持 **Normal** 模式。
 `fastboot reboot recovery` 在这里不是进入 Recovery 的命令；请在 BDS 菜单选择
 **Reboot to Recovery**，或通过 **EFI Tools** 打开 Recovery 启动项。
+## 启动策略与源探测
+
+电脑端 `canoe` 将策略修改转交给唯一的 `canoe-bootmgr` 写入器：
+
+```bash
+canoe config set-policy [--menu-mode silent|menu] \
+  [--key-window-ms N] [--menu-timeout-s N]
+canoe default set android-a
+canoe default set bls:pmos
+canoe source detect --json
+```
+
+`default set bls:<stem>` 只有在与 `bls list` 相同的发现流程找到该 BLS 行时
+才会接受。目录或镜像源不需要提权；设备访问被拒绝时，Linux 显示
+**Retry with pkexec** 及可复制的 `sudo` 命令，Windows 显示 **Restart as
+Administrator**，都不会静默提权。
+
+Linux 工具包可从任意当前目录双击根目录的 `canoe-gui` 启动器；Windows 双击
+工具包根目录的 `canoe-gui.exe`（无控制台窗口，辅助程序仍在 `bin/`）。
+Connect 界面运行 `source detect`，显示路径、身份、型号、大小、启动根目录、
+原因和提权需求，并提供一键连接、Refresh 以及手动目录/镜像/设备选择，同时
+记住平台配置目录中的上次成功源。

@@ -72,9 +72,10 @@ then requests:
 fastboot oem mass-storage:persist
 ```
 
-The host discovers the resulting Canoe USB disk (`1209:ca0e`; stock
-`05c6:f000` is accepted for older firmware) and passes its raw source directly
-to `canoe-bootmgr`. No drive letter or host filesystem directory is created.
+After `fastboot oem mass-storage:persist`, the host asks
+`canoe-bootmgr source detect --json` for candidates and selects the first
+readable, unmounted block row with identity `1209:ca0e` (or compatibility
+identity `05c6:f000`). No drive letter or host filesystem directory is created.
 `canoe-bootmgr` routes all boot-root reads and writes through `canoe-ext4`;
 the helper creates `/efisp` when it is missing and the boot manager commits
 the selected slot triplet, configuration, sidecars, and rollback as one
@@ -254,3 +255,33 @@ Mode 1 projects a locked DeviceInfo view to the OS. The TEE can refuse the data
 key for userdata written under the previous state, so old data is unreadable
 either way. `canoe.cfg` carries `devinfo-repair asneeded`; formatting makes the
 new state coherent.
+
+## Policy and source commands
+
+Policy changes go through the single boot-root writer:
+
+```bash
+canoe config set-policy --menu-mode silent --key-window-ms 1200 \
+  --menu-timeout-s 5
+canoe default set android-a
+canoe default set bls:pmos
+canoe source detect --json
+```
+
+`default set bls:<stem>` refuses a stem that `bls list` cannot discover.
+`source detect` is read-only and privilege-free for enumeration; it reports
+`needs_privilege` when opening a source requires elevation.
+
+## Double-click GUI entry point
+
+On Linux, double-click the root-level `canoe-gui` launcher in the toolkit (or
+run `./canoe-gui` from any current directory). It resolves the bundled
+`bin/canoe-gui` and `bin/canoe-bootmgr`. On Windows, double-click the root-level
+`canoe-gui.exe`; helper binaries remain under `bin/` and no console window opens.
+
+The Connect screen displays detector candidates and provides one-click attach,
+Refresh, and manual directory/image/device selection. It remembers the last
+successful source in the platform config directory. Directory and image
+sources do not need elevation. When a device operation is denied, Linux offers
+**Retry with pkexec** and a copyable `sudo` command; Windows offers **Restart as
+Administrator**. The GUI never escalates silently.

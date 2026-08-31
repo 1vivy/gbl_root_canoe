@@ -58,21 +58,29 @@ Volume Up is the only key that opts into the normal menu; timeout, Volume Down,
 and Power preserve the fastboot default. This is the safe path for a freshly
 flashed BDS: the host can install the chain without any menu configuration.
 
-For a populated root, BDS samples **Volume Up for one second at startup**,
-before it brings up the filesystem stack, so the key is read before
-initialization can consume it.
+For a populated root, BDS reads `menu-mode` and samples keys for
+`key-window` milliseconds at startup:
 
-- **Volume Up held during that second** — the menu opens immediately and no
-  unattended launch is attempted.
-- **Volume Up not held** — BDS launches the entry named by `default` in
-  `canoe.cfg` without showing the menu. The menu is reached if that launch
-  returns or fails, or if the file names no `default`.
+- **Silent mode** (fresh-install default): Volume Up opens the menu and then
+  waits indefinitely; Volume Down takes the existing fastboot path; no key
+  launches the configured default immediately.
+- **Menu mode**: Volume Down during the key window takes fastboot, then the
+  menu always opens. It counts down for `menu-timeout` seconds and launches the
+  default; any key cancels the countdown and makes the menu wait indefinitely.
 
-Once the normal menu is up, the configured `timeout` applies only to its first
-draw when a valid config default exists. A key cancels that countdown; later
-redraws wait indefinitely. `timeout 0` launches the default immediately rather
-than waiting forever. A BLS row is not a valid `canoe.cfg default`, so BLS
-tests must enter the menu deliberately.
+`key-window` is `0..=10000` milliseconds and defaults to `1200`; zero disables
+sampling. `menu-timeout` is `0..=300` seconds and defaults to `5`; it is honored
+only in Menu mode, and zero means never auto-launch. An unresolved default,
+including an undiscovered `bls:<stem>`, opens the menu with the existing notice
+and waits rather than falling through to another row.
+
+The default may select an Android row or a discovered BLS Type #1 row:
+`default bls:pmos` selects the lowercased `pmos.conf` stem. A BLS default is
+passthrough (no sidecars, hooks, or slot semantics), and USB-hosted BLS rows
+cannot be unattended defaults.
+`canoe-bootmgr --json config show` reports `menu_mode`, `key_window_ms`, and
+`menu_timeout_s`; the old `timeout_seconds` field is not present.
+
 
 The menu is built in this order:
 
@@ -93,12 +101,11 @@ The menu is built in this order:
 
 Configured rows are shown only when their image exists; a missing image is
 skipped. A BLS row is also skipped when its referenced image is missing or its
-entry is invalid. Discovered rows are appended after configured rows and are
-never an unattended default: `default` names only a `canoe.cfg` row, and the
-default resolver selects only a non-removable plain EFI row. To boot a BLS
-entry, hold Volume Up, navigate to it, and press Power. For unattended testing,
-put a small wrapper UEFI application in a plain `canoe.cfg` row and make that
-plain row the default; the wrapper can then select or chain to the BLS payload.
+entry is invalid. Discovered BLS rows are eligible for an unattended default
+only when they are on the device boot root and `default bls:<stem>` names the
+discovered stem. Such a BLS default remains passthrough, without sidecars,
+hooks, or slot semantics. USB-hosted BLS rows remain ineligible. To boot a BLS
+row interactively, hold Volume Up, navigate to it, and press Power.
 
 The menu includes the following session tools and actions in the same screen:
 
@@ -231,3 +238,28 @@ This BDS implements the fastboot `reboot` handler for **Normal** mode only.
 `fastboot reboot recovery` is not a recovery navigation command here. To enter
 recovery, select **Reboot to Recovery** in the BDS menu or open the recovery
 entry through **EFI Tools**.
+## Boot policy and source detection
+
+The host CLI exposes the same policy writer as every other Canoe surface:
+
+```bash
+canoe config set-policy [--menu-mode silent|menu] \
+  [--key-window-ms N] [--menu-timeout-s N]
+canoe default set android-a
+canoe default set bls:pmos
+canoe source detect --json
+```
+
+These commands delegate to `canoe-bootmgr`; the Python host never edits
+`canoe.cfg`. `default set bls:<stem>` is accepted only when that BLS Type #1
+row is discovered by the same detector used by `bls list`.
+
+For a graphical host workflow, double-click `./canoe-gui` from the Linux
+toolkit (it works from any current directory), or double-click the root
+`canoe-gui.exe` in the Windows toolkit. The Connect screen runs source
+detection, shows path, identity, model, size, boot-root presence, explanation,
+and privilege need, and offers attach, Refresh, and manual directory/image/
+device selection. Directory and image sources never need elevation. If a
+device operation is denied, Linux offers **Retry with pkexec** and a copyable
+`sudo` command; Windows offers **Restart as Administrator**. Elevation is
+explicit and is never silent.

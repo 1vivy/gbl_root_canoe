@@ -1,11 +1,11 @@
 # `canoe.cfg` — the boot-root contract
 
-`canoe.cfg` is the BDS menu state for 7.x. The 7.0.0-b2 release keeps the
-grammar described below unchanged; it changes the managed Android file and row
-lifecycle from one shared loader to independent A/B triplets. The BDS only reads
-this file; the host `canoe-bootmgr` transaction and the device-side module are
-the writers. The file lives under `persist/efisp`, while the raw `efisp`
-partition contains only `BDS.efi`.
+`canoe.cfg` is the BDS menu state for 7.x. In 7.0.0-b2 the boot policy is
+explicit: fresh installs default to Silent mode, while the writer and BDS
+share the grammar below. The BDS only reads this file; the host
+`canoe-bootmgr` transaction and the device-side module are the writers. The
+file lives under `persist/efisp`, while the raw `efisp` partition contains only
+`BDS.efi`.
 
 ## Location and syntax
 
@@ -33,14 +33,52 @@ Global keys must appear before the first `entry`:
 | --- | --- | --- | --- |
 | `version` | `1` | required | Configuration format version |
 | `generation` | `0..4294967295` | `0` | Monotonic installed-generation number |
-| `timeout` | `0..60` | `5` | Seconds before the configured default launches |
-| `default` | an entry ID | none | Entry launched without menu input |
+| `menu-mode` | `silent`, `menu` | `silent` for fresh installs | Startup policy |
+| `key-window` | `0..=10000` | `1200` | Volume-key sampling window in milliseconds |
+| `menu-timeout` | `0..=300` | `5` | Menu countdown in seconds; only in Menu mode |
+| `default` | an entry ID or `bls:<stem>` | none | Row launched without menu input |
 | `mode` | `0`, `1`, `2` | `1` | Fallback mode for entries without their own mode |
 | `devinfo-repair` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo` |
 
+`key-window` is inclusive at both bounds. `key-window 0` means no sampling:
+Silent mode launches the default immediately, while Menu mode still opens the
+menu. In Silent mode, Volume Up during the key window opens the menu and then
+waits indefinitely for input; Volume Down takes the existing fastboot path; no
+key launches the default immediately. In Menu mode, Volume Down during the key
+window takes fastboot, then the menu always opens. The menu counts down for
+`menu-timeout` seconds and launches the default; any key cancels the countdown
+and leaves the menu waiting indefinitely. `menu-timeout 0` disables automatic
+launch.
+
+The writer never emits `timeout`. The BDS accepts a pre-b2 `timeout N` line only
+as a compatibility alias for `menu-mode menu` plus `menu-timeout N`; it is not a
+rejected line and is never written by current tools.
+
+`default` may name any resolvable `canoe.cfg` entry or a discovered BLS Type #1
+row as `bls:<stem>`. The stem is the case-folded lowercase `.conf` basename and
+must match `^[a-z0-9._-]{1,63}$` (for example, `loader/entries/pmOS.conf`
+becomes `bls:pmos`). A BLS default remains passthrough: it has no managed
+sidecars, mode hooks, or slot semantics.
+USB-hosted BLS rows are not eligible as
+unattended defaults. If the configured default cannot be resolved, BDS opens
+the menu, shows the existing rejected/notice surface, and waits; it never
+falls through to another row.
 Inside an entry block, `title`, `image`, `options`, `mode`, and `role` are
 valid. A per-entry `mode` overrides the global fallback. File-global keys
 appearing in an entry are rejected rather than retroactively applied.
+
+The complete writer grammar is:
+
+```text
+version 1
+generation N
+menu-mode silent|menu
+key-window 1200
+menu-timeout 5
+default android-a          # or: default bls:pmos
+mode 0|1|2
+devinfo-repair asneeded|never
+```
 
 `options` is the command line handed to the image as UEFI LoadOptions. It is
 at most 383 characters and is passed through byte for byte: unlike `image` it
@@ -196,7 +234,9 @@ triplets exist; it does not create a default automatically.
 ```text
 version 1
 generation 4
-timeout 5
+menu-mode silent
+key-window 1200
+menu-timeout 5
 default android-a
 mode 1
 devinfo-repair asneeded
