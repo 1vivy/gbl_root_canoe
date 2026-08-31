@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use crate::protocol::{BootRoot, BootmgrClient, ProtocolError, Request, Response};
+use crate::client::BootmgrClient;
+use crate::protocol::{BootRoot, ProtocolError, Request, Response};
 use crate::text::TextKey;
 use crate::ui::{EditorState, GuiApp, Screen};
 impl GuiApp {
@@ -196,7 +197,6 @@ impl GuiApp {
         }
     }
 
-
     fn current_target(&self) -> BootRoot {
         let path = PathBuf::from(self.root_input.trim());
         if self.source_is_ext4 {
@@ -215,7 +215,7 @@ impl GuiApp {
         self.status = format!(
             "{}: {}",
             self.label(TextKey::Disconnected),
-            crate::protocol::cap_log_message(&detail)
+            crate::client::cap_log_message(&detail)
         );
         self.elevation = if self.source_is_block {
             crate::elevate::action_for(error, &self.bootmgr_path, target)
@@ -224,8 +224,6 @@ impl GuiApp {
         };
         self.log(detail);
     }
-
-
 }
 fn optional_input(value: &str) -> Option<String> {
     (!value.trim().is_empty()).then(|| value.trim().to_owned())

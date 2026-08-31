@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use tempfile::tempdir;
 
-use super::{BootmgrClient, Request, Response};
+use super::BootmgrClient;
+use crate::protocol::{Request, Response};
 
 #[test]
 fn client_round_trips_recorded_fixture_responses() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +13,7 @@ fn client_round_trips_recorded_fixture_responses() -> Result<(), Box<dyn std::er
     let fixture = directory.path().join("fixture-child");
     fs::write(&fixture, FIXTURE_SCRIPT)?;
     fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))?;
-    let mut client = BootmgrClient::connect(&fixture, &super::BootRoot::LocalDir(PathBuf::from(".")))?;
+    let mut client = BootmgrClient::connect(&fixture, &crate::protocol::BootRoot::LocalDir(PathBuf::from(".")))?;
 
     let response = client.request(&Request::EntryList)?;
     assert!(matches!(response, Response::EntryList { generation: 3, .. }));
@@ -34,7 +35,7 @@ fn ext4_source_uses_global_source_flag() -> Result<(), Box<dyn std::error::Error
     fs::write(&fixture, SOURCE_ARGS_FIXTURE)?;
     fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))?;
     let source = PathBuf::from("/tmp/canoe-test.ext4");
-    let mut client = BootmgrClient::connect(&fixture, &super::BootRoot::Ext4Source(source))?;
+    let mut client = BootmgrClient::connect(&fixture, &crate::protocol::BootRoot::Ext4Source(source))?;
     let response = client.request(&Request::SlotStatus {
         slot: None,
         bootctl_output: None,

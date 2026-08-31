@@ -2,10 +2,11 @@ use eframe::egui;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
+use crate::client::{BootmgrClient, cap_log_message};
 use crate::connect::remembered_source;
 use crate::detect::SourceCandidate;
 use crate::model::{BlsFile, ConfigDocument, ConfigEntry, Role};
-use crate::protocol::{BootRoot, BootmgrClient, cap_log_message};
+use crate::protocol::BootRoot;
 use crate::slot_model::SlotStatus;
 use crate::text::{TextKey, text};
 const MAX_LOG_ROWS: usize = 80;
@@ -92,6 +93,8 @@ pub(crate) struct GuiApp {
     pub(crate) manual_source: String,
     pub(crate) source_is_block: bool,
     pub(crate) elevation: Option<crate::elevate::ElevationAction>,
+    pub(crate) export: crate::export::ExportSession,
+    pub(crate) identity: crate::identity::IdentityProbe,
 }
 
 impl GuiApp {
@@ -146,6 +149,8 @@ impl GuiApp {
             manual_source: String::new(),
             source_is_block: false,
             elevation: None,
+            export: crate::export::ExportSession::new(),
+            identity: crate::identity::IdentityProbe::new(),
         };
         if app.client.is_some() {
             app.refresh();
@@ -156,6 +161,7 @@ impl GuiApp {
                 app.root_input = source;
             }
             app.refresh_sources();
+            app.probe_identity();
         }
 
         app
@@ -172,6 +178,12 @@ impl GuiApp {
 
 impl eframe::App for GuiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.poll_identity();
+        self.poll_export();
+        if self.identity.probing || self.export.busy() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(150));
+        }
         if self.screen == Screen::Connect {
             self.render_connect(ui);
             return;

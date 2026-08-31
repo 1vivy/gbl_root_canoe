@@ -1,10 +1,13 @@
 use eframe::egui;
 
 use crate::connect::source_from_candidate;
+use crate::export::{EXPORT_TIMEOUT, ExportPhase, failure_text};
 use crate::detect::{SourceCandidate, SourceKind, display_size, source_kind_label};
 use crate::elevate::ElevationAction;
 use crate::text::TextKey;
 use crate::ui::GuiApp;
+#[cfg(not(windows))]
+use crate::client::BootmgrClient;
 #[cfg(not(windows))]
 use crate::ui::Screen;
 
@@ -14,7 +17,22 @@ impl GuiApp {
         ui.label(format!("bootmgr: {}", self.bootmgr_path.display()));
         if ui.button(self.label(TextKey::Refresh)).clicked() {
             self.refresh_sources();
+            self.probe_identity();
         }
+        ui.separator();
+        ui.strong(self.label(TextKey::DeviceIdentity));
+        let (version, slot) = self.identity.lines();
+        ui.label(version);
+        ui.label(slot);
+        if self.identity.probing {
+            ui.small(self.label(TextKey::Probing));
+        }
+        if let Some(note) = self.identity.note.clone() {
+            ui.colored_label(egui::Color32::YELLOW, note);
+        }
+        ui.separator();
+        ui.strong(self.label(TextKey::PersistExport));
+        self.render_export_control(ui);
         ui.separator();
         ui.strong(self.label(TextKey::DetectedSources));
         if self.candidates.is_empty() {
@@ -73,7 +91,7 @@ impl GuiApp {
             .bootmgr_path
             .canonicalize()
             .unwrap_or_else(|_| self.bootmgr_path.clone());
-        match crate::protocol::BootmgrClient::connect_pkexec(&helper, &target) {
+        match BootmgrClient::connect_pkexec(&helper, &target) {
             Ok(client) => {
                 self.client = Some(client);
                 self.elevation = None;
@@ -98,6 +116,53 @@ impl GuiApp {
             crate::protocol::BootRoot::Ext4Source(self.root_input.clone().into())
         } else {
             crate::protocol::BootRoot::LocalDir(self.root_input.clone().into())
+        }
+    }
+}
+
+impl GuiApp {
+    fn render_export_control(&mut self, ui: &mut egui::Ui) {
+        match self.export.phase.clone() {
+            ExportPhase::Idle => {
+                if ui.button(self.label(TextKey::StartExport)).clicked() {
+                    self.start_export();
+                }
+            }
+            ExportPhase::Starting => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label("starting the export over fastboot…");
+                });
+            }
+            ExportPhase::Discovering { .. } => {
+                let elapsed = self.export.elapsed().map_or(0, |elapsed| elapsed.as_secs());
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label(format!(
+                        "waiting for the export to appear… {elapsed}s / {}s",
+                        EXPORT_TIMEOUT.as_secs()
+                    ));
+                });
+            }
+            ExportPhase::Attached { node, adopted } => {
+                if adopted {
+                    ui.label(format!(
+                        "adopted the export already live at {}",
+                        node.display()
+                    ));
+                } else {
+                    ui.label(format!("export live at {}", node.display()));
+                }
+                if ui.button(self.label(TextKey::StartExport)).clicked() {
+                    self.start_export();
+                }
+            }
+            ExportPhase::Failed(failure) => {
+                ui.colored_label(egui::Color32::YELLOW, failure_text(&failure));
+                if ui.button(self.label(TextKey::StartExport)).clicked() {
+                    self.start_export();
+                }
+            }
         }
     }
 }
