@@ -1,4 +1,5 @@
 use crate::artifact::ArtifactSpec;
+use crate::build::BuildArgs;
 use crate::cli::{
     BlsCommand, BlsStageArgs, Command, ConfigCommand, DefaultCommand, DefaultSetArgs,
     EntryCommand, EntryIdArgs, EntryModeArgs, EntrySetArgs, GraftArgs, InstallArgs, OtaApplyArgs,
@@ -10,6 +11,23 @@ use crate::wire::JsonRequest;
 impl JsonRequest {
     pub fn into_command(self) -> Command {
         match self {
+            Self::Build {
+                abl,
+                vbmeta,
+                staged,
+                tools,
+                keep_unpatched,
+                patch_log,
+                probe,
+            } => Command::Build(BuildArgs {
+                abl,
+                vbmeta,
+                staged,
+                tools,
+                keep_unpatched,
+                patch_log,
+                probe,
+            }),
             Self::ConfigShow => Command::Config {
                 command: ConfigCommand::Show,
             },

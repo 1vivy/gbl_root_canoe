@@ -12,6 +12,22 @@ mod wire_command;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "verb")]
 pub enum JsonRequest {
+    #[serde(rename = "build")]
+    Build {
+        abl: PathBuf,
+        #[serde(default)]
+        vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        staged: Option<PathBuf>,
+        #[serde(default)]
+        tools: Option<PathBuf>,
+        #[serde(default)]
+        keep_unpatched: Option<PathBuf>,
+        #[serde(default)]
+        patch_log: Option<PathBuf>,
+        #[serde(default)]
+        probe: bool,
+    },
     #[serde(rename = "config.show")]
     ConfigShow,
     #[serde(rename = "config.set-policy")]
@@ -179,6 +195,7 @@ mod tests {
     #[test]
     fn every_dotted_verb_deserializes() {
         let requests = [
+            serde_json::json!({"verb":"build","abl":"a","probe":true}),
             serde_json::json!({"verb":"config.show"}),
             serde_json::json!({"verb":"config.set-policy"}),
             serde_json::json!({"verb":"entry.list"}),

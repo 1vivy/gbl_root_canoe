@@ -1,3 +1,7 @@
+mod build;
+mod build_cleanup;
+mod build_steps;
+mod build_tools;
 mod bls_parse;
 mod bls_render;
 mod cli_extra;

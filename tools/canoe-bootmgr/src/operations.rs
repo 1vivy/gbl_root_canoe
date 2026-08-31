@@ -4,9 +4,10 @@ use thiserror::Error;
 
 use crate::artifact::ArtifactError;
 use crate::backend::{Backend, BackendError, BootRoot};
+use crate::build::{self, BuildArgs, BuildError, BuildOutcome};
 use crate::cli::{
-    BlsCommand, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand,
-    EntrySetArgs, PolicyArgs, SourceCommand, Success,
+    BlsCommand, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand, EntrySetArgs,
+    PolicyArgs, SourceCommand, Success,
 };
 use crate::config::{ConfigDocument, ConfigError, EntryRequest, PolicyUpdate};
 use crate::detect::DetectError;
@@ -15,7 +16,6 @@ use crate::graft::GraftError;
 use crate::slots::SlotError;
 use crate::vendorboot::VendorBootError;
 use crate::wire::JsonRequest;
-
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error(transparent)]
@@ -32,6 +32,8 @@ pub enum AppError {
     VendorBoot(#[from] VendorBootError),
     #[error(transparent)]
     Detect(#[from] DetectError),
+    #[error(transparent)]
+    Build(#[from] BuildError),
     #[error("request: {0}")]
     Request(String),
     #[error("default.target: {0}")]
@@ -41,20 +43,26 @@ pub enum AppError {
 }
 
 pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
+    let Some(command) = cli.command.as_ref() else {
+        return Err(AppError::Request("a command is required".to_owned()));
+    };
+    if let Command::Build(args) = command {
+        return build_command(args);
+    }
     let backend = Backend::from_paths(
         cli.boot_root.as_deref(),
         cli.source.as_deref(),
         cli.image.as_deref(),
     )?;
-    let Some(command) = cli.command.as_ref() else {
-        return Err(AppError::Request("a command is required".to_owned()));
-    };
     execute_command(&backend, command)
 }
 
 pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, AppError> {
-    let backend = Backend::local(root)?;
     let command = request.into_command();
+    if let Command::Build(args) = &command {
+        return build_command(args);
+    }
+    let backend = Backend::local(root)?;
     execute_command(&backend, &command)
 }
 
@@ -62,17 +70,21 @@ pub fn execute_request_cli(
     cli: &crate::cli::Cli,
     request: JsonRequest,
 ) -> Result<Success, AppError> {
+    let command = request.into_command();
+    if let Command::Build(args) = &command {
+        return build_command(args);
+    }
     let backend = Backend::from_paths(
         cli.boot_root.as_deref(),
         cli.source.as_deref(),
         cli.image.as_deref(),
     )?;
-    let command = request.into_command();
     execute_command(&backend, &command)
 }
 
 fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppError> {
     match command {
+        Command::Build(args) => build_command(args),
         Command::Config { command } => config_command(backend, command),
         Command::Entry { command } => entry_command(backend, command),
         Command::Default { command } => default_command(backend, command),
@@ -83,6 +95,21 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
         Command::OtaApply(args) => extra_ops::ota_apply(backend, args),
         Command::Graft(args) => extra_ops::graft_command(args),
         Command::VendorBoot { command } => extra_ops::vendorboot_command(command),
+    }
+}
+
+fn build_command(args: &BuildArgs) -> Result<Success, AppError> {
+    match build::execute(args)? {
+        BuildOutcome::Full(receipt) => Ok(Success::Build {
+            ok: true,
+            kind: "build",
+            receipt,
+        }),
+        BuildOutcome::Probe(receipt) => Ok(Success::BuildProbe {
+            ok: true,
+            kind: "build.probe",
+            receipt,
+        }),
     }
 }
 

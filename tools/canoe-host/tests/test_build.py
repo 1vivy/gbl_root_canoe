@@ -15,8 +15,14 @@ TZMAP_BYTES = 256
 
 
 def _assert_triplet_absent(toolkit: FakeToolkit) -> None:
-    """The three outputs must be removed together after every failed derive."""
-    for relative in ("efisp/boot.efi", "efisp/boot.efi.gm2p", "efisp/boot.efi.tzmap"):
+    """A failed canonical build removes outputs and invocation-created auxiliaries."""
+    for relative in (
+        "efisp/boot.efi",
+        "efisp/boot.efi.gm2p",
+        "efisp/boot.efi.tzmap",
+        "ABL_original.efi",
+        "patch_log.txt",
+    ):
         assert not (toolkit.root / relative).exists()
 
 
@@ -30,23 +36,29 @@ def _plant_images(toolkit: FakeToolkit) -> None:
 def test_build_success_derives_and_validates_the_matching_triplet(toolkit: FakeToolkit) -> None:
     # Given a complete fixture toolkit:
     _plant_images(toolkit)
-    # When the real launcher runs:
+    # When the canonical build seam runs:
     result = toolkit.run("canoe", "build")
 
-    # Then the matching triplet has the contract sizes and the tools ran in order.
+    # Then the matching triplet has the contract sizes and the exact command is delegated.
     assert result.returncode == 0, result.stderr
     assert toolkit.read("efisp/boot.efi")
     assert len(toolkit.read("efisp/boot.efi.gm2p")) == GM2P_BYTES
     assert len(toolkit.read("efisp/boot.efi.tzmap")) == TZMAP_BYTES
     assert toolkit.trace() == [
-        "extractfv",
-        "patch_abl",
-        "derive vbmeta.img",
-        "validate boot.efi.gm2p",
-        "tzmap-derive ABL_original.efi allow=1",
-        "tzmap-validate boot.efi.tzmap",
-        "tzmap-verify boot.efi.tzmap ABL_original.efi",
+        'build ["--json", "build", "--abl", "'
+        + str(toolkit.root / "images/abl.img")
+        + '", "--vbmeta", "'
+        + str(toolkit.root / "images/vbmeta.img")
+        + '", "--staged", "'
+        + str(toolkit.root / "efisp")
+        + '", "--keep-unpatched", "'
+        + str(toolkit.root / "ABL_original.efi")
+        + '", "--patch-log", "'
+        + str(toolkit.root / "patch_log.txt")
+        + '"]',
     ]
+    assert toolkit.read("ABL_original.efi") == b"LOADER-FROM-ABL-IMAGE"
+    assert toolkit.read("patch_log.txt") == b"GBL patched\n"
     assert "fastboot flash efisp BDS.efi" in result.stdout
     assert "fastboot flash abl <vulnerable>.img" in result.stdout
 
@@ -112,7 +124,7 @@ def test_build_failure_removes_stale_triplet(
     if missing is not None:
         (toolkit.root / missing).unlink()
 
-    # When the real launcher runs:
+    # When the canonical build seam runs:
     result = toolkit.run("canoe", "build", **env)
 
     # Then it names the stage and leaves no stale or partial generation.
@@ -122,21 +134,23 @@ def test_build_failure_removes_stale_triplet(
     _assert_triplet_absent(toolkit)
 
 
-def test_build_missing_vbmeta_is_the_cheapest_guard(make_toolkit: ToolkitFactory) -> None:
+def test_build_missing_vbmeta_is_reported_by_the_canonical_command(
+    make_toolkit: ToolkitFactory,
+) -> None:
     # Given no matching vbmeta image and a stale previous generation:
     toolkit = make_toolkit()
     _plant_images(toolkit)
     toolkit.plant_triplet()
     (toolkit.root / "images/vbmeta.img").unlink()
 
-    # When the real launcher runs:
+    # When the canonical build seam runs:
     result = toolkit.run("canoe", "build")
 
-    # Then the pair check fails before extractfv and clears every output.
+    # Then its diagnostic is surfaced and every output is removed.
     assert result.returncode != 0
     assert result.stderr.startswith("canoe build: error: ")
-    assert "matching images/vbmeta.img is required" in result.stderr
-    assert toolkit.trace() == []
+    assert "mode2_profile derive failed" in result.stderr
+    assert toolkit.trace()
     _assert_triplet_absent(toolkit)
 
 

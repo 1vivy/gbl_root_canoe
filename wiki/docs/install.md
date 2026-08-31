@@ -145,9 +145,9 @@ not invent a `default`; use `canoe-bootmgr default set` when one is wanted.
 ### 3. KernelSU module install
 
 Install the module on a rooted device and follow its bilingual first-install
-questionnaire. Select Mode 0, 1, or 2. Its device-side flow derives the
-selected per-slot triplet, commits the boot root through `canoe-bootmgr`, and
-performs any required device partition writes.
+questionnaire. It uses the same `canoe-bootmgr build` orchestrator and the same
+four worker binaries as the host path, then commits the boot root through
+`canoe-bootmgr` and performs any required device partition writes.
 
 ### 4. KernelSU update or post-OTA install
 
@@ -171,10 +171,9 @@ If the WebUI offers supplied derivation images, they must be exact, non-empty
 files matching the installed firmware generation; they are never flash payloads.
 
 ### 5. Locked-bootloader temporary root
-
 For a temporary root on a locked device, use the Android toolkit's
-`resources/build.sh`. It derives the staged triplet from the active slot and
-then invokes the bundled `canoe-bootmgr` local-directory backend:
+`resources/build.sh`. It invokes the same `canoe-bootmgr build` orchestrator
+for the active slot and then the bundled local-directory backend:
 
 ```sh
 su -c sh ./build.sh --mode 0

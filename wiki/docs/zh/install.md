@@ -105,10 +105,6 @@ canoe-gui --zh --source /path/to/persist.ext4
 配置和 BLS 行，并提供安装与 OTA 后操作；GUI 不实现另一个配置写入器。
 
 ### Super Fastboot fastboot 变量
-
-Super Fastboot 发布以下 fastboot 变量：
-
-| 变量 | 值与含义 |
 | --- | --- |
 | `canoe-bds` | 项目版本。该变量存在即是设备运行 Super Fastboot 的确定信号。 |
 | `current-slot` | `a` 或 `b`。当 GPT 未标记任何槽位或同时标记两个槽位时，不发布该变量。 |
@@ -131,8 +127,8 @@ canoe install --slot b --mode 1
 ### 3. KernelSU 模块安装
 
 在已 Root 的设备上安装模块，按中英文首次安装问卷操作，选择 Mode 0、1 或 2。
-模块的设备端流程派生所选槽位三件套，通过 `canoe-bootmgr` 提交启动根目录，
-并执行所需的设备分区写入。
+它与电脑端使用同一个 `canoe-bootmgr build` 编排器和同四个 worker 二进制，然后
+通过 `canoe-bootmgr` 提交启动根目录并执行所需的设备分区写入。
 
 ### 4. KernelSU 更新或 OTA 后安装
 
@@ -155,14 +151,10 @@ WebUI，按下 **Install to inactive slot**。该操作要求目标槽位元数�
 ### 5. 锁定 Bootloader 的临时 root
 
 要在锁定设备上获得临时 root，请使用 Android 工具包中的
-`resources/build.sh`。它从活动槽位派生暂存三件套，然后调用捆绑的
-`canoe-bootmgr` 本地目录后端：
+`resources/build.sh`。它为活动槽位调用同一个 `canoe-bootmgr build` 编排器，
+然后调用捆绑的本地目录后端：
 
 ```sh
-su -c sh ./build.sh --mode 0
-su -c sh ./build.sh --mode 1
-su -c sh ./build.sh --mode 1 --abl /path/abl.img --vbmeta /path/vbmeta.img
-```
 
 该包装器只接受 Mode 0 和 Mode 1；它只改变启动根目录树，验证所有生成文件，
 失败时删除完整暂存集，并且不写入分区。对于已准备好的暂存目录，等价的

@@ -121,7 +121,11 @@ def _check_verify(result: Completed, message: str) -> None:
 
 
 def _verify_tzmap(toolkit: Toolkit) -> None:
-    """Verify the staged map against the unpatched ABL loader when available."""
+    """Verify a pre-existing staged map against its unpatched ABL when available.
+
+    ``canoe install`` can consume a triplet derived in an earlier session, so
+    the build command's verification cannot establish this install-time match.
+    """
     if not toolkit.abl_original.is_file():
         note("skipping ABL/tzmap consistency check: ABL_original.efi is unavailable")
         return
@@ -139,6 +143,9 @@ def _verify_tzmap(toolkit: Toolkit) -> None:
         ),
         "abl_tzmap verify failed",
     )
+
+
+
 
 
 

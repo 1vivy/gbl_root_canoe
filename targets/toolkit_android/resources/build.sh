@@ -96,54 +96,37 @@ if [ -d "$SCRIPTDIR/efisp/tools" ]; then
   cp -r "$SCRIPTDIR/efisp/tools/." "$STAGE/tools/"
 fi
 
-# The canonical boot manager owns config rows, slot semantics, rollback, and
-# boot-root writes.  This package passes only its mounted local boot-root path;
-# raw partition writes remain explicit operator-owned steps below.
-
-if ! "$SCRIPTDIR/bin/extractfv" -o "$STAGE" "$ABL_SOURCE"; then
-  die "extractfv failed"
+# The canonical boot manager owns extraction, patching, sidecar derivation and
+# validation.  Keep its output visible so failures retain the tool diagnostic.
+BOOTMGR="$SCRIPTDIR/bin/canoe-bootmgr"
+[ -x "$BOOTMGR" ] || die "bundled canoe-bootmgr is missing or not executable"
+if ! build_output=$("$BOOTMGR" --json build \
+    --abl "$ABL_SOURCE" --vbmeta "$VBMETA_SOURCE" --staged "$STAGE" \
+    --tools "$SCRIPTDIR/bin" --keep-unpatched "$ABL_ORIGINAL" \
+    --patch-log "$PATCH_LOG" 2>&1); then
+  printf '%s\n' "$build_output"
+  [ -f "$PATCH_LOG" ] && cat "$PATCH_LOG"
+  case "$build_output" in
+    *"build step extractfv"*) die "extractfv failed" ;;
+    *"build step patch_abl"*) die "patch_abl failed" ;;
+    *"build step mode2_profile derive"*) die "mode2_profile derive failed" ;;
+    *"build step mode2_profile validate"*) die "mode2_profile validate failed" ;;
+    *"build step abl_tzmap derive"*) die "abl_tzmap derive failed" ;;
+    *"build step abl_tzmap validate"*) die "abl_tzmap validate failed" ;;
+    *"build step abl_tzmap verify"*) die "abl_tzmap verify failed" ;;
+    *) die "canoe-bootmgr build failed" ;;
+  esac
 fi
-[ -f "$LINUX_LOADER" ] || die "extractfv produced no LinuxLoader.efi"
-mv "$LINUX_LOADER" "$ABL_ORIGINAL"
-
-if ! "$SCRIPTDIR/bin/patch_abl" "$ABL_ORIGINAL" "$STAGE/boot.efi" > "$PATCH_LOG" 2>&1; then
-  cat "$PATCH_LOG"
-  die "patch_abl failed"
-fi
-cat "$PATCH_LOG"
-[ -s "$STAGE/boot.efi" ] || die "patch_abl produced no nonempty boot.efi"
-
-if ! "$SCRIPTDIR/bin/mode2_profile" derive --vbmeta "$VBMETA_SOURCE" \
-  --out "$STAGE/boot.efi.gm2p"; then
-  die "mode2_profile derive failed"
-fi
-if ! "$SCRIPTDIR/bin/mode2_profile" validate --input "$STAGE/boot.efi.gm2p"; then
-  die "mode2_profile validate failed"
-fi
-profile_size=$(wc -c < "$STAGE/boot.efi.gm2p" | tr -d ' \n\r')
-[ "$profile_size" = 120 ] || die "mode2_profile output is not exactly 120 bytes"
-
-# --allow-incomplete keeps temporary-root installs usable with ABLs for which
-# no recorded reverse-engineering evidence exists.
-if ! "$SCRIPTDIR/bin/abl_tzmap" derive "$ABL_ORIGINAL" \
-  -o "$STAGE/boot.efi.tzmap" --allow-incomplete; then
-  die "abl_tzmap derive failed"
-fi
-if ! "$SCRIPTDIR/bin/abl_tzmap" validate "$STAGE/boot.efi.tzmap"; then
-  die "abl_tzmap validate failed"
-fi
-tzmap_size=$(wc -c < "$STAGE/boot.efi.tzmap" | tr -d ' \n\r')
-[ "$tzmap_size" = 256 ] || die "abl_tzmap output is not exactly 256 bytes"
-
-if grep -q "Warning: Failed to patch ABL GBL" "$PATCH_LOG"; then
-  echo "WARNING: No GBL exploit found in this ABL (Failed to patch ABL GBL)."
-  echo "The abl partition must be downgraded to an older vulnerable ABL before booting."
-fi
+printf '%s\n' "$build_output"
+case "$build_output" in
+  *'"gbl_patched":false'*)
+    echo "WARNING: No GBL exploit found in this ABL (Failed to patch ABL GBL)."
+    echo "The abl partition must be downgraded to an older vulnerable ABL before booting."
+    ;;
+esac
 
 # The boot manager's local-dir backend is the package format here: Android
 # already mounted persist before invoking this temporary-root builder.
-BOOTMGR="$SCRIPTDIR/bin/canoe-bootmgr"
-[ -x "$BOOTMGR" ] || die "bundled canoe-bootmgr is missing or not executable"
 if [ "$VBMETA_KIND" = supplied ]; then
   "$BOOTMGR" --boot-root "$BOOT_ROOT" install --staged "$STAGE" \
     --slot "${SLOT#_}" --mode "$MODE" --allow-new-signer ||

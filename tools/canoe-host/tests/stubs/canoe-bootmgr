@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Fixture stand-in for ``canoe-bootmgr build``."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def trace(argv: list[str]) -> None:
+    path = os.environ.get("CANOE_TRACE")
+    if path:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("build " + json.dumps(argv) + "\n")
+
+
+def value(argv: list[str], flag: str) -> Path:
+    index = argv.index(flag)
+    return Path(argv[index + 1])
+
+
+def cleanup(staged: Path, unpatched: Path, patch_log: Path) -> None:
+    for path in (
+        staged / "boot.efi",
+        staged / "boot.efi.gm2p",
+        staged / "boot.efi.tzmap",
+        unpatched,
+        patch_log,
+    ):
+        path.unlink(missing_ok=True)
+
+
+def failure(message: str, staged: Path, unpatched: Path, patch_log: Path) -> int:
+    cleanup(staged, unpatched, patch_log)
+    print(
+        json.dumps(
+            {
+                "operation": "build",
+                "ok": False,
+                "error": {"code": "operation", "message": message},
+            }
+        )
+    )
+    return 1
+
+
+def main(argv: list[str]) -> int:
+    trace(argv)
+    staged = value(argv, "--staged")
+    unpatched = value(argv, "--keep-unpatched")
+    patch_log = value(argv, "--patch-log")
+    abl = value(argv, "--abl")
+    vbmeta = value(argv, "--vbmeta")
+    if not abl.is_file():
+        return failure("extractfv failed: ABL image is missing", staged, unpatched, patch_log)
+    if not vbmeta.is_file():
+        return failure("mode2_profile derive failed: vbmeta image is missing", staged, unpatched, patch_log)
+
+    if os.environ.get("STUB_PATCH") == "fail":
+        return failure("patch_abl failed: patch_abl: exploded", staged, unpatched, patch_log)
+    if os.environ.get("STUB_PROFILE") == "derive":
+        return failure("mode2_profile derive failed: mode2_profile: exploded", staged, unpatched, patch_log)
+    if os.environ.get("STUB_PROFILE") == "missing-validate":
+        return failure("mode2_profile validate failed: mode2_profile: invalid", staged, unpatched, patch_log)
+    if os.environ.get("STUB_PROFILE") == "size":
+        return failure("mode2_profile output must be exactly 120 bytes, got 119", staged, unpatched, patch_log)
+    if os.environ.get("STUB_TZMAP") == "derive":
+        return failure("abl_tzmap derive failed: abl_tzmap: exploded", staged, unpatched, patch_log)
+    if os.environ.get("STUB_TZMAP") == "missing-validate":
+        return failure("abl_tzmap validate failed: abl_tzmap: invalid", staged, unpatched, patch_log)
+    if os.environ.get("STUB_TZMAP") == "missing-verify":
+        return failure("abl_tzmap verify failed: abl_tzmap: invalid", staged, unpatched, patch_log)
+    if os.environ.get("STUB_TZMAP") == "size":
+        return failure("abl_tzmap output must be exactly 256 bytes, got 255", staged, unpatched, patch_log)
+    if os.environ.get("STUB_TZMAP") == "verify":
+        sidecar = hashlib.sha256(b"T" * 256).hexdigest()
+        loader = hashlib.sha256(b"LOADER-FROM-ABL-IMAGE").hexdigest()
+        return failure(
+            f"abl_tzmap verify failed: sidecar={sidecar} abl={loader}",
+            staged,
+            unpatched,
+            patch_log,
+        )
+
+    loader = b"LOADER-FROM-ABL-IMAGE"
+    patched = b"PATCHED-" + loader
+    staged.mkdir(parents=True, exist_ok=True)
+    (staged / "boot.efi").write_bytes(patched)
+    (staged / "boot.efi.gm2p").write_bytes(b"G" * 120)
+    (staged / "boot.efi.tzmap").write_bytes(b"T" * 256)
+    unpatched.parent.mkdir(parents=True, exist_ok=True)
+    unpatched.write_bytes(loader)
+    patch_log.parent.mkdir(parents=True, exist_ok=True)
+    patch_log.write_text(
+        "Warning: Failed to patch ABL GBL\n" if os.environ.get("STUB_NO_GBL") == "1" else "GBL patched\n",
+        encoding="utf-8",
+    )
+    receipt = {
+        "staged": str(staged),
+        "loader_bytes": len(patched),
+        "gm2p_bytes": 120,
+        "tzmap_bytes": 256,
+        "gbl_patched": os.environ.get("STUB_NO_GBL") != "1",
+        "loader_sha256": hashlib.sha256(patched).hexdigest(),
+        "gm2p_sha256": hashlib.sha256(b"G" * 120).hexdigest(),
+        "tzmap_sha256": hashlib.sha256(b"T" * 256).hexdigest(),
+        "unpatched_sha256": hashlib.sha256(loader).hexdigest(),
+    }
+    print(json.dumps({"operation": "build", "ok": True, "kind": "build", "receipt": receipt}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

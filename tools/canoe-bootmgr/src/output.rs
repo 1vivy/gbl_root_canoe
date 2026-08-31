@@ -101,6 +101,16 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
                 .collect::<Vec<_>>()
                 .join(",")
         ),
+        Success::Build { receipt, .. } => format!(
+            "built {} ({} bytes, gm2p={}, tzmap={})\n",
+            receipt.staged.display(),
+            receipt.loader_bytes,
+            receipt.gm2p_bytes,
+            receipt.tzmap_bytes
+        ),
+        Success::BuildProbe { receipt, .. } => {
+            format!("probe gbl_patched={}\n", receipt.gbl_patched)
+        }
         Success::Install { receipt, .. } | Success::OtaApply { receipt, .. } => format!(
             "installed={} generation={} backup={}\n",
             receipt

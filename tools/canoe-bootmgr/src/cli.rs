@@ -9,6 +9,7 @@ pub use crate::cli_extra::{
     BlsStageArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs,
     VendorBootCommand, VendorBootPatchArgs,
 };
+use crate::build::{BuildArgs, BuildProbeReceipt, BuildReceipt};
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
 use crate::graft::GraftReceipt;
@@ -93,6 +94,8 @@ pub enum Command {
         #[command(subcommand)]
         command: SlotCommand,
     },
+    /// Build a loader and its validated sidecars from an ABL/vbmeta pair.
+    Build(BuildArgs),
     /// Install one or both per-slot managed loader triplets.
     Install(InstallArgs),
     /// Apply a post-OTA loader to the explicitly confirmed target slot.
@@ -325,6 +328,14 @@ pub enum Success {
         inactive_slot: Option<Slot>,
         source: String,
         installed: Vec<Slot>,
+    },
+    #[serde(rename = "build")]
+    Build { ok: bool, kind: &'static str, receipt: BuildReceipt },
+    #[serde(rename = "build.probe")]
+    BuildProbe {
+        ok: bool,
+        kind: &'static str,
+        receipt: BuildProbeReceipt,
     },
     #[serde(rename = "install")]
     Install { ok: bool, receipt: InstallReceipt },

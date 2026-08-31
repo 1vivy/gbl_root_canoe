@@ -320,8 +320,6 @@ fetch_abl_from_repo() {
   fi
   return 1
 }
-MODE2_PROFILE="$MODPATH/bin/mode2_profile"
-ABL_TZMAP="$MODPATH/bin/abl_tzmap"
 CANOE_BOOTMGR="$MODPATH/bin/canoe-bootmgr"
 abl_part="$BY_NAME_DIR/abl$current_slot_suffix"
 vbmeta_part="$BY_NAME_DIR/vbmeta$current_slot_suffix"
@@ -349,59 +347,50 @@ select_image_sources() {
   fi
 }
 
+
+
+
 preflight_candidate_abl() {
   candidate="$1"
-  candidate_dir="$RUNTIME_DIR/candidate"
-  rm -rf "$candidate_dir"
-  mkdir -p "$candidate_dir" || return 1
-  if ! "$MODPATH/bin/extractfv" -o "$candidate_dir" -v "$candidate" \
-       > "$RUNTIME_DIR/candidate.extract.log" 2>&1 ||
-     ! "$MODPATH/bin/patch_abl" "$candidate_dir/LinuxLoader.efi" \
-       "$candidate_dir/patched.efi" > "$RUNTIME_DIR/candidate.patch.log" 2>&1 ||
-     [ ! -s "$candidate_dir/patched.efi" ]; then
+  candidate_log="$RUNTIME_DIR/candidate-build.log"
+  rm -f "$candidate_log"
+  if ! "$CANOE_BOOTMGR" --json build --abl "$candidate" --probe \
+       --tools "$MODPATH/bin" > "$candidate_log" 2>&1; then
     return 1
   fi
-  if grep -q "Warning: Failed to patch ABL GBL" \
-       "$RUNTIME_DIR/candidate.patch.log"; then
-    return 1
-  fi
-  return 0
+  case "$(cat "$candidate_log")" in
+    *'"gbl_patched":true'*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 preflight_current_pair() {
-  rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" \
-    "$RUNTIME_DIR/patch.log" "$RUNTIME_DIR/boot.efi.gm2p" \
-    "$RUNTIME_DIR/boot.efi.tzmap"
-  CURRENT_PAIR_GBL_VULNERABLE=1
-  if ! "$MODPATH/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl_source" > "$RUNTIME_DIR/extract.log" 2>&1 ||
-     ! "$MODPATH/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" > "$RUNTIME_DIR/patch.log" 2>&1 ||
-     [ ! -s "$RUNTIME_DIR/patched.efi" ]; then
+  preflight_stage="$RUNTIME_DIR/stage"
+  build_log="$RUNTIME_DIR/build.log"
+  rm -rf "$preflight_stage"
+  mkdir -p "$preflight_stage" || return 1
+  rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patch.log" \
+    "$RUNTIME_DIR/extract.log" "$RUNTIME_DIR/profile.log" \
+    "$RUNTIME_DIR/tzmap.log" "$build_log"
+  if ! "$CANOE_BOOTMGR" --json build \
+       --abl "$abl_source" --vbmeta "$vbmeta_source" \
+       --staged "$preflight_stage" --tools "$MODPATH/bin" \
+       --keep-unpatched "$RUNTIME_DIR/LinuxLoader.efi" \
+       --patch-log "$RUNTIME_DIR/patch.log" \
+       > "$build_log" 2>&1; then
+    printf '%s\n' "canoe-bootmgr build failed; see $build_log" \
+      >> "$RUNTIME_DIR/flash.log"
+    rm -rf "$preflight_stage"
     ui_print "$T_PATCH_FAIL"
     return 1
   fi
-  if grep -q "Warning: Failed to patch ABL GBL" "$RUNTIME_DIR/patch.log"; then
-    CURRENT_PAIR_GBL_VULNERABLE=0
-  fi
-  if [ ! -x "$MODE2_PROFILE" ] ||
-     ! "$MODE2_PROFILE" derive --vbmeta "$vbmeta_source" --out "$RUNTIME_DIR/boot.efi.gm2p" > "$RUNTIME_DIR/profile.log" 2>&1 ||
-     [ ! -s "$RUNTIME_DIR/boot.efi.gm2p" ] ||
-     ! "$MODE2_PROFILE" validate --input "$RUNTIME_DIR/boot.efi.gm2p" >> "$RUNTIME_DIR/profile.log" 2>&1; then
-    ui_print "$T_PATCH_FAIL"
-    rm -f "$RUNTIME_DIR/boot.efi.gm2p"
-    return 1
-  fi
-  # --allow-incomplete: an ABL with no recorded RE evidence still gets a sidecar
-  # carrying the soundly derived identifier flags.
-  if [ ! -x "$ABL_TZMAP" ] ||
-     ! "$ABL_TZMAP" derive "$RUNTIME_DIR/LinuxLoader.efi" \
-       -o "$RUNTIME_DIR/boot.efi.tzmap" --allow-incomplete \
-       > "$RUNTIME_DIR/tzmap.log" 2>&1 ||
-     [ ! -s "$RUNTIME_DIR/boot.efi.tzmap" ] ||
-     ! "$ABL_TZMAP" validate "$RUNTIME_DIR/boot.efi.tzmap" >> "$RUNTIME_DIR/tzmap.log" 2>&1; then
-    ui_print "$T_PATCH_FAIL"
-    rm -f "$RUNTIME_DIR/boot.efi.tzmap"
-    return 1
-  fi
+  printf '%s\n' "canoe-bootmgr build complete; see $build_log" \
+    >> "$RUNTIME_DIR/flash.log"
+  case "$(cat "$build_log")" in
+    *'"gbl_patched":true'*) CURRENT_PAIR_GBL_VULNERABLE=1 ;;
+    *'"gbl_patched":false'*) CURRENT_PAIR_GBL_VULNERABLE=0 ;;
+    *) rm -rf "$preflight_stage"; ui_print "$T_PATCH_FAIL"; return 1 ;;
+  esac
   return 0
 }
 
@@ -489,20 +478,19 @@ flash_abl_image() {
 
 abl_is_gbl_vulnerable() {
   inspect_abl="$1"
-  inspect_dir="$2"
-  rm -rf "$inspect_dir"
-  mkdir -p "$inspect_dir" || return 1
-  if ! "$MODPATH/bin/extractfv" -o "$inspect_dir" -v "$inspect_abl" \
-       > "$inspect_dir/extract.log" 2>&1 ||
-     ! "$MODPATH/bin/patch_abl" "$inspect_dir/LinuxLoader.efi" \
-       "$inspect_dir/patched.efi" > "$inspect_dir/patch.log" 2>&1; then
+  inspect_log="$RUNTIME_DIR/inactive-abl/patch.log"
+  mkdir -p "$RUNTIME_DIR/inactive-abl" || return 1
+  rm -f "$inspect_log"
+  if ! "$CANOE_BOOTMGR" --json build --abl "$inspect_abl" --probe \
+       --tools "$MODPATH/bin" > "$inspect_log" 2>&1; then
     return 1
   fi
-  if ! grep -q "Warning: Failed to patch ABL GBL" "$inspect_dir/patch.log"; then
-    return 0
-  fi
-  return 1
+  case "$(cat "$inspect_log")" in
+    *'"gbl_patched":true'*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
+
 
 pair_inactive_abl() {
   inactive_slot_suffix=
@@ -530,12 +518,19 @@ pair_inactive_abl() {
 install_pair() {
   target="$1"
   stage="$target/.canoe.stage.$$"
+  preflight_stage="$RUNTIME_DIR/stage"
   rm -rf "$stage"
-  mkdir -p "$stage" || return 1
-  if ! cp "$RUNTIME_DIR/patched.efi" "$stage/boot.efi" ||
-     ! cp "$RUNTIME_DIR/boot.efi.gm2p" "$stage/boot.efi.gm2p" ||
-     ! cp "$RUNTIME_DIR/boot.efi.tzmap" "$stage/boot.efi.tzmap" ||
-     ! cp "$MODPATH/BDS.efi" "$stage/BDS.efi"; then
+  if ! [ -d "$preflight_stage" ] ||
+     ! mv "$preflight_stage" "$stage"; then
+    rm -rf "$stage"
+    return 1
+  fi
+  [ -x "$CANOE_BOOTMGR" ] || {
+    printf '%s\n' "$T_BIN_FAIL: canoe-bootmgr missing" >> "$RUNTIME_DIR/flash.log"
+    rm -rf "$stage"
+    return 1
+  }
+  if ! cp "$MODPATH/BDS.efi" "$stage/BDS.efi"; then
     rm -rf "$stage"
     return 1
   fi
@@ -545,17 +540,6 @@ install_pair() {
     rm -rf "$stage"
     return 1
   fi
-  if ! "$ABL_TZMAP" verify --sidecar "$stage/boot.efi.tzmap" \
-       --abl "$RUNTIME_DIR/LinuxLoader.efi" --allow-zero-digest \
-       >> "$RUNTIME_DIR/tzmap.log" 2>&1; then
-    rm -rf "$stage"
-    return 1
-  fi
-  [ -x "$CANOE_BOOTMGR" ] || {
-    printf '%s\n' "$T_BIN_FAIL: canoe-bootmgr missing" >> "$RUNTIME_DIR/flash.log"
-    rm -rf "$stage"
-    return 1
-  }
   transaction_log="$RUNTIME_DIR/transaction.log"
   rm -f "$transaction_log"
   if ! "$CANOE_BOOTMGR" --json --boot-root "$target" install \
@@ -571,7 +555,7 @@ install_pair() {
      { [ -d "$stage/tools" ] &&
        ! mkdir -p "$target/tools"; } ||
      { [ -d "$stage/tools" ] &&
-       ! cp -r "$stage/tools/." "$target/tools/"; }; then
+       ! cp -r "$stage/tools/." "$target/tools/."; }; then
     rm -rf "$stage"
     return 1
   fi

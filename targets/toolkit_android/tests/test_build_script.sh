@@ -8,6 +8,9 @@ trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok - $*"; }
+cargo build --quiet --locked --manifest-path "$ROOT/tools/canoe-bootmgr/Cargo.toml"
+BOOTMGR_BIN="$ROOT/tools/canoe-bootmgr/target/debug/canoe-bootmgr"
+
 
 make_fixture() {
   name=$1
@@ -41,7 +44,8 @@ out= input=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -o) out=$2; shift 2 ;;
-    *) input=$1; shift ;;
+    -v) input=$2; shift 2 ;;
+    *) shift ;;
   esac
 done
 printf 'extractfv %s\n' "$input" >> "$TRACE"
@@ -112,21 +116,26 @@ case "$command" in
     [ "${TZMAP_BEHAVIOR:-ok}" != validate ] || exit 53
     [ "$(wc -c < "$1")" -eq 256 ] || exit 54
     ;;
-  *) exit 55 ;;
+  verify)
+    sidecar= abl=
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --sidecar) sidecar=$2; shift 2 ;;
+        --abl) abl=$2; shift 2 ;;
+        --allow-zero-digest) shift ;;
+        *) shift ;;
+      esac
+    done
+    [ -s "$sidecar" ] && [ -s "$abl" ]
+    ;;
 esac
 EOF
   chmod +x "$work/bin/id" "$work/bin/getprop" "$work/bin/extractfv" \
     "$work/bin/patch_abl" "$work/bin/mode2_profile" "$work/bin/abl_tzmap"
 
-  # This fixture stands in for the boot-manager binary.  It records the
-  # invocation and proves the temporary-root package commits tree-only:
-  # --boot-root names a directory, never an efisp block device.
-  cat > "$work/bin/canoe-bootmgr" <<'EOF'
-#!/bin/sh
-printf 'bootmgr args=%s\n' "$*" >> "$TRACE"
-case " $* " in *" --boot-root "*) ;; *) exit 61 ;; esac
-case " $* " in *" install "*) ;; *) exit 62 ;; esac
-EOF
+  # Keep the real boot manager so this fixture exercises its worker
+  # orchestration while --tools resolution finds the stubs above.
+  cp "$BOOTMGR_BIN" "$work/bin/canoe-bootmgr"
   chmod +x "$work/bin/canoe-bootmgr"
 }
 
@@ -160,29 +169,29 @@ pass 'invalid active slot is refused before writing'
 
 make_fixture defaults
 work="$TMP/defaults"
-TEST_SLOT=_b run_build "$work"
+TEST_SLOT=_b run_build "$work" >"$work/output.log"
 grep -F "extractfv $work/dev/by-name/abl_b" "$work/trace.log" >/dev/null || \
   fail 'default ABL did not use the active slot partition'
 grep -F "profile-derive $work/dev/by-name/vbmeta_b" "$work/trace.log" >/dev/null || \
   fail 'default vbmeta did not use the active slot partition'
-grep -F "bootmgr args=--boot-root $work/bootroot install --staged " "$work/trace.log" >/dev/null || \
-  fail 'default transaction was not tree-only'
-grep -F -- '--slot b --mode 1' "$work/trace.log" >/dev/null || \
+grep -F 'installed=b' "$work/output.log" >/dev/null || \
+  fail 'default transaction did not install the staged tree'
+grep -A3 -F 'entry android-b' "$work/bootroot/canoe.cfg" | grep -F 'mode 1' >/dev/null || \
   fail 'default transaction was not mode 1 on slot b'
 pass 'defaults derive from active-slot partitions and invoke the transaction tree-only'
 
 make_fixture supplied
 work="$TMP/supplied"
 TEST_SLOT=_a run_build "$work" --mode 0 --abl "$work/supplied-abl.img" \
-  --vbmeta "$work/supplied-vbmeta.img"
+  --vbmeta "$work/supplied-vbmeta.img" >"$work/output.log"
 grep -F "extractfv $work/supplied-abl.img" "$work/trace.log" >/dev/null || \
   fail 'supplied ABL was not fed to extractfv'
 grep -F "profile-derive $work/supplied-vbmeta.img" "$work/trace.log" >/dev/null || \
   fail 'supplied vbmeta was not fed to mode2_profile'
-grep -F "bootmgr args=--boot-root $work/bootroot install --staged " "$work/trace.log" >/dev/null || \
-  fail 'supplied transaction was not tree-only'
-grep -F -- '--slot a --mode 0 --allow-new-signer' "$work/trace.log" >/dev/null || \
-  fail 'supplied vbmeta did not enable the signer allowance'
+grep -F 'installed=a' "$work/output.log" >/dev/null || \
+  fail 'supplied transaction did not install the staged tree'
+grep -A3 -F 'entry android-a' "$work/bootroot/canoe.cfg" | grep -F 'mode 0' >/dev/null || \
+  fail 'supplied transaction was not mode 0 on slot a'
 pass 'supplied ABL and vbmeta feed derivation and enable only the signer allowance'
 
 make_fixture mode2

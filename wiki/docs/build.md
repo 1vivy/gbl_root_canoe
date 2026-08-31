@@ -46,6 +46,51 @@ canoe default set TARGET
 canoe source detect --json
 ```
 
+## `canoe-bootmgr build`
+
+`canoe-bootmgr build` is the single payload-derivation orchestrator used by
+host and device callers. A full build is:
+
+```text
+canoe-bootmgr build --abl <ABL_IMAGE> --vbmeta <VBMETA_IMAGE> --staged <DIR> \
+                    [--tools <DIR>] [--keep-unpatched <PATH>] [--patch-log <PATH>]
+```
+
+It extracts the ABL into a work directory, runs
+`extractfv -o <workdir> -v <abl>`, and requires
+`<workdir>/LinuxLoader.efi`. It then runs
+`patch_abl <workdir>/LinuxLoader.efi <staged>/boot.efi`, requiring a
+non-empty output, followed by `mode2_profile derive --vbmeta <vbmeta> --out
+<staged>/boot.efi.gm2p` and its `validate` command. Finally it runs
+`abl_tzmap derive <workdir>/LinuxLoader.efi -o <staged>/boot.efi.tzmap
+--allow-incomplete`, then validates and verifies that sidecar against the
+extracted loader with `--allow-zero-digest`. The profile must be exactly 120
+bytes and the map exactly 256 bytes. On success, `<staged>` contains exactly
+`boot.efi`, `boot.efi.gm2p`, and `boot.efi.tzmap`.
+
+The four worker binaries remain separate: `extractfv`, `patch_abl`,
+`mode2_profile`, and `abl_tzmap`. `--keep-unpatched` copies the extracted
+loader, and `--patch-log` records the captured `patch_abl` output. A
+`Warning: Failed to patch ABL GBL` line is not a build error: the receipt
+reports `gbl_patched: false`, and the sidecars describe the stock pair.
+
+For a side-effect-free worker probe (no vbmeta, sidecars, or staged outputs),
+use:
+
+```text
+canoe-bootmgr build --abl <ABL_IMAGE> --probe [--tools <DIR>]
+```
+
+Tools resolve in this order: `--tools <DIR>`, `$CANOE_TOOLS_DIR`, the directory
+containing the running `canoe-bootmgr`, then `PATH`. A missing tool is an
+error naming that tool. Any failure removes all three staged outputs and any
+`--keep-unpatched` or `--patch-log` file created by that invocation, so a
+fresh loader can never remain beside a stale sidecar.
+
+`canoe build` is the host convenience surface for this same orchestrator; it
+does not maintain a separate derivation implementation.
+
+
 `canoe` with no arguments starts the interactive five-scenario questionnaire.
 `canoe build` derives the patched ABL and both sidecars. By default it reads
 `images/abl.img` and `images/vbmeta.img`; `--abl` and `--vbmeta` copy supplied

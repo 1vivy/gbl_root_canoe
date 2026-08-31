@@ -71,10 +71,12 @@ class FakeToolkit:
     trace_path: Path
 
     def run(self, tool: str, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
-        """Run a launcher the way an operator does, from the toolkit directory."""
+        """Run a launcher the way an operator does, stubbing only build."""
         environment = dict(os.environ)
         environment.update(CANOE_TRACE=str(self.trace_path))
         environment.update(env)
+        if tool == "canoe" and args and args[0] == "build":
+            self.stub_build_manager()
         return subprocess.run(
             [sys.executable, str(self.root / tool), *args],
             cwd=self.root,
@@ -83,6 +85,12 @@ class FakeToolkit:
             check=False,
             env=environment,
         )
+
+    def stub_build_manager(self) -> None:
+        """Replace the canonical manager with the build-only fixture stub."""
+        target = self.root / "bin" / "canoe-bootmgr"
+        shutil.copyfile(STUB_DIR / "canoe-bootmgr", target)
+        target.chmod(0o755)
 
     def trace(self) -> list[str]:
         """The host binaries the run invoked, in order."""

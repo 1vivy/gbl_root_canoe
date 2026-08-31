@@ -282,6 +282,14 @@ assert_contains "$cfg" 'entry android-b' 'next-slot probe did not label the targ
 assert_not_contains "$(cat "$LOG")" 'next-slot probe unavailable' \
   'available next-slot probe was reported unavailable'
 pass 'bootctl next-slot probe labels the next active row'
+assert_contains "$(cat "$LOG")" "extractfv source=$BY_NAME/abl_b" \
+  'GBL probe did not inspect the target ABL'
+assert_not_contains "$(cat "$LOG")" "mode2_profile source=$BY_NAME/vbmeta_b" \
+  'GBL probe unexpectedly derived a target profile'
+[ ! -e "$MOD/tmp/boot.efi" ] || fail 'GBL probe left a staged loader'
+[ ! -e "$MOD/tmp/boot.efi.gm2p" ] || fail 'GBL probe left a profile sidecar'
+[ ! -e "$MOD/tmp/boot.efi.tzmap" ] || fail 'GBL probe left a tzmap sidecar'
+pass 'GBL probe uses only the target ABL and leaves no staged outputs'
 
 rm -f "$BIN/bootctl"
 printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"

@@ -44,6 +44,49 @@ canoe default set TARGET
 canoe source detect --json
 ```
 
+## `canoe-bootmgr build`
+
+`canoe-bootmgr build` 是电脑端和设备端共同使用的单一载荷派生编排器。完整
+构建命令为：
+
+```text
+canoe-bootmgr build --abl <ABL_IMAGE> --vbmeta <VBMETA_IMAGE> --staged <DIR> \
+                    [--tools <DIR>] [--keep-unpatched <PATH>] [--patch-log <PATH>]
+```
+
+它先将 ABL 提取到工作目录，运行 `extractfv -o <workdir> -v <abl>`，并要求
+存在 `<workdir>/LinuxLoader.efi`；随后运行
+`patch_abl <workdir>/LinuxLoader.efi <staged>/boot.efi`，要求输出非空。接着运行
+`mode2_profile derive --vbmeta <vbmeta> --out <staged>/boot.efi.gm2p` 及其
+`validate`；最后运行 `abl_tzmap derive <workdir>/LinuxLoader.efi -o
+<staged>/boot.efi.tzmap --allow-incomplete`，再用 `--allow-zero-digest` 对该
+映射和提取出的 loader 执行验证与核验。profile 必须精确为 120 字节，映射必须
+精确为 256 字节。成功时 `<staged>` 中恰好有 `boot.efi`、`boot.efi.gm2p` 和
+`boot.efi.tzmap`。
+
+四个 worker 二进制仍各自独立：`extractfv`、`patch_abl`、`mode2_profile` 和
+`abl_tzmap`。`--keep-unpatched` 会复制提取出的 loader，`--patch-log` 会记录
+捕获的 `patch_abl` 输出。出现 `Warning: Failed to patch ABL GBL` 不算构建失败：
+回执会报告 `gbl_patched: false`，且附属文件描述原厂配对。
+
+如需无副作用的 worker 探测（不需要 vbmeta，也不生成附属文件或暂存输出），使用：
+
+```text
+canoe-bootmgr build --abl <ABL_IMAGE> --probe [--tools <DIR>]
+```
+
+工具按以下顺序解析：`--tools <DIR>`、`$CANOE_TOOLS_DIR`、运行中的
+`canoe-bootmgr` 所在目录，最后是 `PATH`。缺少工具时会报错并指出工具名称。
+任一步骤失败都会删除三个暂存输出，以及本次调用创建的 `--keep-unpatched` 或
+`--patch-log` 文件，确保新的 loader 不会与旧的附属文件并存。
+
+`canoe build` 只是这个统一编排器的电脑端便利入口，不再维护独立的派生实现。
+
+## 电脑端命令界面
+
+电脑端工具包是 Python 3.11 程序。Linux 使用 `./canoe`；Windows 压缩包内附带
+embeddable 解释器，使用 `canoe.cmd`。
+
 不带参数的 `canoe` 启动五种场景的交互问卷。`canoe build` 派生已修补 ABL 和
 两个附属文件。默认读取 `images/abl.img` 与 `images/vbmeta.img`；`--abl` 与
 `--vbmeta` 会先将提供文件复制到这些规范路径，再开始派生。镜像必须与正在

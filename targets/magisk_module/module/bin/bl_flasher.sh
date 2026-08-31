@@ -303,51 +303,7 @@ persist_mounted() { grep -q " $PERSIST_MNT " /proc/mounts; }
 mode2_profile_path() { echo "$BINDIR/mode2_profile"; }
 abl_tzmap_path() { echo "$BINDIR/abl_tzmap"; }
 
-build_abl_tzmap() {
-  abl="$1"
-  output="$2"
-  tool=$(abl_tzmap_path)
-  rm -f "$output"
-  [ -x "$tool" ] || return 1
-  [ -e "$abl" ] || return 1
-  # --allow-incomplete: an ABL with no recorded RE evidence still gets a sidecar
-  # carrying the soundly derived identifier flags.
-  "$tool" derive "$abl" -o "$output" --allow-incomplete >> "$LOG_FILE" 2>&1 || {
-    rm -f "$output"
-    return 1
-  }
-  [ -s "$output" ] || {
-    rm -f "$output"
-    return 1
-  }
-  "$tool" validate "$output" >> "$LOG_FILE" 2>&1 || {
-    rm -f "$output"
-    return 1
-  }
-  return 0
-}
 
-build_mode2_profile() {
-  vbmeta="$1"
-  output="$2"
-  tool=$(mode2_profile_path)
-  rm -f "$output"
-  [ -x "$tool" ] || return 1
-  [ -e "$vbmeta" ] || return 1
-  "$tool" derive --vbmeta "$vbmeta" --out "$output" >> "$LOG_FILE" 2>&1 || {
-    rm -f "$output"
-    return 1
-  }
-  [ -s "$output" ] || {
-    rm -f "$output"
-    return 1
-  }
-  "$tool" validate --input "$output" >> "$LOG_FILE" 2>&1 || {
-    rm -f "$output"
-    return 1
-  }
-  return 0
-}
 
 
 
@@ -404,6 +360,8 @@ install_efisp_pair() {
   source_tzmap="$4"
   active_slot="$5"
   flash_bds="${6:-yes}"
+  build_abl="${7:-}"
+  build_vbmeta="${8:-}"
   case "$active_slot" in _a|_b) ;; *) return 1 ;; esac
   install_mode=1
   if config_mode_for_slot "$target/canoe.cfg" "$active_slot"; then
@@ -413,7 +371,25 @@ install_efisp_pair() {
   stage="$target/.canoe.stage.$$"
   rm -rf "$stage"
   mkdir -p "$stage" || return 1
-  if ! cp "$source_efi" "$stage/boot.efi" ||
+  [ -x "$CANOE_BOOTMGR" ] || {
+    write_log "$TEXT_BIN_NOT_FOUND: $CANOE_BOOTMGR"
+    rm -rf "$stage"
+    return 1
+  }
+  if [ -n "$build_abl" ]; then
+    build_log="$RUNTIME_DIR/build.log"
+    rm -f "$build_log"
+    if ! "$CANOE_BOOTMGR" --json build \
+         --abl "$build_abl" --vbmeta "$build_vbmeta" --staged "$stage" \
+         --tools "$BINDIR" --keep-unpatched "$RUNTIME_DIR/LinuxLoader.efi" \
+         --patch-log "$RUNTIME_DIR/patch.log" > "$build_log" 2>&1; then
+      cat "$build_log" >> "$LOG_FILE"
+      [ -f "$RUNTIME_DIR/patch.log" ] && cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
+      rm -rf "$stage"
+      return 1
+    fi
+    [ -f "$RUNTIME_DIR/patch.log" ] && cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
+  elif ! cp "$source_efi" "$stage/boot.efi" ||
      ! cp "$source_profile" "$stage/boot.efi.gm2p" ||
      ! cp "$source_tzmap" "$stage/boot.efi.tzmap"; then
     rm -rf "$stage"
@@ -429,17 +405,13 @@ install_efisp_pair() {
     rm -rf "$stage"
     return 1
   fi
-  if ! "$(abl_tzmap_path)" verify --sidecar "$stage/boot.efi.tzmap" \
+  if [ -z "$build_abl" ] &&
+     ! "$(abl_tzmap_path)" verify --sidecar "$stage/boot.efi.tzmap" \
        --abl "$RUNTIME_DIR/LinuxLoader.efi" --allow-zero-digest \
        >> "$LOG_FILE" 2>&1; then
     rm -rf "$stage"
     return 1
   fi
-  [ -x "$CANOE_BOOTMGR" ] || {
-    write_log "$TEXT_BIN_NOT_FOUND: $CANOE_BOOTMGR"
-    rm -rf "$stage"
-    return 1
-  }
   transaction_log="$RUNTIME_DIR/transaction.log"
   rm -f "$transaction_log"
   if "$CANOE_BOOTMGR" --json --boot-root "$target" install \
@@ -482,22 +454,6 @@ install_efisp_pair() {
   return 0
 }
 
-build_patched_efi() {
-  abl="$1"
-  rm -f "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" "$RUNTIME_DIR/patch.log"
-  if ! "$MODDIR/bin/extractfv" -o "$RUNTIME_DIR" -v "$abl" >> "$LOG_FILE" 2>&1; then
-    write_log "$TEXT_EXTRACT_FAILED"
-    return 1
-  fi
-  if ! "$MODDIR/bin/patch_abl" "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi" > "$RUNTIME_DIR/patch.log" 2>&1; then
-    cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
-    write_log "$TEXT_PATCH_FAILED"
-    return 1
-  fi
-  cat "$RUNTIME_DIR/patch.log" >> "$LOG_FILE"
-  [ -s "$RUNTIME_DIR/patched.efi" ] || { write_log "$TEXT_PATCH_FAILED"; return 1; }
-}
-
 update_efisp() {
   target_abl="$1"
   target_vbmeta="$2"
@@ -506,41 +462,38 @@ update_efisp() {
   source_vbmeta="$5"
   active_slot="${6:-_a}"
   clean_workdir
-  build_patched_efi "$target_abl" || return 3
-  if grep -q "Warning: Failed to patch ABL GBL" "$RUNTIME_DIR/patch.log"; then
-    gbl_vuln=0
-  else
-    gbl_vuln=1
+  probe_log="$RUNTIME_DIR/probe.log"
+  rm -f "$probe_log" "$RUNTIME_DIR/patch.log"
+  if ! "$CANOE_BOOTMGR" --json build --abl "$target_abl" --probe \
+       --tools "$BINDIR" > "$probe_log" 2>&1; then
+    cat "$probe_log" >> "$LOG_FILE"
+    return 3
   fi
+  cat "$probe_log" >> "$LOG_FILE"
+  case "$(cat "$probe_log")" in
+    *'"gbl_patched":true'*) gbl_vuln=1 ;;
+    *'"gbl_patched":false'*) gbl_vuln=0 ;;
+    *) return 3 ;;
+  esac
 
   # A non-vulnerable target is replaced by the current slot below, so derive
   # every efisp artifact from that same current-slot pair. Debug calls omit a
   # replacement source and retain the inspected target pair.
   if [ "$gbl_vuln" = "1" ] || [ -z "$source_abl" ]; then
-    source_patched_efi="$RUNTIME_DIR/patched.efi"
-    source_vbmeta="$target_vbmeta"
+    build_abl="$target_abl"
+    build_vbmeta="$target_vbmeta"
   else
-    [ -n "$source_vbmeta" ] || source_vbmeta="$target_vbmeta"
-    build_patched_efi "$source_abl" || return 3
-    source_patched_efi="$RUNTIME_DIR/patched.efi"
-  fi
-  if ! build_mode2_profile "$source_vbmeta" "$RUNTIME_DIR/patched.efi.gm2p"; then
-    write_log "Mode 2 profile build failed"
-    return 3
-  fi
-
-  if ! build_abl_tzmap "$RUNTIME_DIR/LinuxLoader.efi" "$RUNTIME_DIR/patched.efi.tzmap"; then
-    write_log "ABL TrustZone map build failed"
-    return 3
+    build_abl="$source_abl"
+    build_vbmeta="$source_vbmeta"
+    [ -n "$build_vbmeta" ] || build_vbmeta="$target_vbmeta"
   fi
   if [ "$is_debug" = "yes" ]; then
     write_log "$TEXT_DEBUG_MODE"
     efisp_target=$RUNTIME_DIR/efisp
     mkdir -p "$efisp_target" >> "$LOG_FILE" 2>&1 ||
       { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
-    if ! install_efisp_pair "$efisp_target" "$source_patched_efi" \
-         "$RUNTIME_DIR/patched.efi.gm2p" "$RUNTIME_DIR/patched.efi.tzmap" \
-         "$active_slot" no; then
+    if ! install_efisp_pair "$efisp_target" "" "" "" \
+         "$active_slot" no "$build_abl" "$build_vbmeta"; then
       write_log "$TEXT_EFISP_WRITE_FAILED"
       return 1
     fi
@@ -554,9 +507,8 @@ update_efisp() {
   fi
   mkdir -p "$efisp_target" >> "$LOG_FILE" 2>&1 ||
     { write_log "$TEXT_EFISP_MKDIR_FAILED"; return 1; }
-  if ! install_efisp_pair "$efisp_target" "$source_patched_efi" \
-       "$RUNTIME_DIR/patched.efi.gm2p" "$RUNTIME_DIR/patched.efi.tzmap" \
-       "$active_slot"; then
+  if ! install_efisp_pair "$efisp_target" "" "" "" \
+       "$active_slot" yes "$build_abl" "$build_vbmeta"; then
     write_log "$TEXT_EFISP_WRITE_FAILED"
     return 1
   fi
@@ -568,15 +520,29 @@ update_efisp() {
   return 0
 }
 
+
+
 detect_gbl_vulnerability() {
   clean_workdir
-  build_patched_efi "$1" || return 1
-  if ! grep -q "Warning: Failed to patch ABL GBL" $RUNTIME_DIR/patch.log; then
-    write_log "$TEXT_GBL_VULN"
-    return 0
+  probe_log="$RUNTIME_DIR/probe.log"
+  rm -f "$probe_log" "$RUNTIME_DIR/patch.log"
+  if ! "$CANOE_BOOTMGR" --json build --abl "$1" --probe \
+       --tools "$BINDIR" > "$probe_log" 2>&1; then
+    cat "$probe_log" >> "$LOG_FILE"
+    return 1
   fi
-  write_log "$TEXT_NO_GBL_VULN"
-  return 2
+  cat "$probe_log" >> "$LOG_FILE"
+  case "$(cat "$probe_log")" in
+    *'"gbl_patched":true'*)
+      write_log "$TEXT_GBL_VULN"
+      return 0
+      ;;
+    *'"gbl_patched":false'*)
+      write_log "$TEXT_NO_GBL_VULN"
+      return 2
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 efisp_has_mz() {
