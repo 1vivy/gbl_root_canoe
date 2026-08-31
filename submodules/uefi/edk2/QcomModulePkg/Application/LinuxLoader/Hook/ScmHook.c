@@ -96,8 +96,9 @@ SfbScmDrop (
   if ((gScmDropLogMask & Bit) == 0) {
     gScmDropLogMask |= Bit;
     DEBUG ((EFI_D_WARN,
-            "SFB: MARK scm-drop smcid=0x%08x name=%a universal=1\n",
-            SmcId, SfbScmDropName (SmcId)));
+            "SFB: MARK scm-drop smcid=0x%08x name=%a universal=1 "
+            "status=%r\n",
+            SmcId, SfbScmDropName (SmcId), EFI_SUCCESS));
   }
   return EFI_SUCCESS;
 }

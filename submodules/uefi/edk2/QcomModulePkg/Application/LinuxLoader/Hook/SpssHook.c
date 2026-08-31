@@ -99,8 +99,8 @@ HookedShareKeyMintInfo (IN KeymintSharedInfoStruct *Info)
     if (Rewritten && !gSpssRewriteLogged) {
       gSpssRewriteLogged = TRUE;
       DEBUG ((EFI_D_INFO,
-              "SFB: MARK spss-rewrite bytes=%u\n",
-              (UINT32)sizeof (KeymintSharedInfoStruct)));
+              "SFB: MARK spss-rewrite bytes=%u status=%r\n",
+              (UINT32)sizeof (KeymintSharedInfoStruct), EFI_SUCCESS));
     }
   }
 

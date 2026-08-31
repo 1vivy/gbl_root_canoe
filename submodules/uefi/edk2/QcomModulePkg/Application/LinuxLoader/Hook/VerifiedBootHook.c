@@ -149,19 +149,20 @@ SfbRepairDeviceInfo (IN BOOLEAN Required, IN SFB_CONFIG_LOCK_POLICY Policy)
     Repair = TRUE;
     Status = EFI_SUCCESS;
   }
-  DEBUG ((EFI_D_INFO,
-          "SFB: MARK devinfo-repair observed-unlocked=%u observed-critical=%u "
-          "required=%u action=%a\n",
-          (UINT32)ObservedUnlocked, (UINT32)ObservedCritical,
-          (UINT32)Required, Action));
   if (Repair) {
     if (!SfbDeviceInfoSetLock ((SFB_UINT8 *)&Info, sizeof (Info),
                                TRUE, TRUE, &LockAction)) {
-      return EFI_COMPROMISED_DATA;
+      Status = EFI_COMPROMISED_DATA;
+    } else {
+      Status = gOrigRwDeviceState (gVerifiedBoot, WRITE_CONFIG,
+                                   (UINT8 *)&Info, sizeof (Info));
     }
-    Status = gOrigRwDeviceState (gVerifiedBoot, WRITE_CONFIG,
-                                 (UINT8 *)&Info, sizeof (Info));
   }
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK devinfo-repair observed-unlocked=%u observed-critical=%u "
+          "required=%u action=%a status=%r\n",
+          (UINT32)ObservedUnlocked, (UINT32)ObservedCritical,
+          (UINT32)Required, Action, Status));
   return Status;
 }
 

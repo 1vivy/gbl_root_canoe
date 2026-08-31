@@ -68,6 +68,8 @@ STATIC EFI_GUID mSfbDriverTagGuid = {
 };
 
 STATIC BOOLEAN mSfbFatStackStarted = FALSE;
+STATIC EFI_STATUS mSfbLastConnectStatus = EFI_SUCCESS;
+STATIC EFI_STATUS mSfbLastDetectStatus = EFI_SUCCESS;
 
 STATIC
 EFI_STATUS
@@ -144,6 +146,7 @@ SfbSignalStorageDetect (VOID)
   EFI_STATUS  Status;
 
   Status = SfbSignalEventGroup (&mSfbDetectSdCardGuid);
+  mSfbLastDetectStatus = Status;
   DEBUG ((EFI_D_INFO, "SFB: MARK event-signal group=detect-sd-card status=%r\n",
           Status));
 }
@@ -182,26 +185,51 @@ VOID
 SfbConnectAll (VOID)
 {
   EFI_STATUS  Status;
+  EFI_STATUS  FirstError = EFI_SUCCESS;
   EFI_HANDLE  *Handles = NULL;
   UINTN       Count = 0;
   UINTN       Index;
   UINTN       Connected = 0;
+  UINTN       Skipped = 0;
+  UINTN       Failed = 0;
 
   Status = gBS->LocateHandleBuffer (AllHandles, NULL, NULL, &Count, &Handles);
   if (EFI_ERROR (Status) || Handles == NULL) {
-    DEBUG ((EFI_D_ERROR, "SFB: no handles to connect: %r\n", Status));
+    mSfbLastConnectStatus = EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-connect handles=%u connected=0 failed=1 "
+            "status=%r\n",
+            (UINT32)Count, mSfbLastConnectStatus));
     return;
   }
 
+  /*
+   * Most handles on this platform are not block devices and have no driver
+   * that wants them, and ConnectController answers EFI_NOT_FOUND for those.
+   * That is "nothing to do", not a failure: counting it as one made a healthy
+   * pass report failed=362 of 368 and hoisted a Not Found into the stack-start
+   * mark, so a real connect error had nothing to stand out against.
+   */
   for (Index = 0; Index < Count; Index++) {
     Status = gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
     if (!EFI_ERROR (Status)) {
       Connected++;
+    } else if (Status == EFI_NOT_FOUND) {
+      Skipped++;
+    } else {
+      Failed++;
+      if (FirstError == EFI_SUCCESS) {
+        FirstError = Status;
+      }
     }
   }
 
-  DEBUG ((EFI_D_INFO, "SFB: connected %u of %u handles\n",
-          (UINT32)Connected, (UINT32)Count));
+  mSfbLastConnectStatus = (Failed == 0) ? EFI_SUCCESS : FirstError;
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK fat-connect handles=%u connected=%u skipped=%u failed=%u "
+          "status=%r\n",
+          (UINT32)Count, (UINT32)Connected, (UINT32)Skipped, (UINT32)Failed,
+          mSfbLastConnectStatus));
 
   FreePool (Handles);
 }
@@ -210,6 +238,7 @@ EFI_STATUS
 SfbStartFatStack (VOID)
 {
   EFI_STATUS  Status;
+  EFI_STATUS  Ext4Status = EFI_SUCCESS;
   EFI_HANDLE  DiskIoHandle = NULL;
   EFI_HANDLE  FatHandle = NULL;
 
@@ -219,6 +248,10 @@ SfbStartFatStack (VOID)
      * the storage-detect group first for the same reason. */
     SfbSignalStorageDetect ();
     SfbConnectAll ();
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK fat-stack-start reused=1 started=1 detect=%r "
+            "connect=%r status=%r\n",
+            mSfbLastDetectStatus, mSfbLastConnectStatus, EFI_SUCCESS));
     return EFI_SUCCESS;
   }
 
@@ -234,31 +267,41 @@ SfbStartFatStack (VOID)
    */
   Status = InitializeUnicodeCollationEng (gImageHandle, gST);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: Unicode Collation init failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=unicode status=%r\n",
+            Status));
     return Status;
   }
 
   Status = SfbCreateDriverHandle (&DiskIoHandle);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: Disk I/O handle alloc failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=diskio-handle status=%r\n",
+            Status));
     return Status;
   }
 
   Status = InitializeDiskIo (DiskIoHandle, gST);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: Disk I/O driver init failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=diskio status=%r\n",
+            Status));
     return Status;
   }
 
   Status = SfbCreateDriverHandle (&FatHandle);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: FAT handle alloc failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=fat-handle status=%r\n",
+            Status));
     return Status;
   }
 
   Status = FatEntryPoint (FatHandle, gST);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: FAT driver init failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=fat status=%r\n",
+            Status));
     return Status;
   }
 
@@ -272,11 +315,16 @@ SfbStartFatStack (VOID)
    */
   Status = SfbCreateDriverHandle (&FatHandle);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: Ext4 handle alloc failed: %r\n", Status));
+    Ext4Status = Status;
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK fat-stack-start stage=ext4-handle status=%r\n",
+            Status));
   } else {
-    Status = Ext4EntryPoint (FatHandle, gST);
-    if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "SFB: Ext4 driver init failed: %r\n", Status));
+    Ext4Status = Ext4EntryPoint (FatHandle, gST);
+    if (EFI_ERROR (Ext4Status)) {
+      DEBUG ((EFI_D_WARN,
+              "SFB: MARK fat-stack-start stage=ext4 status=%r\n",
+              Ext4Status));
     }
   }
 
@@ -291,6 +339,11 @@ SfbStartFatStack (VOID)
    * its chance here, before any volume is scanned or any entry is launched.
    */
   SfbSignalBootPhase ();
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK fat-stack-start reused=0 started=1 ext4=%r "
+          "detect=%r connect=%r status=%r\n",
+          Ext4Status, mSfbLastDetectStatus, mSfbLastConnectStatus,
+          EFI_SUCCESS));
 
   return EFI_SUCCESS;
 }
@@ -415,24 +468,33 @@ VOID
 SfbMountLogfs (VOID)
 {
   EFI_STATUS  Status;
+  EFI_STATUS  ResultStatus = EFI_SUCCESS;
   EFI_HANDLE  *Handles = NULL;
   UINTN       Count    = 0;
   UINTN       Index;
   UINTN       Found    = 0;
   UINTN       Mounted  = 0;
+  UINTN       Present  = 0;
 
   if (!mSfbFatStackStarted) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK logfs-mount found=0 mounted=0 status=%r\n",
+            EFI_NOT_STARTED));
     return;
   }
 
   Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid,
                                     NULL, &Count, &Handles);
   if (EFI_ERROR (Status) || Handles == NULL) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK logfs-mount found=0 mounted=0 status=%r\n",
+            EFI_ERROR (Status) ? Status : EFI_NOT_FOUND));
     return;
   }
 
   for (Index = 0; Index < Count; Index++) {
     EFI_PARTITION_ENTRY  *PartEntry = NULL;
+    VOID                 *FileSystem = NULL;
     UINTN                Before;
     UINTN                After;
 
@@ -442,15 +504,42 @@ SfbMountLogfs (VOID)
     if (!SfbGptNameMatchesInline (PartEntry->PartitionName, L"logfs")) continue;
 
     Found++;
+    /*
+     * Already carrying a filesystem is the common case once the FAT stack has
+     * run, and it is the outcome this call exists to reach - the vendor's
+     * deferred flush only needs the volume bound, not bound by us. Counting it
+     * separately keeps that apart from a mount that genuinely did not happen;
+     * reported as one, a warm handle read as a failure on every boot.
+     */
+    Status = gBS->HandleProtocol (Handles[Index],
+                                 &gEfiSimpleFileSystemProtocolGuid,
+                                 &FileSystem);
+    if (!EFI_ERROR (Status) && FileSystem != NULL) {
+      Present++;
+      continue;
+    }
+
     Before = SfbFileSystemCount ();
-    gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
+    Status = gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
+    if (EFI_ERROR (Status) && Status != EFI_NOT_FOUND &&
+        ResultStatus == EFI_SUCCESS) {
+      ResultStatus = Status;
+    }
     After = SfbFileSystemCount ();
     if (After > Before) Mounted++;
   }
 
   FreePool (Handles);
-  DEBUG ((EFI_D_INFO, "SFB: MARK logfs-mount found=%u mounted=%u\n",
-          (UINT32)Found, (UINT32)Mounted));
+  if (ResultStatus == EFI_SUCCESS) {
+    if (Found == 0) {
+      ResultStatus = EFI_NOT_FOUND;
+    } else if ((Mounted + Present) != Found) {
+      ResultStatus = EFI_NOT_READY;
+    }
+  }
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK logfs-mount found=%u mounted=%u present=%u status=%r\n",
+          (UINT32)Found, (UINT32)Mounted, (UINT32)Present, ResultStatus));
 }
 
 /*
@@ -755,6 +844,10 @@ SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
                                     &AllCount,
                                     &All);
   if (EFI_ERROR (Status) || All == NULL) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK volumes kept=0 of=%u status=%r\n",
+            (UINT32)AllCount,
+            EFI_ERROR (Status) ? Status : EFI_NOT_FOUND));
     return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
   }
 
@@ -777,12 +870,14 @@ SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
     }
   }
 
-  DEBUG ((EFI_D_INFO, "SFB: MARK volumes kept=%u of=%u kinds=fat/ext4\n",
-          (UINT32)Kept, (UINT32)AllCount));
+  Status = (Kept == 0) ? EFI_NOT_FOUND : EFI_SUCCESS;
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK volumes kept=%u of=%u kinds=fat/ext4 status=%r\n",
+          (UINT32)Kept, (UINT32)AllCount, Status));
 
   if (Kept == 0) {
     FreePool (All);
-    return EFI_NOT_FOUND;
+    return Status;
   }
 
   *Handles = All;

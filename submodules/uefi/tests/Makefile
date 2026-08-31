@@ -3,7 +3,7 @@ CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
 .PHONY: test clean
 
-test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_surface
+test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface
 	./test_profile
 	./test_deviceinfo
 	./test_tzmap
@@ -13,6 +13,7 @@ test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch te
 	./test_config
 	./test_bls
 	./test_linuxboot
+	./test_log
 	./test_surface
 
 test_profile: test_profile.c \
@@ -80,10 +81,17 @@ test_linuxboot: test_linuxboot.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLinuxBoot.h
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
+# EDK2's x64 varargs helpers assume the firmware ABI; use the host ABI here.
+test_log: test_log.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLog.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLogRing.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLog.h
+	$(CC) $(CFLAGS) -DNO_MSABI_VA_FUNCS -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
+
 test_surface: test_surface.c \
 	../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.c \
 	../edk2/AndroidToolsPkg/Application/SurfaceTools/SurfaceModel.h
 	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 clean:
-	rm -f test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_surface
+	rm -f test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface

@@ -31,6 +31,8 @@ SfbOemWatchdogDisable (VOID)
   EFI_STATUS             Status;
 
   if (mSfbOemWatchdogAttempted) {
+    DEBUG ((EFI_D_INFO, "SFB: MARK oem-wdog state=skipped status=%r\n",
+            EFI_ALREADY_STARTED));
     return;
   }
   mSfbOemWatchdogAttempted = TRUE;
@@ -39,7 +41,9 @@ SfbOemWatchdogDisable (VOID)
                                 (VOID **)&Wdog);
   if (EFI_ERROR (Status) || Wdog == NULL) {
     /* No applet on this device: there is nothing to disable. */
-    DEBUG ((EFI_D_ERROR, "SFB: MARK oem-wdog state=absent status=%r\n",
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK oem-wdog state=unavailable reason=protocol "
+            "status=%r\n",
             Status));
     return;
   }
@@ -47,17 +51,25 @@ SfbOemWatchdogDisable (VOID)
   if (Wdog->Revision != SFB_OEM_WDOG_REVISION_DECODED) {
     /* Same GUID, layout we have not decoded: calling through it would be a
      * guess about where StopWatchdog sits. Leave the timer armed instead. */
-    DEBUG ((EFI_D_ERROR, "SFB: MARK oem-wdog state=unknown-rev rev=0x%llx\n",
-            (UINT64)Wdog->Revision));
+    Status = EFI_UNSUPPORTED;
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK oem-wdog state=unavailable reason=revision "
+            "rev=0x%llx status=%r\n",
+            (UINT64)Wdog->Revision, Status));
     return;
   }
 
   if (Wdog->StopWatchdog == NULL) {
-    DEBUG ((EFI_D_ERROR, "SFB: MARK oem-wdog state=no-stop rev=0x%llx\n",
-            (UINT64)Wdog->Revision));
+    Status = EFI_UNSUPPORTED;
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK oem-wdog state=unavailable reason=stop-slot "
+            "rev=0x%llx status=%r\n",
+            (UINT64)Wdog->Revision, Status));
     return;
   }
 
   Status = Wdog->StopWatchdog ();
-  DEBUG ((EFI_D_ERROR, "SFB: MARK oem-wdog state=stopped status=%r\n", Status));
+  DEBUG ((EFI_ERROR (Status) ? EFI_D_ERROR : EFI_D_INFO,
+          "SFB: MARK oem-wdog state=%a status=%r\n",
+          EFI_ERROR (Status) ? "failed" : "disabled", Status));
 }

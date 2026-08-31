@@ -79,6 +79,7 @@
 #include <Protocol/SimpleTextIn.h>
 #include "SuperFbMenu.h"
 #include "SuperFbOemWatchdog.h"
+#include "SuperFbLog.h"
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -176,6 +177,18 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     Config.KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
     Config.MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
 
+    /*
+     * Capture starts before the first stage mark, because the marks worth
+     * having are the ones from a boot that does not finish. The platform
+     * flushes its own log only when the boot continues into an OS stage or a
+     * reset notification fires, so anything that ends at the menu or in
+     * fastboot leaves nothing behind; and the file it does write is one
+     * unrotated snapshot of a circular buffer that is never truncated, so a
+     * short run reads as this boot followed by the tail of an older one.
+     * This tee is the same text under our own naming, ordering and length.
+     */
+    SfbLogBegin ();
+
     SfbBootMark (L"fatstack");
     Status = SfbStartFatStack ();
     if (EFI_ERROR (Status)) {
@@ -257,6 +270,9 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
          * SfbLaunchDefaultEntry resolves the target again after discovery.
          * A missing entry, missing image, or USB-only BLS target returns FALSE
          * and falls through to the menu without trying another row.
+         *
+         * The log is flushed inside SfbLaunchEntry, which every launch path
+         * reaches; flushing here as well would only cover this one.
          */
         (VOID)SfbLaunchDefaultEntry (Mode);
       }
@@ -281,6 +297,13 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
   DEBUG ((EFI_D_INFO, "Rebooting the device.\n"));
   RebootDevice (NORMAL_MODE);
 #endif
+  /*
+   * The fastboot loop is a one-way door: it exits only by resetting the
+   * device, so a session that lands here is exactly the session whose log used
+   * to be unrecoverable. Written now, while there is still a filesystem and a
+   * caller.
+   */
+  (VOID)SfbLogFlush ("pre-fastboot");
   DEBUG ((EFI_D_INFO, "Launching fastboot\n"));
   Status = FastbootInitialize ();
   if (EFI_ERROR (Status)) {
@@ -289,6 +312,16 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
   }
 
 stack_guard_update_default:
+  /*
+   * The tee holds a callback registration in this image, so it has to come
+   * down on every path that returns - the same rule the installed protocols
+   * and Block I/O wrappers already follow. A handler left pointing into code
+   * that is about to be unloaded is a fault with no owner. It unregisters
+   * through Boot Services, so it goes before the stack teardown below rather
+   * than after it.
+   */
+  SfbLogEnd ();
+
   /*Update stack check guard with defualt value then return*/
   __stack_chk_guard = DEFAULT_STACK_CHK_GUARD;
 

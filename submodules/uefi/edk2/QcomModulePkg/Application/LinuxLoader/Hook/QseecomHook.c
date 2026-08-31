@@ -187,8 +187,9 @@ SfbLogTzMapSizeMismatch (
   }
   DEBUG ((EFI_D_ERROR,
           "SFB: MARK tzmap-size-mismatch command=0x%03x semantic=%u "
-          "manifest=%u compiled=%u\n",
-          Command, (UINT32)Semantic, ManifestBytes, CompiledBytes));
+          "manifest=%u compiled=%u status=%r\n",
+          Command, (UINT32)Semantic, ManifestBytes, CompiledBytes,
+          EFI_COMPROMISED_DATA));
 }
 
 STATIC BOOLEAN
@@ -397,11 +398,10 @@ HookedQseecomSendCmd (
       Command >= 0x200u && Command <= 0x2FFu) {
     gPinnedKeymasterHandle = Handle;
     if (!gPinnedKeymasterLogged) {
-      gPinnedKeymasterLogged = TRUE;
       DEBUG ((EFI_D_INFO,
               "SFB: MARK hook-invoke component=qsee "
-              "operation=pin-keymaster command=0x%03x\n",
-              Command));
+              "operation=pin-keymaster command=0x%03x status=%r\n",
+              Command, EFI_SUCCESS));
     }
   }
 
@@ -415,8 +415,8 @@ HookedQseecomSendCmd (
       DEBUG ((EFI_D_INFO,
               "SFB: MARK hook-invoke component=qsee "
               "operation=suppress-persistence target=oplus-sec "
-              "command=0x%03x\n",
-              Command));
+              "command=0x%03x status=%r\n",
+              Command, EFI_SUCCESS));
     }
     SfbHookLeave (&gQseeSendGuard);
     return EFI_SUCCESS;
@@ -442,8 +442,8 @@ HookedQseecomSendCmd (
       DEBUG ((EFI_D_INFO,
               "SFB: MARK hook-invoke component=qsee "
               "operation=suppress-persistence target=keymaster "
-              "command=0x%03x\n",
-              Command));
+              "command=0x%03x status=%r\n",
+              Command, EFI_SUCCESS));
     }
     SfbHookLeave (&gQseeSendGuard);
     return EFI_SUCCESS;
@@ -470,8 +470,8 @@ HookedQseecomSendCmd (
       gUnclassifiedCommandLogged = TRUE;
       DEBUG ((EFI_D_INFO,
               "SFB: MARK keymaster-passthrough command=0x%03x "
-              "enumerated=1 semantic=%u (further notices suppressed)\n",
-              Command, (UINT32)Semantic));
+              "enumerated=1 semantic=%u status=%r\n",
+              Command, (UINT32)Semantic, EFI_SUCCESS));
     }
   }
 
@@ -495,8 +495,9 @@ HookedQseecomSendCmd (
           (gKeymasterRewriteLogMask & RewriteLogBit) == 0) {
         gKeymasterRewriteLogMask |= RewriteLogBit;
         DEBUG ((EFI_D_INFO,
-                "SFB: MARK keymaster-rewrite command=0x%03x bytes=%u\n",
-                Command, SendBytes));
+                "SFB: MARK keymaster-rewrite command=0x%03x bytes=%u "
+                "status=%r\n",
+                Command, SendBytes, EFI_SUCCESS));
       }
     }
   }
@@ -507,19 +508,20 @@ HookedQseecomSendCmd (
       !EFI_ERROR (Status)) {
     if (SfbProjectDeviceInfo (ResponseBuffer, ResponseBytes, &ProjectOffset)) {
       if (!gDeviceStateProjectionLogged) {
-        gDeviceStateProjectionLogged = TRUE;
         DEBUG ((EFI_D_INFO,
                 "SFB: MARK devicestate-projected mode=%u "
-                "buffer=%a offset=%u\n",
-                (UINT32)SfbHooksMode (), "rsp", ProjectOffset));
+                "buffer=%a offset=%u status=%r\n",
+                (UINT32)SfbHooksMode (), "rsp", ProjectOffset,
+                EFI_SUCCESS));
       }
     } else if (SfbProjectDeviceInfo (SendBuffer, SendBytes, &ProjectOffset)) {
       if (!gDeviceStateProjectionLogged) {
         gDeviceStateProjectionLogged = TRUE;
         DEBUG ((EFI_D_INFO,
                 "SFB: MARK devicestate-projected mode=%u "
-                "buffer=%a offset=%u\n",
-                (UINT32)SfbHooksMode (), "send", ProjectOffset));
+                "buffer=%a offset=%u status=%r\n",
+                (UINT32)SfbHooksMode (), "send", ProjectOffset,
+                EFI_SUCCESS));
       }
     } else if (!gDeviceStateProjectionLogged) {
       gDeviceStateProjectionLogged = TRUE;
@@ -531,9 +533,9 @@ HookedQseecomSendCmd (
       }
       DEBUG ((EFI_D_WARN,
               "SFB: MARK devicestate-opaque mode=%u send=%u rsp=%u "
-              "head=%02x%02x%02x%02x\n",
+              "head=%02x%02x%02x%02x status=%r\n",
               (UINT32)SfbHooksMode (), SendBytes, ResponseBytes,
-              Head0, Head1, Head2, Head3));
+              Head0, Head1, Head2, Head3, EFI_NOT_FOUND));
     }
   }
   SfbHookLeave (&gQseeSendGuard);

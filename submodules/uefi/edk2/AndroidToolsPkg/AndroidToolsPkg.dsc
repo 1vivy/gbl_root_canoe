@@ -1,9 +1,9 @@
 #/** @file
-#  AndroidToolsPkg platform description. Builds the standalone RebootTools,
-#  ArbTools, BLTools and SurfaceTools UEFI applications plus the shared
-#  AndroidToolsUi menu library. The package is self-contained: it ports the r32
-#  reboot/recovery code it needs and only relies on the standard EDK2 base
-#  classes, so it does not depend on the stripped QcomModulePkg build config.
+#  AndroidToolsPkg platform description. Builds standalone RebootTools,
+#  ArbTools, BLTools, SurfaceTools, UsbTools and LogTools applications plus
+#  the shared AndroidToolsUi menu library. The package is self-contained: it
+#  ports the r32 reboot/recovery code it needs and only relies on standard
+#  EDK2 base classes, so it does not depend on the stripped QcomModulePkg config.
 #
 #  Build with, for example:
 #    build -p AndroidToolsPkg/AndroidToolsPkg.dsc -a AARCH64 -b RELEASE
@@ -107,3 +107,4 @@
   AndroidToolsPkg/Application/BLTools/BLTools.inf
   AndroidToolsPkg/Application/SurfaceTools/SurfaceTools.inf
   AndroidToolsPkg/Application/UsbTools/UsbTools.inf
+  AndroidToolsPkg/Application/LogTools/LogTools.inf

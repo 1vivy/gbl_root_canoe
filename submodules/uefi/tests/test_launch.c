@@ -2559,6 +2559,17 @@ SfbBootMark(IN CONST CHAR16 *Stage)
   (void)Stage;
 }
 
+/* The launch path flushes the captured log before it hands over; here it only
+   has to resolve. Note that test_log links the ring and the capture side only,
+   so the writer this stands in for has no host coverage at all - do not read
+   this stub as evidence that it does. */
+EFI_STATUS
+SfbLogFlush(IN CONST CHAR8 *Tag)
+{
+  (void)Tag;
+  return EFI_SUCCESS;
+}
+
 /*
  * These count what is *currently published*, not how many times the installer
  * was called. A failed install publishes nothing, so it must not increment -

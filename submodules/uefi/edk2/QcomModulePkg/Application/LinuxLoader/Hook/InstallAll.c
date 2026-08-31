@@ -9,6 +9,25 @@ STATIC SFB_MODE2_PROFILE gManagedProfile;
 STATIC BOOLEAN gManagedProfileValid = FALSE;
 STATIC SFB_TZ_MAP gManagedTzMap;
 STATIC BOOLEAN gManagedTzMapInitialized = FALSE;
+#define SFB_HOOK_MASK_VERIFIED  (1u << 0)
+#define SFB_HOOK_MASK_QSEE      (1u << 1)
+#define SFB_HOOK_MASK_SPSS      (1u << 2)
+#define SFB_HOOK_MASK_SCM       (1u << 3)
+#define SFB_HOOK_MASK_RESERVE   (1u << 4)
+#define SFB_HOOK_MASK_EFISP     (1u << 5)
+STATIC UINT32 gManagedInstallMask = 0;
+
+STATIC UINT32
+SfbHookMaskCount (IN UINT32 Mask)
+{
+  UINT32 Count = 0;
+
+  while (Mask != 0) {
+    Count += Mask & 1u;
+    Mask >>= 1;
+  }
+  return Count;
+}
 
 BOOLEAN
 SfbHooksActive (VOID)
@@ -55,12 +74,13 @@ SfbPrepareManagedAblHooks (
   SFB_TZ_MAP ValidatedTzMap;
   QCOM_SCM_PROTOCOL *Scm = NULL;
   EFI_STATUS ScmStatus;
-  BOOLEAN ScmInstalled = FALSE;
-  BOOLEAN SpssInstalled = FALSE;
-  BOOLEAN ReserveInstalled = FALSE;
   BOOLEAN EfispInstalled = FALSE;
   EFI_STATUS ReserveStatus;
   EFI_STATUS EfispStatus;
+  UINT32 InstallCount = 0;
+  UINT32 FailureCount = 0;
+  UINT32 UnavailableCount = 0;
+  UINT32 RestoredCount;
 
   /* A failed reconfiguration must leave installed wrappers strict pass-through
    * rather than retaining a prior launch's active policy. */
@@ -72,12 +92,13 @@ SfbPrepareManagedAblHooks (
   SfbResetQseecomState ();
 
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK hook-prepare mode=%u profile=%u\n",
-          (UINT32)EffectiveMode, (UINT32)(Profile != NULL)));
+          "SFB: MARK hook-prepare mode=%u profile=%u status=%r\n",
+          (UINT32)EffectiveMode, (UINT32)(Profile != NULL), EFI_NOT_STARTED));
   if ((UINT32)EffectiveMode > 2u) {
     Status = EFI_INVALID_PARAMETER;
     DEBUG ((EFI_D_ERROR,
-            "SFB: MARK hook-stage stage=validate component=policy status=%r\n",
+            "SFB: MARK hook-stage stage=validate component=policy "
+            "reason=mode status=%r\n",
             Status));
     return Status;
   }
@@ -87,7 +108,8 @@ SfbPrepareManagedAblHooks (
                          &ValidatedProfile))) {
     Status = EFI_INVALID_PARAMETER;
     DEBUG ((EFI_D_ERROR,
-            "SFB: MARK hook-stage stage=validate component=policy status=%r\n",
+            "SFB: MARK hook-stage stage=validate component=policy "
+            "reason=profile status=%r\n",
             Status));
     return Status;
   }
@@ -98,12 +120,14 @@ SfbPrepareManagedAblHooks (
                              &ValidatedTzMap)) {
     Status = EFI_INVALID_PARAMETER;
     DEBUG ((EFI_D_ERROR,
-            "SFB: MARK hook-stage stage=validate component=policy status=%r\n",
+            "SFB: MARK hook-stage stage=validate component=policy "
+            "reason=tzmap status=%r\n",
             Status));
     return Status;
   }
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK hook-stage stage=validate component=policy status=%r\n",
+          "SFB: MARK hook-stage stage=validate component=policy "
+          "reason=none status=%r\n",
           EFI_SUCCESS));
 
   /*
@@ -113,25 +137,34 @@ SfbPrepareManagedAblHooks (
    * superfastboot.
    */
   if (EffectiveMode == SfbBootModeHonestUnlocked) {
+    RestoredCount = SfbHookMaskCount (gManagedInstallMask);
     SfbRestoreReserveBlockIo ();
     SfbRestoreScm ();
     SfbRestoreSpss ();
     SfbRestoreQseecom ();
     SfbRestoreVerifiedBoot ();
     SfbRestoreEfispBlockIo ();
+    gManagedInstallMask = 0;
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK hooks-restore mode=%u restored=%u status=%r\n",
+            (UINT32)EffectiveMode, RestoredCount, EFI_SUCCESS));
 
     EfispStatus = SfbInstallEfispBlockIo ();
     EfispInstalled = (BOOLEAN)!EFI_ERROR (EfispStatus);
+    if (EfispInstalled) {
+      gManagedInstallMask |= SFB_HOOK_MASK_EFISP;
+      InstallCount++;
+    }
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK hooks-install mode=%u installed=%u failed=0 "
+            "unavailable=%u armed=0 status=%r\n",
+            (UINT32)EffectiveMode, InstallCount,
+            (UINT32)!EfispInstalled, EfispStatus));
     gManagedMode = EffectiveMode;
     gManagedProfileValid = FALSE;
     ZeroMem (&gManagedProfile, sizeof (gManagedProfile));
     CopyMem (&gManagedTzMap, &ValidatedTzMap, sizeof (gManagedTzMap));
     gManagedTzMapInitialized = TRUE;
-    DEBUG ((EFI_D_INFO,
-            "SFB: MARK hooks-armed mode=%u profile=0 spss=0 scm=0 reserve=0 "
-            "efisp=%u tzmap-commands=%u\n",
-            (UINT32)gManagedMode, (UINT32)EfispInstalled,
-            (UINT32)gManagedTzMap.CommandCount));
     return EFI_SUCCESS;
   }
 
@@ -178,27 +211,19 @@ SfbPrepareManagedAblHooks (
 
   Status = SfbInstallVerifiedBoot (VerifiedBoot);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR,
-            "SFB: MARK hook-stage stage=install "
-            "component=verified-boot status=%r\n",
-            Status));
+    FailureCount++;
     goto Rollback;
   }
-  DEBUG ((EFI_D_INFO,
-          "SFB: MARK hook-stage stage=install "
-          "component=verified-boot status=%r\n",
-          Status));
+  InstallCount++;
+  gManagedInstallMask |= SFB_HOOK_MASK_VERIFIED;
 
   Status = SfbInstallQseecom (Qseecom);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR,
-            "SFB: MARK hook-stage stage=install component=qsee status=%r\n",
-            Status));
+    FailureCount++;
     goto Rollback;
   }
-  DEBUG ((EFI_D_INFO,
-          "SFB: MARK hook-stage stage=install component=qsee status=%r\n",
-          Status));
+  InstallCount++;
+  gManagedInstallMask |= SFB_HOOK_MASK_QSEE;
 
   /* Universal and mode independent: irreversible fuse and anti-rollback
    * advancement must never reach TZ from a chainloaded ABL. Best effort with a
@@ -207,23 +232,14 @@ SfbPrepareManagedAblHooks (
    * be the larger regression. */
   ScmStatus = SfbPreflightScm (&Scm);
   if (EFI_ERROR (ScmStatus)) {
-    DEBUG ((EFI_D_WARN,
-            "SFB: MARK hook-stage stage=preflight component=scm "
-            "universal=1 status=%r\n",
-            ScmStatus));
+    UnavailableCount++;
   } else {
     ScmStatus = SfbInstallScm (Scm);
     if (EFI_ERROR (ScmStatus)) {
-      DEBUG ((EFI_D_WARN,
-              "SFB: MARK hook-stage stage=install component=scm "
-              "universal=1 status=%r\n",
-              ScmStatus));
+      FailureCount++;
     } else {
-      ScmInstalled = TRUE;
-      DEBUG ((EFI_D_INFO,
-              "SFB: MARK hook-stage stage=install component=scm "
-              "universal=1 status=%r\n",
-              ScmStatus));
+      InstallCount++;
+      gManagedInstallMask |= SFB_HOOK_MASK_SCM;
     }
   }
 
@@ -236,28 +252,25 @@ SfbPrepareManagedAblHooks (
             "SFB: MARK hook-stage stage=install component=reserve "
             "universal=1 present=0 status=%r\n",
             ReserveStatus));
+    UnavailableCount++;
   } else {
-    ReserveInstalled = TRUE;
     DEBUG ((EFI_D_INFO,
             "SFB: MARK hook-stage stage=install component=reserve "
             "universal=1 present=1 status=%r\n",
             ReserveStatus));
+    InstallCount++;
+    gManagedInstallMask |= SFB_HOOK_MASK_RESERVE;
   }
 
   /* Hide efisp for this launch, but leave failure soft: platforms without the
    * partition are still valid superfastboot targets. */
   EfispStatus = SfbInstallEfispBlockIo ();
   if (EFI_ERROR (EfispStatus)) {
-    DEBUG ((EFI_D_WARN,
-            "SFB: MARK hook-stage stage=install component=efisp "
-            "universal=1 present=0 status=%r\n",
-            EfispStatus));
+    UnavailableCount++;
   } else {
     EfispInstalled = TRUE;
-    DEBUG ((EFI_D_INFO,
-            "SFB: MARK hook-stage stage=install component=efisp "
-            "universal=1 present=1 status=%r\n",
-            EfispStatus));
+    InstallCount++;
+    gManagedInstallMask |= SFB_HOOK_MASK_EFISP;
   }
 
   if ((UINT32)EffectiveMode == 2u) {
@@ -271,6 +284,7 @@ SfbPrepareManagedAblHooks (
               "SFB: MARK hook-stage stage=locate component=spss "
               "optional=1 status=%r\n",
               SpssStatus));
+      UnavailableCount++;
       /* Distinct literals, not a %u: a device whose ABL never references SPSS
        * is reporting an expected absence, and the on-device log must be
        * greppable without formatting. */
@@ -293,16 +307,10 @@ SfbPrepareManagedAblHooks (
               (UINT32)SpssRequired, SpssStatus));
       SpssStatus = SfbInstallSpss (Spss);
       if (EFI_ERROR (SpssStatus)) {
-        DEBUG ((EFI_D_WARN,
-                "SFB: MARK hook-stage stage=install component=spss "
-                "optional=1 status=%r\n",
-                SpssStatus));
+        FailureCount++;
       } else {
-        SpssInstalled = TRUE;
-        DEBUG ((EFI_D_INFO,
-                "SFB: MARK hook-stage stage=install component=spss "
-                "optional=1 status=%r\n",
-                SpssStatus));
+        InstallCount++;
+        gManagedInstallMask |= SFB_HOOK_MASK_SPSS;
       }
     }
   }
@@ -320,30 +328,55 @@ SfbPrepareManagedAblHooks (
   gManagedTzMapInitialized = TRUE;
   gManagedPolicyActive = TRUE;
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK hooks-armed mode=%u profile=%u spss=%u scm=%u "
-          "reserve=%u efisp=%u tzmap-commands=%u\n",
-          (UINT32)gManagedMode, (UINT32)gManagedProfileValid,
-          (UINT32)SpssInstalled, (UINT32)ScmInstalled,
-          (UINT32)ReserveInstalled, (UINT32)EfispInstalled,
-          (UINT32)gManagedTzMap.CommandCount));
+          "SFB: MARK hooks-armed mode=%u installed=%u failed=%u "
+          "unavailable=%u verified=%u qsee=%u spss=%u scm=%u reserve=%u "
+          "efisp=%u armed=1 status=%r\n",
+          (UINT32)gManagedMode, InstallCount, FailureCount,
+          UnavailableCount,
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_VERIFIED) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_QSEE) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_SPSS) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_SCM) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_RESERVE) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_EFISP) != 0),
+          EFI_SUCCESS));
   return EFI_SUCCESS;
 
 Rollback:
+  DEBUG ((EFI_D_ERROR,
+          "SFB: MARK hooks-install mode=%u installed=%u failed=%u "
+          "unavailable=%u verified=%u qsee=%u spss=%u scm=%u reserve=%u "
+          "efisp=%u armed=0 status=%r\n",
+          (UINT32)EffectiveMode, InstallCount, FailureCount,
+          UnavailableCount,
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_VERIFIED) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_QSEE) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_SPSS) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_SCM) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_RESERVE) != 0),
+          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_EFISP) != 0),
+          Status));
+  RestoredCount = SfbHookMaskCount (gManagedInstallMask);
   SfbRestoreEfispBlockIo ();
   SfbRestoreReserveBlockIo ();
   SfbRestoreScm ();
   SfbRestoreSpss ();
   SfbRestoreQseecom ();
   SfbRestoreVerifiedBoot ();
+  gManagedInstallMask = 0;
   DEBUG ((EFI_D_ERROR,
-          "SFB: MARK hook-stage stage=rollback component=all status=%r\n",
-          Status));
+          "SFB: MARK hooks-restore restored=%u status=%r cause=%r\n",
+          RestoredCount, EFI_SUCCESS, Status));
   return Status;
 }
+
 
 VOID
 SfbDisarmManagedAblHooks (VOID)
 {
+  UINT32 RestoredCount;
+
+  RestoredCount = SfbHookMaskCount (gManagedInstallMask);
   gManagedPolicyActive = FALSE;
   gManagedProfileValid = FALSE;
   ZeroMem (&gManagedProfile, sizeof (gManagedProfile));
@@ -355,4 +388,8 @@ SfbDisarmManagedAblHooks (VOID)
   SfbRestoreQseecom ();
   SfbRestoreVerifiedBoot ();
   SfbRestoreEfispBlockIo ();
+  gManagedInstallMask = 0;
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK hooks-restore restored=%u status=%r\n",
+          RestoredCount, EFI_SUCCESS));
 }

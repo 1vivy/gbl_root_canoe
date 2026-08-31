@@ -162,18 +162,15 @@ HookedReserveWriteBlocks (
     }
     Reason = SfbReserveWriteReason (Record, Lba, BufferSize, Buffer);
     if (!SfbReasonIsProtected (Reason)) {
-      DEBUG ((EFI_D_INFO,
-              "SFB: MARK reserve-write-pass p=%a lba=%Lu bytes=%u\n",
-              Record->NameAscii, (UINT64)Lba, (UINT32)BufferSize));
       return Record->OrigWriteBlocks (This, MediaId, Lba, BufferSize, Buffer);
     }
-
     /* Deliberately not gated on nesting depth: a firmware callback re-entering
      * this slot beneath an outer write must be suppressed too. */
     DEBUG ((EFI_D_WARN,
             "SFB: MARK reserve-write-swallow reason=%a p=%a lba=%Lu bytes=%u "
-            "universal=1\n",
-            Reason, Record->NameAscii, (UINT64)Lba, (UINT32)BufferSize));
+            "universal=1 status=%r\n",
+            Reason, Record->NameAscii, (UINT64)Lba, (UINT32)BufferSize,
+            EFI_SUCCESS));
     /* The token erase is the only event surfaced on screen. DEBUG reaches the
      * UART log alone, so without this the one thing a user needs to see is
      * invisible. Held for three seconds because the boot moves on immediately
@@ -230,8 +227,9 @@ SfbInstallReserveBlockIo (VOID)
     }
     if (BlockIo->WriteBlocks == NULL) continue;
     if (gSfbReserveCount >= SFB_RESERVE_MAX_RECORDS) {
-      DEBUG ((EFI_D_WARN, "SFB: MARK reserve-table-full count=%u\n",
-              (UINT32)gSfbReserveCount));
+      DEBUG ((EFI_D_WARN,
+              "SFB: MARK reserve-table-full count=%u status=%r\n",
+              (UINT32)gSfbReserveCount, EFI_OUT_OF_RESOURCES));
       break;
     }
 
@@ -243,12 +241,6 @@ SfbInstallReserveBlockIo (VOID)
     SfbCopyNameAscii (gSfbReserve[gSfbReserveCount].NameAscii,
                       PartEntry->PartitionName);
     BlockIo->WriteBlocks = HookedReserveWriteBlocks;
-    DEBUG ((EFI_D_INFO, "SFB: MARK reserve-armed p=%a last-block=%Lu "
-            "token-lba=%Lu\n",
-            gSfbReserve[gSfbReserveCount].NameAscii,
-            (UINT64)gSfbReserve[gSfbReserveCount].LastBlockAtInstall,
-            (UINT64)(gSfbReserve[gSfbReserveCount].LastBlockAtInstall -
-                     SFB_RESERVE_TOKEN_DELTA)));
     gSfbReserveCount++;
     Installed++;
   }
@@ -362,7 +354,6 @@ SfbInstallEfispBlockIo (VOID)
                                     &HandleCount, &Handles);
   if (EFI_ERROR (Status) || Handles == NULL) {
     Status = EFI_NOT_FOUND;
-    DEBUG ((EFI_D_WARN, "SFB: MARK efisp-hide status=%r\n", Status));
     return Status;
   }
 
@@ -389,7 +380,6 @@ SfbInstallEfispBlockIo (VOID)
 
   gBS->FreePool (Handles);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_WARN, "SFB: MARK efisp-hide status=%r\n", Status));
     return Status;
   }
 
@@ -405,7 +395,6 @@ SfbInstallEfispBlockIo (VOID)
          BlockIo->FlushBlocks != HookedEfispFlushBlocks &&
          BlockIo->FlushBlocks != gSfbEfisp.OrigFlushBlocks)) {
       Status = EFI_NOT_READY;
-      DEBUG ((EFI_D_WARN, "SFB: MARK efisp-hide status=%r\n", Status));
       return Status;
     }
     if (gSfbEfisp.Media != BlockIo->Media) {
@@ -414,12 +403,12 @@ SfbInstallEfispBlockIo (VOID)
     }
     gEfispHideArmed = TRUE;
     BlockIo->Media->MediaPresent = FALSE;
-    DEBUG ((EFI_D_INFO, "SFB: MARK efisp-hide status=%r\n", EFI_SUCCESS));
+    DEBUG ((EFI_D_INFO, "SFB: MARK efisp-hide status=%r reused=1\n",
+            EFI_SUCCESS));
     return EFI_SUCCESS;
   }
   if (gSfbEfisp.BlockIo != NULL) {
     Status = EFI_NOT_READY;
-    DEBUG ((EFI_D_WARN, "SFB: MARK efisp-hide status=%r\n", Status));
     return Status;
   }
 
@@ -443,7 +432,8 @@ SfbInstallEfispBlockIo (VOID)
   }
   gEfispHideArmed = TRUE;
   BlockIo->Media->MediaPresent = FALSE;
-  DEBUG ((EFI_D_INFO, "SFB: MARK efisp-hide status=%r\n", EFI_SUCCESS));
+  DEBUG ((EFI_D_INFO, "SFB: MARK efisp-hide status=%r reused=0\n",
+          EFI_SUCCESS));
   return EFI_SUCCESS;
 }
 

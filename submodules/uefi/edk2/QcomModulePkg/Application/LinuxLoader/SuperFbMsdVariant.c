@@ -75,10 +75,10 @@ SfbMsdVariantProtocol (VOID)
     return NULL;
   }
   mSfbVariantState = SfbVariantFailed;
+  Status = EFI_NOT_FOUND;
 
   if (gCanoeMsdVariant == NULL || gCanoeMsdVariantSize == 0) {
-    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe match=0 reason=none-bundled\n"));
-    return NULL;
+    goto Out;
   }
 
   (VOID)gBS->LocateHandleBuffer (ByProtocol, (EFI_GUID *)&mSfbMsdProtocolGuid,
@@ -91,12 +91,14 @@ SfbMsdVariantProtocol (VOID)
    * outlives the MEMMAP-path form across vendor DXE cores. */
   if (gCanoeMsdVariantSize < 0x40 ||
       gCanoeMsdVariant[0] != 'M' || gCanoeMsdVariant[1] != 'Z') {
+    Status = EFI_LOAD_ERROR;
     DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe status=%r reason=bad-embed\n",
-            EFI_LOAD_ERROR));
+            Status));
     goto Out;
   }
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe step=pre-load size=0x%Lx\n",
-          (UINT64)gCanoeMsdVariantSize));
+  DEBUG ((EFI_D_ERROR,
+          "SFB: MARK msc-dxe stage=load-entered size=0x%Lx status=%r\n",
+          (UINT64)gCanoeMsdVariantSize, EFI_NOT_STARTED));
 
   Status = gBS->LoadImage (FALSE, gImageHandle, NULL, (VOID *)gCanoeMsdVariant,
                            gCanoeMsdVariantSize, &mSfbVariantImage);
@@ -104,7 +106,9 @@ SfbMsdVariantProtocol (VOID)
   if (EFI_ERROR (Status)) {
     goto Out;
   }
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe step=pre-start\n"));
+  DEBUG ((EFI_D_ERROR,
+          "SFB: MARK msc-dxe stage=start-entered status=%r\n",
+          EFI_NOT_STARTED));
   Status = gBS->StartImage (mSfbVariantImage, 0, NULL);
   DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe start status=%r\n", Status));
   if (EFI_ERROR (Status)) {
@@ -130,21 +134,29 @@ SfbMsdVariantProtocol (VOID)
     }
   }
   if (NewHandle == NULL) {
+    Status = EFI_NOT_FOUND;
     DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe status=%r reason=no-new-handle\n",
-            EFI_NOT_FOUND));
+            Status));
     goto Out;
   }
   Status = gBS->HandleProtocol (NewHandle, (EFI_GUID *)&mSfbMsdProtocolGuid,
                                 &Protocol);
   DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe proto status=%r\n", Status));
   if (EFI_ERROR (Status) || Protocol == NULL) {
+    if (!EFI_ERROR (Status)) {
+      Status = EFI_NOT_FOUND;
+    }
     goto Out;
   }
-
   mSfbVariant      = (SFB_USB_MSD_PROTOCOL *)Protocol;
   mSfbVariantState = SfbVariantReady;
 
 Out:
+  DEBUG (((mSfbVariant != NULL) ? EFI_D_INFO : EFI_D_WARN,
+          "SFB: MARK msc-dxe selected=%a usable=%u status=%r\n",
+          (mSfbVariant != NULL) ? "bundled" : "platform",
+          (UINT32)(mSfbVariant != NULL),
+          (mSfbVariant != NULL) ? EFI_SUCCESS : Status));
   if (Before != NULL) {
     FreePool (Before);
   }

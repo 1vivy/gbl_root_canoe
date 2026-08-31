@@ -18,6 +18,7 @@
 
 #include "SuperFbMassStorage.h"
 #include "SuperFbMenu.h"
+#include "SuperFbLog.h"
 
 #include <FastbootLib/FastbootMain.h>
 #include <Library/BaseLib.h>
@@ -80,6 +81,8 @@ SfbMassStorageEnsureUsbStack (VOID)
   Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbfnIoProtocolGuid, NULL,
                                 &Protocol);
   if (!EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_INFO, "SFB: MARK msc-usb-init status=%r usbfn=1\n",
+            EFI_SUCCESS));
     return;
   }
 
@@ -112,8 +115,9 @@ SfbMassStorageDrainKeys (VOID)
     Drained++;
   }
   if (Drained != 0) {
-    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-drained keys=%u last-scan=0x%x\n",
-            (UINT32)Drained, Key.ScanCode));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK msc-drained keys=%u last-scan=0x%x status=%r\n",
+            (UINT32)Drained, Key.ScanCode, EFI_SUCCESS));
   }
 }
 
@@ -134,10 +138,6 @@ SfbMassStorageCancelled (VOID)
   if (EFI_ERROR (gST->ConIn->ReadKeyStroke (gST->ConIn, &Key))) {
     return FALSE;
   }
-  /* Log every key the run loop sees so unexpected sources are named in the
-   * boot log, not guessed. */
-  DEBUG ((EFI_D_ERROR, "SFB: MARK msc-key scancode=0x%x char=0x%x\n",
-          Key.ScanCode, Key.UnicodeChar));
   return (BOOLEAN)(Key.ScanCode == SCAN_DOWN);
 }
 
@@ -171,11 +171,15 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
                           IN CONST CHAR8  *Tag)
 {
   EFI_STATUS            Status;
+  EFI_STATUS            QueryStatus;
+  EFI_STATUS            StopStatus;
+  EFI_STATUS            ReleaseStatus;
+  EFI_STATUS            FirstHandlerError = EFI_SUCCESS;
   EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
   SFB_USB_MSD_PROTOCOL *Msd = NULL;
   UINT8                 MaxLun = 0;
   BOOLEAN               Cancelled = FALSE;
-  BOOLEAN               HandlerErrorLogged = FALSE;
+  BOOLEAN               Bundled;
   UINT32                Polls = 0;
   UINT32                NotReady = 0;
   UINT32                Errors = 0;
@@ -200,10 +204,12 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
   Status = SfbFindPartitionByName (Name, &BlockIo);
   if (EFI_ERROR (Status) || BlockIo == NULL) {
     DEBUG ((EFI_D_ERROR,
-            "SFB: MARK msc-run target=%a status=%r reason=partition\n",
+            "SFB: MARK msc-target target=%a status=%r\n",
             (Tag != NULL) ? Tag : "?", Status));
     return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
   }
+  DEBUG ((EFI_D_INFO, "SFB: MARK msc-target target=%a status=%r\n",
+          (Tag != NULL) ? Tag : "?", EFI_SUCCESS));
   /*
    * The bundled driver is preferred: its identity (1209:ca0e, fixed disk)
    * matches no host-side rule that would tear the session down. The platform
@@ -211,33 +217,39 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    * driver or it could not start.
    */
   Msd = SfbMsdVariantProtocol ();
+  Bundled = (BOOLEAN)(Msd != NULL);
   if (Msd == NULL) {
     Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdProtocolGuid, NULL,
                                   (VOID **)&Msd);
     if (EFI_ERROR (Status) || Msd == NULL) {
       DEBUG ((EFI_D_ERROR,
-              "SFB: MARK msc-run target=%a status=%r reason=protocol\n",
+              "SFB: MARK msc-driver target=%a driver=none status=%r\n",
               (Tag != NULL) ? Tag : "?", Status));
       return EFI_NOT_FOUND;
     }
   }
 
-  Status = Msd->QueryMaxLun (Msd, &MaxLun);
-  if (EFI_ERROR (Status)) {
+  QueryStatus = Msd->QueryMaxLun (Msd, &MaxLun);
+  if (EFI_ERROR (QueryStatus)) {
     MaxLun = 0;
   }
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK msc-export target=%a driver=%a maxlun=%u revision=0x%x\n",
+          "SFB: MARK msc-driver target=%a driver=%a maxlun=%u "
+          "revision=0x%x status=%r\n",
           (Tag != NULL) ? Tag : "?",
-          (Msd == SfbMsdVariantProtocol ()) ? "bundled" : "platform",
-          (UINT32)MaxLun, Msd->Revision));
+          Bundled ? "bundled" : "platform",
+          (UINT32)MaxLun, Msd->Revision, QueryStatus));
 
   Status = Msd->AssignBlkIoHandle (Msd, BlockIo, 0);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run target=%a status=%r reason=assign\n",
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK msc-lun target=%a lun=0 published=0 status=%r\n",
             (Tag != NULL) ? Tag : "?", Status));
     return Status;
   }
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK msc-lun target=%a lun=0 published=1 status=%r\n",
+          (Tag != NULL) ? Tag : "?", Status));
   /*
    * Draw after assigning the LUN and before draining keys. The chooser's
    * confirm keystroke is still queued here, so the screen must be visible
@@ -263,19 +275,25 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    */
   Status = Msd->StartDevice (Msd);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: MARK msc-run target=%a status=%r reason=start\n",
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK msc-link target=%a taken=0 status=%r\n",
             (Tag != NULL) ? Tag : "?", Status));
     /*
      * StartDevice may have partially claimed the shared gadget before
      * reporting failure. Stop it before releasing the LUN so a failed start
      * cannot leave fastboot or the partition in a half-owned state.
      */
-    Msd->StopDevice (Msd);
-    Msd->AssignBlkIoHandle (Msd, NULL, 0);
+    StopStatus = Msd->StopDevice (Msd);
+    ReleaseStatus = Msd->AssignBlkIoHandle (Msd, NULL, 0);
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK msc-session target=%a status=%r stop=%r "
+            "lun-release=%r\n",
+            (Tag != NULL) ? Tag : "?", Status, StopStatus, ReleaseStatus));
     return Status;
   }
-  DEBUG ((EFI_D_INFO, "SFB: MARK msc-started target=%a\n",
-          (Tag != NULL) ? Tag : "?"));
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK msc-link target=%a taken=1 status=%r\n",
+          (Tag != NULL) ? Tag : "?", Status));
 
   /*
    * Pump the handler first and test for cancel second, which is the order the
@@ -307,11 +325,8 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
     } else if (EFI_ERROR (Status)) {
       Errors++;
       Consecutive++;
-      if (!HandlerErrorLogged) {
-        DEBUG ((EFI_D_ERROR,
-                "SFB: MARK msc-handler target=%a status=%r\n",
-                (Tag != NULL) ? Tag : "?", Status));
-        HandlerErrorLogged = TRUE;
+      if (FirstHandlerError == EFI_SUCCESS) {
+        FirstHandlerError = Status;
       }
       if (Consecutive >= SFB_MSC_MAX_CONSECUTIVE_ERRORS) {
         break;
@@ -326,8 +341,8 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
     }
   }
 
-  Msd->StopDevice (Msd);
-  Msd->AssignBlkIoHandle (Msd, NULL, 0);
+  StopStatus = Msd->StopDevice (Msd);
+  ReleaseStatus = Msd->AssignBlkIoHandle (Msd, NULL, 0);
 
   /*
    * Drain on the way out as well as on the way in. Volume Down itself is
@@ -341,16 +356,13 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    */
   SfbMassStorageDrainKeys ();
 
-  /* Poll counts make a starved loop visible in the log: a session that lasted
-   * seconds but polled only a few hundred times is not servicing the link. */
-  DEBUG ((EFI_D_ERROR,
-          "SFB: MARK msc-poll target=%a polls=%u notready=%u errors=%u\n",
-          (Tag != NULL) ? Tag : "?", Polls, NotReady, Errors));
-  DEBUG ((EFI_D_ERROR,
-          "SFB: MARK msc-run target=%a status=%r reason=%a\n",
-          (Tag != NULL) ? Tag : "?", Status,
-          Cancelled ? "cancelled" : "handler-error"));
-  return Cancelled ? EFI_ABORTED : EFI_SUCCESS;
+  Status = Cancelled ? EFI_ABORTED : EFI_SUCCESS;
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK msc-session target=%a status=%r stop=%r "
+          "lun-release=%r polls=%u notready=%u errors=%u handler=%r\n",
+          (Tag != NULL) ? Tag : "?", Status, StopStatus, ReleaseStatus,
+          Polls, NotReady, Errors, FirstHandlerError));
+  return Status;
 }
 
 STATIC
@@ -553,5 +565,15 @@ SfbExportPartitionByName (IN CONST CHAR16 *Target)
 
   /* The partition is resolved inside the export, after it has released host
    * mode; looking it up here would hand over a handle that release frees. */
+  /*
+   * Flush before the machine is handed to the export. An export takes the USB
+   * link for as long as the host browses, and if it hangs or the export path
+   * faults, this is the last point the session's marks reach logfs. Placed at
+   * the shared entry point so the menu and the fastboot oem command both get
+   * it, and placed after the target check so a refused export does not write a
+   * file for nothing.
+   */
+  (VOID)SfbLogFlush ("pre-export");
+
   return SfbMassStorageExportDisk (Target, Tag);
 }

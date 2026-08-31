@@ -72,6 +72,11 @@
 	LinuxLoader.c
 	SuperFbMenu.h
 	SuperFbGptName.h
+	SuperFbLog.h
+	SuperFbLog.c
+	SuperFbLogRing.c
+	SuperFbLogFlush.c
+	SuperFbLogSlot.c
 	SuperFbConfig.h
 	SuperFbConfig.c
 	SuperFbFat.c
@@ -152,6 +157,7 @@
 	gEfiFileSystemInfoGuid
 	gEfiPartitionTypeGuid
 	gEfiEventVirtualAddressChangeGuid
+	gEfiEventExitBootServicesGuid
 	gEfiEmmcRpmbPartitionGuid
 	gEfiEmmcGppPartition1Guid
 	gEfiEmmcUserPartitionGuid
@@ -207,6 +213,7 @@
 	gEfiMemCardInfoProtocolGuid
 	gEfiPrint2ProtocolGuid
 	gEfiPartitionRecordGuid
+	gEfiRscHandlerProtocolGuid
 	gEfiResetReasonProtocolGuid
 	gQcomRngProtocolGuid
 	# Patched around unsigned image launches so the boot menu can run unsigned

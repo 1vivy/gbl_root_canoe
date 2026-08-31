@@ -298,26 +298,29 @@ SfbMoveCursor (IN OUT UINTN *Cursor, IN UINTN Count, IN SFB_KEY Key)
   }
 }
 
-
 /*
- * Print a boot-progress stage to the console, then dwell.
+ * Record a boot-progress stage.
  *
- * The platform only flushes its log when boot continues into an OS stage, so
- * a fault before the menu takes every DEBUG mark with it. These land on the
- * display instead, and the first screen the menu draws clears them - so they
- * cost nothing on a boot that works and name the last stage reached on one
- * that does not.
+ * This used to draw the stage on the display and then dwell 120 ms, because
+ * the platform flushes its own log only when a boot continues into an OS
+ * stage: a fault before the menu took every mark with it, so the screen was
+ * the only place a mark could survive, and without the dwell a fault
+ * microseconds later left the previous screen intact and the mark invisible.
  *
- * The dwell is load-bearing, not politeness. Without it a fault microseconds
- * after the Print can leave the previous screen contents intact and the mark
- * invisible, which is exactly the "no change on screen, then dies" symptom
- * that made a crash unlocalisable.
+ * The capture in SuperFbLog.c removed the reason for both. Marks now land in a
+ * ring the BDS owns and are flushed to a file before anything that might not
+ * return, so they survive a boot that dies at the menu or in fastboot, and the
+ * seven stages no longer cost 120 ms each on every boot that works.
+ *
+ * Note that Print output is not lost either way: the platform's ConOut also
+ * reaches its serial ring, so the rendered screen - menu rows, cursor and all
+ * - shows up in a flushed log beside these marks. That is a bonus for reading
+ * a failed boot, not a reason to draw progress twice.
  */
 VOID
 SfbBootMark (IN CONST CHAR16 *Stage)
 {
-  Print (L"[%s]\r\n", Stage);
-  gBS->Stall (120 * 1000);
+  DEBUG ((EFI_D_INFO, "SFB: MARK stage=%s\n", Stage));
 }
 
 /* Report a failure and hold the screen until the user acknowledges it. */

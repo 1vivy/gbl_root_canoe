@@ -9,6 +9,7 @@
  */
 
 #include "SuperFbMenu.h"
+#include "SuperFbLog.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -1817,6 +1818,16 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
           "effective-mode=%u kind=%u path='%s'\n",
           (UINT32)Managed, (UINT32)SessionMode, (UINT32)EffectiveMode,
           (UINT32)Entry->Kind, Entry->Path));
+
+  /*
+   * Every launch reaches this one function - a menu row, the menu countdown
+   * expiring, a silent-mode default and the first-run screen all arrive here -
+   * so the log is written here rather than at any of those call sites. A child
+   * that reaches an OS never returns and one that hangs takes the session with
+   * it, and the flush placed before the mark above would have omitted it, so it
+   * goes after: the file names the row that was about to be launched.
+   */
+  (VOID)SfbLogFlush ("pre-launch");
 
   SfbPreloadDrivers (Entry->Volume, Entry->Path);
 

@@ -1,0 +1,50 @@
+#/** @file
+#  LogTools UEFI application - read-only platform UART-ring probes and a
+#  single logfs report writer.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = LogTools
+  FILE_GUID                      = 6B4E9F20-7D13-4A8C-B562-0E31F7D9A408
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = LogToolsEntry
+
+[Sources]
+  LogTools.c
+  LogTools.h
+  LogMemory.c
+  LogHob.c
+  LogFat.c
+  LogWrite.c
+  LogInfo.c
+  LogRing.c
+  LogDump.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+
+[LibraryClasses]
+  AndroidToolsUi
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+
+[Guids]
+  gEfiHobListGuid
+
+[Protocols]
+  gEfiPartitionInfoProtocolGuid
+  gEfiPartitionRecordGuid
+  gEfiSimpleFileSystemProtocolGuid

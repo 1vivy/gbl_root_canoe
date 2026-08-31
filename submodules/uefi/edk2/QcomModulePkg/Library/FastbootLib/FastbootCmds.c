@@ -99,6 +99,9 @@ found at
 #include "../../Application/LinuxLoader/SuperFbMenu.h"
 /* CmdOem already depends on SuperFb; this slot lookup adds no new layering. */
 #include "../../Application/LinuxLoader/SuperFbSlots.h"
+/* Same reasoning for the log: CmdOem's log-flush subcommand is an application
+   concern, and FastbootLib is linked into the application it is extending. */
+#include "../../Application/LinuxLoader/SuperFbLog.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -2347,6 +2350,24 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
 
   if (Arg == NULL) {
     FastbootFail ("unknown oem command");
+    return;
+  }
+
+  /*
+   * oem log-flush: persist the session so far into the next rotation slot on
+   * logfs. Entering fastboot already flushed once ("pre-fastboot"), so this
+   * is for what happened since - oem command outcomes, exports, anything a
+   * failed action logged. Unlike mass-storage this answers before acting:
+   * the log is still in RAM until the flush runs, and a silent failure would
+   * send the host hunting for a file that was never written.
+   */
+  if (AsciiStrCmp (Arg, "log-flush") == 0) {
+    Status = SfbLogFlush ("oem-log");
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("log flush failed");
+    } else {
+      FastbootOkay ("");
+    }
     return;
   }
 
