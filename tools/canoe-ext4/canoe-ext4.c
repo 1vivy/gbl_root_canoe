@@ -444,10 +444,57 @@ static void recover_journal(const char *path, bool force) {
         fprintf(stderr, "journal_replay=performed\n");
 }
 #else
-static void recover_journal(const char *path, bool force) {
-    (void)path;
-    if (force)
-        fail(EXIT_UNSUPPORTED, "journal recovery is unavailable in this Windows build");
+/*
+ * e2fsck is not available in the Windows toolkit.  e2fsprogs nevertheless
+ * ships the same jbd2 replay implementation used by e2fsck/debugfs; the
+ * Windows build links those objects and uses this entry point directly.
+ */
+extern errcode_t ext2fs_run_ext3_journal(ext2_filsys *fs);
+
+static void recover_journal(const char *path, bool force, bool dirty) {
+    if (!force)
+        return;
+
+    ext2_filsys recovery_fs = NULL;
+    errcode_t rc = ext2fs_open(path, EXT2_FLAG_64BITS | EXT2_FLAG_RW, 0, 0,
+                               default_io_manager, &recovery_fs);
+    if (rc != 0)
+        fail_rc(EXIT_IO, "recovery-open", rc);
+    bool journal_was_pending =
+        ext2fs_has_feature_journal_needs_recovery(recovery_fs->super);
+
+    rc = ext2fs_run_ext3_journal(&recovery_fs);
+    if (rc != 0) {
+        if (recovery_fs != NULL)
+            (void)ext2fs_close2(recovery_fs, 0);
+        fail_rc(EXIT_IO, "journal-recovery", rc);
+    }
+    /*
+     * ext2fs_run_ext3_journal deliberately leaves the EXT2_VALID_FS bit
+     * unset: e2fsck normally decides that after its consistency checks.
+     * Replay itself is the only recovery operation available here, so only
+     * a successful pending-journal replay may close that dirty-state gate.
+     */
+    if (dirty && journal_was_pending &&
+        (recovery_fs->super->s_state & EXT2_ERROR_FS) == 0) {
+        ext2fs_mark_valid(recovery_fs);
+        recovery_fs->super->s_state |= EXT2_VALID_FS;
+        ext2fs_mark_super_dirty(recovery_fs);
+        rc = ext2fs_flush(recovery_fs);
+        if (rc != 0) {
+            (void)ext2fs_close2(recovery_fs, 0);
+            fail_rc(EXIT_IO, "recovery-flush", rc);
+        }
+    }
+    if (recovery_fs != NULL) {
+        rc = ext2fs_close2(recovery_fs, 0);
+        recovery_fs = NULL;
+        if (rc != 0)
+            fail_rc(EXIT_IO, "recovery-close", rc);
+    }
+    fprintf(stderr, "journal_recovery=completed\n");
+    if (journal_was_pending)
+        fprintf(stderr, "journal_replay=performed\n");
 }
 #endif
 
@@ -457,10 +504,16 @@ static void open_filesystem(bool writable, bool recover) {
     check_supported(&raw_super);
     if (writable && (raw_super.s_feature_ro_compat & EXT4_FEATURE_RO_COMPAT_READONLY) != 0)
         fail(EXIT_UNSUPPORTED, "filesystem is marked read-only by its feature flags");
-    if (writable && is_dirty(&raw_super) && !recover)
+    bool dirty = is_dirty(&raw_super);
+    if (writable && dirty && !recover)
         fail(EXIT_DIRTY, "filesystem is dirty; retry with --recover");
+#ifndef _WIN32
     if (writable)
-        recover_journal(source_name, recover || is_dirty(&raw_super));
+        recover_journal(source_name, recover || dirty);
+#else
+    if (writable)
+        recover_journal(source_name, recover || dirty, dirty);
+#endif
 
     int flags = EXT2_FLAG_64BITS | (writable ? EXT2_FLAG_RW : 0);
     errcode_t rc = ext2fs_open(source_name, flags, 0, 0, default_io_manager, &fs);
@@ -475,6 +528,7 @@ static void open_filesystem(bool writable, bool recover) {
     if (writable && is_dirty(&after_recovery))
         fail(EXIT_DIRTY, "journal recovery did not leave a clean filesystem");
 }
+
 
 static int finish_success(void) {
     errcode_t rc;
