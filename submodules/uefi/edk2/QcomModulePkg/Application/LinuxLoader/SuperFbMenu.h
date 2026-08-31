@@ -178,13 +178,13 @@ typedef struct {
 typedef struct {
   SFB_BOOT_ENTRY  Entry[SFB_MAX_ENTRIES];
   UINTN           Count;
-  /* Entry the menu highlights first, or SFB_NO_INDEX. This may be the
-   * configured default or, absent one, the first on-device entry used as a
-   * starting point for the cursor and the "*" marker. */
+  /* Entry the menu highlights first, or SFB_NO_INDEX. This is the configured
+   * default when it resolves, or the first on-device EFI row when no persisted
+   * default was supplied. An unresolved persisted target leaves this unset. */
   UINTN           DefaultIndex;
-  /* TRUE only when DefaultIndex came from canoe.cfg's `default`, not from the
-   * first-entry fallback. A power-on with no key pressed boots the default
-   * straight away only when this is TRUE; otherwise the menu is shown. */
+  /* TRUE only when DefaultIndex came from canoe.cfg's `default` and resolved to
+   * an eligible row. A power-on with no key pressed boots it only in silent
+   * policy; unresolved/USB targets never become unattended defaults. */
   BOOLEAN         DefaultFromConfig;
   /* Session mode: the fallback for entries that carry no configured policy,
    * and what a menu override changes. */
@@ -200,7 +200,9 @@ typedef struct {
    */
   BOOLEAN                ConfigValid;
   UINT32                 ConfigGeneration;
-  UINT32                 TimeoutSeconds;
+  SFB_CONFIG_MENU_MODE   MenuMode;
+  UINT32                 KeyWindowMs;
+  UINT32                 MenuTimeoutSeconds;
   SFB_CONFIG_LOCK_POLICY LockPolicy;
   /* Non-zero means canoe.cfg was partly refused. Surfaced in the menu: a
    * half-applied config must be visible, never silent. */
@@ -221,9 +223,36 @@ typedef enum {
   SfbKeySelect
 } SFB_KEY;
 
-/* First-run's only opt-in is Volume Up; timeout, Volume Down, and Power keep
- * the historical fastboot default. Kept pure so the host contract can test the
- * decision without constructing UEFI console protocols. */
+typedef enum {
+  SfbBootDecisionDefault = 0,
+  SfbBootDecisionMenu,
+  SfbBootDecisionFastboot
+} SFB_BOOT_DECISION;
+
+/*
+ * Decide what the power-on key window does after first-run handling. An
+ * explicit default is required for silent expiry; a menu-mode expiry always
+ * enters the menu so its shared scaffold can run the countdown.
+ */
+static inline SFB_BOOT_DECISION
+SfbDecidePowerOn (
+  IN SFB_CONFIG_MENU_MODE MenuMode,
+  IN SFB_KEY              Key,
+  IN BOOLEAN              HasDefault
+  )
+{
+  if (Key == SfbKeyDown) {
+    return SfbBootDecisionFastboot;
+  }
+  if (MenuMode == SfbConfigMenuSilent &&
+      Key == SfbKeyTimeout && HasDefault) {
+    return SfbBootDecisionDefault;
+  }
+  return SfbBootDecisionMenu;
+}
+
+/* First-run's only opt-in is Volume Up. It is intentionally independent of the
+ * persisted silent/menu policy and keeps the historical fastboot default. */
 static inline BOOLEAN
 SfbFirstRunEntersMenu (IN SFB_KEY Key)
 {
@@ -236,7 +265,8 @@ SfbFirstRunEntersMenu (IN SFB_KEY Key)
  */
 typedef enum {
   SfbKeyPolicyConfirm = 0,
-  SfbKeyPolicyUpOnly
+  SfbKeyPolicyUpOnly,
+  SfbKeyPolicyVolume
 } SFB_KEY_POLICY;
 
 /*
@@ -547,7 +577,8 @@ SfbFreeEntry (IN OUT SFB_BOOT_ENTRY *Entry);
  * the caller is expected to honour; FALSE means the menu has nothing left to do.
  */
 BOOLEAN
-SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode);
+SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
+                IN BOOLEAN       AllowCountdown);
 
 /* File browser: pick a volume, walk directories, act on a .efi. */
 VOID
@@ -629,11 +660,10 @@ SfbShowActionScreen (IN CONST CHAR16 *Text);
 /*
  * Wait for a key. TimeoutMs of 0 waits indefinitely.
  *
- * FlushFirst drains the input buffer before waiting, which a power-on scan
- * needs and an interactive menu must not do. Policy decides what a key that is
- * neither volume key means. This is the single implementation; the power-on
- * volume-up scan in LinuxLoader.c used to carry its own copy of the same
- * timer-event loop.
+ * FlushFirst drains the input buffer before waiting, which a power-on volume
+ * scan needs and an interactive menu must not do. Policy decides what a key that
+ * is neither volume key means. This is the single implementation; the power-on
+ * volume scan in LinuxLoader.c uses the same timer-event loop.
  */
 SFB_KEY
 SfbWaitForKeyEx (IN UINT32          TimeoutMs,

@@ -29,6 +29,8 @@
 #define SFB_BLS_TITLE_CHARS   48u
 #define SFB_BLS_PATH_CHARS    200u
 #define SFB_BLS_CMDLINE_CHARS 512u
+/* A defaultable stem is at most 63 ASCII characters plus its terminator. */
+#define SFB_BLS_STEM_CHARS    64u
 
 typedef enum {
   SfbBlsKindNone = 0,
@@ -45,6 +47,8 @@ typedef struct {
   /* Empty when the file declared no `title`; the caller substitutes the file
    * stem so a row always has a label. */
   char         Title[SFB_BLS_TITLE_CHARS];
+  /* The lower-cased basename of the .conf file, without its extension. */
+  char         Stem[SFB_BLS_STEM_CHARS];
   /* The `linux` or `efi` value, normalised to backslash separators. */
   char         Image[SFB_BLS_PATH_CHARS];
   char         Initrd[SFB_BLS_PATH_CHARS];

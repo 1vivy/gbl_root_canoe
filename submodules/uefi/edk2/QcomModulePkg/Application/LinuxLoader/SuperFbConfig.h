@@ -32,8 +32,11 @@
  * LoadOptions. Sized generously because the launched image owns its own
  * argument grammar and may need several paths plus a kernel command line. */
 #define SFB_CONFIG_OPTIONS_CHARS   384u
-#define SFB_CONFIG_TIMEOUT_MAX     60u
-#define SFB_CONFIG_DEFAULT_TIMEOUT 5u
+#define SFB_CONFIG_KEY_WINDOW_DEFAULT    1200u
+#define SFB_CONFIG_KEY_WINDOW_MAX        10000u
+#define SFB_CONFIG_MENU_TIMEOUT_DEFAULT  5u
+#define SFB_CONFIG_MENU_TIMEOUT_MAX      300u
+#define SFB_CONFIG_BLS_STEM_CHARS        64u
 
 /* Mirrors SFB_BOOT_MODE without pulling in the UEFI menu header, so the parser
  * stays buildable on the host. The values are the same three the mode records
@@ -49,6 +52,11 @@ typedef enum {
   SfbConfigRoleInactive,
   SfbConfigRoleBackup
 } SFB_CONFIG_ROLE;
+
+typedef enum {
+  SfbConfigMenuSilent = 0,
+  SfbConfigMenuMenu
+} SFB_CONFIG_MENU_MODE;
 
 typedef enum {
   /* Repair the backing DeviceInfo only when the requested mode needs it. */
@@ -84,11 +92,19 @@ typedef struct {
 typedef struct {
   SFB_BOOLEAN            Valid;
   SFB_UINT32             Generation;
-  SFB_UINT32             TimeoutSeconds;
+  SFB_CONFIG_MENU_MODE   MenuMode;
+  SFB_UINT32             KeyWindowMs;
+  SFB_UINT32             MenuTimeoutSeconds;
   SFB_UINT8              Mode;
   SFB_CONFIG_LOCK_POLICY LockPolicy;
-  /* Index into Entry[] of the `default` id, or SFB_CONFIG_NO_DEFAULT. Resolved
-   * by the parser so callers never re-scan for it. */
+  /*
+   * `default` is either an accepted entry id (bound to DefaultIndex after
+   * compaction) or a BLS stem. DefaultSpecified remains true when the target
+   * cannot be resolved, so callers never fall back to another row.
+   */
+  SFB_BOOLEAN            DefaultSpecified;
+  SFB_BOOLEAN            DefaultIsBls;
+  char                   DefaultBlsStem[SFB_CONFIG_BLS_STEM_CHARS];
   SFB_UINTN              DefaultIndex;
   SFB_UINTN              Count;
   /* Lines the parser refused. A non-zero count is surfaced in the menu: a

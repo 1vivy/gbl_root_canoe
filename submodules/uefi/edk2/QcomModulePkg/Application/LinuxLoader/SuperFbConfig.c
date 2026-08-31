@@ -102,10 +102,13 @@ SfbCfgParseU32 (const char *Text,
     if (Digit < '0' || Digit > '9') {
       return FALSE;
     }
-    Accumulated = (Accumulated * 10u) + (SFB_UINT32)(Digit - '0');
-    if (Accumulated > Limit) {
+    Digit = (char)(Digit - '0');
+    if (Accumulated > Limit / 10u ||
+        (Accumulated == Limit / 10u &&
+         (SFB_UINT32)Digit > Limit % 10u)) {
       return FALSE;
     }
+    Accumulated = (Accumulated * 10u) + (SFB_UINT32)Digit;
   }
   *Value = Accumulated;
   return TRUE;
@@ -134,6 +137,78 @@ SfbCfgValidId (const char *Text, SFB_UINTN Length)
     return FALSE;
   }
   return TRUE;
+}
+
+static SFB_BOOLEAN
+SfbCfgKeyIs (const char *Begin, const char *End, const char *Want);
+
+static SFB_BOOLEAN
+SfbCfgParseMenuMode (const char          *Begin,
+                     const char          *End,
+                     SFB_CONFIG_MENU_MODE *Mode)
+{
+  if (SfbCfgKeyIs (Begin, End, "silent")) {
+    *Mode = SfbConfigMenuSilent;
+    return TRUE;
+  }
+  if (SfbCfgKeyIs (Begin, End, "menu")) {
+    *Mode = SfbConfigMenuMenu;
+    return TRUE;
+  }
+  return FALSE;
+}
+
+static SFB_BOOLEAN
+SfbCfgValidBlsStem (const char *Text, SFB_UINTN Length)
+{
+  SFB_UINTN Index;
+
+  if (Length == 0 || Length >= SFB_CONFIG_BLS_STEM_CHARS) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Length; Index++) {
+    char Character = Text[Index];
+
+    if ((Character >= 'A' && Character <= 'Z') ||
+        (Character >= 'a' && Character <= 'z') ||
+        (Character >= '0' && Character <= '9') ||
+        Character == '.' || Character == '_' || Character == '-') {
+      continue;
+    }
+    return FALSE;
+  }
+  return TRUE;
+}
+
+static SFB_BOOLEAN
+SfbCfgParseDefault (const char *Text,
+                    SFB_UINTN   Length,
+                    char       *EntryId,
+                    char       *BlsStem,
+                    SFB_BOOLEAN *IsBls)
+{
+  static const char Prefix[] = "bls:";
+  SFB_UINTN PrefixLength = sizeof (Prefix) - 1;
+  SFB_UINTN Index;
+
+  *IsBls = FALSE;
+  if (Length > PrefixLength &&
+      SfbCfgKeyIs (Text, Text + PrefixLength, Prefix) &&
+      SfbCfgValidBlsStem (Text + PrefixLength, Length - PrefixLength)) {
+    for (Index = 0; Index < Length - PrefixLength; Index++) {
+      char Character = Text[PrefixLength + Index];
+
+      if (Character >= 'A' && Character <= 'Z') {
+        Character = (char)(Character + ('a' - 'A'));
+      }
+      BlsStem[Index] = Character;
+    }
+    BlsStem[Index] = '\0';
+    *IsBls = TRUE;
+    return TRUE;
+  }
+  return SfbCfgValidId (Text, Length) &&
+         SfbCfgCopy (EntryId, SFB_CONFIG_ID_CHARS, Text, Length);
 }
 
 /*
@@ -407,7 +482,9 @@ SfbConfigParse (
   const char       *End;
   SFB_BOOLEAN       SawVersion = FALSE;
   SFB_CONFIG_ENTRY *Current = NULL;
-  char              Default[SFB_CONFIG_ID_CHARS];
+  char              DefaultId[SFB_CONFIG_ID_CHARS];
+  char              DefaultBlsStem[SFB_CONFIG_BLS_STEM_CHARS];
+  SFB_BOOLEAN       DefaultIsBls = FALSE;
   SFB_UINTN         Index;
 
   if (Config == NULL) {
@@ -415,10 +492,13 @@ SfbConfigParse (
   }
   SfbCfgZero (Config, sizeof (*Config));
   Config->Mode = (SFB_UINT8)SFB_CONFIG_MODE_FAKE_LOCKED;
-  Config->TimeoutSeconds = SFB_CONFIG_DEFAULT_TIMEOUT;
+  Config->MenuMode = SfbConfigMenuSilent;
+  Config->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
+  Config->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
   Config->LockPolicy = SfbConfigLockAsNeeded;
   Config->DefaultIndex = SFB_CONFIG_NO_DEFAULT;
-  Default[0] = '\0';
+  DefaultId[0] = '\0';
+  DefaultBlsStem[0] = '\0';
 
   if (Bytes == NULL || Size == 0) {
     return FALSE;
@@ -538,18 +618,55 @@ SfbConfigParse (
       }
       continue;
     }
-    if (SfbCfgKeyIs (Begin, KeyEnd, "timeout")) {
-      if (!SfbCfgParseU32 (Value, ValueLength, SFB_CONFIG_TIMEOUT_MAX,
-                           &Config->TimeoutSeconds)) {
-        Config->TimeoutSeconds = SFB_CONFIG_DEFAULT_TIMEOUT;
+    /*
+     * The legacy `timeout` spelling remains a compatibility key while
+     * pre-b2 host/device writers still emit it; new transactions use the
+     * independent menu policy keys. The core cutover retires the compatibility
+     * name once those writers no longer produce it.
+     */
+    if (SfbCfgKeyIs (Begin, KeyEnd, "menu-mode")) {
+      if (!SfbCfgParseMenuMode (Value, End, &Config->MenuMode)) {
         Config->RejectedLines++;
       }
       continue;
     }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "key-window")) {
+      if (!SfbCfgParseU32 (Value, ValueLength, SFB_CONFIG_KEY_WINDOW_MAX,
+                           &Config->KeyWindowMs)) {
+        Config->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "menu-timeout")) {
+      if (!SfbCfgParseU32 (Value, ValueLength,
+                           SFB_CONFIG_MENU_TIMEOUT_MAX,
+                           &Config->MenuTimeoutSeconds)) {
+        Config->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "timeout")) {
+      SFB_UINT32 LegacyTimeout;
+
+      if (!SfbCfgParseU32 (Value, ValueLength,
+                           SFB_CONFIG_MENU_TIMEOUT_MAX, &LegacyTimeout)) {
+        Config->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
+        Config->RejectedLines++;
+      } else {
+        Config->MenuMode = SfbConfigMenuMenu;
+        Config->MenuTimeoutSeconds = LegacyTimeout;
+      }
+      continue;
+    }
     if (SfbCfgKeyIs (Begin, KeyEnd, "default")) {
-      if (!SfbCfgValidId (Value, ValueLength) ||
-          !SfbCfgCopy (Default, SFB_CONFIG_ID_CHARS, Value, ValueLength)) {
-        Default[0] = '\0';
+      Config->DefaultSpecified = TRUE;
+      DefaultId[0] = '\0';
+      DefaultBlsStem[0] = '\0';
+      if (!SfbCfgParseDefault (Value, ValueLength, DefaultId,
+                               DefaultBlsStem, &DefaultIsBls)) {
+        DefaultIsBls = FALSE;
         Config->RejectedLines++;
       }
       continue;
@@ -606,17 +723,24 @@ SfbConfigParse (
     return FALSE;
   }
 
-  if (Default[0] != '\0') {
-    for (Index = 0; Index < Config->Count; Index++) {
-      if (SfbCfgEquals (Config->Entry[Index].Id, Default)) {
-        Config->DefaultIndex = Index;
-        break;
+  if (Config->DefaultSpecified) {
+    Config->DefaultIsBls = DefaultIsBls;
+    if (DefaultIsBls) {
+      (void)SfbCfgCopy (Config->DefaultBlsStem,
+                        SFB_CONFIG_BLS_STEM_CHARS,
+                        DefaultBlsStem, SfbCfgLength (DefaultBlsStem));
+    } else if (DefaultId[0] != '\0') {
+      for (Index = 0; Index < Config->Count; Index++) {
+        if (SfbCfgEquals (Config->Entry[Index].Id, DefaultId)) {
+          Config->DefaultIndex = Index;
+          break;
+        }
       }
-    }
-    if (Config->DefaultIndex == SFB_CONFIG_NO_DEFAULT) {
-      /* A default naming an entry that is not installed is a real condition
-       * after a partial OTA, not a reason to refuse to boot. */
-      Config->RejectedLines++;
+      if (Config->DefaultIndex == SFB_CONFIG_NO_DEFAULT) {
+        /* A default naming an entry that is not installed is a real condition
+         * after a partial OTA, not a reason to refuse to boot. */
+        Config->RejectedLines++;
+      }
     }
   }
 

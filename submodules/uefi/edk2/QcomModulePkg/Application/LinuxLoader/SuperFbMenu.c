@@ -54,7 +54,7 @@ STATIC SFB_KEY mSfbPendingVolumeKey = SfbKeyTimeout;
  * The one key wait in the loader.
  *
  * There used to be two: this, and a near-identical timer-event loop in
- * LinuxLoader.c for the power-on volume-up scan. They agreed on the hard part
+ * LinuxLoader.c for the power-on volume-key scan. They agreed on the hard part
  * — create a relative timer, wait on it alongside ConIn->WaitForKey, read the
  * stroke — and differed only in two policy decisions, which are now the two
  * parameters. A key-handling bug had to be fixed twice, and the menu is the
@@ -67,9 +67,10 @@ STATIC SFB_KEY mSfbPendingVolumeKey = SfbKeyTimeout;
  *
  * Policy decides what a non-volume key means. SfbKeyPolicyConfirm treats it as
  * confirm, which is right on a three-key handset where there is nothing else
- * it can be. SfbKeyPolicyUpOnly skips it and keeps waiting, which is what the
- * power-on scan needs so that the power key used to switch the device on is
- * neither mistaken for input nor allowed to mask the volume key behind it.
+ * it can be. SfbKeyPolicyUpOnly skips every key except volume-up, while
+ * SfbKeyPolicyVolume accepts either volume key and skips power. The latter two
+ * policies keep the power key used to switch the device on from being mistaken
+ * for input or masking a volume key behind it.
  */
 SFB_KEY
 SfbWaitForKeyEx (IN UINT32          TimeoutMs,
@@ -141,7 +142,8 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
       Result = SfbKeyUp;
       break;
     }
-    if (Policy == SfbKeyPolicyUpOnly) {
+    if (Policy == SfbKeyPolicyUpOnly ||
+        (Policy == SfbKeyPolicyVolume && Key.ScanCode != SCAN_DOWN)) {
       /* Not the key being scanned for. Keep waiting rather than reporting it:
        * the timer, not this key, decides when the scan is over. */
       DEBUG ((EFI_D_INFO, "SFB: ignoring scan=0x%x char=0x%x; still scanning\n",
@@ -473,6 +475,7 @@ typedef struct {
   SFB_MENU_TEMPLATE *Template;
   SFB_MENU_STATE     Menu;
   SFB_BOOT_MODE      CurrentMode;
+  BOOLEAN            AllowCountdown;
   BOOLEAN            EnterFastboot;
 } SFB_MAIN_MENU_CONTEXT;
 
@@ -543,8 +546,11 @@ SfbRefreshMainMenu (IN VOID *Context)
                              State->Menu.DefaultIndex < State->Menu.Count)
                             ? State->Menu.DefaultIndex : 0;
   State->Template->TimeoutMs =
-    (State->Menu.DefaultFromConfig && State->Menu.TimeoutSeconds != 0)
-    ? State->Menu.TimeoutSeconds * 1000 : 0;
+    (State->AllowCountdown &&
+     State->Menu.MenuMode == SfbConfigMenuMenu &&
+     State->Menu.DefaultFromConfig &&
+     State->Menu.MenuTimeoutSeconds != 0)
+    ? State->Menu.MenuTimeoutSeconds * 1000 : 0;
   return EFI_SUCCESS;
 }
 
@@ -572,7 +578,9 @@ SfbHandleMainMenuRow (IN VOID *Context,
   }
   Entry = &State->Menu.Entry[Row];
 
-  if (Entry->Kind == SfbEntryEfiFile) {
+  if (Entry->Kind == SfbEntryEfiFile ||
+      Entry->Kind == SfbEntryBlsLinux ||
+      Entry->Kind == SfbEntryBlsEfi) {
     if (Key == SfbKeyTimeout) {
       SfbSetLaunchLockPolicy (State->Menu.ConfigValid
                               ? State->Menu.LockPolicy
@@ -674,7 +682,8 @@ SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode)
 }
 
 BOOLEAN
-SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
+SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
+                IN BOOLEAN       AllowCountdown)
 {
   SFB_MAIN_MENU_CONTEXT State;
   SFB_MENU_TEMPLATE     Template;
@@ -687,6 +696,7 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode)
   ZeroMem (&Template, sizeof (Template));
   State.Template = &Template;
   State.CurrentMode = InitialMode;
+  State.AllowCountdown = AllowCountdown;
   State.Menu.DefaultIndex = SFB_NO_INDEX;
 
   Template.Title = L"Boot Menu";

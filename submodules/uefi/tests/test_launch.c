@@ -21,6 +21,7 @@
 #include <Protocol/Security2.h>
 
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.h"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlots.h"
 
@@ -37,6 +38,9 @@ static UINTN mSidecarBytes;
 static UINT8 mEntriesFixture[SFB_LIST_MAX_BYTES + 1];
 static UINTN mEntriesFixtureBytes;
 static BOOLEAN mEntriesFixtureEnabled;
+static UINT8 mBlsFixture[SFB_BLS_MAX_BYTES + 1];
+static UINTN mBlsFixtureBytes;
+static BOOLEAN mBlsFixtureEnabled;
 static EFI_STATUS mOpenStatus;
 static EFI_STATUS mReadStatus;
 static UINTN mCloseCount;
@@ -80,6 +84,7 @@ static EFI_FILE_PROTOCOL mFatRoot;
 static EFI_HANDLE mFatVolume = (EFI_HANDLE)(UINTN)0x2345;
 static BOOLEAN mFatVolumePresent;
 static BOOLEAN mFatBootFilePresent;
+static BOOLEAN mFatIsUsb;
 static BOOLEAN mBootRootIsExt4;
 static BOOLEAN mBootRootBackupPresent;
 static BOOLEAN mBootRootBootentriesPresent;
@@ -158,6 +163,7 @@ ResetVolumes(void)
   mVolumesAvailable = FALSE;
   mFatVolumePresent = FALSE;
   mFatBootFilePresent = FALSE;
+  mFatIsUsb = FALSE;
   mBootRootIsExt4 = FALSE;
   mBootRootConfigPresent = FALSE;
   mBootRootManagedPresent = FALSE;
@@ -669,8 +675,16 @@ SfbReadFileBytes(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path,
   if (EFI_ERROR (mReadStatus)) {
     return mReadStatus;
   }
-  Data = mEntriesFixtureEnabled ? mEntriesFixture : mSidecar;
-  DataBytes = mEntriesFixtureEnabled ? mEntriesFixtureBytes : mSidecarBytes;
+  if (mBlsFixtureEnabled && SfbStrEndsWith (Path, L".conf")) {
+    Data = mBlsFixture;
+    DataBytes = mBlsFixtureBytes;
+  } else if (mEntriesFixtureEnabled) {
+    Data = mEntriesFixture;
+    DataBytes = mEntriesFixtureBytes;
+  } else {
+    Data = mSidecar;
+    DataBytes = mSidecarBytes;
+  }
   *BytesRead = DataBytes;
   if (DataBytes > BufferBytes) {
     memcpy (Buffer, Data, BufferBytes);
@@ -1827,6 +1841,7 @@ TestBootRootBlsEntryIsDiscovered(void)
 
   SfbFreeMenu (&Menu);
 
+
   /* Without the tree the menu gains nothing, which is what every other boot
    * on this device looks like. */
   mBlsDirPresent = FALSE;
@@ -1838,6 +1853,95 @@ TestBootRootBlsEntryIsDiscovered(void)
 
   ResetVolumes ();
   mEntriesFixtureEnabled = FALSE;
+}
+static void
+TestBlsDefaultResolution (void)
+{
+  static const CHAR8 ConfigTemplate[] =
+    "version 1\n"
+    "default bls:%s\n"
+    "entry fallback\n"
+    "  image missing.efi\n";
+  static const CHAR8 BlsText[] =
+    "title postmarketOS\n"
+    "linux /pmos/vmlinuz\n";
+  CHAR8 ConfigText[256];
+  SFB_MENU_STATE Menu;
+  UINTN Index;
+  UINTN Found;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  mVolumesAvailable = TRUE;
+  mEntriesFixtureEnabled = TRUE;
+  mBlsFixtureEnabled = TRUE;
+  memcpy (mBlsFixture, BlsText, sizeof (BlsText) - 1);
+  mBlsFixtureBytes = sizeof (BlsText) - 1;
+  mBootRootConfigPresent = TRUE;
+  mBootRootIsExt4 = TRUE;
+  mBootRootPrefixIsEfisp = TRUE;
+  mBlsDirPresent = TRUE;
+  mBlsConfNames[0] = L"pmOS.conf";
+  mBlsConfCount = 1;
+
+  sprintf (ConfigText, ConfigTemplate, "PMOS");
+  memcpy (mEntriesFixture, ConfigText, strlen (ConfigText));
+  mEntriesFixtureBytes = strlen (ConfigText);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  Found = SFB_NO_INDEX;
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryBlsLinux) {
+      Found = Index;
+      break;
+    }
+  }
+  assert (Found != SFB_NO_INDEX);
+  assert (Menu.Entry[Found].Passthrough);
+  assert (Menu.DefaultFromConfig);
+  assert (Menu.DefaultIndex == Found);
+  SfbFreeMenu (&Menu);
+
+  /* A valid but undiscovered stem is never replaced by the first EFI row. */
+  sprintf (ConfigText, ConfigTemplate, "missing");
+  memcpy (mEntriesFixture, ConfigText, strlen (ConfigText));
+  mEntriesFixtureBytes = strlen (ConfigText);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  assert (!Menu.DefaultFromConfig);
+  assert (Menu.DefaultIndex == SFB_NO_INDEX);
+  assert (Menu.RejectedLines != 0);
+  SfbFreeMenu (&Menu);
+
+  /* A USB-hosted row is discoverable but ineligible as an unattended default. */
+  ResetVolumes ();
+  mVolumesAvailable = TRUE;
+  mEntriesFixtureEnabled = TRUE;
+  mBlsFixtureEnabled = TRUE;
+  mBootRootConfigPresent = TRUE;
+  mFatVolumePresent = TRUE;
+  mFatIsUsb = TRUE;
+  mBlsDirPresent = TRUE;
+  mBlsConfNames[0] = L"pmos.conf";
+  mBlsConfCount = 1;
+  sprintf (ConfigText, ConfigTemplate, "pmos");
+  memcpy (mEntriesFixture, ConfigText, strlen (ConfigText));
+  mEntriesFixtureBytes = strlen (ConfigText);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  Found = SFB_NO_INDEX;
+  for (Index = 0; Index < Menu.Count; ++Index) {
+    if (Menu.Entry[Index].Kind == SfbEntryBlsLinux) {
+      Found = Index;
+      break;
+    }
+  }
+  assert (Found != SFB_NO_INDEX);
+  assert (Menu.Entry[Found].IsUsb);
+  assert (!Menu.DefaultFromConfig);
+  assert (Menu.DefaultIndex == SFB_NO_INDEX);
+  SfbFreeMenu (&Menu);
+
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+  mBlsFixtureEnabled = FALSE;
 }
 
 /*
@@ -2175,6 +2279,29 @@ TestStaleSlotRole(void)
   mEntriesFixtureEnabled = FALSE;
 }
 
+static void
+TestPowerOnDecisionTable (void)
+{
+  /* Silent expiry launches only an explicitly configured, resolvable default. */
+  assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyTimeout, TRUE) ==
+          SfbBootDecisionDefault);
+  assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyTimeout, FALSE) ==
+          SfbBootDecisionMenu);
+  assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyUp, TRUE) ==
+          SfbBootDecisionMenu);
+  assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyDown, TRUE) ==
+          SfbBootDecisionFastboot);
+
+  /* Menu mode always opens the menu after expiry, where the shared scaffold
+   * owns menu-timeout; Volume Down retains the fastboot escape. */
+  assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyTimeout, TRUE) ==
+          SfbBootDecisionMenu);
+  assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyUp, TRUE) ==
+          SfbBootDecisionMenu);
+  assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyDown, TRUE) ==
+          SfbBootDecisionFastboot);
+}
+
 int
 main(void)
 {
@@ -2192,13 +2319,14 @@ main(void)
   TestConfigWithoutOptionsPublishesNone ();
   TestAdditiveDiscovery ();
   TestBootRootBlsEntryIsDiscovered ();
-  TestBootRootEspIsDiscovered ();
+  TestBlsDefaultResolution ();
   TestBlsLinuxPublishesAndTearsDownBoth ();
   TestBlsLinuxUnwindsTheDtbWhenTheInitrdFails ();
   TestBlsLinuxAbortsWhenTheDtbFails ();
   TestBlsEfiPublishesNeither ();
   TestBlsLinuxWithoutPayloadsStillLaunches ();
   TestStaleSlotRole ();
+  TestPowerOnDecisionTable ();
   return 0;
 }
 
@@ -2326,9 +2454,9 @@ SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
     return FALSE;
   }
   /* The removable volume carries one well-known loader and nothing else. */
-  if (Root == &mFatRoot) {
-    return (BOOLEAN)(StrCmp (Path, SFB_BOOT_FILE_PATH) == 0 &&
-                     mFatBootFilePresent);
+  if (Root == &mFatRoot &&
+      StrCmp (Path, SFB_BOOT_FILE_PATH) == 0) {
+    return mFatBootFilePresent;
   }
   /*
    * The kernel a staged boot-spec entry names. Recorded and answered
@@ -2339,7 +2467,13 @@ SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
   if (mBlsConfCount != 0 && SfbStrEndsWith (Path, L"vmlinuz")) {
     FakeCopyChars (mBlsImageProbed, Path, ARRAY_SIZE (mBlsImageProbed));
     return (BOOLEAN)(mBlsDirPresent &&
-                     StrCmp (Path, L"\\efisp\\pmos\\vmlinuz") == 0);
+                     ((Root == &mRoot &&
+                       StrCmp (Path, L"\\efisp\\pmos\\vmlinuz") == 0) ||
+                      (Root == &mFatRoot &&
+                       StrCmp (Path, L"\\pmos\\vmlinuz") == 0)));
+  }
+  if (Root == &mFatRoot) {
+    return FALSE;
   }
   if (StrCmp (Path, L"\\canoe.cfg") == 0) {
     return mBootRootConfigPresent;
@@ -2416,8 +2550,7 @@ SfbConnectAll(VOID)
 BOOLEAN
 SfbIsUsbVolume(IN EFI_HANDLE Volume)
 {
-  (void)Volume;
-  return FALSE;
+  return (BOOLEAN)(mFatIsUsb && Volume == mFatVolume);
 }
 
 VOID

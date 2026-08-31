@@ -60,10 +60,14 @@ TestDefaultsWhenOmitted (void)
   assert (Parse ("version 1\nentry solo\n  image boot.efi\n"));
   assert (gConfig.Valid);
   assert (gConfig.Count == 1);
-  assert (gConfig.TimeoutSeconds == SFB_CONFIG_DEFAULT_TIMEOUT);
+  assert (gConfig.MenuMode == SfbConfigMenuSilent);
+  assert (gConfig.KeyWindowMs == SFB_CONFIG_KEY_WINDOW_DEFAULT);
+  assert (gConfig.MenuTimeoutSeconds == SFB_CONFIG_MENU_TIMEOUT_DEFAULT);
   assert (gConfig.Mode == SFB_CONFIG_MODE_FAKE_LOCKED);
   assert (gConfig.LockPolicy == SfbConfigLockAsNeeded);
   assert (gConfig.DefaultIndex == SFB_CONFIG_NO_DEFAULT);
+  assert (!gConfig.DefaultSpecified);
+  assert (!gConfig.DefaultIsBls);
   assert (gConfig.Generation == 0);
   assert (gConfig.RejectedLines == 0);
   /* Title falls back to the id so no row can ever render blank. */
@@ -118,7 +122,8 @@ TestKeyScopingAfterTheFirstEntry (void)
   /* A key that exists only at file scope cannot be retro-applied from inside
    * an entry, so it is counted and skipped. */
   assert (Parse ("version 1\nentry a\n  image boot.efi\ntimeout 30\n"));
-  assert (gConfig.TimeoutSeconds == SFB_CONFIG_DEFAULT_TIMEOUT);
+  assert (gConfig.MenuMode == SfbConfigMenuSilent);
+  assert (gConfig.MenuTimeoutSeconds == SFB_CONFIG_MENU_TIMEOUT_DEFAULT);
   assert (gConfig.RejectedLines == 1);
   assert (Parse ("version 1\nentry a\n  image boot.efi\ndefault a\n"));
   assert (gConfig.DefaultIndex == SFB_CONFIG_NO_DEFAULT);
@@ -168,10 +173,45 @@ TestDefaultNamingAMissingEntry (void)
 {
   /* Real after a partial OTA. It is counted and the menu is shown; refusing to
    * boot would be the worse answer. */
+
   assert (Parse ("version 1\ndefault gone\nentry a\n  image boot.efi\n"));
   assert (gConfig.Valid);
   assert (gConfig.DefaultIndex == SFB_CONFIG_NO_DEFAULT);
   assert (gConfig.RejectedLines == 1);
+}
+static void
+TestBlsDefaults (void)
+{
+  assert (Parse ("version 1\ndefault bls:PMOS\n"
+                 "entry fallback\n  image boot.efi\n"));
+  assert (gConfig.Valid);
+  assert (gConfig.DefaultSpecified);
+  assert (gConfig.DefaultIsBls);
+  assert (gConfig.DefaultIndex == SFB_CONFIG_NO_DEFAULT);
+  assert (strcmp (gConfig.DefaultBlsStem, "pmos") == 0);
+  assert (gConfig.RejectedLines == 0);
+
+  /* The stem grammar is intentionally narrower than a general filename. */
+  assert (Parse ("version 1\ndefault bls:bad/stem\n"
+                 "entry fallback\n  image boot.efi\n"));
+  assert (gConfig.DefaultSpecified);
+  assert (!gConfig.DefaultIsBls);
+  assert (gConfig.DefaultIndex == SFB_CONFIG_NO_DEFAULT);
+  assert (gConfig.RejectedLines == 1);
+
+  {
+    char Long[SFB_CONFIG_BLS_STEM_CHARS + 1];
+    memset (Long, 'x', sizeof (Long) - 1);
+    Long[sizeof (Long) - 1] = '\0';
+    {
+      char Text[256];
+      sprintf (Text, "version 1\ndefault bls:%s\n"
+                     "entry fallback\n  image boot.efi\n", Long);
+      assert (Parse (Text));
+      assert (gConfig.RejectedLines == 1);
+      assert (!gConfig.DefaultIsBls);
+    }
+  }
 }
 
 static void
@@ -275,20 +315,48 @@ TestBoundsAreEnforced (void)
 static void
 TestScalarBoundsAndGarbage (void)
 {
-  assert (Parse ("version 1\ntimeout 61\nentry a\n  image boot.efi\n"));
-  assert (gConfig.TimeoutSeconds == SFB_CONFIG_DEFAULT_TIMEOUT);
-  assert (gConfig.RejectedLines == 1);
-
-  assert (Parse ("version 1\ntimeout 0\nentry a\n  image boot.efi\n"));
-  assert (gConfig.TimeoutSeconds == 0);
+  assert (Parse ("version 1\nmenu-mode menu\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuMode == SfbConfigMenuMenu);
   assert (gConfig.RejectedLines == 0);
 
+  assert (Parse ("version 1\nmenu-mode silent\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuMode == SfbConfigMenuSilent);
+  assert (gConfig.RejectedLines == 0);
+  assert (Parse ("version 1\nmenu-mode other\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuMode == SfbConfigMenuSilent);
+  assert (gConfig.RejectedLines == 1);
   assert (Parse ("version 1\nmode 3\nentry a\n  image boot.efi\n"));
   assert (gConfig.Mode == SFB_CONFIG_MODE_FAKE_LOCKED);
   assert (gConfig.RejectedLines == 1);
 
+  assert (Parse ("version 1\nkey-window 0\nentry a\n  image boot.efi\n"));
+  assert (gConfig.KeyWindowMs == 0);
+  assert (Parse ("version 1\nkey-window 10000\nentry a\n  image boot.efi\n"));
+  assert (gConfig.KeyWindowMs == 10000);
+  assert (Parse ("version 1\nkey-window 10001\nentry a\n  image boot.efi\n"));
+  assert (gConfig.KeyWindowMs == SFB_CONFIG_KEY_WINDOW_DEFAULT);
+  assert (gConfig.RejectedLines == 1);
+
+  assert (Parse ("version 1\nmenu-timeout 0\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuTimeoutSeconds == 0);
+  assert (Parse ("version 1\nmenu-timeout 300\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuTimeoutSeconds == 300);
+  assert (Parse ("version 1\nmenu-timeout 301\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuTimeoutSeconds == SFB_CONFIG_MENU_TIMEOUT_DEFAULT);
+  assert (gConfig.RejectedLines == 1);
+
+  /* `timeout` is accepted only as the pre-b2 alias, and selects menu mode. */
+  assert (Parse ("version 1\ntimeout 0\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuMode == SfbConfigMenuMenu);
+  assert (gConfig.MenuTimeoutSeconds == 0);
+  assert (gConfig.RejectedLines == 0);
+  assert (Parse ("version 1\ntimeout 301\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuMode == SfbConfigMenuSilent);
+  assert (gConfig.MenuTimeoutSeconds == SFB_CONFIG_MENU_TIMEOUT_DEFAULT);
+  assert (gConfig.RejectedLines == 1);
+
   /* No sign, no whitespace inside, no hex. */
-  assert (Parse ("version 1\ntimeout -1\nentry a\n  image boot.efi\n"));
+  assert (Parse ("version 1\nkey-window -1\nentry a\n  image boot.efi\n"));
   assert (gConfig.RejectedLines == 1);
   assert (Parse ("version 1\ngeneration 0x10\nentry a\n  image boot.efi\n"));
   assert (gConfig.RejectedLines == 1);
@@ -424,6 +492,7 @@ main (void)
   TestNoTrailingNewlineAndUnterminatedBuffer ();
   TestNullAndEmpty ();
   TestOptionsArePassedThroughVerbatim ();
+  TestBlsDefaults ();
   printf ("test_config: ok\n");
   return 0;
 }

@@ -681,6 +681,44 @@ SfbBlsIsConfName (IN CONST CHAR16 *Name)
   return TRUE;
 }
 
+/* Return a lower-cased defaultable stem for a .conf filename. */
+STATIC
+BOOLEAN
+SfbBlsStemFromName (IN CONST CHAR16 *Name,
+                    OUT CHAR8       *Stem,
+                    IN UINTN         StemChars)
+{
+  UINTN Length;
+  UINTN StemLength;
+  UINTN Index;
+
+  if (Name == NULL || Stem == NULL || StemChars == 0 ||
+      !SfbBlsIsConfName (Name)) {
+    return FALSE;
+  }
+  Length = StrLen (Name);
+  StemLength = Length - 5;
+  if (StemLength == 0 || StemLength >= StemChars) {
+    return FALSE;
+  }
+  for (Index = 0; Index < StemLength; Index++) {
+    CHAR16 Character = Name[Index];
+
+    if (Character >= L'A' && Character <= L'Z') {
+      Character = (CHAR16)(Character + (L'a' - L'A'));
+    }
+    if (!((Character >= L'a' && Character <= L'z') ||
+          (Character >= L'0' && Character <= L'9') ||
+          Character == L'.' || Character == L'_' || Character == L'-')) {
+      Stem[0] = '\0';
+      return FALSE;
+    }
+    Stem[Index] = (CHAR8)Character;
+  }
+  Stem[StemLength] = '\0';
+  return TRUE;
+}
+
 /*
  * Narrow a boot-root prefix to ASCII for the parser module.
  *
@@ -827,8 +865,14 @@ SfbScanBlsEntries (IN OUT SFB_MENU_STATE *Menu,
 
     Slot->Kind = (Parsed.Kind == SfbBlsKindLinux) ? SfbEntryBlsLinux
                                                   : SfbEntryBlsEfi;
+    /* BLS rows are always passthrough, even when their image basename happens
+     * to look like a managed ABL path on the boot root. */
+    Slot->Passthrough = TRUE;
     Slot->BlsIndex = (UINT8)Menu->Count;
     CopyMem (&mSfbBlsPayload[Menu->Count], &Parsed, sizeof (Parsed));
+    (void)SfbBlsStemFromName (List[Index].Name,
+                              mSfbBlsPayload[Menu->Count].Stem,
+                              SFB_BLS_STEM_CHARS);
 
     DEBUG ((EFI_D_INFO,
             "SFB: MARK bls-entry file='%s' kind=%u image='%s' rejected=%u\n",
@@ -1155,6 +1199,8 @@ SfbCheckConfigSlots (IN OUT SFB_MENU_STATE *Menu, IN CONST SFB_CONFIG *Config)
     if (Config->Entry[Index].Role != SfbConfigRoleActive) {
       continue;
     }
+
+
     Claimed = SfbConfigEntrySlot (Config->Entry[Index].Id,
                                   Config->Entry[Index].Image);
     if (Claimed != SfbSlotUnknown && Claimed != Active) {
@@ -1165,6 +1211,23 @@ SfbCheckConfigSlots (IN OUT SFB_MENU_STATE *Menu, IN CONST SFB_CONFIG *Config)
     }
   }
 }
+STATIC
+BOOLEAN
+SfbAsciiEqual (IN CONST CHAR8 *Left, IN CONST CHAR8 *Right)
+{
+  UINTN Index = 0;
+
+  if (Left == NULL || Right == NULL) {
+    return FALSE;
+  }
+  while (Left[Index] != '\0' && Right[Index] != '\0') {
+    if (Left[Index] != Right[Index]) {
+      return FALSE;
+    }
+    Index++;
+  }
+  return (BOOLEAN)(Left[Index] == '\0' && Right[Index] == '\0');
+}
 
 STATIC
 VOID
@@ -1172,37 +1235,70 @@ SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu,
                    IN CONST SFB_CONFIG   *Config)
 {
   UINTN Index;
+  UINTN ConfiguredIndex = Menu->DefaultIndex;
 
   Menu->DefaultFromConfig = FALSE;
-
-  if (Config != NULL && Config->Valid &&
-      Config->DefaultIndex != SFB_CONFIG_NO_DEFAULT &&
-      Config->DefaultIndex < Config->Count &&
-      Menu->DefaultIndex != SFB_NO_INDEX &&
-      Menu->DefaultIndex < Menu->Count) {
-    /*
-     * A stale `active` label must not boot unattended: the entry it points at
-     * is the one the flipped slot invalidated. The row stays highlighted so it
-     * is still one keypress away, but the user has to look first. A default
-     * carrying any other role is untouched - only `active` makes a claim about
-     * the slot.
-     */
-    Menu->DefaultFromConfig =
-      (BOOLEAN)!(Menu->SlotMismatch &&
-                 Menu->Entry[Menu->DefaultIndex].Role == SfbConfigRoleActive);
+  Menu->DefaultIndex = SFB_NO_INDEX;
+  if (Config == NULL || !Config->Valid || !Config->DefaultSpecified) {
+    /* No persisted target: retain the historical first internal EFI row as
+     * the cursor fallback, but never mark it unattended-defaultable. */
+    for (Index = 0; Index < Menu->Count; Index++) {
+      if (Menu->Entry[Index].Kind == SfbEntryEfiFile &&
+          !Menu->Entry[Index].IsUsb) {
+        Menu->DefaultIndex = Index;
+        break;
+      }
+    }
     return;
   }
 
-  Menu->DefaultIndex = SFB_NO_INDEX;
-  for (Index = 0; Index < Menu->Count; Index++) {
-    /* Removable media is never the unattended starting point: its device path
-     * does not survive a reboot, so a USB row either fails to resolve or
-     * resolves onto whatever disk happens to be plugged in next. */
-    if (Menu->Entry[Index].Kind == SfbEntryEfiFile &&
-        !Menu->Entry[Index].IsUsb) {
-      Menu->DefaultIndex = Index;
-      break;
+  if (Config->DefaultIsBls) {
+    for (Index = 0; Index < Menu->Count; Index++) {
+      CONST SFB_BLS_ENTRY *Payload;
+
+      if ((Menu->Entry[Index].Kind != SfbEntryBlsLinux &&
+           Menu->Entry[Index].Kind != SfbEntryBlsEfi) ||
+          Menu->Entry[Index].IsUsb) {
+        continue;
+      }
+      Payload = SfbBlsPayload (Menu->Entry[Index].BlsIndex);
+      if (Payload != NULL &&
+          SfbAsciiEqual (Payload->Stem, Config->DefaultBlsStem)) {
+        Menu->DefaultIndex = Index;
+        Menu->DefaultFromConfig = TRUE;
+        return;
+      }
     }
+    /* A valid BLS target that is absent (or USB-only) is a visible notice, not
+     * permission to boot another row. */
+    Menu->RejectedLines++;
+    return;
+  }
+
+  if (Config->DefaultIndex < Config->Count &&
+      Config->DefaultIndex != SFB_CONFIG_NO_DEFAULT &&
+      ConfiguredIndex != SFB_NO_INDEX &&
+      ConfiguredIndex < Menu->Count) {
+    Menu->DefaultIndex = ConfiguredIndex;
+    if (!Menu->Entry[Menu->DefaultIndex].IsUsb) {
+      /*
+       * A stale `active` label must not boot unattended: the entry it points at
+       * is the one the flipped slot invalidated. The row stays highlighted so
+       * it is still one keypress away, but the user has to look first.
+       */
+      Menu->DefaultFromConfig =
+        (BOOLEAN)!(Menu->SlotMismatch &&
+                   Menu->Entry[Menu->DefaultIndex].Role ==
+                     SfbConfigRoleActive);
+      return;
+    }
+    Menu->RejectedLines++;
+    return;
+  }
+
+  /* A named entry was parsed, but its image is no longer present. */
+  if (Config->DefaultIndex != SFB_CONFIG_NO_DEFAULT) {
+    Menu->RejectedLines++;
   }
 }
 
@@ -1221,9 +1317,12 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   UINTN Index;
 
   ZeroMem (Menu, sizeof (*Menu));
+  ZeroMem (&Config, sizeof (Config));
   Menu->Mode = Mode;
   Menu->DefaultIndex = SFB_NO_INDEX;
-  Menu->TimeoutSeconds = SFB_CONFIG_DEFAULT_TIMEOUT;
+  Menu->MenuMode = SfbConfigMenuSilent;
+  Menu->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
+  Menu->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
   Menu->LockPolicy = SfbConfigLockAsNeeded;
 
   SfbBootMark (L"menu:begin");
@@ -1236,7 +1335,9 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   if (!EFI_ERROR (Status)) {
     Menu->ConfigValid = TRUE;
     Menu->ConfigGeneration = Config.Generation;
-    Menu->TimeoutSeconds = Config.TimeoutSeconds;
+    Menu->MenuMode = Config.MenuMode;
+    Menu->KeyWindowMs = Config.KeyWindowMs;
+    Menu->MenuTimeoutSeconds = Config.MenuTimeoutSeconds;
     Menu->LockPolicy = Config.LockPolicy;
     Menu->RejectedLines = Config.RejectedLines;
     SfbAppendConfigEntries (Menu, &Config, ConfigVolume);
@@ -1271,12 +1372,21 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   }
 
   ReservedRows = MandatoryRows +
-                 ((Menu->ConfigValid && Menu->RejectedLines != 0) ? 1 : 0) +
+                 ((Menu->ConfigValid &&
+                   (Menu->RejectedLines != 0 || Config.DefaultSpecified))
+                    ? 1 : 0) +
                  (Menu->SlotMismatch ? 1 : 0);
   while (Menu->Count > SFB_MAX_ENTRIES - ReservedRows) {
     Menu->Count--;
     SfbFreeEntry (&Menu->Entry[Menu->Count]);
   }
+
+  /*
+   * Resolve only after truncation: a BLS row dropped by the entry budget must
+   * not remain an unattended target. An unresolved explicit target increments
+   * RejectedLines so the existing notice row explains why the menu was shown.
+   */
+  SfbResolveDefault (Menu, &Config);
 
   if (Menu->ConfigValid && Menu->RejectedLines != 0) {
     CHAR16 Rejected[SFB_DESC_CHARS];
@@ -1299,9 +1409,8 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power Off");
   SfbAppendBuiltIn (Menu, SfbEntryRestart, L"Restart");
 
-  SfbResolveDefault (Menu, &Config);
-}
 
+}
 
 VOID
 SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu)
