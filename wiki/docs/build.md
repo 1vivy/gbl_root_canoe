@@ -33,8 +33,8 @@ the `canoe-bds` fastboot variable.
 ## Host command surface
 
 The host toolkit ships a native `canoe` binary at the archive root (`canoe.exe`
-on Windows), alongside `canoe-gui` and `bin/canoe-bootmgr`. No Python
-installation or bundled interpreter is required.
+on Windows), alongside `bin/canoe-bootmgr`. No Python installation or bundled
+interpreter is required.
 
 ```text
 canoe
@@ -206,19 +206,7 @@ After editing UEFI sources, rebuild a target with
 `UEFI_REBUILD=1 make target_<name>`, or run `make clean` first. There is no
 separate generic build.
 
-## GUI and archive layout
-
-The Linux archive contains `bin/canoe-gui` (release build) and a root-level
-`canoe-gui` launcher. Open the root `canoe-gui` from a file manager or run it
-from any current directory; the launcher supplies the bundled boot manager path.
-The Windows archive places the no-console `canoe-gui.exe` at its root; helper
-binaries remain in `bin/`. Android and Magisk archives contain no GUI.
-
-The GUI Connect screen runs `source detect`, offers attach, Refresh, and manual
-directory/image/device selection, and remembers the last successful source in
-the platform config directory. Elevation is not needed for directory or image
-sources. Access-denied device operations show an explicit Linux `pkexec`/sudo
-retry or Windows **Restart as Administrator** action.
+## Archive layout
 
 The Windows helper supports explicit dirty-journal recovery with
 `canoe-ext4.exe --recover`; code 4 reports a dirty filesystem, and recovery is

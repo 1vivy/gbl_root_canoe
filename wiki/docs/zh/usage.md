@@ -237,12 +237,5 @@ canoe source detect --json
 ```
 
 `default set bls:<stem>` 只有在与 `bls list` 相同的发现流程找到该 BLS 行时
-才会接受。目录或镜像源不需要提权；设备访问被拒绝时，Linux 显示
-**Retry with pkexec** 及可复制的 `sudo` 命令，Windows 显示 **Restart as
-Administrator**，都不会静默提权。
-
-Linux 工具包可从任意当前目录双击根目录的 `canoe-gui` 启动器；Windows 双击
-工具包根目录的 `canoe-gui.exe`（无控制台窗口，辅助程序仍在 `bin/`）。
-Connect 界面运行 `source detect`，显示路径、身份、型号、大小、启动根目录、
-原因和提权需求，并提供一键连接、Refresh 以及手动目录/镜像/设备选择，同时
-记住平台配置目录中的上次成功源。
+才会接受。`source detect` 只读，目录或镜像源不需要提权；需要设备访问权限时会
+报告 `needs_privilege`。

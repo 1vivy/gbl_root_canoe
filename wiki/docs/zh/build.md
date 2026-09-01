@@ -31,8 +31,8 @@ CANOE_VERSION_CODE = 14
 ## 电脑端命令界面
 
 电脑端工具包在归档根目录提供原生 `canoe` 二进制（Windows 为
-`canoe.exe`），并与 `canoe-gui`、`bin/canoe-bootmgr` 并列。不再需要安装
-Python，也不再捆绑解释器。
+`canoe.exe`），并提供 `bin/canoe-bootmgr`。不再需要安装 Python，也不再
+捆绑解释器。
 
 ```text
 canoe
@@ -183,17 +183,8 @@ canoe-ext4.exe inspect \\.\PhysicalDrive<N>
 
 编辑 UEFI 源码后，请使用 `UEFI_REBUILD=1 make target_<name>` 重建目标，或先运行
 `make clean`。本项目没有单独的通用构建。
-## 图形界面与归档布局
 
-Linux 归档包含发布版 `bin/canoe-gui` 与根目录 `canoe-gui` 启动器。在文件管理器
-中打开根目录的 `canoe-gui`，或从任意当前目录运行它；启动器会设置随包的 boot
-manager 路径。Windows 归档将无控制台的 `canoe-gui.exe` 放在根目录，辅助程序
-保留在 `bin/`。Android 与 Magisk 归档不包含 GUI。
-
-GUI 的 Connect 界面运行 `source detect`，提供一键连接、Refresh 和手动目录/
-镜像/设备选择，并在平台配置目录记住上次成功源。目录与镜像不需要提权；设备
-访问被拒绝时，Linux 显示 `pkexec`/sudo 重试，Windows 显示 **Restart as
-Administrator**。
+## 归档布局
 
 Windows helper 支持显式脏日志恢复：`canoe-ext4.exe --recover`；退出码 4 表示
 文件系统脏，恢复不会隐式执行。

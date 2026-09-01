@@ -96,17 +96,6 @@ canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
 明确使用带有已知活动元数据及 `--i-know-inactive-status` 的 inactive 形式。
 未知槽位会被拒绝。
 
-双语 `canoe-gui` 是使用同一 `canoe-bootmgr` 协议的图形主机界面：
-
-```bash
-canoe-gui --source /path/to/persist.ext4
-canoe-gui --boot-root /path/to/efisp
-canoe-gui --zh --source /path/to/persist.ext4
-```
-
-其 `--source`/`--ext4-image` 与 `--boot-root` 选项互斥。它显示槽位状态、
-配置和 BLS 行，并提供安装与 OTA 后操作；GUI 不实现另一个配置写入器。
-
 ### Super Fastboot fastboot 变量
 | 变量 | 值及含义 |
 | `canoe-bds` | 项目版本。该变量存在即是设备运行 Super Fastboot 的确定信号。 |
@@ -233,7 +222,7 @@ Mode 1 会向系统投射锁定的 DeviceInfo 视图。TEE 可能拒绝为此前
 的 userdata 提供数据密钥，所以旧数据无论如何都不可读。
 `canoe.cfg` 使用 `devinfo-repair asneeded`；格式化数据才能让新状态一致。
 
-## 策略、源探测与图形界面
+## 策略与源探测
 
 策略修改通过唯一的启动根目录写入器完成：
 
@@ -248,11 +237,3 @@ canoe source detect --json
 `default set bls:<stem>` 会使用与 `bls list` 相同的发现结果，找不到目标时拒绝
 写入。`source detect` 只读且枚举时不需要提权；需要访问权限时报告
 `needs_privilege`。
-
-Linux 工具包双击根目录的 `canoe-gui` 即可启动，也可从任意当前目录运行
-`./canoe-gui`；它会找到随包提供的 `bin/canoe-gui` 与 `bin/canoe-bootmgr`。
-Windows 双击根目录的 `canoe-gui.exe`，辅助程序留在 `bin/`，且不打开控制台。
-Connect 界面显示探测结果，支持一键连接、Refresh 和手动目录/镜像/设备选择，
-并记住平台配置目录中的上次成功源。目录和镜像不需要提权；设备访问被拒绝时，
-Linux 提供 **Retry with pkexec** 和可复制的 `sudo` 命令，Windows 提供
-**Restart as Administrator**；图形界面不会静默提权。

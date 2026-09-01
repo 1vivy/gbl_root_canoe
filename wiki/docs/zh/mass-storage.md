@@ -68,9 +68,6 @@ canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
   --staged /path/to/staged --slot a --mode 1
 ```
 
-双语 `canoe-gui` 通过 `--source`/`--ext4-image` 或 `--boot-root` 提供相同
-选择；后端对比见 [`install.md`](./install.md)。
-
 测试或操作员自行管理的本地目录可以使用显式 local 后端：
 
 ```bash

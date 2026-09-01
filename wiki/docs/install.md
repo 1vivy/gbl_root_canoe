@@ -109,19 +109,6 @@ an ext4 image or block device and cannot be combined with `--boot-root`.
 uses the inactive-slot form with known active metadata and
 `--i-know-inactive-status`. An unknown slot is refused.
 
-The bilingual `canoe-gui` is the graphical host surface over the same
-`canoe-bootmgr` protocol:
-
-```bash
-canoe-gui --source /path/to/persist.ext4
-canoe-gui --boot-root /path/to/efisp
-canoe-gui --zh --source /path/to/persist.ext4
-```
-
-Its `--source`/`--ext4-image` and `--boot-root` choices are mutually exclusive.
-It exposes slot status, config and BLS rows, and the install/post-OTA actions;
-the GUI does not implement another config writer.
-
 Super Fastboot publishes these fastboot variables:
 
 | Variable | Value and meaning |
@@ -279,17 +266,3 @@ canoe source detect --json
 `default set bls:<stem>` refuses a stem that `bls list` cannot discover.
 `source detect` is read-only and privilege-free for enumeration; it reports
 `needs_privilege` when opening a source requires elevation.
-
-## Double-click GUI entry point
-
-On Linux, double-click the root-level `canoe-gui` launcher in the toolkit (or
-run `./canoe-gui` from any current directory). It resolves the bundled
-`bin/canoe-gui` and `bin/canoe-bootmgr`. On Windows, double-click the root-level
-`canoe-gui.exe`; helper binaries remain under `bin/` and no console window opens.
-
-The Connect screen displays detector candidates and provides one-click attach,
-Refresh, and manual directory/image/device selection. It remembers the last
-successful source in the platform config directory. Directory and image
-sources do not need elevation. When a device operation is denied, Linux offers
-**Retry with pkexec** and a copyable `sudo` command; Windows offers **Restart as
-Administrator**. The GUI never escalates silently.
