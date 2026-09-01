@@ -1,3 +1,4 @@
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -16,7 +17,7 @@ const VENDOR_SECURITY_PATCH_KEY: &[u8] = b"com.android.build.vendor.security_pat
 const SECURITY_PATCH_KEY: &[u8] = b"com.android.build.boot.security_patch";
 
 /// One non-vbmeta chain partition available as a graft target.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ChainPartition {
     pub rollback_index_location: u32,
     pub partition_name: String,
@@ -24,7 +25,7 @@ pub struct ChainPartition {
 }
 
 /// Build properties used to predict the Android data format.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct BuildProperties {
     pub system_os_version: Option<String>,
     pub system_security_patch: Option<String>,
@@ -33,29 +34,32 @@ pub struct BuildProperties {
 }
 
 /// Header fields used to classify a raw vbmeta blob or a footer-bearing image.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct VbmetaHeader {
     pub algorithm_type: u32,
+    pub rollback_index: u64,
     pub flags: u32,
     pub release_string: String,
 }
 
 /// Conservative graft state inferred from an AVB header.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GraftState {
     UngraftedTreeBuilt,
     SignedOrGrafted,
 }
 
 /// Strength of the signal behind a graft classification.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GraftConfidence {
     Unknown,
     High,
 }
 
 /// Classifier result. The numeric algorithm is retained as the detecting signal.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct GraftClassification {
     pub state: Option<GraftState>,
     pub confidence: GraftConfidence,
@@ -133,6 +137,7 @@ fn parse_header(header: &[u8]) -> Result<VbmetaHeader, DeriveError> {
         return Err(DeriveError::BadMagic);
     }
     let algorithm_type = be_u32(header, 28).ok_or(DeriveError::MalformedHeader)?;
+    let rollback_index = be_u64(header, 112).ok_or(DeriveError::MalformedHeader)?;
     let flags = be_u32(header, 120).ok_or(DeriveError::MalformedHeader)?;
     let release_end = RELEASE_STRING_OFFSET
         .checked_add(RELEASE_STRING_SIZE)
@@ -149,6 +154,7 @@ fn parse_header(header: &[u8]) -> Result<VbmetaHeader, DeriveError> {
         .to_owned();
     Ok(VbmetaHeader {
         algorithm_type,
+        rollback_index,
         flags,
         release_string,
     })

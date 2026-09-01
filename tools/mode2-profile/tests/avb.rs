@@ -112,6 +112,7 @@ fn recorded_real_headers_drive_graft_classifier_confidence_order() {
         stock,
         VbmetaHeader {
             algorithm_type: 2,
+            rollback_index: 0,
             flags: 0,
             release_string: "avbtool 1.3.0".to_owned(),
         }
@@ -131,6 +132,7 @@ fn recorded_real_headers_drive_graft_classifier_confidence_order() {
         custom,
         VbmetaHeader {
             algorithm_type: 0,
+            rollback_index: 0,
             flags: 0,
             release_string: "avbtool 1.3.0".to_owned(),
         }

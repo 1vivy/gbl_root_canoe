@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use mode2_profile::{DeriveError, ValidateFileError, derive_to_file, inspect_vbmeta, validate_file};
+use mode2_profile::{
+    DeriveError, GraftClassification, VbmetaHeader, ValidateFileError, classify_graft,
+    derive_to_file, inspect_vbmeta, inspect_vbmeta_header, validate_file,
+};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -33,6 +36,11 @@ enum Command {
         #[arg(long)]
         vbmeta: PathBuf,
     },
+    /// Inspect AVB header fields and graft classification as JSON.
+    InspectHeader {
+        #[arg(long)]
+        vbmeta: PathBuf,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -48,12 +56,18 @@ struct InspectEnvelope {
     ok: bool,
     inspection: InspectReceipt,
 }
-
 #[derive(Serialize)]
 struct InspectReceipt {
     rollback_index: u64,
     chain_partitions: Vec<ChainPartition>,
     build_properties: BuildProperties,
+}
+
+#[derive(Serialize)]
+struct HeaderEnvelope {
+    ok: bool,
+    header: VbmetaHeader,
+    classification: GraftClassification,
 }
 
 #[derive(Serialize)]
@@ -183,6 +197,59 @@ fn inspect(path: &Path) -> ExitCode {
     }
 }
 
+fn inspect_header(path: &Path) -> ExitCode {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let envelope = ErrorEnvelope {
+                ok: false,
+                error: ErrorBody {
+                    code: "vbmeta-read",
+                    message: format!("read vbmeta {}: {error}", path.display()),
+                },
+            };
+            return match emit_json(&envelope) {
+                Ok(()) => ExitCode::FAILURE,
+                Err(error) => {
+                    eprintln!("inspect-header output: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+    };
+    let header = match inspect_vbmeta_header(&bytes) {
+        Ok(header) => header,
+        Err(error) => {
+            let envelope = ErrorEnvelope {
+                ok: false,
+                error: ErrorBody {
+                    code: inspect_error_code(&error),
+                    message: error.to_string(),
+                },
+            };
+            return match emit_json(&envelope) {
+                Ok(()) => ExitCode::FAILURE,
+                Err(error) => {
+                    eprintln!("inspect-header output: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+    };
+    let envelope = HeaderEnvelope {
+        ok: true,
+        classification: classify_graft(&header),
+        header,
+    };
+    match emit_json(&envelope) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("inspect-header output: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run(command: Command) -> Result<(), CliError> {
     match command {
         Command::Derive { vbmeta, out } => derive_to_file(&vbmeta, &out).map_err(CliError::from),
@@ -190,13 +257,16 @@ fn run(command: Command) -> Result<(), CliError> {
             validate_file(&input)?;
             Ok(())
         }
-        Command::Inspect { .. } => unreachable!("inspect is dispatched by main"),
+        Command::Inspect { .. } | Command::InspectHeader { .. } => {
+            unreachable!("inspection commands are dispatched by main")
+        }
     }
 }
 
 fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Inspect { vbmeta } => inspect(&vbmeta),
+        Command::InspectHeader { vbmeta } => inspect_header(&vbmeta),
         command => match run(command) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
