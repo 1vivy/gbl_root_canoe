@@ -174,6 +174,15 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             "rollback_index={rollback_index} chain_partitions={}\n",
             chain_partitions.len()
         ),
+        Success::VbmetaHeader {
+            algorithm_type,
+            rollback_index,
+            flags,
+            release_string,
+            ..
+        } => format!(
+            "algorithm_type={algorithm_type} rollback_index={rollback_index} flags={flags} release_string={release_string}\n"
+        ),
         Success::VendorBootPatch { receipt, .. } => format!(
             "patched {} ({} bytes, changed={})\n",
             receipt.output, receipt.bytes, receipt.changed

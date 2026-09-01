@@ -10,7 +10,7 @@ pub use crate::cli_extra::{
     AblVerifyArgs, BlsStageArgs, BlockWriteArgs, FastbootAblCoverageArgs, FastbootCommand,
     FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
     FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
-    SlotCommand, SlotStatusArgs, VendorBootCommand, VendorBootPatchArgs,
+    SlotCommand, SlotStatusArgs, VbmetaHeaderArgs, VendorBootCommand, VendorBootPatchArgs,
 };
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
@@ -123,6 +123,9 @@ pub enum Command {
     /// Inspect AVB chain partitions and build properties.
     #[command(name = "vbmeta-inspect")]
     VbmetaInspect(VbmetaInspectArgs),
+    /// Inspect AVB header fields without walking descriptors.
+    #[command(name = "vbmeta-header")]
+    VbmetaHeader(VbmetaHeaderArgs),
     Fastboot {
         #[command(subcommand)]
         command: FastbootCommand,
@@ -418,6 +421,14 @@ pub enum Success {
         rollback_index: u64,
         chain_partitions: Vec<VbmetaChainPartition>,
         build_properties: VbmetaBuildProperties,
+    },
+    #[serde(rename = "vbmeta.header")]
+    VbmetaHeader {
+        ok: bool,
+        algorithm_type: u32,
+        rollback_index: u64,
+        flags: u32,
+        release_string: String,
     },
     #[serde(rename = "vendorboot.patch")]
     VendorBootPatch { ok: bool, receipt: PatchReceipt },

@@ -168,6 +168,12 @@ pub enum JsonRequest {
         #[serde(default)]
         tools: Option<PathBuf>,
     },
+    #[serde(rename = "vbmeta.header")]
+    VbmetaHeader {
+        vbmeta: PathBuf,
+        #[serde(default)]
+        tools: Option<PathBuf>,
+    },
     #[serde(rename = "vendorboot.patch", alias = "vendor_boot.patch")]
     VendorBootPatch { input: PathBuf, output: PathBuf },
     #[serde(rename = "fastboot.identify")]
@@ -294,6 +300,7 @@ mod tests {
             serde_json::json!({"verb":"ota-apply","staged":"a"}),
             serde_json::json!({"verb":"vbmeta.graft","vbmeta":"a","recovery":"b","output":"c"}),
             serde_json::json!({"verb":"vbmeta.inspect","vbmeta":"a"}),
+            serde_json::json!({"verb":"vbmeta.header","vbmeta":"a"}),
             serde_json::json!({"verb":"vendorboot.patch","input":"a","output":"b"}),
             serde_json::json!({"verb":"fastboot.identify"}),
             serde_json::json!({"verb":"fastboot.export"}),

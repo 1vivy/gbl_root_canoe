@@ -113,6 +113,13 @@ pub struct ModePlanArgs {
     #[arg(long)]
     pub tools: Option<PathBuf>,
 }
+#[derive(Debug, Args)]
+pub struct VbmetaHeaderArgs {
+    #[arg(long)]
+    pub vbmeta: PathBuf,
+    #[arg(long)]
+    pub tools: Option<PathBuf>,
+}
 
 #[derive(Debug, Args)]
 pub struct GraftArgs {

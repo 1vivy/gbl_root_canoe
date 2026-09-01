@@ -96,6 +96,9 @@ pub fn execute_request_cli(
     if let Command::VbmetaInspect(args) = &command {
         return vbmeta_inspect_command(args);
     }
+    if let Command::VbmetaHeader(args) = &command {
+        return vbmeta_header_command(args);
+    }
     if let Command::Fastboot { command } = &command {
         return fastboot_command(command);
     }
@@ -124,6 +127,7 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
         Command::ModePlan(args) => mode_plan_command(backend, args),
         Command::Graft(args) => extra_ops::graft_command(args),
         Command::VbmetaInspect(args) => vbmeta_inspect_command(args),
+        Command::VbmetaHeader(args) => vbmeta_header_command(args),
         Command::Fastboot { command } => fastboot_command(command),
         Command::VendorBoot { command } => extra_ops::vendorboot_command(command),
     }
@@ -198,6 +202,16 @@ fn vbmeta_inspect_command(args: &crate::cli::VbmetaInspectArgs) -> Result<Succes
         rollback_index: receipt.rollback_index,
         chain_partitions: receipt.chain_partitions,
         build_properties: receipt.build_properties,
+    })
+}
+fn vbmeta_header_command(args: &crate::cli::VbmetaHeaderArgs) -> Result<Success, AppError> {
+    let header = crate::vbmeta_inspect::inspect_header(&args.vbmeta, args.tools.as_deref())?;
+    Ok(Success::VbmetaHeader {
+        ok: true,
+        algorithm_type: header.algorithm_type,
+        rollback_index: header.rollback_index,
+        flags: header.flags,
+        release_string: header.release_string,
     })
 }
 

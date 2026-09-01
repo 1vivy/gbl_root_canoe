@@ -5,8 +5,8 @@ use crate::cli::{
     EntryIdArgs, EntryModeArgs, EntrySetArgs, FastbootAblCoverageArgs, FastbootCommand,
     FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
     FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
-    PolicyArgs, SlotCommand, SlotStatusArgs, SourceCommand, VbmetaInspectArgs, VendorBootCommand,
-    VendorBootPatchArgs,
+    PolicyArgs, SlotCommand, SlotStatusArgs, SourceCommand, VbmetaHeaderArgs, VbmetaInspectArgs,
+    VendorBootCommand, VendorBootPatchArgs,
 };
 use crate::wire::JsonRequest;
 
@@ -221,6 +221,9 @@ impl JsonRequest {
             }),
             Self::VbmetaInspect { vbmeta, tools } => {
                 Command::VbmetaInspect(VbmetaInspectArgs { vbmeta, tools })
+            }
+            Self::VbmetaHeader { vbmeta, tools } => {
+                Command::VbmetaHeader(VbmetaHeaderArgs { vbmeta, tools })
             }
             Self::VendorBootPatch { input, output } => Command::VendorBoot {
                 command: VendorBootCommand::Patch(VendorBootPatchArgs { input, output }),
