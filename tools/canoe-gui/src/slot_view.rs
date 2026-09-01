@@ -6,8 +6,7 @@
 //! override, but they are never the primary path and never a guess: an
 //! unresolved slot stays unknown.
 
-use canoe_bootmgr::fastboot::Identity;
-
+use crate::identity::Identity;
 use crate::model::ConfigEntry;
 use crate::slot_model::{Slot, SlotStatus};
 
@@ -71,7 +70,10 @@ pub(crate) fn slot_cards_for(
             slot,
             active: active == Some(slot),
             installed: status.is_some_and(|status| status.installed.contains(&slot)),
-            row: entries.iter().find(|entry| entry.id == row_id(slot)).cloned(),
+            row: entries
+                .iter()
+                .find(|entry| entry.id == row_id(slot))
+                .cloned(),
         })
         .collect()
 }
@@ -95,8 +97,7 @@ pub(crate) const fn loader_name(slot: Slot) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{SOURCE_FASTBOOT, identity_slot, slot_cards, slot_cards_for, source_label};
-    use canoe_bootmgr::fastboot::Identity;
-
+    use crate::identity::Identity;
     use crate::model::{ConfigEntry, Role};
     use crate::slot_model::{Slot, SlotStatus};
 
@@ -162,7 +163,10 @@ mod tests {
         assert_eq!(first.slot, Slot::A);
         assert!(first.active);
         assert!(first.installed);
-        assert_eq!(first.row.as_ref().map(|row| row.id.as_str()), Some("android-a"));
+        assert_eq!(
+            first.row.as_ref().map(|row| row.id.as_str()),
+            Some("android-a")
+        );
 
         let second = &cards[1];
         assert_eq!(second.slot, Slot::B);
@@ -183,7 +187,10 @@ mod tests {
         };
         let entries = vec![android_row("android-a", "boot_a.efi")];
         let cards = slot_cards_for(Some(Slot::A), Some(&blind), &entries);
-        assert!(cards[0].active, "slot A must render active from the session");
+        assert!(
+            cards[0].active,
+            "slot A must render active from the session"
+        );
         assert!(cards[0].installed);
         assert!(!cards[1].active);
     }

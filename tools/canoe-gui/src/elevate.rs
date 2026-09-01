@@ -27,22 +27,25 @@ pub fn access_denied(error: &ProtocolError) -> bool {
         | ProtocolError::Decode(_)
         | ProtocolError::ResponseTooLarge
         | ProtocolError::EmptyResponse
+        | ProtocolError::ResponseTimeout { .. }
         | ProtocolError::Exited { code: Some(126) }
         | ProtocolError::Malformed(_) => false,
         ProtocolError::Exited { code } => code == &Some(127),
     }
 }
 
-pub fn action_for(error: &ProtocolError, helper: &Path, root: &BootRoot) -> Option<ElevationAction> {
+pub fn action_for(
+    error: &ProtocolError,
+    helper: &Path,
+    root: &BootRoot,
+) -> Option<ElevationAction> {
     if !access_denied(error) {
         return None;
     }
     if cfg!(windows) {
         return Some(ElevationAction::Windows);
     }
-    let absolute_helper = helper
-        .canonicalize()
-        .unwrap_or_else(|_| helper.to_owned());
+    let absolute_helper = helper.canonicalize().unwrap_or_else(|_| helper.to_owned());
     let mut arguments = vec![absolute_helper.display().to_string(), "--json".to_owned()];
     match root {
         BootRoot::LocalDir(path) => {
@@ -101,7 +104,14 @@ mod tests {
     #[test]
     fn does_not_offer_elevation_for_other_errors() {
         let error = ProtocolError::Malformed("bad response".to_owned());
-        assert!(action_for(&error, &PathBuf::from("helper"), &BootRoot::LocalDir(PathBuf::from("."))).is_none());
+        assert!(
+            action_for(
+                &error,
+                &PathBuf::from("helper"),
+                &BootRoot::LocalDir(PathBuf::from("."))
+            )
+            .is_none()
+        );
     }
 
     #[cfg(not(windows))]
@@ -117,7 +127,12 @@ mod tests {
             &BootRoot::Ext4Source(PathBuf::from("/tmp/a b.img")),
         );
         assert!(matches!(action, Some(ElevationAction::Linux { .. })));
-        if let Some(ElevationAction::Linux { arguments, sudo_command, .. }) = action {
+        if let Some(ElevationAction::Linux {
+            arguments,
+            sudo_command,
+            ..
+        }) = action
+        {
             assert_eq!(arguments[0], "/opt/canoe-bootmgr");
             assert!(sudo_command.contains("'/tmp/a b.img'"));
         }

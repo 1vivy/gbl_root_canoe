@@ -4,30 +4,12 @@
 //! explicitly by the operator and reports what it did. None of them run as a
 //! side effect of derivation or installation.
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-use canoe_bootmgr::fastboot;
+use std::path::PathBuf;
 
 use crate::export::ExportPhase;
-use crate::export_drive::toolkit_root;
 use crate::ui::GuiApp;
 
-/// Flashing a few hundred kilobytes is fast; the bound is for a stuck link.
-const OPERATION_TIMEOUT: Duration = Duration::from_secs(60);
-
 impl GuiApp {
-    fn fastboot_binary(&mut self) -> Option<PathBuf> {
-        match fastboot::binary(toolkit_root().as_deref()) {
-            Ok(path) => Some(path),
-            Err(error) => {
-                self.status = error.to_string();
-                self.log(self.status.clone());
-                None
-            }
-        }
-    }
-
     /// Step 0: write the exploit carrier or the raw BDS image.
     pub(crate) fn provision_flash(&mut self, partition: &str, image: &str) {
         if image.is_empty() {
@@ -35,36 +17,29 @@ impl GuiApp {
             self.log(self.status.clone());
             return;
         }
-        let Some(binary) = self.fastboot_binary() else {
-            return;
-        };
-        match fastboot::flash(&binary, partition, Path::new(image), OPERATION_TIMEOUT) {
-            Ok(()) => {
+        match self.request(crate::protocol::Request::FastbootFlash {
+            partition: partition.to_owned(),
+            image: PathBuf::from(image),
+        }) {
+            Some(crate::protocol::Response::FastbootFlash) => {
                 self.status = format!("flashed {image} to {partition}");
                 self.log(self.status.clone());
             }
-            Err(error) => {
-                self.status = format!("flash {partition} failed: {error}");
-                self.log(self.status.clone());
-            }
+            _ => {}
         }
     }
 
     /// Reboot the device to a named target, or to its default.
     pub(crate) fn reboot_device(&mut self, target: Option<&str>) {
-        let Some(binary) = self.fastboot_binary() else {
-            return;
-        };
-        match fastboot::reboot(&binary, target, OPERATION_TIMEOUT) {
-            Ok(()) => {
+        match self.request(crate::protocol::Request::FastbootReboot {
+            target: target.map(str::to_owned),
+        }) {
+            Some(crate::protocol::Response::FastbootReboot) => {
                 self.status = format!("reboot {} requested", target.unwrap_or("(default)"));
                 self.log(self.status.clone());
                 self.identity.identity = None;
             }
-            Err(error) => {
-                self.status = format!("reboot failed: {error}");
-                self.log(self.status.clone());
-            }
+            _ => {}
         }
     }
 

@@ -63,7 +63,10 @@ impl GuiApp {
             self.log(self.status.clone());
             return;
         };
-        self.log(format!("installing to slot {slot} ({})", resolved.provenance.label()));
+        self.log(format!(
+            "installing to slot {slot} ({})",
+            resolved.provenance.label()
+        ));
         let request = Request::Install {
             staged: PathBuf::from(staged),
             slot: Some(slot.clone()),

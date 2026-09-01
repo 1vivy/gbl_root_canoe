@@ -140,26 +140,50 @@ mod tests {
 
     #[test]
     fn device_commands_need_a_device() {
-        assert_eq!(gate(Action::Identify, Transport::None, true), Gate::NeedsFastboot);
-        assert_eq!(gate(Action::Provision, Transport::None, true), Gate::NeedsFastboot);
+        assert_eq!(
+            gate(Action::Identify, Transport::None, true),
+            Gate::NeedsFastboot
+        );
+        assert_eq!(
+            gate(Action::Provision, Transport::None, true),
+            Gate::NeedsFastboot
+        );
     }
 
     #[test]
     fn install_requires_the_export() {
-        assert_eq!(gate(Action::Install, Transport::Fastboot, true), Gate::NeedsExport);
-        assert_eq!(gate(Action::Install, Transport::None, true), Gate::NeedsExport);
-        assert_eq!(gate(Action::Install, Transport::MassStorage, true), Gate::Allowed);
+        assert_eq!(
+            gate(Action::Install, Transport::Fastboot, true),
+            Gate::NeedsExport
+        );
+        assert_eq!(
+            gate(Action::Install, Transport::None, true),
+            Gate::NeedsExport
+        );
+        assert_eq!(
+            gate(Action::Install, Transport::MassStorage, true),
+            Gate::Allowed
+        );
     }
 
     #[test]
     fn install_refuses_an_unknown_slot_rather_than_guessing() {
-        assert_eq!(gate(Action::Install, Transport::MassStorage, false), Gate::UnknownSlot);
+        assert_eq!(
+            gate(Action::Install, Transport::MassStorage, false),
+            Gate::UnknownSlot
+        );
     }
 
     #[test]
     fn ending_the_export_needs_a_live_export() {
-        assert_eq!(gate(Action::EndExport, Transport::Fastboot, true), Gate::NeedsExport);
-        assert_eq!(gate(Action::EndExport, Transport::MassStorage, true), Gate::Allowed);
+        assert_eq!(
+            gate(Action::EndExport, Transport::Fastboot, true),
+            Gate::NeedsExport
+        );
+        assert_eq!(
+            gate(Action::EndExport, Transport::MassStorage, true),
+            Gate::Allowed
+        );
     }
 
     #[test]

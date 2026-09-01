@@ -40,9 +40,7 @@ impl GuiApp {
             Flow::FirstInstall => {
                 "The device still needs its exploit carrier and BDS before anything else works."
             }
-            Flow::Update => {
-                "A generation is already installed; provisioning is skipped."
-            }
+            Flow::Update => "A generation is already installed; provisioning is skipped.",
         });
     }
 
@@ -57,7 +55,9 @@ impl GuiApp {
                 let skipped = self.flow == Flow::Update && phase == Phase::Provision;
                 let selected = self.phase == phase;
                 let clicked = ui
-                    .add_enabled_ui(!skipped, |ui| ui.selectable_label(selected, label).clicked())
+                    .add_enabled_ui(!skipped, |ui| {
+                        ui.selectable_label(selected, label).clicked()
+                    })
                     .inner;
                 if clicked {
                     self.phase = phase;
@@ -76,7 +76,11 @@ impl GuiApp {
         path_row(ui, "vulnerable ABL image", &mut self.provision_abl_input);
         let flash_abl = self.gated_button(ui, Action::Provision, "Flash to active abl slot");
         ui.add_space(6.0);
-        path_row(ui, "BDS.efi (raw efisp image)", &mut self.provision_bds_input);
+        path_row(
+            ui,
+            "BDS.efi (raw efisp image)",
+            &mut self.provision_bds_input,
+        );
         let flash_bds = self.gated_button(ui, Action::Provision, "Flash to efisp");
         if flash_abl {
             let image = self.provision_abl_input.trim().to_owned();
@@ -156,7 +160,10 @@ impl GuiApp {
         if let Some(receipt) = self.patch_receipt.clone() {
             ui.label(format!("patched {} ({} B)", receipt.output, receipt.bytes));
             if !receipt.changed {
-                ui.colored_label(ABSENT, "blacklist was already present — image left equivalent");
+                ui.colored_label(
+                    ABSENT,
+                    "blacklist was already present — image left equivalent",
+                );
             }
             ui.small("Flashing the patched image is a separate, explicit partition write.");
         }

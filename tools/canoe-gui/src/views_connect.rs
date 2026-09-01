@@ -1,13 +1,13 @@
 use eframe::egui;
 
-use crate::connect::source_from_candidate;
-use crate::export::{EXPORT_TIMEOUT, ExportPhase, failure_text};
-use crate::detect::{SourceCandidate, SourceKind, display_size, source_kind_label};
-use crate::elevate::ElevationAction;
-use crate::text::TextKey;
-use crate::ui::GuiApp;
 #[cfg(not(windows))]
 use crate::client::BootmgrClient;
+use crate::connect::source_from_candidate;
+use crate::detect::{SourceCandidate, SourceKind, display_size, source_kind_label};
+use crate::elevate::ElevationAction;
+use crate::export::{ExportPhase, failure_text};
+use crate::text::TextKey;
+use crate::ui::GuiApp;
 #[cfg(not(windows))]
 use crate::ui::Screen;
 
@@ -146,25 +146,8 @@ impl GuiApp {
                     ui.label("starting the export over fastboot…");
                 });
             }
-            ExportPhase::Discovering { .. } => {
-                let elapsed = self.export.elapsed().map_or(0, |elapsed| elapsed.as_secs());
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new());
-                    ui.label(format!(
-                        "waiting for the export to appear… {elapsed}s / {}s",
-                        EXPORT_TIMEOUT.as_secs()
-                    ));
-                });
-            }
-            ExportPhase::Attached { node, adopted } => {
-                if adopted {
-                    ui.label(format!(
-                        "adopted the export already live at {}",
-                        node.display()
-                    ));
-                } else {
-                    ui.label(format!("export live at {}", node.display()));
-                }
+            ExportPhase::Attached { node } => {
+                ui.label(format!("export live at {}", node.display()));
                 if ui.button(self.label(TextKey::StartExport)).clicked() {
                     self.start_export();
                 }
@@ -220,10 +203,12 @@ fn render_elevation(app: &mut GuiApp, ui: &mut egui::Ui, action: ElevationAction
             ui.add(egui::TextEdit::singleline(&mut command));
         }
         ElevationAction::Windows => {
-            if ui.button(app.label(TextKey::RestartAdministrator)).clicked() {
+            if ui
+                .button(app.label(TextKey::RestartAdministrator))
+                .clicked()
+            {
                 app.retry_elevated();
             }
         }
     }
 }
-

@@ -27,8 +27,8 @@ impl GuiApp {
                 active_slot: identity.current_slot.as_deref().and_then(parse_slot),
             });
         }
-        self.session.boot_root = (!self.root_path.as_os_str().is_empty())
-            .then(|| self.root_path.display().to_string());
+        self.session.boot_root =
+            (!self.root_path.as_os_str().is_empty()).then(|| self.root_path.display().to_string());
         self.session.staged = {
             let staged = self.staged_input.trim();
             (!staged.is_empty()).then(|| staged.to_owned())
@@ -42,7 +42,12 @@ impl GuiApp {
         let version = self.session.bds_version();
         let issues = self.session.issues();
         ui.horizontal_wrapped(|ui| {
-            chip(ui, "BDS", version.value.as_deref().unwrap_or("—"), version.provenance);
+            chip(
+                ui,
+                "BDS",
+                version.value.as_deref().unwrap_or("—"),
+                version.provenance,
+            );
             ui.separator();
             match self.session.transport {
                 Transport::Fastboot => ui.colored_label(OK, "fastboot"),
@@ -113,14 +118,23 @@ const fn colour_for(issue: Issue) -> egui::Color32 {
 fn chip(ui: &mut egui::Ui, label: &str, value: &str, provenance: Provenance) {
     ui.label(label);
     ui.colored_label(
-        if provenance == Provenance::Unknown { ABSENT } else { OK },
+        if provenance == Provenance::Unknown {
+            ABSENT
+        } else {
+            OK
+        },
         value,
     );
     ui.small(provenance.label());
 }
 
 fn parse_slot(value: &str) -> Option<Slot> {
-    match value.trim().trim_start_matches('_').to_ascii_lowercase().as_str() {
+    match value
+        .trim()
+        .trim_start_matches('_')
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "a" => Some(Slot::A),
         "b" => Some(Slot::B),
         _ => None,

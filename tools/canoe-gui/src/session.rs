@@ -174,7 +174,11 @@ impl Session {
 
     /// The BDS version, from the best source that has one.
     pub(crate) fn bds_version(&self) -> Resolved<String> {
-        if let Some(version) = self.live.as_ref().and_then(|facts| facts.bds_version.clone()) {
+        if let Some(version) = self
+            .live
+            .as_ref()
+            .and_then(|facts| facts.bds_version.clone())
+        {
             return Resolved {
                 value: Some(version),
                 provenance: Provenance::Live,

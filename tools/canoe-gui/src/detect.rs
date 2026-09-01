@@ -12,6 +12,14 @@ pub enum SourceKind {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportCandidate {
+    Candidate,
+    Mounted,
+    NotCandidate,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct SourceCandidate {
     pub kind: SourceKind,
     pub path: PathBuf,
@@ -25,6 +33,8 @@ pub struct SourceCandidate {
     pub needs_privilege: bool,
     pub mounted_at: Option<PathBuf>,
     pub why: String,
+    #[serde(default)]
+    pub export_candidate: Option<ExportCandidate>,
 }
 
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -87,7 +97,7 @@ pub fn display_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{DetectError, SourceKind, display_size, parse_detect_response};
+    use super::{DetectError, ExportCandidate, SourceKind, display_size, parse_detect_response};
 
     #[test]
     fn parses_empty_detect_result() {
@@ -105,6 +115,16 @@ mod tests {
         assert_eq!(result[0].kind, SourceKind::Block);
         assert!(result[0].needs_privilege);
         assert!(result[0].boot_root_present);
+        assert_eq!(result[0].export_candidate, None);
+    }
+
+    #[test]
+    fn parses_export_candidate_state() {
+        let result = parse_detect_response(
+            br#"{"ok":true,"operation":"source.detect","sources":[{"kind":"block","path":"/dev/sdb","identity":"1209:ca0e","model":"Canoe persist","size_bytes":128,"boot_root":"/efisp","boot_root_present":true,"readable":true,"writable":true,"needs_privilege":false,"mounted_at":null,"why":"exported persist LUN","export_candidate":"candidate"}]}"#,
+        )
+        .expect("valid candidate response");
+        assert_eq!(result[0].export_candidate, Some(ExportCandidate::Candidate));
     }
 
     #[test]

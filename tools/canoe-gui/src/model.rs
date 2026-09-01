@@ -53,7 +53,6 @@ pub enum MenuMode {
     Menu,
 }
 
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum DeviceInfoRepair {
     #[serde(rename = "asneeded")]

@@ -100,15 +100,11 @@ impl GuiApp {
                     self.elevation = None;
                 }
                 Ok(_) => self.status = "source.detect returned wrong operation".to_owned(),
-                Err(error) => self.record_error_for(
-                    &error,
-                    &BootRoot::LocalDir(PathBuf::from(".")),
-                ),
+                Err(error) => {
+                    self.record_error_for(&error, &BootRoot::LocalDir(PathBuf::from(".")))
+                }
             },
-            Err(error) => self.record_error_for(
-                &error,
-                &BootRoot::LocalDir(PathBuf::from(".")),
-            ),
+            Err(error) => self.record_error_for(&error, &BootRoot::LocalDir(PathBuf::from("."))),
         }
     }
 
@@ -248,6 +244,10 @@ fn request_name(request: &Request) -> &'static str {
         Request::BlsShow { .. } => "bls.show",
         Request::SlotStatus { .. } => "slot.status",
         Request::Build { .. } => "build",
+        Request::FastbootIdentify { .. } => "fastboot.identify",
+        Request::FastbootExport { .. } => "fastboot.export",
+        Request::FastbootFlash { .. } => "fastboot.flash",
+        Request::FastbootReboot { .. } => "fastboot.reboot",
         Request::FastbootEndExport { .. } => "fastboot.end-export",
         Request::VendorBootPatch { .. } => "vendorboot.patch",
         Request::Install { .. } => "install",

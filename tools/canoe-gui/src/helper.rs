@@ -67,10 +67,7 @@ mod tests {
         fs::write(&helper, "#!/bin/sh\n").expect("write fixture");
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).expect("permissions");
         let executable = directory.path().join("canoe-gui");
-        assert_eq!(
-            resolve_from(None, None, Some(&executable)),
-            helper
-        );
+        assert_eq!(resolve_from(None, None, Some(&executable)), helper);
     }
 
     #[test]
@@ -78,7 +75,13 @@ mod tests {
         let explicit = Path::new("/tmp/explicit");
         let environment = Path::new("/tmp/environment").as_os_str();
         let executable = Path::new("/tmp/canoe-gui");
-        assert_eq!(resolve_from(Some(explicit), Some(environment), Some(executable)), explicit);
-        assert_eq!(resolve_from(None, Some(environment), Some(executable)), environment);
+        assert_eq!(
+            resolve_from(Some(explicit), Some(environment), Some(executable)),
+            explicit
+        );
+        assert_eq!(
+            resolve_from(None, Some(environment), Some(executable)),
+            environment
+        );
     }
 }

@@ -134,8 +134,6 @@ impl GuiApp {
             });
         }
     }
-
-
 }
 fn render_bls_entry(ui: &mut egui::Ui, entry: &BlsEntry, chinese: bool) {
     let label = |key| crate::text::text(key, chinese);
@@ -161,8 +159,8 @@ fn bls_target(name: &str) -> Option<String> {
     let normalized = stem.to_ascii_lowercase();
     let valid = !normalized.is_empty()
         && normalized.len() <= 63
-        && normalized
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte));
+        && normalized.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"._-".contains(&byte)
+        });
     valid.then(|| format!("bls:{normalized}"))
 }

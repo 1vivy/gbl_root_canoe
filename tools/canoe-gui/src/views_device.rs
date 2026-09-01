@@ -42,7 +42,10 @@ impl GuiApp {
     pub(crate) fn render_transport_banner(&mut self, ui: &mut egui::Ui) {
         match self.transport() {
             Transport::Fastboot => {
-                ui.colored_label(OK, "Super Fastboot is answering — device commands available");
+                ui.colored_label(
+                    OK,
+                    "Super Fastboot is answering — device commands available",
+                );
             }
             Transport::MassStorage => {
                 ui.colored_label(
@@ -63,20 +66,27 @@ impl GuiApp {
         let active = resolved_slot
             .value
             .map_or_else(|| "unknown".to_owned(), |slot| slot.label().to_owned());
-        egui::Grid::new("device-identity").num_columns(2).show(ui, |ui| {
-            ui.strong("BDS");
-            ui.label(resolved_version.value.clone().unwrap_or_else(|| "unknown".to_owned()));
-            ui.end_row();
-            ui.strong("Active slot");
-            ui.label(active);
-            ui.end_row();
-            ui.strong("Slot source");
-            ui.label(source);
-            ui.end_row();
-            ui.strong("Boot root");
-            ui.label(self.root_path.display().to_string());
-            ui.end_row();
-        });
+        egui::Grid::new("device-identity")
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.strong("BDS");
+                ui.label(
+                    resolved_version
+                        .value
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                );
+                ui.end_row();
+                ui.strong("Active slot");
+                ui.label(active);
+                ui.end_row();
+                ui.strong("Slot source");
+                ui.label(source);
+                ui.end_row();
+                ui.strong("Boot root");
+                ui.label(self.root_path.display().to_string());
+                ui.end_row();
+            });
         if self.identity.probing {
             ui.small("probing the device over fastboot…");
         }
@@ -140,7 +150,10 @@ impl GuiApp {
 
     /// Rows that are not the two managed Android slots: BLS, hand-added, backup.
     fn render_other_entries(&mut self, ui: &mut egui::Ui, cards: &[SlotCard]) {
-        let managed: Vec<&str> = cards.iter().map(|card| slot_view::row_id(card.slot)).collect();
+        let managed: Vec<&str> = cards
+            .iter()
+            .map(|card| slot_view::row_id(card.slot))
+            .collect();
         let others: Vec<_> = self
             .entries
             .iter()
@@ -163,7 +176,12 @@ impl GuiApp {
         }
         for file in self.bls_entries.clone() {
             ui.horizontal(|ui| {
-                ui.label(file.entry.title.clone().unwrap_or_else(|| file.name.clone()));
+                ui.label(
+                    file.entry
+                        .title
+                        .clone()
+                        .unwrap_or_else(|| file.name.clone()),
+                );
                 ui.small("BLS");
             });
         }
@@ -171,17 +189,20 @@ impl GuiApp {
 
     /// Which transport the device is reachable on right now.
     pub(crate) fn transport(&self) -> Transport {
-        if matches!(self.export.phase, crate::export::ExportPhase::Attached { .. }) {
+        if matches!(
+            self.export.phase,
+            crate::export::ExportPhase::Attached { .. }
+        ) {
             return Transport::MassStorage;
         }
-        let answered = self
-            .identity
-            .identity
-            .as_ref()
-            .is_some_and(|identity| {
-                identity.bds_version.is_some() || identity.current_slot.is_some()
-            });
-        if answered { Transport::Fastboot } else { Transport::None }
+        let answered = self.identity.identity.as_ref().is_some_and(|identity| {
+            identity.bds_version.is_some() || identity.current_slot.is_some()
+        });
+        if answered {
+            Transport::Fastboot
+        } else {
+            Transport::None
+        }
     }
 
     /// Whether an action may run, given transport and what we know about slots.

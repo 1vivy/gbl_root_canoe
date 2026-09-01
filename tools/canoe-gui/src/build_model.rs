@@ -1,6 +1,6 @@
 //! Receipts returned by the boot manager's derivation and image verbs.
 //!
-//! These mirror `canoe_bootmgr`'s own receipt shapes over the JSON protocol.
+//! These mirror the boot manager's receipt shapes over the JSON protocol.
 //! They are decoded, never recomputed: the GUI reports what the writer did.
 
 use serde::Deserialize;

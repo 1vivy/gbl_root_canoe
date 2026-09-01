@@ -45,12 +45,21 @@ pub enum Request {
         #[serde(skip_serializing_if = "Option::is_none")]
         efisp_tools: Option<PathBuf>,
     },
+    #[serde(rename = "fastboot.identify")]
+    FastbootIdentify { timeout_seconds: u64 },
+    #[serde(rename = "fastboot.export")]
+    FastbootExport {
+        target: String,
+        timeout_seconds: u64,
+    },
+    #[serde(rename = "fastboot.flash")]
+    FastbootFlash { partition: String, image: PathBuf },
+    #[serde(rename = "fastboot.reboot")]
+    FastbootReboot {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
     /// End a live mass-storage export from the host.
-    ///
-    /// This opens the raw block node for an SG_IO ioctl, which the GUI process
-    /// is not privileged to do. The boot manager already runs elevated for a
-    /// block source, so the eject belongs there with every other privileged
-    /// operation.
     #[serde(rename = "fastboot.end-export")]
     FastbootEndExport { node: PathBuf },
     /// Append the module blacklist to a supplied vendor_boot image.
@@ -154,9 +163,10 @@ pub enum ProtocolError {
     EmptyResponse,
     #[error("boot manager exited with status {code:?}")]
     Exited { code: Option<i32> },
+    #[error("boot manager did not respond within {seconds}s")]
+    ResponseTimeout { seconds: u64 },
     #[error("malformed boot manager response: {0}")]
     Malformed(String),
     #[error("boot manager rejected request ({code}): {message}")]
     Rejected { code: String, message: String },
 }
-
