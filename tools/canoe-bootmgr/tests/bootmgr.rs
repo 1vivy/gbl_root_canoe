@@ -274,6 +274,77 @@ fn request_json(
 }
 
 #[test]
+fn fresh_install_sets_active_row_as_default() {
+    let root = tempfile::tempdir().expect("fresh boot root");
+    assert!(
+        fs::read_dir(root.path())
+            .expect("read fresh boot root")
+            .next()
+            .is_none(),
+        "fixture must begin with no inherited boot-root state"
+    );
+    let staging = tempfile::tempdir().expect("staging root");
+    let staged = staged_root(&staging, b"fresh", 6);
+
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"slot":"b"}),
+    )
+    .expect("install into fresh boot root");
+
+    let rendered = fs::read_to_string(root.path().join("canoe.cfg")).expect("written config");
+    println!("FRESH_INSTALL_CANOE_CFG_BEGIN\n{rendered}\nFRESH_INSTALL_CANOE_CFG_END");
+    let config = ConfigDocument::parse(rendered.as_bytes()).expect("parse written config");
+    assert_eq!(config.default.as_deref(), Some("android-b"));
+}
+
+#[test]
+fn fresh_install_preserves_preexisting_non_managed_default() {
+    let root = tempfile::tempdir().expect("fresh boot root");
+    let initial_staging = tempfile::tempdir().expect("initial staging root");
+    let initial = staged_root(&initial_staging, b"initial", 6);
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":initial,"slot":"a"}),
+    )
+    .expect("initial fresh install");
+
+    let mut config =
+        ConfigDocument::parse(&fs::read(root.path().join("canoe.cfg")).expect("config"))
+            .expect("parse initial config");
+    // This assertion makes the setup itself prove the default comes from the
+    // fresh install rather than from a hand-authored fixture.
+    assert_eq!(config.default.as_deref(), Some("android-a"));
+    config
+        .upsert(request("operator-choice", "operator-choice.efi"))
+        .expect("add non-managed row");
+    config
+        .set_default("operator-choice")
+        .expect("set non-managed default");
+    let malformed_generation = String::from_utf8(config.serialize().expect("serialize config"))
+        .expect("UTF-8")
+        .replacen("generation 3", "generation malformed", 1);
+    fs::write(root.path().join("canoe.cfg"), malformed_generation)
+        .expect("write pre-existing config with malformed generation");
+
+    let update_staging = tempfile::tempdir().expect("update staging root");
+    let update = staged_root(&update_staging, b"update", 6);
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":update,"slot":"b","active_slot":"b"}),
+    )
+    .expect("install with non-managed default");
+
+    let config = ConfigDocument::parse(&fs::read(root.path().join("canoe.cfg")).expect("config"))
+        .expect("parse updated config");
+    assert_eq!(config.default.as_deref(), Some("operator-choice"));
+    assert_eq!(
+        config.generation, 1,
+        "an invalid pre-existing generation is retained as zero before this install bumps it"
+    );
+}
+
+#[test]
 fn dual_slot_install_writes_independent_rows_and_sidecars() {
     let root = tempfile::tempdir().expect("root");
     let staged = staged_root(&root, b"new", 7);

@@ -3,9 +3,12 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::Duration;
 
 use thiserror::Error;
+use wait_timeout::ChildExt;
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -17,6 +20,8 @@ pub enum ToolError {
         #[source]
         source: io::Error,
     },
+    #[error("build tool `{tool}` timed out after {timeout:?}")]
+    Timeout { tool: String, timeout: Duration },
 }
 
 #[derive(Debug, Clone)]
@@ -34,11 +39,26 @@ pub struct ToolOutput {
     pub success: bool,
 }
 
-pub fn resolve_tools(preferred: Option<&Path>) -> Result<ToolPaths, ToolError> {
+fn resolution_directories() -> (Option<PathBuf>, Option<PathBuf>) {
     let environment = env::var_os("CANOE_TOOLS_DIR").map(PathBuf::from);
     let executable_dir = env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(Path::to_path_buf));
+    (environment, executable_dir)
+}
+
+pub fn resolve_mode2_profile(preferred: Option<&Path>) -> Result<PathBuf, ToolError> {
+    let (environment, executable_dir) = resolution_directories();
+    resolve_one(
+        "mode2_profile",
+        preferred,
+        environment.as_deref(),
+        executable_dir.as_deref(),
+    )
+}
+
+pub fn resolve_tools(preferred: Option<&Path>) -> Result<ToolPaths, ToolError> {
+    let (environment, executable_dir) = resolution_directories();
     let extractfv = resolve_one(
         "extractfv",
         preferred,
@@ -127,6 +147,77 @@ pub fn run(tool: &Path, args: &[OsString]) -> Result<ToolOutput, ToolError> {
             source,
         })?;
     Ok(output_to_result(output))
+}
+
+pub fn run_with_timeout(
+    tool: &Path,
+    args: &[OsString],
+    timeout: Duration,
+) -> Result<ToolOutput, ToolError> {
+    let tool_name = tool.display().to_string();
+    let mut child = Command::new(tool)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|source| ToolError::Spawn {
+            tool: tool_name.clone(),
+            source,
+        })?;
+    let stdout = child.stdout.take().expect("piped child stdout");
+    let stderr = child.stderr.take().expect("piped child stderr");
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut reader = stdout;
+        reader.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut reader = stderr;
+        reader.read_to_end(&mut bytes).map(|_| bytes)
+    });
+
+    let status = match child.wait_timeout(timeout).map_err(|source| ToolError::Spawn {
+        tool: tool_name.clone(),
+        source,
+    })? {
+        Some(status) => status,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(ToolError::Timeout {
+                tool: tool_name,
+                timeout,
+            });
+        }
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| ToolError::Spawn {
+            tool: tool_name.clone(),
+            source: io::Error::other("stdout reader thread panicked"),
+        })?
+        .map_err(|source| ToolError::Spawn {
+            tool: tool_name.clone(),
+            source,
+        })?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| ToolError::Spawn {
+            tool: tool_name.clone(),
+            source: io::Error::other("stderr reader thread panicked"),
+        })?
+        .map_err(|source| ToolError::Spawn {
+            tool: tool_name,
+            source,
+        })?;
+    Ok(output_to_result(Output {
+        status,
+        stdout,
+        stderr,
+    }))
 }
 
 fn output_to_result(output: Output) -> ToolOutput {

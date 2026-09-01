@@ -1,0 +1,117 @@
+# canoe-bootmgr wire protocol
+
+**Protocol version: 1.** `canoe-bootmgr` is the only writer of a Canoe boot root and the only owner of boot policy and derivation. Clients send requests; they must not derive, mutate, or write boot-root state themselves.
+
+## Compatibility rule
+
+This protocol is **additive only** within a protocol version: additions may be new verbs or new **optional** request/response fields. Existing verbs, field names, requiredness, meanings, and response shapes must not change. Any other change requires a protocol-version bump. Clients must ignore response fields they do not understand, and the current server ignores unknown request fields so a newer client can safely send an optional field to an older compatible server.
+
+Use `protocol.version` before relying on a capability. `app_version` identifies the binary release; `protocol_version` identifies this contract.
+
+## Envelope, limits, and errors
+
+Every request is one UTF-8 JSON object. Its required discriminator is `verb` (a string). JSON object fields not recognized by the selected verb are ignored. A request is limited to **64 KiB (65,536 bytes)** of decoded JSON; JSONL line terminators are not part of the request object.
+
+A successful response is one UTF-8 JSON object, followed by `\n`:
+
+```json
+{"operation":"protocol.version","ok":true,"app_version":"0.1.0","protocol_version":1}
+```
+
+All successful envelopes contain `ok: true` and `operation` (the response operation name). Successful serialized responses, including their terminating newline, are limited to **1,000,000 bytes (1 MB)**. Exceeding that limit returns `response-too-large` instead of the operation response.
+
+A failed JSON response is one object, followed by `\n`:
+
+```json
+{"ok":false,"error":{"code":"request","message":"request JSON: ..."}}
+```
+
+`message` is diagnostic text, not a stable parsing surface. The current stable error codes are:
+
+| Code | Meaning |
+| --- | --- |
+| `usage` | Command-line arguments are invalid or incompatible. |
+| `request` | The request is too large, malformed JSON, or malformed base64url. |
+| `input` | The JSONL input stream could not be read (including invalid UTF-8). |
+| `operation` | The selected operation refused or failed. |
+| `vbmeta-duplicate-property` | `vbmeta.inspect` refused an image with a duplicate named build property; clients must not use a partial result. |
+| `vbmeta-worker-unavailable` | The `mode2_profile` worker could not be resolved or is not executable. |
+| `vbmeta-worker-spawn` | The `mode2_profile` worker could not be started. |
+| `vbmeta-worker-timeout` | The `mode2_profile` worker did not finish within 30 seconds. |
+| `vbmeta-worker-malformed` | The `mode2_profile` worker output was not a recognized JSON envelope. |
+| `vbmeta-read`, `vbmeta-too-small`, `vbmeta-bad-magic`, `vbmeta-bad-footer`, `vbmeta-range-invalid`, `vbmeta-release-string-invalid`, `vbmeta-unsigned`, `vbmeta-header-malformed`, `vbmeta-public-key-missing`, `vbmeta-public-key-invalid`, `vbmeta-descriptors-invalid`, `vbmeta-descriptor-malformed`, `vbmeta-property-malformed`, `vbmeta-chain-malformed`, `vbmeta-property-utf8`, `vbmeta-partition-name-utf8`, `vbmeta-duplicate-property`, `vbmeta-os-version-missing`, `vbmeta-security-patch-missing`, `vbmeta-os-version-malformed`, `vbmeta-security-patch-malformed` | `mode2_profile` rejected the image; the code identifies the specific AVB inspection failure. |
+| `response-too-large` | A successful response exceeded 1 MB. |
+| `output` | The response could not be encoded or written. |
+
+JSON success exits with status 0. JSON request, input, operation, and response failures exit 1; CLI usage failures exit 2.
+
+## Transports
+
+### JSONL session: `--json`
+
+With `--json` and no subcommand, stdin is a JSON Lines session: write one request object plus a newline, and read one response line for each non-empty input line. The session continues after a per-request error, but the process exits 1 if any line failed. A stream-read failure emits one `input` error line and ends the session.
+
+### One shot: `--request-b64 TOKEN`
+
+`--request-b64` accepts exactly one unpadded base64url (`A-Z`, `a-z`, `0-9`, `-`, `_`) token containing the UTF-8 request JSON. It emits exactly one JSON response line to stdout. The token has an implementation guard of 128 KiB before decoding; the decoded request remains subject to the 64 KiB request limit. It cannot be combined with a CLI subcommand.
+
+The Android WebUI mirror at `targets/magisk_module/module/webroot/protocol.js` uses this transport and only requires the stable `ok` boolean plus the error envelope on failure. Version 1 remains compatible with that mirror.
+
+## Boot-root addressing
+
+The request envelope never selects a filesystem root. Process-level options choose it:
+
+- `--boot-root PATH` selects a mounted Canoe persist/efisp directory; absent means the current directory.
+- `--source PATH` selects a direct ext4 image or block source.
+- `--ext4-image PATH` is an alias for `--source`.
+
+`--source` and `--ext4-image` conflict. Boot-root operations resolve this addressing once in `canoe-bootmgr`; clients never address raw boot-root files directly. `protocol.version`, `build`, and fastboot requests do not need a boot root. `source.detect` discovers candidate roots rather than reading the selected one.
+
+## Types used below
+
+`string` is a JSON string, `bool` a JSON boolean, `u8`/`u32`/`u64` non-negative JSON integers, and `path` a string serialized from a platform path. `T?` means the field is optional in a request or may be `null` in a response. `[]` means an array.
+
+Shared response records:
+
+- `raw_line`: `{key:string,value:string}`.
+- `entry`: `{id:string,title:string,image:string,options:string?,mode:u8,role:"active"|"inactive"|"backup"|"other",unknown:raw_line[]}`.
+- `config`: `{entries:entry[],generation:u32,menu_mode:"silent"|"menu",key_window_ms:u32,menu_timeout_s:u32,default:string?,mode:u8,devinfo_repair:"asneeded"|"never",unknown:raw_line[]}`.
+- `bls_entry`: `{title:string?,kind:"linux"|"efi",image:string,initrd:string?,devicetree:string?,options:string,unknown:raw_line[],rejected_lines:usize}`.
+- `bls_file`: `{name:string,entry:bls_entry}`.
+- `install_receipt`: `{active_slot:"a"|"b",installed:("a"|"b")[],generation:u32,signer_changed:bool,backup_present:bool}`.
+
+## Verb catalogue
+
+Every success response below also has `ok:true` and `operation` with the stated value.
+
+| Verb | Request fields | Success response fields |
+| --- | --- | --- |
+| `protocol.version` | `verb` only | `operation:"protocol.version"`, `app_version:string`, `protocol_version:u32`. |
+| `build` | `abl:path` required; `vbmeta:path?`, `staged:path?`, `tools:path?`, `efisp_tools:path?`, `keep_unpatched:path?`, `patch_log:path?`, `probe:bool?`. | Full build: `operation:"build"`, `kind:"build"`, `receipt:{staged:path,loader_bytes:u64,gm2p_bytes:u64,tzmap_bytes:u64,tools_staged:usize,gbl_patched:bool,loader_sha256:string,gm2p_sha256:string,tzmap_sha256:string,unpatched_sha256:string}`. Probe build: `operation:"build.probe"`, `kind:"build.probe"`, `receipt:{gbl_patched:bool,unpatched_sha256:string}`. |
+| `config.show` | `verb` only | `operation:"config.show"`, `config:config`. |
+| `config.set-policy` | `menu_mode:"silent"|"menu"?`, `key_window_ms:u32?`, `menu_timeout_s:u32?`. | `operation:"config.policy"`, `kind:"config.policy"`, `config:config`, `generation:u32`, `mark:string`. |
+| `entry.list` | `verb` only | `operation:"entry.list"`, `generation:u32`, `entries:entry[]`. |
+| `entry.set` | `id:string`, `title:string`, `image:string`, `role:"active"|"inactive"|"backup"|"other"` required; `options:string?`, `mode:u8?`, `global_mode:u8?`, `devinfo_repair:"asneeded"|"never"?`, `default:bool?`. | `operation:"entry.set"`, `generation:u32`, `entry:entry`, `mark:string`. |
+| `entry.remove` | `id:string` required. | `operation:"entry.remove"`, `generation:u32`, `mark:string`. |
+| `entry.mode` | `id:string`, `mode:u8` required. | `operation:"entry.mode"`, `generation:u32`, `mark:string`. |
+| `default.get` | `verb` only | `operation:"default.get"`, `default:string?`. |
+| `default.set` | `id:string` required. | `operation:"default.set"`, `generation:u32`, `default:string`. |
+| `source.detect` | `verb` only | `operation:"source.detect"`, `kind:"source.detect"`, `sources:source_candidate[]`, where `source_candidate` is `{kind:"block"|"image"|"dir",path:path,identity:string?,model:string,size_bytes:u64,boot_root:path,boot_root_present:bool,readable:bool,writable:bool,needs_privilege:bool,mounted_at:path?,why:string,export_candidate:"candidate"|"mounted"|"not_candidate"?}`. `export_candidate` is `"candidate"` for an unmounted recognized Canoe export, `"mounted"` for a recognized export that is mounted, and `"not_candidate"` otherwise. A mounted recognized export remains a candidate but is unavailable; `mounted_at` retains its mount path. |
+| `bls.list` | `verb` only | `operation:"bls.list"`, `entries:bls_file[]`. |
+| `bls.show` | `name:string` required. | `operation:"bls.show"`, `entry:bls_file`. |
+| `bls.stage` | `name:string`, `entry:path`, `artifacts:artifact[]` required. An `artifact` is `{source:path,destination:string,sha256:string}`. | `operation:"bls.stage"`, `receipt:{name:string,artifacts:string[]}`. |
+| `slot.status` | `slot:string?`, `bootctl_output:string?`, `gpt_active_slot:string?`. | `operation:"slot.status"`, `active_slot:"a"|"b"?`, `inactive_slot:"a"|"b"?`, `source:string`, `installed:("a"|"b")[]`. |
+| `install` | `staged:path` required; `slot:string?`, `both:bool?`, `inactive:bool?`, `i_know_inactive_status:bool?`, `active_slot:string?`, `bootctl_output:string?`, `gpt_active_slot:string?`, `mode:u8?`, `allow_new_signer:bool?`. | `operation:"install"`, `receipt:install_receipt`. |
+| `ota-apply` | `staged:path` required; `target_slot:string?`, `bootctl_output:string?`, `gpt_active_slot:string?`, `mode:u8?`, `allow_new_signer:bool?`. | `operation:"ota-apply"`, `receipt:install_receipt`. |
+| `vbmeta.graft` | `vbmeta:path`, `recovery:path`, `output:path` required. Legacy request aliases `graft` and `vbmetaport` are accepted. | `operation:"vbmeta.graft"`, `receipt:{output:string,bytes:usize}`. |
+| `vbmeta.inspect` | `vbmeta:path` required; `tools:path?` optionally selects the `mode2_profile` worker directory. When omitted, the worker is resolved from `CANOE_TOOLS_DIR`, then the executable's directory, then `PATH`. | `operation:"vbmeta.inspect"`, `rollback_index:u64`, `chain_partitions:{rollback_index_location:u32,partition_name:string,public_key:u8[]}[]`, `build_properties:{system_os_version:string?,system_security_patch:string?,vendor_security_patch:string?,boot_security_patch:string?}`. Chain partitions whose name starts with `vbmeta` are excluded; `recovery` is ordinary. Duplicate occurrences of any named build property return `vbmeta-duplicate-property`, never a partial result. |
+| `vendorboot.patch` | `input:path`, `output:path` required. Legacy request alias `vendor_boot.patch` is accepted. | `operation:"vendorboot.patch"`, `receipt:{output:string,bytes:usize,changed:bool}`. |
+| `fastboot.identify` | `timeout_seconds:u64?` (default `30`). | `operation:"fastboot.identify"`, `bds_version:string?`, `current_slot:"a"|"b"?`. A missing or invalid device value is `null`; the server never guesses a slot. |
+| `fastboot.export` | `target:string?` (default `"persist"`), `timeout_seconds:u64?` (default `30`). | `operation:"fastboot.export"`, `node:string`. The server adopts an existing unmounted Canoe export or starts one for `target`, then returns its raw block node. |
+| `fastboot.end-export` | `node:path` required. | `operation:"fastboot.end-export"`, `node:string`. |
+| `fastboot.fetch` | `partition:string`, `output:path` required. | `operation:"fastboot.fetch"`, `partition:string`, `output:string`. |
+| `fastboot.abl-coverage` | `tools:path?`; `timeout_seconds:u64?` (default `30`). | `operation:"fastboot.abl-coverage"`, `slots:{slot:"a"|"b",coverage:"vulnerable"|"stock"|"unknown"}[]`. The server fetches and probes `abl_a` and `abl_b` without flashing or staging; `vulnerable` is `build --probe` reporting `gbl_patched:true`, `stock` is `false`, and a fetch or probe that cannot answer is `unknown`. |
+| `fastboot.flash` | `partition:string`, `image:path` required. The image must be an existing regular file. | `operation:"fastboot.flash"`, `receipt:{partition:string,image:string}`. The receipt identifies the partition and image actually passed to fastboot. |
+| `fastboot.reboot` | `target:"bootloader"|"fastboot"|"recovery"?`. Omit `target` for a normal reboot; any other value is refused. | `operation:"fastboot.reboot"`, `target:"bootloader"|"fastboot"|"recovery"?`. |
+
+The version-1 golden transcripts are in `tests/fixtures/protocol/`. `tests/protocol_fixtures.rs` replays every request against the built binary and compares the complete response bytes, including field order and the trailing newline.

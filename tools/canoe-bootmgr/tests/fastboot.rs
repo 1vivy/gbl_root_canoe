@@ -39,6 +39,329 @@ fn script(directory: &Path, body: &str) -> (MutexGuard<'static, ()>, PathBuf) {
     (guard, path)
 }
 
+fn protocol_json(root: &Path, request: &str) -> std::process::Output {
+    use std::io::Write;
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"))
+        .arg("--json")
+        .current_dir(root)
+        .env_clear()
+        .env("PATH", root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start JSONL CLI");
+    child
+        .stdin
+        .take()
+        .expect("CLI stdin")
+        .write_all(request.as_bytes())
+        .expect("write JSONL request");
+    child.wait_with_output().expect("wait for JSONL CLI")
+}
+
+fn install_path_fastboot(root: &Path, script: &Path) {
+    fs::hard_link(script, root.join("fastboot")).expect("fastboot PATH entry");
+}
+
+fn protocol_json_with_tools(root: &Path, request: &str, tools: &Path) -> std::process::Output {
+    use std::io::Write;
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"))
+        .arg("--json")
+        .current_dir(root)
+        .env_clear()
+        .env("PATH", root)
+        .env("CANOE_TOOLS_DIR", tools)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start JSONL CLI");
+    child
+        .stdin
+        .take()
+        .expect("CLI stdin")
+        .write_all(request.as_bytes())
+        .expect("write JSONL request");
+    child.wait_with_output().expect("wait for JSONL CLI")
+}
+
+fn install_probe_tools(root: &Path) -> PathBuf {
+    let tools = root.join("probe-tools");
+    fs::create_dir(&tools).expect("probe tools directory");
+    for (name, body) in [
+        (
+            "extractfv",
+            r#"out=
+prev=
+for arg in "$@"; do
+  if [ "$prev" = -o ]; then out="$arg"; fi
+  prev="$arg"
+done
+IFS= read -r loader < "$4"
+if [ "$loader" = garbage ]; then exit 3; fi
+printf '%s\n' "$loader" > "$out/LinuxLoader.efi""#,
+        ),
+        (
+            "patch_abl",
+            r#"IFS= read -r loader < "$1"
+printf '%s' "$loader" > "$2"
+if [ "$loader" = stock ]; then
+  echo 'Warning: Failed to patch ABL GBL'
+fi"#,
+        ),
+        ("mode2_profile", "exit 0"),
+        ("abl_tzmap", "exit 0"),
+    ] {
+        let path = tools.join(name);
+        fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).expect("probe tool");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("probe executable");
+    }
+    tools
+}
+
+#[test]
+fn fastboot_abl_coverage_reports_vulnerable_and_stock_per_slot() {
+    let root = TempDir::new().expect("fixture");
+    let (guard, fastboot) = script(
+        root.path(),
+        r#"case "$2" in
+  abl_a) printf 'vulnerable\n' > "$3" ;;
+  abl_b) printf 'stock\n' > "$3" ;;
+  *) exit 2 ;;
+esac"#,
+    );
+    let tools = install_probe_tools(root.path());
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json_with_tools(
+        root.path(),
+        "{\"verb\":\"fastboot.abl-coverage\"}\n",
+        &tools,
+    );
+    drop(guard);
+
+    assert!(output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["operation"], "fastboot.abl-coverage");
+    assert_eq!(
+        document["slots"][0],
+        serde_json::json!({"slot":"a","coverage":"vulnerable"})
+    );
+    assert_eq!(
+        document["slots"][1],
+        serde_json::json!({"slot":"b","coverage":"stock"})
+    );
+}
+
+#[test]
+fn fastboot_abl_coverage_reports_unknown_when_fetch_times_out() {
+    let root = TempDir::new().expect("fixture");
+    let (guard, fastboot) = script(
+        root.path(),
+        r#"case "$2" in
+  abl_a) while :; do :; done ;;
+  abl_b) printf 'vulnerable\n' > "$3" ;;
+  *) exit 2 ;;
+esac"#,
+    );
+    let tools = install_probe_tools(root.path());
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json_with_tools(
+        root.path(),
+        "{\"verb\":\"fastboot.abl-coverage\",\"timeout_seconds\":1}\n",
+        &tools,
+    );
+    drop(guard);
+
+    assert!(output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["operation"], "fastboot.abl-coverage");
+    assert_eq!(
+        document["slots"][0],
+        serde_json::json!({"slot":"a","coverage":"unknown"})
+    );
+    assert_eq!(
+        document["slots"][1],
+        serde_json::json!({"slot":"b","coverage":"vulnerable"})
+    );
+}
+
+#[test]
+fn fastboot_abl_coverage_keeps_zero_byte_and_malformed_images_unknown() {
+    let root = TempDir::new().expect("fixture");
+    let (guard, fastboot) = script(
+        root.path(),
+        r#"case "$2" in
+  abl_a) : > "$3" ;;
+  abl_b) printf 'garbage\n' > "$3" ;;
+  *) exit 2 ;;
+esac"#,
+    );
+    let tools = install_probe_tools(root.path());
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json_with_tools(
+        root.path(),
+        "{\"verb\":\"fastboot.abl-coverage\"}\n",
+        &tools,
+    );
+    drop(guard);
+
+    assert!(output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(
+        document["slots"][0],
+        serde_json::json!({"slot":"a","coverage":"unknown"})
+    );
+    assert_eq!(
+        document["slots"][1],
+        serde_json::json!({"slot":"b","coverage":"unknown"})
+    );
+}
+
+#[test]
+fn fastboot_identify_protocol_reports_fake_values() {
+    let root = TempDir::new().expect("fixture");
+    let (guard, fastboot) = script(
+        root.path(),
+        r#"if [ "$2" = "current-slot" ]; then
+    echo "current-slot: b" >&2
+  else
+    echo "canoe-bds: 7.0.0" >&2
+  fi"#,
+    );
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json(root.path(), "{\"verb\":\"fastboot.identify\"}\n");
+    drop(guard);
+
+    assert!(output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["operation"], "fastboot.identify");
+    assert_eq!(document["bds_version"], "7.0.0");
+    assert_eq!(document["current_slot"], "b");
+}
+
+#[test]
+fn fastboot_identify_protocol_keeps_silent_values_null() {
+    let root = TempDir::new().expect("fixture");
+    let (guard, fastboot) = script(root.path(), "exit 0");
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json(root.path(), "{\"verb\":\"fastboot.identify\"}\n");
+    drop(guard);
+
+    assert!(output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["operation"], "fastboot.identify");
+    assert!(document["bds_version"].is_null());
+    assert!(document["current_slot"].is_null());
+}
+
+#[test]
+fn fastboot_export_protocol_times_out_with_an_error_envelope() {
+    let root = TempDir::new().expect("fixture");
+    let (guard, fastboot) = script(root.path(), "while :; do :; done");
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json(
+        root.path(),
+        "{\"verb\":\"fastboot.export\",\"timeout_seconds\":1}\n",
+    );
+    drop(guard);
+
+    assert!(!output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "operation");
+    assert!(
+        document["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("timed out")
+    );
+}
+
+#[test]
+fn fastboot_flash_protocol_refuses_empty_partition_before_spawning() {
+    let root = TempDir::new().expect("fixture");
+    let argv = root.path().join("argv");
+    let image = root.path().join("boot.img");
+    fs::write(&argv, b"").expect("argv log");
+    fs::write(&image, b"image").expect("image");
+    let (guard, fastboot) = script(
+        root.path(),
+        &format!("printf '%s\\n' \"$@\" > {}", argv.display()),
+    );
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json(
+        root.path(),
+        &format!(
+            "{{\"verb\":\"fastboot.flash\",\"partition\":\"\",\"image\":\"{}\"}}\n",
+            image.display()
+        ),
+    );
+    drop(guard);
+
+    assert!(!output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["error"]["code"], "operation");
+    assert!(fs::read(&argv).expect("argv log").is_empty());
+}
+
+#[test]
+fn fastboot_flash_protocol_refuses_missing_image_before_spawning() {
+    let root = TempDir::new().expect("fixture");
+    let argv = root.path().join("argv");
+    let missing = root.path().join("missing.img");
+    fs::write(&argv, b"").expect("argv log");
+    let (guard, fastboot) = script(
+        root.path(),
+        &format!("printf '%s\\n' \"$@\" > {}", argv.display()),
+    );
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json(
+        root.path(),
+        &format!(
+            "{{\"verb\":\"fastboot.flash\",\"partition\":\"boot\",\"image\":\"{}\"}}\n",
+            missing.display()
+        ),
+    );
+    drop(guard);
+
+    assert!(!output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["error"]["code"], "operation");
+    assert!(fs::read(&argv).expect("argv log").is_empty());
+}
+
+#[test]
+fn fastboot_reboot_protocol_refuses_unsupported_target_before_spawning() {
+    let root = TempDir::new().expect("fixture");
+    let argv = root.path().join("argv");
+    fs::write(&argv, b"").expect("argv log");
+    let (guard, fastboot) = script(
+        root.path(),
+        &format!("printf '%s\\n' \"$@\" > {}", argv.display()),
+    );
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json(
+        root.path(),
+        "{\"verb\":\"fastboot.reboot\",\"target\":\"bogus\"}\n",
+    );
+    drop(guard);
+
+    assert!(!output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["error"]["code"], "operation");
+    assert!(fs::read(&argv).expect("argv log").is_empty());
+}
+
 #[test]
 fn getvar_matches_exact_prefix_and_filters_failed_or_empty_values() {
     let root = TempDir::new().expect("fixture");
@@ -371,6 +694,7 @@ fn candidate() -> SourceCandidate {
         needs_privilege: false,
         mounted_at: None,
         why: "test".to_owned(),
+        export_candidate: None,
     }
 }
 

@@ -106,6 +106,7 @@ fn read_blocks(probe: &LinuxProbe, mounts: &[Mount]) -> Vec<SourceCandidate> {
             needs_privilege: !(readable && writable),
             mounted_at,
             why: "exported persist LUN (canoe identity)".to_owned(),
+            export_candidate: None,
         });
     }
     candidates
@@ -215,6 +216,7 @@ fn add_dir_candidate(
         needs_privilege: !(readable && writable),
         mounted_at: Some(path.to_path_buf()),
         why: why.to_owned(),
+        export_candidate: None,
     });
 }
 
@@ -237,6 +239,7 @@ fn add_block_alias(
         needs_privilege: !(readable && writable),
         mounted_at: None,
         why: "Android /dev/block/by-name/persist".to_owned(),
+        export_candidate: None,
     });
 }
 

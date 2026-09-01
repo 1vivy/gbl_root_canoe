@@ -1,0 +1,1 @@
+{"ok":false,"error":{"code":"operation","message":"fastboot binary not found; expected bundled Platform-Tools/fastboot or Platform-Tools/fastboot.exe or fastboot on PATH"}}

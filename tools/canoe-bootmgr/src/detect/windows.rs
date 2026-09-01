@@ -64,6 +64,7 @@ pub fn detect_windows() -> Result<Vec<SourceCandidate>, super::DetectError> {
                     needs_privilege: true,
                     mounted_at: None,
                     why: "USB persist candidate found by SetupAPI; raw disk access requires Administrator".to_owned(),
+                    export_candidate: None,
                 });
             }
             continue;
@@ -92,6 +93,7 @@ pub fn detect_windows() -> Result<Vec<SourceCandidate>, super::DetectError> {
             needs_privilege: true,
             mounted_at: None,
             why,
+            export_candidate: None,
         });
     }
     candidates.sort_by_key(|candidate| candidate.identity.as_deref() != Some(CANOE_IDENTITY));

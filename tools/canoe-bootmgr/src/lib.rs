@@ -33,6 +33,7 @@ pub use slot_transaction::{InstallInput, InstallReceipt};
 mod slot_tools;
 pub mod slot_transaction;
 pub mod slots;
+mod vbmeta_inspect;
 pub mod vendorboot;
 
 #[cfg(feature = "cli")]
