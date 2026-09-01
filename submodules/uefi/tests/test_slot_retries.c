@@ -38,6 +38,32 @@ SetName (EFI_PARTITION_ENTRY *Entry, const CHAR16 *Name)
   }
 }
 
+static int
+TestMaxRetryAttributeUnchanged(void)
+{
+  UINT8 Before[sizeof (UINT64)];
+  UINT8 After[sizeof (UINT64)];
+  UINTN Byte;
+  BOOLEAN Same;
+
+  PtnEntries[1].PartEntry.Attributes = PART_ATT_ACTIVE_VAL |
+      ((UINT64)MAX_RETRY_COUNT << PART_ATT_MAX_RETRY_CNT_BIT);
+  for (Byte = 0; Byte < sizeof (Before); ++Byte) {
+    Before[Byte] = ((UINT8 *)&PtnEntries[1].PartEntry.Attributes)[Byte];
+  }
+  (void)SfbResetActiveSlotRetry ();
+  Same = TRUE;
+  for (Byte = 0; Byte < sizeof (After); ++Byte) {
+    After[Byte] = ((UINT8 *)&PtnEntries[1].PartEntry.Attributes)[Byte];
+    if (Before[Byte] != After[Byte]) {
+      Same = FALSE;
+    }
+  }
+  CHECK(Same);
+  puts("active-slot reset at max leaves attribute bytes unchanged");
+  return 0;
+}
+
 int
 main (void)
 {
@@ -95,5 +121,8 @@ main (void)
   CHECK(EFI_ERROR(SfbResetActiveSlotRetry()));
   CHECK(UpdateCount == 1);
   puts("active-slot reset refused malformed all-ones attributes");
+  if (TestMaxRetryAttributeUnchanged () != 0) {
+    return 1;
+  }
   return 0;
 }

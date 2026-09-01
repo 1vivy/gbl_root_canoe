@@ -1,4 +1,5 @@
 #include "SuperFbLaunchPolicy.h"
+#include "SuperFbSlots.h"
 #include "SuperFbLog.h"
 
 #include <Library/BaseLib.h>
@@ -396,6 +397,7 @@ SfbLaunchImage (
     UINTN ReasonIndex;
     CONST CHAR8 *Reason;
     EFI_STATUS PersistStatus;
+    EFI_STATUS RetryResetStatus;
 
     Reason = ReasonText[LaunchReason];
     /* Fixed grammar, built without adding a formatter dependency to the launch
@@ -416,6 +418,15 @@ SfbLaunchImage (
             "SFB: MARK last-launch requested=%u effective=%u reason=%u "
             "status=%r\n", (UINT32)RequestedMode, (UINT32)LaunchMode,
             (UINT32)LaunchReason, PersistStatus));
+
+    /*
+     * Restore the active slot's retry budget before handing control to the
+     * managed image. This is deliberately fail-soft: an unavailable or
+     * malformed partition table must not turn a launch into a boot failure.
+     */
+    RetryResetStatus = SfbResetActiveSlotRetry ();
+    DEBUG ((EFI_ERROR (RetryResetStatus) ? EFI_D_WARN : EFI_D_INFO,
+            "SFB: MARK retry-reset status=%r\n", RetryResetStatus));
   }
 
   DEBUG ((EFI_D_INFO,
