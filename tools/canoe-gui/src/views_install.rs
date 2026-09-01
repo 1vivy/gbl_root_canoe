@@ -149,12 +149,21 @@ impl GuiApp {
             .slot_status
             .as_ref()
             .and_then(|status| status.active_slot)
-            .map_or_else(|| "<slot>".to_owned(), |slot| slot.label().to_owned());
-        ui.small(format!(
-            "Obtain the image from the device first: fastboot fetch vendor_boot_{slot} vendor_boot.img"
-        ));
+            .map(|slot| slot.label().to_owned());
+        let slot_label = slot.as_deref().unwrap_or("<slot>");
+        let fetch_vendor_boot =
+            self.gated_button(ui, Action::FetchVendorBoot, "Fetch vendor_boot from device");
         path_row(ui, "vendor_boot.img", &mut self.vendor_boot_input);
-        if self.gated_button(ui, Action::Derive, "Patch vendor_boot") {
+        if fetch_vendor_boot {
+            if let Some(slot) = slot.as_deref() {
+                self.fetch_vendor_boot(slot);
+            } else {
+                self.status = "fetch refused: active slot is unknown".to_owned();
+                self.log(self.status.clone());
+            }
+        }
+        ui.small(format!("Fetches vendor_boot_{slot_label} into the image field."));
+        if self.gated_button(ui, Action::VendorBoot, "Patch vendor_boot") {
             self.patch_vendor_boot();
         }
         if let Some(receipt) = self.patch_receipt.clone() {

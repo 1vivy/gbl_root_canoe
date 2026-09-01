@@ -46,6 +46,7 @@ pub(crate) enum Action {
     Provision,
     Identify,
     VendorBoot,
+    FetchVendorBoot,
     Derive,
     StartExport,
     EndExport,
@@ -89,6 +90,7 @@ pub(crate) fn gate(action: Action, transport: Transport, slot_known: bool) -> Ga
         }
         Action::Provision
         | Action::Identify
+        | Action::FetchVendorBoot
         | Action::VendorBoot
         | Action::StartExport
         | Action::Reboot => {
@@ -127,6 +129,7 @@ mod tests {
             Action::Provision,
             Action::Identify,
             Action::VendorBoot,
+            Action::FetchVendorBoot,
             Action::Reboot,
             Action::StartExport,
         ] {
@@ -146,6 +149,10 @@ mod tests {
         );
         assert_eq!(
             gate(Action::Provision, Transport::None, true),
+            Gate::NeedsFastboot
+        );
+        assert_eq!(
+            gate(Action::FetchVendorBoot, Transport::None, true),
             Gate::NeedsFastboot
         );
     }

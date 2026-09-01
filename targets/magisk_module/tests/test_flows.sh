@@ -421,6 +421,9 @@ assert_contains "$(cat "$TMP/pair-unresolved-ui.log")" \
 pass 'unresolvable inactive slot is skipped without a write'
 
 printf 'custom-vbmeta\n' > "$BY_NAME/vbmeta_b"
+# Ensure the automatic signer-change demotion starts from Mode 2.
+"$MOD/bin/canoe-bootmgr" --boot-root "$EFISP" entry mode \
+  --id android-b --mode 2 >/dev/null
 : > "$LOG"
 run flash update-efisp >/dev/null
 cfg=$(cat "$EFISP/canoe.cfg")
@@ -431,6 +434,8 @@ assert_contains "$(cat "$LOG")" 'Mode 2' \
   'Mode 2 was not downgraded after a partition signer change'
 assert_contains "$active_block" 'mode 1' \
   'partition signer change left the active row in Mode 2'
+assert_contains "$(cat "$LOG")" '"acknowledged":["P-GRAFT"]' \
+  'automatic Mode 2 downgrade did not acknowledge P-GRAFT'
 pass 'partition signer changes are reported and Mode 2 is downgraded'
 
 "$MOD/bin/canoe-bootmgr" --boot-root "$EFISP" entry mode --id android-b --mode 2 >/dev/null

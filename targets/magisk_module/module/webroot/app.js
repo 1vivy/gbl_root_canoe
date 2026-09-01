@@ -175,7 +175,18 @@ function saveMode() {
     showMessage("Select an entry before saving its mode", "error");
     return;
   }
-  return runAction(() => core({ verb: "entry.mode", id: entry.id, mode: Number(element("entryModeSelect").value) }));
+  const targetMode = Number(element("entryModeSelect").value);
+  const acknowledge = [];
+  if (entry.mode !== targetMode) {
+    if (targetMode === 1) acknowledge.push("P-GRAFT");
+    if (entry.mode === 0 || targetMode === 0) acknowledge.push("P-FORMAT");
+  }
+  return runAction(() => core({
+    verb: "entry.mode",
+    id: entry.id,
+    mode: targetMode,
+    acknowledge,
+  }));
 }
 
 function bind() {

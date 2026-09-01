@@ -552,8 +552,10 @@ install_pair() {
     ui_print "$T_SIGNER_CHANGED"
     if [ "$signer_source" != "supplied" ] && [ "$selected_mode" = "2" ]; then
       entry_id=android-${current_slot_suffix#_}
-      if ! "$CANOE_BOOTMGR" --boot-root "$target" entry mode \
-           --id "$entry_id" --mode 1 >> "$RUNTIME_DIR/flash.log" 2>&1; then
+      # The installer records this signer-change override; acknowledge P-GRAFT
+      # because it owns the Mode 2 to Mode 1 demotion.
+      if ! "$CANOE_BOOTMGR" --json --boot-root "$target" entry mode \
+           --id "$entry_id" --mode 1 --acknowledge P-GRAFT >> "$RUNTIME_DIR/flash.log" 2>&1; then
         rm -rf "$stage"
         return 1
       fi

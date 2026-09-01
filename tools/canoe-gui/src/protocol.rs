@@ -54,6 +54,8 @@ pub enum Request {
     },
     #[serde(rename = "fastboot.flash")]
     FastbootFlash { partition: String, image: PathBuf },
+    #[serde(rename = "fastboot.fetch")]
+    FastbootFetch { partition: String, output: PathBuf },
     #[serde(rename = "fastboot.reboot")]
     FastbootReboot {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,7 +103,16 @@ pub enum Request {
     #[serde(rename = "entry.remove")]
     EntryRemove { id: String },
     #[serde(rename = "entry.mode")]
-    EntryMode { id: String, mode: u8 },
+    EntryMode {
+        id: String,
+        mode: u8,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        acknowledge: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        current_vbmeta: Option<PathBuf>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target_vbmeta: Option<PathBuf>,
+    },
     #[serde(rename = "default.get")]
     DefaultGet,
     #[serde(rename = "default.set")]

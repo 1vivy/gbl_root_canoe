@@ -4,9 +4,11 @@
 //! explicitly by the operator and reports what it did. None of them run as a
 //! side effect of derivation or installation.
 
+use std::fs;
 use std::path::PathBuf;
 
 use crate::export::ExportPhase;
+use crate::export_drive::toolkit_root;
 use crate::ui::GuiApp;
 
 impl GuiApp {
@@ -23,6 +25,40 @@ impl GuiApp {
         }) {
             Some(crate::protocol::Response::FastbootFlash) => {
                 self.status = format!("flashed {image} to {partition}");
+                self.log(self.status.clone());
+            }
+            _ => {}
+        }
+    }
+
+    /// Fetch the active slot's vendor_boot image into the patch input field.
+    pub(crate) fn fetch_vendor_boot(&mut self, slot: &str) {
+        let output = toolkit_root()
+            .map_or_else(std::env::temp_dir, |root| root.join("work"))
+            .join("vendor_boot.img");
+        if let Some(parent) = output.parent() {
+            if let Err(error) = fs::create_dir_all(parent) {
+                self.status = format!("could not create {}: {error}", parent.display());
+                self.log(self.status.clone());
+                return;
+            }
+        }
+        let partition = format!("vendor_boot_{slot}");
+        match self.request(crate::protocol::Request::FastbootFetch {
+            partition: partition.clone(),
+            output: output.clone(),
+        }) {
+            Some(crate::protocol::Response::FastbootFetch {
+                partition: fetched_partition,
+                output: fetched_output,
+            }) if fetched_partition == partition => {
+                self.vendor_boot_input = fetched_output.clone();
+                self.status = format!("fetched {fetched_partition} to {fetched_output}");
+                self.log(self.status.clone());
+            }
+            Some(crate::protocol::Response::FastbootFetch { partition, output }) => {
+                self.status =
+                    format!("fastboot.fetch returned {partition} at unexpected output {output}");
                 self.log(self.status.clone());
             }
             _ => {}

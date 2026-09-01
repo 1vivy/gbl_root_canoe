@@ -40,6 +40,8 @@ enum Operation {
     FastbootExport,
     #[serde(rename = "fastboot.flash")]
     FastbootFlash,
+    #[serde(rename = "fastboot.fetch")]
+    FastbootFetch,
     #[serde(rename = "fastboot.reboot")]
     FastbootReboot,
     #[serde(rename = "fastboot.end-export")]
@@ -78,6 +80,8 @@ struct ResponseEnvelope {
     installed: Option<Vec<Slot>>,
     receipt: Option<serde_json::Value>,
     node: Option<String>,
+    partition: Option<String>,
+    output: Option<String>,
     bds_version: Option<String>,
     current_slot: Option<String>,
 }
@@ -144,6 +148,10 @@ pub enum Response {
         node: String,
     },
     FastbootFlash,
+    FastbootFetch {
+        partition: String,
+        output: String,
+    },
     FastbootReboot,
     FastbootEndExport {
         node: String,
@@ -235,6 +243,10 @@ pub fn parse_response(bytes: &[u8]) -> Result<Response, ProtocolError> {
             node: required(envelope.node, "node")?,
         }),
         Operation::FastbootFlash => Ok(Response::FastbootFlash),
+        Operation::FastbootFetch => Ok(Response::FastbootFetch {
+            partition: required(envelope.partition, "partition")?,
+            output: required(envelope.output, "output")?,
+        }),
         Operation::FastbootReboot => Ok(Response::FastbootReboot),
         Operation::FastbootEndExport => Ok(Response::FastbootEndExport {
             node: envelope.node.unwrap_or_default(),

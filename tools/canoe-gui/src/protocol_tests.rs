@@ -8,6 +8,7 @@ use tempfile::tempdir;
 
 use super::BootmgrClient;
 use crate::protocol::{Request, Response};
+use crate::flow::{Action, Gate, Transport, gate};
 
 /// Serializes "write an executable, then exec it" across this binary's threads.
 ///
@@ -29,6 +30,48 @@ fn fixture(directory: &Path, name: &str, body: &str) -> (MutexGuard<'static, ()>
     (guard, path)
 }
 
+
+#[test]
+fn fastboot_fetch_request_matches_documented_wire_shape() -> Result<(), Box<dyn std::error::Error>>
+{
+    let request = Request::FastbootFetch {
+        partition: "vendor_boot_a".to_owned(),
+        output: PathBuf::from("/tmp/vendor_boot.img"),
+    };
+
+    assert_eq!(
+        serde_json::to_string(&request)?,
+        r#"{"verb":"fastboot.fetch","partition":"vendor_boot_a","output":"/tmp/vendor_boot.img"}"#
+    );
+    Ok(())
+}
+
+#[test]
+fn fastboot_fetch_response_round_trips_documented_fields() -> Result<(), Box<dyn std::error::Error>>
+{
+    let response = crate::wire::parse_response(
+        br#"{"operation":"fastboot.fetch","ok":true,"partition":"vendor_boot_a","output":"/tmp/vendor_boot.img"}"#,
+    )?;
+
+    assert_eq!(
+        response,
+        Response::FastbootFetch {
+            partition: "vendor_boot_a".to_owned(),
+            output: "/tmp/vendor_boot.img".to_owned(),
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn vendor_boot_uses_fastboot_gate_instead_of_derive_gate() {
+    let vendor_boot = gate(Action::VendorBoot, Transport::MassStorage, true);
+    let derive = gate(Action::Derive, Transport::MassStorage, true);
+
+    assert_eq!(vendor_boot, Gate::NeedsFastboot);
+    assert_eq!(derive, Gate::Allowed);
+    assert_ne!(vendor_boot, derive);
+}
 #[test]
 fn client_round_trips_recorded_fixture_responses() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempdir()?;
@@ -97,6 +140,17 @@ fn fastboot_responses_are_understood() -> Result<(), Box<dyn std::error::Error>>
         })?,
         Response::FastbootFlash
     ));
+    let response = client.request(&Request::FastbootFetch {
+        partition: "vendor_boot_a".to_owned(),
+        output: PathBuf::from("/tmp/vendor_boot.img"),
+    })?;
+    assert_eq!(
+        response,
+        Response::FastbootFetch {
+            partition: "vendor_boot_a".to_owned(),
+            output: "/tmp/vendor_boot.img".to_owned(),
+        }
+    );
     assert!(matches!(
         client.request(&Request::FastbootReboot {
             target: Some("bootloader".to_owned()),
@@ -166,6 +220,7 @@ while IFS= read -r request; do
   case "$request" in
     *fastboot.identify*) echo '{"ok":true,"operation":"fastboot.identify","bds_version":"7.0.0","current_slot":"a"}' ;;
     *fastboot.export*) echo '{"ok":true,"operation":"fastboot.export","node":"/dev/sdz"}' ;;
+    *fastboot.fetch*) echo '{"ok":true,"operation":"fastboot.fetch","partition":"vendor_boot_a","output":"/tmp/vendor_boot.img"}' ;;
     *fastboot.flash*) echo '{"ok":true,"operation":"fastboot.flash","receipt":{"partition":"abl_a","image":"/tmp/abl.img"}}' ;;
     *fastboot.reboot*) echo '{"ok":true,"operation":"fastboot.reboot","target":"bootloader"}' ;;
   esac
