@@ -4,8 +4,8 @@ use crate::cli::{
     BlsCommand, BlsStageArgs, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand,
     EntryIdArgs, EntryModeArgs, EntrySetArgs, FastbootAblCoverageArgs, FastbootCommand,
     FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
-    FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, OtaApplyArgs, PolicyArgs,
-    SlotCommand, SlotStatusArgs, SourceCommand, VbmetaInspectArgs, VendorBootCommand,
+    FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
+    PolicyArgs, SlotCommand, SlotStatusArgs, SourceCommand, VbmetaInspectArgs, VendorBootCommand,
     VendorBootPatchArgs,
 };
 use crate::wire::JsonRequest;
@@ -32,6 +32,24 @@ impl JsonRequest {
                 keep_unpatched,
                 patch_log,
                 probe,
+            }),
+            Self::AblVerify {
+                image,
+                expected_sha256,
+            } => Command::AblVerify(crate::cli::AblVerifyArgs {
+                image,
+                expected_sha256,
+            }),
+            Self::BlockWrite {
+                partition,
+                image,
+                snapshot,
+                slot,
+            } => Command::BlockWrite(crate::cli::BlockWriteArgs {
+                partition,
+                image,
+                snapshot,
+                slot,
             }),
             Self::ConfigShow => Command::Config {
                 command: ConfigCommand::Show,
@@ -76,9 +94,34 @@ impl JsonRequest {
             Self::EntryRemove { id } => Command::Entry {
                 command: EntryCommand::Remove(EntryIdArgs { id }),
             },
-            Self::EntryMode { id, mode } => Command::Entry {
-                command: EntryCommand::Mode(EntryModeArgs { id, mode }),
+            Self::EntryMode {
+                id,
+                mode,
+                acknowledge,
+                current_vbmeta,
+                target_vbmeta,
+            } => Command::Entry {
+                command: EntryCommand::Mode(EntryModeArgs {
+                    id,
+                    mode,
+                    acknowledge,
+                    current_vbmeta,
+                    target_vbmeta,
+                    tools: None,
+                }),
             },
+            Self::ModePlan {
+                id,
+                target_mode,
+                current_vbmeta,
+                target_vbmeta,
+            } => Command::ModePlan(ModePlanArgs {
+                id,
+                target_mode,
+                current_vbmeta,
+                target_vbmeta,
+                tools: None,
+            }),
             Self::DefaultGet => Command::Default {
                 command: DefaultCommand::Get,
             },

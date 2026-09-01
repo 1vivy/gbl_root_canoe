@@ -1,8 +1,10 @@
+pub mod abl_verify;
 pub mod artifact;
 pub mod backend;
 pub mod bls;
 mod bls_parse;
 mod bls_render;
+pub mod block_write;
 pub mod build;
 mod build_cleanup;
 mod build_efisp_tools;
@@ -34,6 +36,8 @@ mod slot_tools;
 pub mod slot_transaction;
 pub mod slots;
 mod vbmeta_inspect;
+mod mode_plan_types;
+pub mod mode_plan;
 pub mod vendorboot;
 
 #[cfg(feature = "cli")]

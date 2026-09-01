@@ -7,10 +7,10 @@ use crate::artifact::BlsStageReceipt;
 use crate::backend::BlsFile;
 use crate::build::{BuildArgs, BuildProbeReceipt, BuildReceipt};
 pub use crate::cli_extra::{
-    BlsStageArgs, FastbootAblCoverageArgs, FastbootCommand, FastbootEndExportArgs,
-    FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs, FastbootIdentifyArgs,
-    FastbootRebootArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs,
-    VendorBootCommand, VendorBootPatchArgs,
+    AblVerifyArgs, BlsStageArgs, BlockWriteArgs, FastbootAblCoverageArgs, FastbootCommand,
+    FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
+    FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
+    SlotCommand, SlotStatusArgs, VendorBootCommand, VendorBootPatchArgs,
 };
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
@@ -18,6 +18,7 @@ use crate::graft::GraftReceipt;
 use crate::slot_transaction::InstallReceipt;
 use crate::slots::Slot;
 use crate::vbmeta_inspect::{VbmetaBuildProperties, VbmetaChainPartition};
+use crate::mode_plan::ModePlan;
 use crate::vendorboot::PatchReceipt;
 #[derive(Debug, Parser)]
 #[command(
@@ -102,11 +103,20 @@ pub enum Command {
     },
     /// Build a loader and its validated sidecars from an ABL/vbmeta pair.
     Build(BuildArgs),
+    /// Verify an ABL digest and probe its GBL vulnerability.
+    #[command(name = "abl-verify")]
+    AblVerify(AblVerifyArgs),
+    /// Write an image to a block partition with a rollback snapshot.
+    #[command(name = "block-write")]
+    BlockWrite(BlockWriteArgs),
     /// Install one or both per-slot managed loader triplets.
     Install(InstallArgs),
     /// Apply a post-OTA loader to the explicitly confirmed target slot.
     #[command(name = "ota-apply")]
     OtaApply(OtaApplyArgs),
+    /// Plan a safe mode transition without writing the configuration.
+    #[command(name = "mode-plan")]
+    ModePlan(ModePlanArgs),
     /// Graft official recovery vbmeta onto a custom recovery image.
     #[command(name = "vbmeta-graft", visible_alias = "graft")]
     Graft(GraftArgs),
@@ -187,6 +197,14 @@ pub struct EntryModeArgs {
     pub id: String,
     #[arg(long)]
     pub mode: u8,
+    #[arg(long, value_name = "PRECONDITION")]
+    pub acknowledge: Vec<String>,
+    #[arg(long)]
+    pub current_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub target_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub tools: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -327,6 +345,8 @@ pub enum Success {
         ok: bool,
         generation: u32,
         mark: String,
+        acknowledged: Vec<String>,
+        warnings: Vec<String>,
     },
     #[serde(rename = "default.get")]
     DefaultGet { ok: bool, default: Option<String> },
@@ -368,10 +388,28 @@ pub enum Success {
         kind: &'static str,
         receipt: BuildProbeReceipt,
     },
+    #[serde(rename = "abl.verify")]
+    AblVerify {
+        ok: bool,
+        sha256: String,
+        gbl_patched: bool,
+    },
+    #[serde(rename = "block.write")]
+    BlockWrite {
+        ok: bool,
+        partition: String,
+        node: String,
+        bytes_written: u64,
+        sha256: String,
+        snapshot: String,
+        verified: bool,
+    },
     #[serde(rename = "install")]
     Install { ok: bool, receipt: InstallReceipt },
     #[serde(rename = "ota-apply")]
     OtaApply { ok: bool, receipt: InstallReceipt },
+    #[serde(rename = "mode.plan")]
+    ModePlan { ok: bool, id: String, plan: ModePlan },
     #[serde(rename = "vbmeta.graft")]
     VbmetaGraft { ok: bool, receipt: GraftReceipt },
     #[serde(rename = "vbmeta.inspect")]
@@ -388,6 +426,8 @@ pub enum Success {
         ok: bool,
         bds_version: Option<String>,
         current_slot: Option<String>,
+        devinfo: Option<String>,
+        last_launch: Option<String>,
     },
     #[serde(rename = "fastboot.export")]
     FastbootExport { ok: bool, node: String },
