@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use crate::fastboot::FastbootError;
 
 const STDERR_TAIL_BYTES: usize = 4096;
+const STDERR_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub(crate) fn run(
     fastboot: &Path,
@@ -47,7 +48,7 @@ pub(crate) fn run(
     }
     let detail = stderr_detail(reader, timed_out, timeout);
     match status {
-        None => Err(FastbootError::Command { command, detail }),
+        None => Err(FastbootError::CommandTimeout { command, detail }),
         Some(status) if status.success() => Ok(()),
         Some(status) => Err(FastbootError::Command {
             command,
@@ -105,7 +106,6 @@ fn read_stderr_tail(mut stderr: impl Read) -> io::Result<String> {
     }
     Ok(String::from_utf8_lossy(&tail).trim().to_owned())
 }
-
 fn stderr_detail(
     reader: thread::JoinHandle<io::Result<String>>,
     timed_out: bool,
@@ -116,15 +116,35 @@ fn stderr_detail(
     } else {
         "no stderr output".to_owned()
     };
-    match reader.join() {
-        Ok(Ok(stderr)) if !stderr.is_empty() => {
+    match join_with_timeout(reader, STDERR_READER_JOIN_TIMEOUT) {
+        Some(Ok(Ok(stderr))) if !stderr.is_empty() => {
             if timed_out {
                 format!("{fallback}: {stderr}")
             } else {
                 stderr
             }
         }
-        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => fallback,
+        Some(Ok(Ok(_))) | Some(Ok(Err(_))) | Some(Err(_)) | None => fallback,
+    }
+}
+
+fn join_with_timeout<T>(
+    reader: thread::JoinHandle<T>,
+    timeout: Duration,
+) -> Option<thread::Result<T>> {
+    let deadline = Instant::now().checked_add(timeout);
+    loop {
+        if reader.is_finished() {
+            return Some(reader.join());
+        }
+        let Some(deadline) = deadline else {
+            return None;
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return None;
+        }
+        thread::sleep(remaining.min(Duration::from_millis(1)));
     }
 }
 

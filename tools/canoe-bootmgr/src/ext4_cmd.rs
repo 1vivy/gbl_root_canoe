@@ -34,11 +34,16 @@ impl Ext4Dir {
             .map_err(|source| io("wait", &self.helper, source))?;
         if !output.status.success() {
             let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-            return Err(Ext4Error::Operation(if detail.is_empty() {
+            let message = if detail.is_empty() {
                 format!("helper exited {}", output.status)
             } else {
                 detail
-            }));
+            };
+            return Err(if output.status.code() == Some(7) {
+                Ext4Error::Missing { message }
+            } else {
+                Ext4Error::Helper { message }
+            });
         }
         Ok(output.stdout)
     }
@@ -62,11 +67,13 @@ impl Ext4Dir {
             return Ok(None);
         }
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        Err(Ext4Error::Operation(if detail.is_empty() {
-            format!("read failed: {target}")
-        } else {
-            detail
-        }))
+        Err(Ext4Error::Helper {
+            message: if detail.is_empty() {
+                format!("read failed: {target}")
+            } else {
+                detail
+            },
+        })
     }
 
     pub(super) fn write_path(&self, path: &str, bytes: &[u8]) -> Result<(), Ext4Error> {
@@ -101,9 +108,14 @@ impl Ext4Dir {
         if output.status.success() || output.status.code() == Some(7) {
             return Ok(());
         }
-        Err(Ext4Error::Operation(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ))
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        Err(Ext4Error::Helper {
+            message: if message.is_empty() {
+                format!("helper exited {}", output.status)
+            } else {
+                message
+            },
+        })
     }
 }
 

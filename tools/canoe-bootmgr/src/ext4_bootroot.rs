@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use super::{Ext4Dir, Listed};
+use super::{Ext4Dir, Ext4Error, Listed};
 use crate::backend::{BackendError, BlsFile, BootRoot};
 use crate::bls::BlsEntry;
 use crate::config::ConfigDocument;
@@ -13,14 +13,14 @@ impl BootRoot for Ext4Dir {
 
     fn read_config(&self) -> Result<Option<ConfigDocument>, BackendError> {
         self.read_path("/canoe.cfg")
-            .map_err(|error| BackendError::Ext4(error.to_string()))?
+            .map_err(BackendError::Ext4Typed)?
             .map(|bytes| ConfigDocument::parse(&bytes).map_err(BackendError::Config))
             .transpose()
     }
 
     fn write_config(&self, config: &ConfigDocument) -> Result<(), BackendError> {
         self.write_path("/canoe.cfg", &config.serialize()?)
-            .map_err(|error| BackendError::Ext4(error.to_string()))
+            .map_err(BackendError::Ext4Typed)
     }
 
     fn list_bls(&self) -> Result<Vec<BlsFile>, BackendError> {
@@ -32,16 +32,25 @@ impl BootRoot for Ext4Dir {
         let output = Command::new(&self.helper)
             .args(["list", source, entries_dir.as_str()])
             .output()
-            .map_err(|error| {
-                BackendError::Ext4(format!("list BLS files {entries_dir}: {error}"))
+            .map_err(|source_error| {
+                BackendError::Ext4Typed(Ext4Error::Io {
+                    operation: "list BLS files",
+                    path: self.helper.clone(),
+                    source: source_error,
+                })
             })?;
         if output.status.code() == Some(7) {
             return Ok(Vec::new());
         }
         if !output.status.success() {
-            return Err(BackendError::Ext4(
-                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            ));
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(BackendError::Ext4Typed(Ext4Error::Helper {
+                message: if message.is_empty() {
+                    format!("helper exited {}", output.status)
+                } else {
+                    message
+                },
+            }));
         }
         let names: Vec<Listed> = serde_json::from_slice(&output.stdout)
             .map_err(|error| BackendError::Ext4(error.to_string()))?;
@@ -49,7 +58,7 @@ impl BootRoot for Ext4Dir {
         for item in names.into_iter().filter(|item| item.kind == "file") {
             if let Some(bytes) = self
                 .read_path(&format!("/loader/entries/{}", item.name))
-                .map_err(|error| BackendError::Ext4(error.to_string()))?
+                .map_err(BackendError::Ext4Typed)?
             {
                 if let Ok(entry) = BlsEntry::parse(&bytes) {
                     entries.push(BlsFile {
@@ -73,7 +82,7 @@ impl BootRoot for Ext4Dir {
         let path = format!("/loader/entries/{name}");
         let bytes = self
             .read_path(&path)
-            .map_err(|error| BackendError::Ext4(error.to_string()))?
+            .map_err(BackendError::Ext4Typed)?
             .ok_or_else(|| BackendError::Ext4(format!("BLS file not found: {name}")))?;
         Ok(BlsFile {
             name: name.to_owned(),
