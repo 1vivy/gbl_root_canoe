@@ -78,7 +78,7 @@ fn install_inner(
     let mut config = read_config(root)?;
     let rows = managed_rows(root, &mut config, active, input.mode)?;
     let generation = config
-        .sync_managed_rows(&rows)
+        .sync_managed_rows(&rows, Some(input.target.row_id()))
         .map_err(|error| SlotError::Invalid(error.to_string()))?;
     write_config(root, &config)?;
     stamp(root)?;
