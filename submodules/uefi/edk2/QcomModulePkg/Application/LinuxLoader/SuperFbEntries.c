@@ -1759,6 +1759,7 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
 {
   EFI_STATUS Status;
   BOOLEAN Managed;
+  SFB_BOOT_MODE RequestedMode;
   SFB_BOOT_MODE EffectiveMode;
   SFB_MODE2_PROFILE Profile;
   SFB_TZ_MAP TzMap;
@@ -1773,7 +1774,8 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
        Entry->Kind != SfbEntryBlsEfi)) {
     return EFI_INVALID_PARAMETER;
   }
-  EffectiveMode = Entry->ModeFromConfig ? Entry->Mode : SessionMode;
+  RequestedMode = Entry->ModeFromConfig ? Entry->Mode : SessionMode;
+  EffectiveMode = RequestedMode;
   Managed = SfbIsManagedAblEntry (Entry);
 
   if (Managed) {
@@ -1816,7 +1818,7 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
   DEBUG ((EFI_D_INFO,
           "SFB: MARK launch managed=%u requested-mode=%u "
           "effective-mode=%u kind=%u path='%s'\n",
-          (UINT32)Managed, (UINT32)SessionMode, (UINT32)EffectiveMode,
+          (UINT32)Managed, (UINT32)RequestedMode, (UINT32)EffectiveMode,
           (UINT32)Entry->Kind, Entry->Path));
 
   /*
@@ -1853,6 +1855,9 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
       OptionsPtr = Options;
     }
 
+    if (Managed) {
+      SfbSetLaunchRequestedMode (RequestedMode);
+    }
     SfbBypassSecurity ();
     Status = SfbLaunchImage (
                Entry->DevicePath,

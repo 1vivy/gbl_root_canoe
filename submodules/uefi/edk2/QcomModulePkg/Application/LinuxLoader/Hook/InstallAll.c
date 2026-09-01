@@ -83,9 +83,10 @@ SfbPrepareManagedAblHooks (
   UINT32 RestoredCount;
 
   /* A failed reconfiguration must leave installed wrappers strict pass-through
-   * rather than retaining a prior launch's active policy. */
+   * rather than retaining a prior launch's active policy or observation. */
   gManagedPolicyActive = FALSE;
   gManagedProfileValid = FALSE;
+  SfbInvalidateObservedDevInfo ();
   ZeroMem (&gManagedProfile, sizeof (gManagedProfile));
   SfbTzMapBuiltinDefault (&gManagedTzMap);
   gManagedTzMapInitialized = TRUE;

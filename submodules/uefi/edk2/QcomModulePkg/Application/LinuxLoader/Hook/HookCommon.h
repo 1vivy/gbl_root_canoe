@@ -9,6 +9,7 @@
 #include "../SuperFbMenu.h"
 #include "SuperFbProfile.h"
 #include "SuperFbTzMap.h"
+#include "SuperFbDevInfo.h"
 
 /* Boot Services run on one non-preempted boot CPU. Plain depth counters are
  * intentional: atomics would add unavailable outline helpers to EDK2. */

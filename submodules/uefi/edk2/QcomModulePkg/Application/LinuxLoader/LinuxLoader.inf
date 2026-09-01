@@ -77,6 +77,8 @@
 	SuperFbLogRing.c
 	SuperFbLogFlush.c
 	SuperFbLogSlot.c
+	SuperFbLastLaunch.h
+	SuperFbLastLaunch.c
 	SuperFbConfig.h
 	SuperFbConfig.c
 	SuperFbFat.c
@@ -85,6 +87,8 @@
 	SuperFbMenuScaffold.c
 	SuperFbBrowser.c
 	SuperFbSlots.h
+	SuperFbSlotRetry.h
+	SuperFbSlotAttributes.h
 	SuperFbSlots.c
 	SuperFbMassStorage.h
 	SuperFbMassStorage.c
@@ -101,6 +105,8 @@
 	Hook/SuperFbManagedPath.h
 	Hook/SuperFbManagedPath.c
 	Hook/SuperFbDeviceInfo.c
+	Hook/SuperFbDevInfo.h
+	Hook/SuperFbDevInfo.c
 	Hook/SuperFbProfile.h
 	Hook/SuperFbProfile.c
 	Hook/SuperFbTzMap.c

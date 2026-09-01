@@ -1,5 +1,6 @@
 #include "HookCommon.h"
 #include "SuperFbDeviceInfo.h"
+#include "SuperFbDevInfo.h"
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -30,10 +31,31 @@ STATIC BOOLEAN gVbReadLogged = FALSE;
 STATIC BOOLEAN gVbWriteLogged = FALSE;
 STATIC BOOLEAN gVbInitLogged = FALSE;
 STATIC BOOLEAN gVbResetLogged = FALSE;
+STATIC SFB_OBSERVED_DEVINFO gObservedDevInfo = { FALSE, FALSE, FALSE };
 
 SFB_HOOK_GUARD_DEFINE (gVbRwGuard);
 SFB_HOOK_GUARD_DEFINE (gVbInitGuard);
 SFB_HOOK_GUARD_DEFINE (gVbResetGuard);
+
+VOID
+SfbRecordObservedDevInfo (IN BOOLEAN Unlocked, IN BOOLEAN Critical)
+{
+  gObservedDevInfo.Available = TRUE;
+  gObservedDevInfo.Unlocked = Unlocked;
+  gObservedDevInfo.Critical = Critical;
+}
+
+VOID
+SfbInvalidateObservedDevInfo (VOID)
+{
+  ZeroMem (&gObservedDevInfo, sizeof (gObservedDevInfo));
+}
+
+SFB_OBSERVED_DEVINFO
+SfbGetObservedDevInfo (VOID)
+{
+  return gObservedDevInfo;
+}
 
 BOOLEAN
 SfbValidDeviceInfo (IN CONST UINT8 *Buffer, IN UINT32 BufferBytes)
@@ -117,6 +139,9 @@ SfbRepairDeviceInfo (IN BOOLEAN Required, IN SFB_CONFIG_LOCK_POLICY Policy)
   SFB_LOCK_ACTION LockAction;
   CONST CHAR8 *Action;
 
+  /* A failed read must invalidate an earlier observation rather than publish
+   * stale lock state if the caller later falls back to fastboot. */
+  SfbInvalidateObservedDevInfo ();
   if (gVerifiedBoot == NULL || gOrigRwDeviceState == NULL) {
     return EFI_NOT_READY;
   }
@@ -134,6 +159,7 @@ SfbRepairDeviceInfo (IN BOOLEAN Required, IN SFB_CONFIG_LOCK_POLICY Policy)
                               &ObservedUnlocked, &ObservedCritical)) {
     return EFI_COMPROMISED_DATA;
   }
+  SfbRecordObservedDevInfo (ObservedUnlocked, ObservedCritical);
 
   Satisfies = (BOOLEAN)(!Required ||
                         (ObservedUnlocked && ObservedCritical));

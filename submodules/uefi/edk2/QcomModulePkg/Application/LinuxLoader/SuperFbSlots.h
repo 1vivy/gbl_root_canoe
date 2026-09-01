@@ -1,7 +1,7 @@
 /*
- * Which slot the GPT marks active.
+ * Which slot the GPT marks active, plus the narrow active-slot retry reset.
  *
- * This exists to check a claim, never to make one. The menu's slot roles are
+ * Slot discovery checks a claim and never makes one. The menu's slot roles are
  * presentation-only and are written by whoever authored canoe.cfg; when an OTA
  * flips the active slot and the device-side watcher has not run yet - because
  * Android has not booted - the config still labels the old slot active. Reading
@@ -21,6 +21,7 @@
 #define __SUPER_FB_SLOTS_H__
 
 #include <Uefi.h>
+#include "SuperFbSlotRetry.h"
 
 typedef enum {
   /* Not an A/B device, or the GPT marks neither slot, or it marks both. */
@@ -28,6 +29,15 @@ typedef enum {
   SfbSlotA,
   SfbSlotB
 } SFB_SLOT;
+
+/*
+ * Read each abl partition's retry-related attributes from the table already
+ * enumerated by LinuxLoader. Missing entries remain unavailable; callers must
+ * render those as unknown. This path is deliberately uncached so a later GPT
+ * update cannot leave a stale counter behind.
+ */
+SFB_SLOT_RETRIES
+SfbSlotRetries (VOID);
 
 /*
  * Which slot the GPT marks active, read from the partition table the loader
@@ -39,5 +49,13 @@ typedef enum {
  */
 SFB_SLOT
 SfbActiveSlot (VOID);
+
+/*
+ * Restore the retry count and clear unbootable on the slot freshly observed as
+ * active in PtnEntries. There is intentionally no slot argument: callers can
+ * neither switch slots nor target the inactive slot through this capability.
+ */
+EFI_STATUS
+SfbResetActiveSlotRetry (VOID);
 
 #endif /* __SUPER_FB_SLOTS_H__ */

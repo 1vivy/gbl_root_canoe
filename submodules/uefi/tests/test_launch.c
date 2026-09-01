@@ -62,6 +62,9 @@ static EFI_STATUS mStartStatus;
 static UINTN mLoadCount;
 static UINTN mStartCount;
 static UINTN mWatchdogDisableCount;
+static UINTN mLaunchEvent;
+static UINTN mLoadEvent;
+static UINTN mStartEvent;
 static EFI_HANDLE mLoadedHandle = (EFI_HANDLE)(UINTN)0x5678;
 static BOOLEAN mFileDevicePathAvailable;
 static EFI_DEVICE_PATH_PROTOCOL mDevicePath;
@@ -758,6 +761,7 @@ FakeLoadImage(IN BOOLEAN BootPolicy, IN EFI_HANDLE ParentImageHandle,
   (void)SourceBuffer;
   (void)SourceSize;
   ++mLoadCount;
+  mLoadEvent = ++mLaunchEvent;
   if (EFI_ERROR (mLoadStatus)) {
     return mLoadStatus;
   }
@@ -801,6 +805,7 @@ FakeStartImage(IN EFI_HANDLE ImageHandle, IN OUT UINTN *ExitDataSize,
   (void)ExitDataSize;
   (void)ExitData;
   ++mStartCount;
+  mStartEvent = ++mLaunchEvent;
   assert(ImageHandle == mLoadedHandle);
   mSecurityRestoredAtStart =
     mSecurity.FileAuthenticationState == OriginalSecurityState &&
@@ -978,6 +983,9 @@ ResetLaunchBackend(void)
   mStartStatus = EFI_SUCCESS;
   mLoadCount = 0;
   mStartCount = 0;
+  mLaunchEvent = 0;
+  mLoadEvent = 0;
+  mStartEvent = 0;
   mWatchdogDisableCount = 0;
   mOpenStatus = EFI_SUCCESS;
   mReadStatus = EFI_SUCCESS;
