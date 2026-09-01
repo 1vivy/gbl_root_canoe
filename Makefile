@@ -1,3 +1,4 @@
+CANOE_ROOT_DIR := $(abspath .)
 include version.mk
 
 .PHONY: clean clean_submodules targets_clean \
@@ -75,7 +76,12 @@ bump:
 		'# `make bump` regenerates every derived file.' \
 		'# `make version-check` fails when they drift.' \
 		'CANOE_VERSION = '"$$version" \
-		'CANOE_VERSION_CODE = '"$$version_code" > version.mk.tmp; \
+		'CANOE_VERSION_CODE = '"$$version_code" \
+		'# Web UI release pin; the archive is a checked-in last-known-good fallback' \
+		'# until canoe-boot-manager publishes release assets.' \
+		'CANOE_WEBUI_VERSION = $(CANOE_WEBUI_VERSION)' \
+		'CANOE_WEBUI_SHA256 = $(CANOE_WEBUI_SHA256)' \
+		'CANOE_WEBUI_URL = file://$$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-$(CANOE_WEBUI_VERSION).tar.gz' > version.mk.tmp; \
 	if ! cmp -s version.mk.tmp version.mk; then mv version.mk.tmp version.mk; else rm version.mk.tmp; fi; \
 	printf '%s\n' \
 		'//! Build version generated from version.mk by `make bump`.' \
@@ -172,18 +178,18 @@ test:
 	cargo test --locked --manifest-path tools/mode2-profile/Cargo.toml
 	cargo test --locked --manifest-path tools/abl-tzmap/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
-	cargo test --locked --manifest-path tools/canoe-gui/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe/Cargo.toml
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
 	$(MAKE) -C tools/canoe-ext4 test
 	sh targets/magisk_module/tests/test_flows.sh
-	sh targets/magisk_module/tests/test_webui.sh
 	sh targets/toolkit_android/tests/test_build_script.sh
 
-# Download a pinned package asset without ever exposing a partial archive to
+# Fetch a pinned package asset without ever exposing a partial archive to
 # subsequent builds. Package Makefiles invoke this target with absolute
 # FETCH_DEST paths so the mechanism is independent of their working directory.
+# A file:// URL uses the checked-in last-known-good asset while a release URL
+# remains the normal path once the producer repository publishes one.
 fetch-verified:
 	@set -eu; \
 	test -n "$(FETCH_URL)" || { echo "FETCH_URL is required" >&2; exit 2; }; \
@@ -198,8 +204,11 @@ fetch-verified:
 		echo "Verified $$(basename "$$dest") sha256: $(FETCH_SHA256)"; \
 		exit 0; \
 	fi; \
-	rm -f "$$dest" "$$tmp"; \
-	wget --no-verbose --tries=3 --output-document="$$tmp" "$(FETCH_URL)"; \
+	source_label=Downloaded; \
+	case "$(FETCH_URL)" in \
+		file://*) source_label=Copied; cp -- "$${FETCH_URL#file://}" "$$tmp" ;; \
+		*) wget --no-verbose --tries=3 --output-document="$$tmp" "$(FETCH_URL)" ;; \
+	esac; \
 	actual="$$(sha256sum "$$tmp" | cut -d" " -f1)"; \
 	if [ "$$actual" != "$(FETCH_SHA256)" ]; then \
 		echo "sha256 mismatch for $$(basename "$$dest"): expected $(FETCH_SHA256), got $$actual" >&2; \
@@ -207,4 +216,4 @@ fetch-verified:
 	fi; \
 	mv "$$tmp" "$$dest"; \
 	trap - EXIT HUP INT TERM; \
-	echo "Downloaded and verified $$(basename "$$dest") sha256: $$actual"
+	echo "$$source_label and verified $$(basename "$$dest") sha256: $$actual"
