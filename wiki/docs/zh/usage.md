@@ -161,9 +161,12 @@ fastboot reboot recovery     # recovery
 fastboot reboot bootloader   # 回到 Super Fastboot
 ```
 
-其他目标会直接失败，而不是重启到未被指定的位置；本设备没有用户空间
-fastbootd，因此 `fastboot reboot fastboot` 会被拒绝，而不会被当作重启到
-bootloader。
+其他目标会直接失败，而不是重启到未被指定的位置。BDS 会话不是 fastbootd，
+它之下也没有用户空间会话，因此 `fastboot reboot fastboot` 会被拒绝，而不会
+被当作重启到 bootloader。这仅指 BDS 会话：设备本身在刚解锁时是提供
+fastbootd 的——在 Android 中用 `adb reboot fastboot` 进入，或在 bootloader
+自己的 fastboot 中用 `fastboot reboot fastboot` 进入。ABL 及其他关键分区只能
+在 fastbootd 中刷写，因此首次安装要在原厂 fastbootd 里进行。
 
 结束导出本身仍然要在设备上按音量下。导出进行时 USB 链路是 mass storage
 gadget，不承载 fastboot 通道，任何主机命令都到不了 BDS。主机发出的 SCSI

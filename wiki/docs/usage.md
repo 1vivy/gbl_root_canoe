@@ -189,9 +189,14 @@ fastboot reboot recovery     # recovery
 fastboot reboot bootloader   # back into Super Fastboot
 ```
 
-Any other target fails rather than rebooting somewhere it was not asked to;
-this device has no userspace fastbootd, so `fastboot reboot fastboot` is
-refused instead of being answered with a bootloader reboot.
+Any other target fails rather than rebooting somewhere it was not asked to.
+The BDS session is not fastbootd and has no userspace session beneath it, so
+`fastboot reboot fastboot` is refused instead of being answered with a
+bootloader reboot. This is about the BDS session only: the device itself does
+provide fastbootd when it is fresh and unlocked — reach that one from Android
+with `adb reboot fastboot`, or from the bootloader's own fastboot with
+`fastboot reboot fastboot`. ABL and other critical partitions can only be
+flashed there, which is why the first install happens from stock fastbootd.
 
 Ending the export itself is still Volume Down on the device. While the export
 runs, the USB link is a mass-storage gadget and carries no fastboot channel, so

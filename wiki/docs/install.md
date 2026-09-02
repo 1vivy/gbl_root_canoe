@@ -51,8 +51,18 @@ host permission required is permission to open the source device.
 
 ### 1. Host install
 
-This is the first installation from a Linux or Windows computer. The device
-must already be in Super Fastboot before the native host surface runs:
+This is the first installation from a Linux or Windows computer. It has two
+halves with different fastboot sessions. First, the vulnerable ABL and
+`BDS.efi` are flashed to `abl_a`/`abl_b` and `efisp` from **stock fastbootd** —
+the userspace fastboot a fresh unlocked device provides, entered from Android
+with `adb reboot fastboot` (or from the bootloader's own fastboot with
+`fastboot reboot fastboot`). ABL and other critical partitions are not
+flashable from the bootloader's fastboot, so there is no alternative session
+for this half; `fastboot getvar is-userspace` answers `yes` in the right one.
+The device then boots into the BDS, which presents Super Fastboot.
+
+The second half installs the boot root and is what this section describes. The
+device must already be in Super Fastboot before the native host surface runs:
 
 ```text
 Linux:   ./canoe
