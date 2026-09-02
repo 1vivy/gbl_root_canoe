@@ -71,23 +71,24 @@ When the boot root is missing or unreachable, has no launchable image, or has a
 configuration whose images are all absent, BDS treats it as first run. The
 first-run screen has these rows:
 
-- **Enter Super Fastboot**
+- **Enter boot menu (Volume Up)**
 - **Enter Super Fastboot (default)**
 
-Press **VOL UP during boot** to reach that menu. The cursor starts on **Enter
-Super Fastboot**, and the default row is **Enter Super Fastboot (default)**.
-The timeout, VOL DOWN, and Power preserve the safe Super Fastboot path; choosing
-the menu row lets an operator inspect the available entries.
+On the first-run screen, press **VOL UP** to enter the normal boot menu. The
+cursor starts on **Enter Super Fastboot (default)**. The two-second timeout,
+VOL DOWN, and Power preserve the safe Super Fastboot path; choosing the boot
+menu row lets an operator inspect the available entries.
 
 For a populated root, BDS reads `menu-mode` and samples keys for `key-window`
 milliseconds:
 
 - **Silent** (fresh-install default): VOL UP opens the menu and then waits
-  indefinitely; VOL DOWN takes the existing Super Fastboot path; no key launches
-  the configured default after the key window.
-- **Menu**: VOL DOWN during the key window takes Super Fastboot, then the menu
-  always opens. It counts down for `menu-timeout` seconds and launches the
-  default; any key cancels the countdown and makes the menu wait indefinitely.
+  indefinitely; VOL DOWN exits directly to Super Fastboot; with no key held,
+  BDS launches the configured default after the key window.
+- **Menu**: VOL DOWN during the key window exits directly to Super Fastboot.
+  Otherwise the menu opens and counts down for `menu-timeout` seconds before
+  launching the default; any key cancels the countdown and makes the menu wait
+  indefinitely.
 
 `key-window` is `0..=10000` milliseconds and defaults to `1200`; zero disables
 sampling. `menu-timeout` is `0..=300` seconds and defaults to `5`; it is used

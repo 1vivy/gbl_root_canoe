@@ -65,19 +65,19 @@ Super Fastboot 会放宽 ABL 的关键分区保护状态，因此可以在此 BD
 启动根目录不存在或无法访问、没有可启动镜像，或配置中的全部镜像都不存在时，BDS
 视为首次运行。首次运行界面包含以下两行：
 
-- **Enter Super Fastboot**
+- **Enter boot menu (Volume Up)**
 - **Enter Super Fastboot (default)**
 
-启动时按**音量上**进入该菜单。光标位于 **Enter Super Fastboot**，默认行是
-**Enter Super Fastboot (default)**。超时、音量下和电源键都会保留安全的 Super
-Fastboot 路径；选择菜单行可以查看可用启动项。
+在首次运行界面按**音量上**进入普通启动菜单。光标起始于
+**Enter Super Fastboot (default)**。两秒超时、音量下和电源键都会保留安全的
+Super Fastboot 路径；选择启动菜单行可以查看可用启动项。
 
 对于已填充的启动根目录，BDS 读取 `menu-mode`，并在启动时采样
 `key-window` 毫秒：
 
-- **Silent**（新安装默认）：窗口内按音量上打开菜单并无限等待；音量下走现有 Super
-  Fastboot 路径；无按键时在窗口结束后启动配置的默认项。
-- **Menu**：窗口内按音量下先进入 Super Fastboot，之后总是打开菜单。菜单按
+- **Silent**（新安装默认）：窗口内按音量上打开菜单并无限等待；按音量下会直接退出到
+  Super Fastboot；没有按键时，BDS 会在窗口结束后启动配置的默认项。
+- **Menu**：窗口内按音量下会直接退出到 Super Fastboot。否则打开菜单，并按
   `menu-timeout` 秒倒计时后启动默认项；任意按键会取消倒计时并使菜单无限等待。
 
 `key-window` 范围为 `0..=10000` 毫秒，默认 `1200`；零表示关闭采样。

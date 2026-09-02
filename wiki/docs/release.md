@@ -103,12 +103,15 @@ bun run dist-tarball -- canoe-boot-manager-0.1.0.tar.gz
 sha256sum canoe-boot-manager-0.1.0.tar.gz
 ```
 
-The current untagged app build produced
-`f10c63063d93d8a4b644f7a0ff7989ab2d199ac95c78da96e69fb461fb3eccb1` twice; the
-checked-in fallback has been regenerated from that same artifact and the firmware pin
-now matches it. The app version remains `0.1.0` because it has not been tagged yet;
-once published, the release URL and digest must move together. The firmware repository
-consumes the tarball by URL and SHA-256; it does not rebuild or reinterpret the WebUI.
+A deterministic implementation produces the same digest both times. The digest
+itself is deliberately not written here: it changes with every app build, so a copy
+in prose is stale the moment the app is rebuilt, and a stale digest in a release
+guide is worse than none. The authoritative value is `CANOE_WEBUI_SHA256` in
+`version.mk`, and `make version-check` fails when the checked-in archive does not
+hash to it. The app version remains `0.1.0` because it has not been tagged yet;
+once published, the release URL and digest must move together. The firmware
+repository consumes the tarball by URL and SHA-256; it does not rebuild or
+reinterpret the WebUI.
 
 ## 3. Build the firmware packages
 
