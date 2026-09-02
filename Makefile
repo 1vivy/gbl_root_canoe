@@ -173,6 +173,25 @@ version-check:
 			fail=1; \
 		fi; \
 	fi; \
+	if [ -f submodules/uefi/build/BDS.efi ] && command -v sha256sum >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then \
+		expected="$$(sha256sum submodules/uefi/build/BDS.efi | cut -d" " -f1)"; \
+		for archive in targets/toolkit_linux/build/toolkit_linux.zip \
+			targets/toolkit_windows/build/toolkit_windows.zip \
+			targets/toolkit_android/build/toolkit_android.zip \
+			targets/magisk_module/build/module_android.zip; do \
+			[ -f "$$archive" ] || continue; \
+			if unzip -l "$$archive" BDS.efi >/dev/null 2>&1; then \
+				member="$$(unzip -p "$$archive" BDS.efi | sha256sum | cut -d" " -f1)"; \
+			else \
+				member='<missing>'; \
+			fi; \
+			if [ "$$member" != "$$expected" ]; then \
+				printf 'package artifact mismatch: %s carries BDS.efi %s expected %s (rebuild that package; a green unit suite does not prove an archive is current)\n' \
+					"$$archive" "$$member" "$$expected"; \
+				fail=1; \
+			fi; \
+		done; \
+	fi; \
 	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
 	printf 'Version check passed: %s (version code %s)\n' "$$version" "$$version_code"
 
