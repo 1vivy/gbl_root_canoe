@@ -261,6 +261,7 @@ fn fastboot_identify_protocol_reports_fake_values() {
     canoe-bds) echo "canoe-bds: 7.0.0" >&2 ;;
     canoe-devinfo) echo "canoe-devinfo: unlocked=0 critical=0 waiver=unknown retry_a=3 retry_b=unknown" >&2 ;;
     canoe-last-launch) echo "canoe-last-launch: requested=2 effective=0 reason=lockstate-refused" >&2 ;;
+    is-userspace) echo "is-userspace: yes" >&2 ;;
   esac"#,
     );
     install_path_fastboot(root.path(), &fastboot);
@@ -281,6 +282,7 @@ fn fastboot_identify_protocol_reports_fake_values() {
         "requested=2 effective=0 reason=lockstate-refused"
     );
     assert_eq!(document["current_slot"], "b");
+    assert_eq!(document["is_userspace"], true);
 }
 
 #[test]
@@ -296,6 +298,7 @@ fn fastboot_identify_protocol_keeps_silent_values_null() {
         serde_json::from_slice(&output.stdout).expect("JSON response");
     assert_eq!(document["operation"], "fastboot.identify");
     assert!(document["bds_version"].is_null());
+    assert!(document["is_userspace"].is_null());
     assert!(document["current_slot"].is_null());
 }
 
@@ -411,12 +414,14 @@ fn getvar_matches_exact_prefix_and_filters_failed_or_empty_values() {
       echo "current-slot: a" >&2
       ;;
     canoe-bds) echo "canoe-bds: FAILED (unknown variable)" >&2 ;;
+    is-userspace) echo "is-userspace: no" >&2 ;;
   esac
   exit 0"#,
     );
     let identity = fastboot::identify(&fastboot, Duration::from_secs(1));
     assert_eq!(identity.current_slot.as_deref(), Some("a"));
     assert_eq!(identity.bds_version, None);
+    assert_eq!(identity.is_userspace, Some(false));
 }
 
 #[test]

@@ -285,6 +285,7 @@ fn fastboot_command(command: &FastbootCommand) -> Result<Success, AppError> {
                 current_slot: identity.current_slot,
                 devinfo: identity.devinfo,
                 last_launch: identity.last_launch,
+                is_userspace: identity.is_userspace,
             })
         }
         FastbootCommand::Export(args) => {

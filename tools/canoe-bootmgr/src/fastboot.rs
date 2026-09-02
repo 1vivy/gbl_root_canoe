@@ -22,6 +22,7 @@ pub struct Identity {
     pub current_slot: Option<String>,
     pub devinfo: Option<String>,
     pub last_launch: Option<String>,
+    pub is_userspace: Option<bool>,
 }
 
 #[derive(Debug, Error)]
@@ -124,18 +125,24 @@ fn is_executable(path: &Path) -> bool {
         true
     }
 }
-
 /// Read the BDS identity variables, retrying one missed getvar command.
 pub fn identify(fastboot: &Path, timeout: Duration) -> Identity {
     let current_slot = getvar(fastboot, "current-slot", timeout);
     let bds_version = getvar(fastboot, "canoe-bds", timeout);
     let devinfo = getvar(fastboot, "canoe-devinfo", timeout);
     let last_launch = getvar(fastboot, "canoe-last-launch", timeout);
+    let is_userspace = getvar(fastboot, "is-userspace", timeout)
+        .and_then(|value| match value.as_str() {
+            "yes" => Some(true),
+            "no" => Some(false),
+            _ => None,
+        });
     Identity {
         bds_version,
         current_slot: current_slot.filter(|slot| slot == "a" || slot == "b"),
         devinfo,
         last_launch,
+        is_userspace,
     }
 }
 
