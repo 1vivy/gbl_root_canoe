@@ -40,6 +40,9 @@ boot 处理函数在该镜像 kernel 段的开头识别出 `MZ` 签名，于是�
 
 两者任选。`fastboot stage` + `fastboot oem boot-efi` 是显式形式，不依赖电脑端
 工具的包装行为；`fastboot boot` 只需一条命令。
+`Super Fastboot` 是 BDS 自带的 fastboot 会话，不是系统用户空间的
+`fastbootd`。它会放宽 ABL 的关键分区保护状态，因此可以在此刷写；但
+`super` 内部的分区仍是例外。`fastbootd` 仅用于安装指南所述的全新安装流程。
 
 ## 首次运行与菜单
 
@@ -47,18 +50,18 @@ boot 处理函数在该镜像 kernel 段的开头识别出 `MZ` 签名，于是�
 所有 `image` 都不存在的配置视为首次运行。BDS 显示首次运行界面，其中有两行：
 
 - **Enter boot menu (Volume Up)**
-- **Enter fastboot (default)**
+- **Enter Super Fastboot (default)**
 
-光标从 **Enter fastboot** 开始，界面等待两秒。只有音量上会选择进入普通菜单；
-超时、音量下和电源键都会保留 fastboot 默认路径。这是刚刷入 BDS 后的安全路径：
+光标从 **Enter Super Fastboot** 开始，界面等待两秒。只有音量上会选择进入普通菜单；
+超时、音量下和电源键都会保留 Super Fastboot 默认路径。这是刚刷入 BDS 后的安全路径：
 电脑端无需先准备菜单配置就能安装启动链。
 
 对于已填充的启动根目录，BDS 会在启动时按 `menu-mode` 读取策略，并采样
 `key-window` 毫秒：
 
 - **Silent 模式**（新安装默认）：窗口内按音量上会打开菜单并无限等待；音量下
-  进入现有 fastboot 路径；没有按键则立即启动配置的默认项。
-- **Menu 模式**：窗口内按音量下进入 fastboot，随后总是打开菜单。菜单按
+  进入现有 Super Fastboot 路径；没有按键则立即启动配置的默认项。
+- **Menu 模式**：窗口内按音量下进入 Super Fastboot，随后总是打开菜单。菜单按
   `menu-timeout` 秒倒计时后启动默认项；任意按键会取消倒计时并使菜单无限等待。
 
 `key-window` 范围为 `0..=10000` 毫秒，默认 `1200`；零表示不采样。
@@ -84,7 +87,7 @@ boot 处理函数在该镜像 kernel 段的开头识别出 `MZ` 签名，于是�
    使用 `NONAME<n>`。
 5. `persist` ext4 启动根目录或可移动介质中 `\loader\entries\*.conf` 下的有效
    BLS Type #1 启动项。见[链式启动与 BLS 启动项](./chainload.md)。
-6. 内置操作：**Enter Fastboot**、**Enter EFI Program Selector**、**EFI Tools**、
+6. 内置操作：**Enter Super Fastboot**、**Enter EFI Program Selector**、**EFI Tools**、
    **USB Mass Storage**、**Reboot to Recovery**、**Power Off** 与 **Restart**。
 
 只有镜像存在时才显示配置行；镜像缺失会被跳过。BLS 文件无效或引用镜像缺失时
@@ -149,8 +152,8 @@ Super Fastboot 等待主机时会显示自己的选项，用音量上/下移动�
 - **Power Off**；
 - **Restart**。
 
-这里提供 Recovery 是因为进入 fastboot 后无法重新进入启动菜单：启动菜单在
-**Enter Fastboot** 之前运行，而首次运行也默认直接到此界面。完成电脑端安装或
+这里提供 Recovery 是因为进入 Super Fastboot 后无法重新进入启动菜单：启动菜单在
+**Enter Super Fastboot** 之前运行，而首次运行也默认直接到此界面。完成电脑端安装或
 导出会话后要进入 Recovery，就用这里的 **Reboot to Recovery**。
 
 电脑端的重启目标现在会被遵守：

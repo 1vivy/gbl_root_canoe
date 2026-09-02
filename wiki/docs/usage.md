@@ -43,6 +43,10 @@ Measured on the OnePlus 15.
 Use whichever is convenient. `fastboot stage` + `fastboot oem boot-efi` is the
 explicit form and does not depend on the host tool's wrapping behaviour;
 `fastboot boot` is one command.
+`Super Fastboot` is the BDS's own fastboot session, not stock userspace
+`fastbootd`. It waives ABL's critical-partition status, so flashing works from
+Super Fastboot; partitions inside `super` remain the exception. `fastbootd` is
+reserved for the fresh-install path described in [install.md](./install.md).
 
 ## First run and menu
 
@@ -51,20 +55,20 @@ launchable image, and a config whose images are all absent as first run. BDS
 shows a first-run screen with two rows:
 
 - **Enter boot menu (Volume Up)**
-- **Enter fastboot (default)**
+- **Enter Super Fastboot (default)**
 
-The cursor starts on **Enter fastboot** and that screen waits two seconds.
+The cursor starts on **Enter Super Fastboot** and that screen waits two seconds.
 Volume Up is the only key that opts into the normal menu; timeout, Volume Down,
-and Power preserve the fastboot default. This is the safe path for a freshly
+and Power preserve the Super Fastboot default. This is the safe path for a freshly
 flashed BDS: the host can install the chain without any menu configuration.
 
 For a populated root, BDS reads `menu-mode` and samples keys for
 `key-window` milliseconds at startup:
 
 - **Silent mode** (fresh-install default): Volume Up opens the menu and then
-  waits indefinitely; Volume Down takes the existing fastboot path; no key
+  waits indefinitely; Volume Down takes the existing Super Fastboot path; no key
   launches the configured default immediately.
-- **Menu mode**: Volume Down during the key window takes fastboot, then the
+- **Menu mode**: Volume Down during the key window takes Super Fastboot, then the
   menu always opens. It counts down for `menu-timeout` seconds and launches the
   default; any key cancels the countdown and makes the menu wait indefinitely.
 
@@ -95,7 +99,7 @@ The menu is built in this order:
 5. Usable BLS Type #1 rows from `\loader\entries\*.conf` on the persist ext4
    boot root or removable media. See
    [Chainloading and BLS entries](./chainload.md).
-6. Built-in actions: **Enter Fastboot**, **Enter EFI Program Selector**,
+6. Built-in actions: **Enter Super Fastboot**, **Enter EFI Program Selector**,
    **EFI Tools**, **USB Mass Storage**, **Reboot to Recovery**, **Power Off**,
    and **Restart**.
 
@@ -176,8 +180,8 @@ Up/Down and chosen with Power:
 - **Power Off**
 - **Restart**
 
-Recovery is here because the boot menu runs before the fastboot loop and cannot
-be re-entered after **Enter Fastboot**. First-run also defaults directly to this
+Recovery is here because the boot menu runs before the fastboot loop and cannot be
+re-entered after **Enter Super Fastboot**. First-run also defaults directly to this
 screen, so its **Reboot to Recovery** row is the recovery path after a host
 install or export session.
 

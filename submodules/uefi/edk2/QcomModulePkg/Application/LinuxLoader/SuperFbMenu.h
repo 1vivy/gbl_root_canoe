@@ -573,7 +573,7 @@ SfbFreeEntry (IN OUT SFB_BOOT_ENTRY *Entry);
  * Draw the boot menu and service it until something is launched. This is the
  * only entry point LinuxLoader needs.
  *
- * Returns TRUE when the user picked the built-in "Enter Fastboot" entry, which
+ * Returns TRUE when the user picked the built-in "Enter Super Fastboot" entry, which
  * the caller is expected to honour; FALSE means the menu has nothing left to do.
  */
 BOOLEAN

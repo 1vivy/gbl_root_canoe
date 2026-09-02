@@ -1402,7 +1402,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
     SfbAppendBuiltIn (Menu, SfbEntryBack, L"Config slot role is stale");
   }
 
-  SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Fastboot");
+  SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Super Fastboot");
   SfbAppendBuiltIn (Menu, SfbEntrySelector, L"Enter EFI Program Selector");
   SfbAppendBuiltIn (Menu, SfbEntryTools, L"EFI Tools");
   SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");
