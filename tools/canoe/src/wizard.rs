@@ -47,7 +47,17 @@ fn confirm_environment<R: BufRead, W: Write>(
         Ok(path) => path,
         Err(error) => return confirm_probe_failure(error.to_string(), reader, writer),
     };
-    let identity = canoe_bootmgr::fastboot::identify(&fastboot, Duration::from_secs(10));
+    let identity = match canoe_bootmgr::fastboot::identify_checked(
+        &fastboot,
+        Duration::from_secs(10),
+    ) {
+        Ok(identity) => identity,
+        Err(error @ canoe_bootmgr::fastboot::FastbootError::DeviceBusy { .. })
+        | Err(error @ canoe_bootmgr::fastboot::FastbootError::ExportActive { .. }) => {
+            return Err(CanoeError::message(error.to_string()));
+        }
+        Err(error) => return confirm_probe_failure(error.to_string(), reader, writer),
+    };
     confirm_identity(identity, reader, writer)
 }
 

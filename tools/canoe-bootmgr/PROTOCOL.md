@@ -41,6 +41,9 @@ A failed JSON response is one object, followed by `\n`:
 | `timeout` | A fastboot command or helper exceeded its deadline; the process is stopped, but descendants holding output pipes may be detached. |
 | `fastboot-unavailable` | No bundled or PATH `fastboot` executable exists, so device identification cannot run. |
 | `permission-denied` | The selected local path or raw block node could not be opened because permission was denied. |
+| `device-busy` | Another process owns the device lease; the request waited up to the bounded lease deadline and was refused. |
+| `export-active` | A live mass-storage export owns the link, so fastboot cannot run until it is ended. |
+| `export-required` | The operation needs a live mass-storage export before raw-node access can proceed. |
 | `vbmeta-duplicate-property` | `vbmeta.inspect` refused an image with a duplicate named build property; clients must not use a partial result. |
 | `vbmeta-worker-unavailable` | The `mode2_profile` worker could not be resolved or is not executable. |
 | `vbmeta-worker-spawn` | The `mode2_profile` worker could not be started. |

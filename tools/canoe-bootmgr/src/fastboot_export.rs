@@ -4,8 +4,9 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::device_access::DeviceGuard;
 use crate::fastboot::FastbootError;
-use crate::fastboot::fastboot_command::ReapedChild;
+use super::fastboot_child::ReapedChild;
 
 #[derive(Debug)]
 pub struct Exported {
@@ -16,6 +17,20 @@ pub struct Exported {
 
 /// Start or adopt a BDS mass-storage export and return its raw block node.
 pub fn export<F>(
+    fastboot: &Path,
+    target: &str,
+    timeout: Duration,
+    find: F,
+) -> Result<Exported, FastbootError>
+where
+    F: FnMut() -> Result<Option<PathBuf>, FastbootError>,
+{
+    let guard = DeviceGuard::export()?;
+    export_with_guard(&guard, fastboot, target, timeout, find)
+}
+
+pub(crate) fn export_with_guard<F>(
+    _guard: &DeviceGuard,
     fastboot: &Path,
     target: &str,
     timeout: Duration,
@@ -35,6 +50,7 @@ where
     // `Exported` must never kill it; the detached guard only reaps an exited
     // child or hands a running one to a waiter thread.
     let mut child = ReapedChild::spawn_detached(
+        _guard,
         fastboot,
         &[
             OsString::from("oem"),
@@ -94,7 +110,7 @@ where
     export(fastboot, target, timeout, find)
 }
 
-pub(crate) fn end_export(node: &Path) -> Result<(), FastbootError> {
+pub(crate) fn end_export(_guard: &DeviceGuard, node: &Path) -> Result<(), FastbootError> {
     #[cfg(target_os = "linux")]
     {
         end_export_linux(node)

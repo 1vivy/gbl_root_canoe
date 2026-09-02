@@ -418,7 +418,8 @@ fn getvar_matches_exact_prefix_and_filters_failed_or_empty_values() {
   esac
   exit 0"#,
     );
-    let identity = fastboot::identify(&fastboot, Duration::from_secs(1));
+    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(1))
+        .expect("identity");
     assert_eq!(identity.current_slot.as_deref(), Some("a"));
     assert_eq!(identity.bds_version, None);
     assert_eq!(identity.is_userspace, Some(false));
@@ -435,7 +436,8 @@ fn getvar_filters_empty_value() {
   esac
   exit 0"#,
     );
-    let identity = fastboot::identify(&fastboot, Duration::from_secs(1));
+    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(1))
+        .expect("identity");
     assert_eq!(identity.current_slot.as_deref(), Some("a"));
     assert_eq!(identity.bds_version, None);
 }
@@ -463,7 +465,8 @@ fn getvar_retries_one_missed_command() {
     );
     // Generous per-command budget: the assertion is that one miss is retried,
     // not that a loaded machine answers within a second.
-    let identity = fastboot::identify(&fastboot, Duration::from_secs(30));
+    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(30))
+        .expect("identity");
     assert_eq!(identity.current_slot.as_deref(), Some("b"));
     assert_eq!(fs::read_to_string(state).expect("attempt count"), "2\n");
 }

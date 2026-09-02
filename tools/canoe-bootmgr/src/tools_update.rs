@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::slot_tools;
 
 #[derive(Debug, Error)]
-pub(crate) enum ToolsUpdateError {
+pub enum ToolsUpdateError {
     #[error("tools source does not exist: {source_path}")]
     SourceMissing { source_path: PathBuf },
     #[error("tools source is not a directory: {source_path}")]

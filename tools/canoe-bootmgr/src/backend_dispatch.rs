@@ -50,6 +50,13 @@ impl Backend {
         Self::local(root.unwrap_or_else(|| Path::new(".")))
     }
 
+    pub(crate) fn source_is_block_device(&self) -> bool {
+        match self {
+            Self::Local(_) => false,
+            Self::Ext4(ext4) => ext4.source_is_block_device(),
+        }
+    }
+
     pub fn with_temp_root<T, F>(&self, action: F) -> Result<T, BackendError>
     where
         F: FnOnce(&Path) -> Result<T, String>,

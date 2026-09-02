@@ -1,4 +1,6 @@
 use std::env;
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -128,6 +130,14 @@ impl Ext4Dir {
         &self.prefix
     }
 
+    pub(crate) fn source_is_block_device(&self) -> bool {
+        source_is_block_device(
+            &self.source,
+            source_file_is_block_device(&self.source),
+        )
+    }
+
+
     /// Map a boot-root-relative path onto the volume.
     pub(super) fn remote(&self, path: &str) -> String {
         if self.prefix.is_empty() {
@@ -174,6 +184,69 @@ impl Ext4Dir {
             });
         let _ = fs::remove_dir_all(&root);
         result
+    }
+}
+fn source_file_is_block_device(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_block_device())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+fn source_is_block_device(path: &Path, file_type_is_block: bool) -> bool {
+    #[cfg(unix)]
+    {
+        let _ = path;
+        return file_type_is_block;
+    }
+    #[cfg(windows)]
+    {
+        let _ = file_type_is_block;
+        return path
+            .to_string_lossy()
+            .starts_with(r"\\.\PhysicalDrive")
+            || path.to_string_lossy().starts_with(r"\\?\Device\");
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (path, file_type_is_block);
+        false
+    }
+}
+
+#[cfg(test)]
+mod source_classifier_tests {
+    use super::source_is_block_device;
+    use std::path::Path;
+
+    #[test]
+    fn regular_image_is_not_a_raw_source() {
+        assert!(!source_is_block_device(Path::new("persist.img"), false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_block_path_uses_file_type() {
+        assert!(source_is_block_device(Path::new("/dev/sda"), true));
+        assert!(!source_is_block_device(Path::new("/dev/sda"), false));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_device_namespace_is_raw() {
+        assert!(source_is_block_device(
+            Path::new(r"\\.\PhysicalDrive0"),
+            false
+        ));
+        assert!(source_is_block_device(
+            Path::new(r"\\?\Device\Harddisk0"),
+            false
+        ));
     }
 }
 

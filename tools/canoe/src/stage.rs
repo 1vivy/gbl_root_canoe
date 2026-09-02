@@ -192,12 +192,21 @@ pub fn run(args: &[String]) -> Result<(), CanoeError> {
     };
     if options.boot_root.is_none() {
         match canoe_bootmgr::fastboot::binary(Some(&toolkit.root)) {
-            Ok(fastboot) => {
-                let identity = canoe_bootmgr::fastboot::identify(&fastboot, Duration::from_secs(10));
-                if identity.bds_version.is_none() {
-                    warn("The device does not look like Super Fastboot; fastboot oem mass-storage:persist does not exist outside the BDS.");
+            Ok(fastboot) => match canoe_bootmgr::fastboot::identify_checked(
+                &fastboot,
+                Duration::from_secs(10),
+            ) {
+                Ok(identity) => {
+                    if identity.bds_version.is_none() {
+                        warn("The device does not look like Super Fastboot; fastboot oem mass-storage:persist does not exist outside the BDS.");
+                    }
                 }
-            }
+                Err(error @ canoe_bootmgr::fastboot::FastbootError::DeviceBusy { .. })
+                | Err(error @ canoe_bootmgr::fastboot::FastbootError::ExportActive { .. }) => {
+                    return Err(CanoeError::message(error.to_string()));
+                }
+                Err(error) => warn(&format!("Could not identify the device with fastboot: {error}")),
+            },
             Err(error) => warn(&format!("Could not identify the device with fastboot: {error}")),
         }
         step("Exporting persist over USB Mass Storage");

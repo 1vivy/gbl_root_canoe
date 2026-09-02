@@ -84,6 +84,46 @@ fn rollback_failure_names_the_snapshot_artifact() {
     assert_eq!(error.protocol_code(), "rollback-failed");
     assert!(error.to_string().contains(&snapshot.display().to_string()));
 }
+fn assert_write_fault_restores_snapshot(fault: BlockWriteTestFault) {
+    let fixture = TempDir::new().expect("temporary fixture");
+    let target = fixture.path().join("boot");
+    let image = fixture.path().join("image");
+    let snapshot = fixture.path().join("snapshot");
+    fs::write(&target, b"original-target").expect("target");
+    fs::write(&image, b"replacement").expect("image");
+
+    let error = canoe_bootmgr::block_write::write_at_root_with_fault(
+        &request("boot", &image, &snapshot),
+        fixture.path(),
+        fault,
+    )
+    .expect_err("injected write failure must fail");
+
+    assert_eq!(error.protocol_code(), "operation");
+    assert_eq!(fs::read(&target).expect("target bytes"), b"original-target");
+    assert_eq!(fs::read(&snapshot).expect("snapshot bytes"), b"original-target");
+}
+
+#[test]
+fn write_open_failure_restores_snapshot() {
+    assert_write_fault_restores_snapshot(BlockWriteTestFault::WriteOpen);
+}
+
+#[test]
+fn write_copy_failure_restores_snapshot_after_partial_write() {
+    assert_write_fault_restores_snapshot(BlockWriteTestFault::WriteCopy);
+}
+
+#[test]
+fn write_flush_failure_restores_snapshot() {
+    assert_write_fault_restores_snapshot(BlockWriteTestFault::WriteFlush);
+}
+
+#[test]
+fn readback_failure_restores_snapshot() {
+    assert_write_fault_restores_snapshot(BlockWriteTestFault::Readback);
+}
+
 
 #[test]
 fn invalid_partition_is_rejected_before_filesystem_access() {
