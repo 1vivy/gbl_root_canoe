@@ -1,50 +1,75 @@
 # OTA update procedure
 
 An OTA normally installs the next system generation into the other A/B slot.
-The loader in that slot must be prepared before the device boots it.
+That slot's Canoe loader must be prepared before the device boots it. The
+post-OTA action is an explicit app/CLI operation; there is no background OTA
+watcher.
 
 ## Required pre-reboot procedure
 
-1. Start the system updater, install the OTA, and let it finish writing the
-   other A/B slot.
-2. Keep the device running in its current slot; do **not** reboot yet.
-3. Open the KernelSU module WebUI and press **Install to inactive slot**.
-4. The action requires known target-slot metadata. It derives and validates the
-   target loader triplet, matching profile, and TrustZone map; unknown metadata
-   is refused, and the running slot is never relabelled or used as a fallback.
-   The prior valid generation for that target is preserved as
-   `boot_backup.efi` with its sidecars.
-5. Reboot after the action completes.
+1. Start Android's system updater, install the OTA, and wait for it to finish
+   writing the other A/B slot.
+2. Keep the device running in its current slot. **Do not reboot yet.**
+3. Open Canoe Boot Manager in the KernelSU surface. Start reads the local boot
+   root directly; it does not wait for fastboot. A readable root opens
+   **GENERAL**.
+4. In GENERAL choose **Install to Inactive Slot / OTA** and complete the Guided
+   flow. The app obtains slot metadata with `slot.status`, checks the
+   transition/evidence, and applies the prepared target with `ota-apply` only
+   after the target slot is known. It never relabels the running slot or silently
+   falls back to it. A missing or unknown slot is a refusal, not a guess.
+5. Reboot only after the app reports success.
 
-The action installs the target slot's `boot_a.efi` or `boot_b.efi` triplet and
-its matching sidecars. A managed Mode 2 profile belongs to the installed
-generation and is refreshed by this explicit action, never by the system
-updater.
+The equivalent writer command is explicit about the target:
 
-If the action is forgotten, the new slot carries a stock ABL. The GBL exploit
-is absent, so BDS is simply not loaded and the device boots stock and
-unhooked. Nothing is bricked. Run **Install to inactive slot** and reboot again;
-this recovery needs no slot switch. The other slot is the slot you were running
-moments ago, so its health is known-good in this scenario. Canoe does not
-provide a slot-switch action; if you choose to boot back to the other slot, you
-must switch the active slot yourself outside Canoe (for example with
-`fastboot set_active`).
+```bash
+canoe-bootmgr ota-apply --staged /path/to/staged \
+  --target-slot b --mode 1
+```
 
-There is no OTA watcher in this release. The module performs this work only
-when the operator presses the WebUI action before rebooting.
+Add the global `--boot-root`, `--source`, or `--ext4-image` selector when the
+staged operation is against a particular local boot-root source. Use
+`--allow-new-signer` only after reviewing and explicitly accepting the signer
+change reported by the plan. The `ota-apply` operation installs the target
+slot's `boot_a.efi` or `boot_b.efi` triplet and matching sidecars. The prior
+valid generation is retained as `boot_backup.efi` when the transaction allows
+it.
 
-## Custom-ROM image and signer limits
+The fresh-install operation is different: it uses the Guided **Provision**
+flow and the `install` verb after the app confirms the stock userspace
+`fastbootd` precondition. Do not use fresh-install `install` as a substitute for
+the post-OTA inactive-slot action.
 
-The default derivation inputs are the device partitions. If the WebUI offers a
-supplied ABL or vbmeta image, it must be an exact, non-empty file and is a
-derivation input only, never a flash payload. The resulting pair must match the
-firmware generation being installed.
+If the action is forgotten, the new slot carries a stock ABL. The GBL exploit is
+absent, so BDS is not loaded and the device boots stock and unhooked. Nothing is
+bricked by that omission. Run the inactive-slot flow while still in the known-
+good slot and reboot again. Canoe does not provide a slot-switch action; to boot
+the other slot, switch it outside Canoe with the platform fastboot tool, for
+example:
 
-A successful Mode 2 derivation means only that `vbmeta` parsed and carries a
-signature and public-key blob. No tool here can prove which key is the OEM's.
-The only automatic protection is detection of a changed public-key digest since
-the last installed generation. A change is expected when moving to or from a
-Custom ROM; follow the WebUI's explicit signer-change confirmation.
+```bash
+fastboot set_active b
+```
+
+The app's status strip reports the active slot and BDS version when answered;
+otherwise it says **Unknown** and the OTA operation must wait for reliable
+metadata.
+
+## Evidence and signer limits
+
+The Guided flow reviews a `mode.plan` before commit. For a Mode 2 transition it
+may use `vbmeta.inspect`, `vbmeta.header`, and `vbmeta.check`; these operations
+inspect evidence and do not themselves flash an image. If a selected ABL or
+vbmeta image is supplied, it must be an exact, non-empty file and is a
+**derivation input only**, never an implicit flash payload. `abl.verify` can
+check a supplied ABL digest.
+
+A successful Mode 2 derivation means only that vbmeta parsed and carries a
+signature and public-key blob. No tool can prove which key is the OEM's. The
+automatic safeguard is detection of a changed public-key digest relative to the
+installed generation. A change is expected when moving to or from a Custom ROM;
+follow the app's explicit signer-change acknowledgement and pass
+`--allow-new-signer` only when that change is intended.
 
 ## Universal SCM safeguards
 
@@ -58,20 +83,20 @@ protocol is unavailable, launch continues and records `hooks-armed ... scm=0`.
 Xiaomi fixed the GBL vulnerability in version **300**. As of version **306**,
 XBL can still boot an older ABL to load `efisp` indirectly. Check the ABL
 anti-rollback version before updating and test an OTA on a non-critical device.
-A changed ABL that is incompatible with the device can still cause a hard
-brick; the pre-reboot action does not make an incompatible vendor ABL safe.
+A changed ABL that is incompatible with the device can still cause a hard brick;
+the pre-reboot action does not make an incompatible vendor ABL safe.
 
-Use a package freezer such as Hail when appropriate, and do not install an OTA
+Use a package freezer such as Hail when appropriate. Do not install an OTA
 without confirming that the vulnerable ABL and the target firmware are
 compatible.
 
 ## OnePlus
 
 Newer OnePlus builds fix the loader path. Keep a vulnerable older ABL in the
-partition and use **Install to inactive slot** after each OTA, before rebooting,
-so the patched loader tracks the firmware generation. Builds through
+partition and use **Install to Inactive Slot / OTA** after each OTA, before
+rebooting, so the patched loader tracks the firmware generation. Builds through
 `16.0.5.7xx` and below are vulnerable; newer builds may be fixed. Check the
-device.
+device and wait for a tested result.
 
 ## Anti-rollback caution
 

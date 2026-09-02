@@ -1,162 +1,129 @@
-# Super Fastboot 使用指南
+# Canoe 使用说明
+
+Canoe 在三个界面上使用同一个应用：Linux 与 Windows 的 Tauri 桌面壳，以及
+KernelSU Android WebUI。应用通过 JSON wire protocol 与 `canoe-bootmgr` 通信，
+不会自行编辑启动根目录。原生 `canoe` CLI 会把支持的操作转交给同一个写入器。
+
+## Start 与命名路由
+
+**Start**（landing）页面有意保持保守：
+
+- **Linux 或 Windows：** 在 Start 选择 **Enter Super Fastboot**。桌面应用等待
+  `fastboot.identify` 应答。BDS 应答后进入 **GENERAL**；fastboot 应答但没有
+  BDS 时提供引导式 **Provision** 流程。
+- **KernelSU Android：** 应用用 `config.show` 直接读取本地启动根目录，绝不会等待
+  fastboot。根目录可读时进入 **GENERAL**；根目录不存在或不可读时提供首次安装
+  **Provision**。
+
+所有路由使用同一状态条。它显示连接/传输、槽位、BDS 版本，以及可展开的启动根目录、
+暂存集合等详细信息。尚未应答的事实显示为 **Unknown**。Canoe 不会猜测槽位或 BDS
+版本。
+
+应用路由如下：
+
+- **GENERAL**——更新 BDS 与 EFI 工具、重新生成受管理启动项，并在设备上开始非活动
+  槽位 OTA 流程。
+- **Boot entries**——查看受管理启动项和发现的 BLS 行，包括请求/生效模式、默认状态
+  与附属文件健康状态。删除已保存启动项时使用 `entry.remove`；这里不能删除发现的
+  BLS 文件。
+- **Settings**——通过 `config.set-policy` 只写入 `canoe.cfg` 策略键，并选择新启动
+  项继承的全局模式。
+- **Guided flow**——分阶段的首次安装或模式变更：Provision、Prepare、Commit、Finish。
+  它先审核证据再写入，并把重启保留为明确的最后一步。
+- **Graft**——检查镜像和头部、提取或 graft vbmeta、核对选定公钥；只有输出经过验证后，
+  才提供需要单独确认的刷写操作。它主要用于 Mode 1 镜像准备。
+
+在 Commit 前放弃 Guided flow 不会发送任何协议写入。分区写入或重启始终需要应用中
+相应的确认。
 
 ## 进入 Super Fastboot
 
-- 将 BDS 临时启动到内存，不写入闪存：
-
-  ```bash
-  fastboot stage <BDS.efi>
-  fastboot oem boot-efi
-  ```
-
-- 启动时出现 OEM 解锁警告后，按**音量上**进入 Super Fastboot。
-
-### 两条内存启动路径都可用，原理不同
+Super Fastboot 是 BDS 自带的 fastboot 会话。启动时按**音量上**打开 BDS 菜单，
+再选择 **Enter Super Fastboot**。如需不写入闪存而将 BDS 临时启动到内存：
 
 ```bash
 fastboot stage <BDS.efi>
 fastboot oem boot-efi
 ```
 
+电脑端工具也接受一条命令的路径：
+
 ```bash
 fastboot boot <BDS.efi>
 ```
 
-第二条常令人意外，因为 `BDS.efi` 是 PE 镜像而不是 Android boot 镜像。它之所以
-可行，是因为**电脑端**的 `fastboot` 工具会先把传入的文件包装成一个合成的 boot
-镜像再发送——命令回显本身就说明了这一点：
+`fastboot boot` 可行，是因为电脑端工具会先把 PE 包装为合成 boot 镜像再发送。
+`fastboot stage` 加 `fastboot oem boot-efi` 是显式路径，不依赖这种包装行为。两条
+路径都只是临时启动。
 
-```text
-creating boot image...
-creating boot image - 440320 bytes
-Sending 'boot.img' (430 KB)                        OKAY
-Booting                                            OKAY
-```
+Super Fastboot 会放宽 ABL 的关键分区保护状态，因此可以在此 BDS 会话中刷写；但
+`super` 内部的分区仍是例外。系统用户空间 `fastbootd` 只在首次安装 Provision 流程
+中使用。
 
-输入 438272 字节的 `BDS.efi`，输出 440320 字节的 boot 镜像。随后 bootloader 的
-boot 处理函数在该镜像 kernel 段的开头识别出 `MZ` 签名，于是按 EFI 载荷启动而不
-是当作内核处理；这正是 `QcomModulePkg/Library/FastbootLib` 中 `IsEfiInBootImg`
-的用途。在一加 15 上实测如此。
+## 首次运行与 BDS 菜单
 
-两者任选。`fastboot stage` + `fastboot oem boot-efi` 是显式形式，不依赖电脑端
-工具的包装行为；`fastboot boot` 只需一条命令。
-`Super Fastboot` 是 BDS 自带的 fastboot 会话，不是系统用户空间的
-`fastbootd`。它会放宽 ABL 的关键分区保护状态，因此可以在此刷写；但
-`super` 内部的分区仍是例外。`fastbootd` 仅用于安装指南所述的全新安装流程。
+启动根目录不存在或无法访问、没有可启动镜像，或配置中的全部镜像都不存在时，BDS
+视为首次运行。首次运行界面包含以下两行：
 
-## 首次运行与菜单
-
-`SfbBootRootIsEmpty` 会将无法定位或打开卷、没有可启动镜像的启动根目录，以及
-所有 `image` 都不存在的配置视为首次运行。BDS 显示首次运行界面，其中有两行：
-
-- **Enter boot menu (Volume Up)**
+- **Enter Super Fastboot**
 - **Enter Super Fastboot (default)**
 
-光标从 **Enter Super Fastboot** 开始，界面等待两秒。只有音量上会选择进入普通菜单；
-超时、音量下和电源键都会保留 Super Fastboot 默认路径。这是刚刷入 BDS 后的安全路径：
-电脑端无需先准备菜单配置就能安装启动链。
+启动时按**音量上**进入该菜单。光标位于 **Enter Super Fastboot**，默认行是
+**Enter Super Fastboot (default)**。超时、音量下和电源键都会保留安全的 Super
+Fastboot 路径；选择菜单行可以查看可用启动项。
 
-对于已填充的启动根目录，BDS 会在启动时按 `menu-mode` 读取策略，并采样
+对于已填充的启动根目录，BDS 读取 `menu-mode`，并在启动时采样
 `key-window` 毫秒：
 
-- **Silent 模式**（新安装默认）：窗口内按音量上会打开菜单并无限等待；音量下
-  进入现有 Super Fastboot 路径；没有按键则立即启动配置的默认项。
-- **Menu 模式**：窗口内按音量下进入 Super Fastboot，随后总是打开菜单。菜单按
+- **Silent**（新安装默认）：窗口内按音量上打开菜单并无限等待；音量下走现有 Super
+  Fastboot 路径；无按键时在窗口结束后启动配置的默认项。
+- **Menu**：窗口内按音量下先进入 Super Fastboot，之后总是打开菜单。菜单按
   `menu-timeout` 秒倒计时后启动默认项；任意按键会取消倒计时并使菜单无限等待。
 
-`key-window` 范围为 `0..=10000` 毫秒，默认 `1200`；零表示不采样。
-`menu-timeout` 范围为 `0..=300` 秒，默认 `5`，仅 Menu 模式生效；零表示永不
-自动启动。默认项无法解析（包括未发现的 `bls:<stem>`）时，BDS 显示现有
-拒绝/提示界面并等待，不会回退到其他启动项。
+`key-window` 范围为 `0..=10000` 毫秒，默认 `1200`；零表示关闭采样。
+`menu-timeout` 范围为 `0..=300` 秒，默认 `5`；仅 Menu 模式使用，零表示永不自动
+启动。无法解析的默认项（包括未发现的 `bls:<stem>`）会打开菜单、显示现有提示并
+等待，不会回退到其他启动项。
 
-默认项可以是 Android 行，也可以是发现的 BLS Type #1 行，例如
-`default bls:pmos`。BLS 默认项是直通行（无附属文件、钩子或槽位语义），USB
-上的 BLS 行不能作为无人值守默认项。
-`canoe-bootmgr --json config show` 会返回 `menu_mode`、`key_window_ms` 与
-`menu_timeout_s`；不再返回旧的 `timeout_seconds` 字段。
-
+默认项可以是 Android 行，也可以是发现的非可移动介质 BLS Type #1 行，例如
+`default bls:pmos`。USB 上的 BLS 行不能作为无人值守默认项。写入器会输出
+`menu-mode`、`key-window` 与 `menu-timeout`；旧版 `timeout` 仅作为 b2 以前的
+BDS 兼容别名接受，当前不会写出。
 
 菜单按以下顺序构建：
 
-1. **Session boot mode**（只对下一次启动生效，不会保存）。
-2. `canoe.cfg` 中 `image` 存在的启动项。
-3. 配置缺失或无效时，探测启动根目录中的兼容路径 `boot.efi`、按槽位命名的
-   `boot_a.efi` 与 `boot_b.efi`，以及 `boot_backup.efi`。当前安装器只写按槽位
-   命名的文件与备份；`boot.efi` 只是 b2 以前的兼容探测。
-4. 每个卷上的 `\EFI\BOOT\BOOTAA64.EFI`。若存在 `\EFI\DESC` 则用它命名，否则
-   使用 `NONAME<n>`。
-5. `persist` ext4 启动根目录或可移动介质中 `\loader\entries\*.conf` 下的有效
-   BLS Type #1 启动项。见[链式启动与 BLS 启动项](./chainload.md)。
-6. 内置操作：**Enter Super Fastboot**、**Enter EFI Program Selector**、**EFI Tools**、
-   **USB Mass Storage**、**Reboot to Recovery**、**Power Off** 与 **Restart**。
+1. 只对下一次启动有效、绝不保存的会话启动模式覆盖。
+2. `canoe.cfg` 中 `image` 存在的行。
+3. 配置缺失或无效时，探测存在的 `boot.efi`、`boot_a.efi`、`boot_b.efi` 与
+   `boot_backup.efi` 兼容路径。新安装使用按槽位命名的文件与备份；`boot.efi` 仅是
+   b2 以前的兼容探测。
+4. 每个卷上的 `\EFI\BOOT\BOOTAA64.EFI` 行；标签来自 `\EFI\DESC`，否则使用
+   `NONAME<n>`。
+5. `persist` 启动根目录或可移动介质中 `\loader\entries\*.conf` 的有效 BLS Type #1
+   行。
+6. 内置操作：**Enter Super Fastboot**、**Enter EFI Program Selector**、
+   **EFI Tools**、**USB Mass Storage**、**Reboot to Recovery**、**Power Off** 与
+   **Restart**。
 
-只有镜像存在时才显示配置行；镜像缺失会被跳过。BLS 文件无效或引用镜像缺失时
-也会被跳过。只有设备启动根目录中发现的 BLS 行，且 `default bls:<stem>` 指向
-已发现的 stem 时，才可作为无人值守默认项。该 BLS 默认项保持直通，不使用附属
-文件、钩子或槽位语义；USB 上的 BLS 行仍不符合条件。交互启动 BLS 时，按住
-音量上进入菜单，移动到该行后按电源键。
+镜像缺失的配置行和无效 BLS 行会被跳过。要交互式启动 BLS 行，请在启动采样窗口内
+按住音量上，选中该行后按电源。BLS 行是直通启动，不使用 Mode 1/2 策略 hook 或受
+管理附属文件。
 
-同一菜单还提供以下工具与操作：
+**EFI Tools** 会列出启动根目录的 `tools/`。随附的 `SurfaceTools.efi` 被动清单和
+只读策略探测行为保持不变：被动导出只替换明确命名的 logfs 文件，策略探测仍需要单独
+的音量上确认。请查看 BDS 日志中的有界 `key=value` 报告；`authorized` 回读不等于
+物理调试已生效。
 
-- **EFI Tools** 会列出启动根目录 `tools/` 下的文件。
-- **USB Mass Storage** 将一个分区导出为一个 USB 磁盘。`persist` 的 `/efisp` 中
-  有启动根目录；只有存在 `logfs` 时才提供它。导出正在使用的 `persist` 前 BDS
-  会警告。详见 [`mass-storage.md`](./mass-storage.md)。
-- **Reboot to Recovery** 直接重置进入 Recovery。这是内置重置操作，不是自定义镜像
-  解析器。
+## Super Fastboot 界面
 
-随附的 `SurfaceTools.efi` 清单工具可从 **EFI Tools** 打开。默认视图只枚举 UEFI
-协议 GUID、配置表 GUID、已加载镜像类别、内存描述符和已知 Qualcomm 策略协议是否
-存在；不会显示原始地址，也不会调用厂商方法。**Dump Passive Inventory to logfs**
-会明确覆盖已挂载 `logfs` 卷上的 `\SurfaceTools.log`，刷新文件内容并在返回 BDS 前
-关闭全部文件句柄；该被动导出保持不变。执行 **Run Read-only Policy Probe** 前必须
-再次按音量上键确认（电源键用于取消，因此长按菜单选择键不会授权调用）；该操作最多
-发出固定白名单中的七个只读调用：原有的 CPU 最大索引、TrustZone 版本、Verified
-Boot 状态和 Keymaster 状态读取方法，外加一次 TrustZone 安全状态读取和一次已应用
-调试策略回读。主动报告只构建一次，只写入 `logfs` 上专用的 `\SurfacePolicy.log`
-一次，随后在界面展示同一份内存中的报告；导出与界面都不会重新执行这些调用。文件为
-`[Policy.v1]` 下有界的 ASCII `key=value` 行，开头为 `SurfaceTools policy probe`、
-`format=1`、`encoding=ASCII`、`policy_payload=complete_hex` 与
-`physical_effectiveness=not_observed`。
+BDS 等待主机时会显示：
 
-策略回读仅支持 SCM 协议修订 `0x40001`（960 字节 revision-2 布局）与 `0x50002`
-（1220 字节 revision-5 布局），两者都通过与 `ScmSipSysCall` 相同的已验证协议前缀
-访问，不做尾部访问。报告的大小或修订不匹配、canary 损坏或解析失败时，会输出确定性
-状态行，但不做语义解码。策略 SCM 调用成功时，完整的 960 或 1220 字节响应也会按
-32 字节十六进制块输出为 `policy.raw.<offset>`，包括 root 哈希和序列号数组。日志还
-包含原始安全状态 common/status 字、经过验证的策略字段，以及单独命名的厂商谓词
-（`production`、`debug-disabled`、`image-cert-debug-disabled`、`secure-device`），
-并同时列出基本与扩展标志位。未知位与 OEM 位仅以原始形式保留。调用成功时显示
-`authorized`；这只
-证明固件授权了此次回读，绝不证明 EUD、SWD 或 JTAG 调试在物理上实际生效。探测调用
-不会更改固件或调试状态；主动流程只会替换明确命名的 `\SurfacePolicy.log`。
-
-USB Mass Storage 会将一个分区作为一个 USB 磁盘导出。也可以在 fastboot 中导出：
-
-```bash
-fastboot oem mass-storage             # persist（默认）
-fastboot oem mass-storage:persist     # persist
-fastboot oem mass-storage:logfs       # logfs
-```
-
-每次会话只导出一个分区。**结束 Mass Storage 会话的唯一方式是设备上的音量下**。
-断开数据线不会结束会话。
-
-## Fastboot 模式界面
-
-Super Fastboot 等待主机时会显示自己的选项，用音量上/下移动，电源键选择：
-
-- **Stay in Fastboot**——空操作，仅重绘；光标默认停在这一行，因此误触不会
-  产生任何后果；
+- **Stay in Fastboot**——空操作，仅重绘，且是初始光标行；
 - **Reboot to Recovery**；
 - **Power Off**；
 - **Restart**。
 
-这里提供 Recovery 是因为进入 Super Fastboot 后无法重新进入启动菜单：启动菜单在
-**Enter Super Fastboot** 之前运行，而首次运行也默认直接到此界面。完成电脑端安装或
-导出会话后要进入 Recovery，就用这里的 **Reboot to Recovery**。
-
-电脑端的重启目标现在会被遵守：
+电脑端支持以下重启目标：
 
 ```bash
 fastboot reboot              # Android
@@ -164,38 +131,82 @@ fastboot reboot recovery     # recovery
 fastboot reboot bootloader   # 回到 Super Fastboot
 ```
 
-其他目标会直接失败，而不是重启到未被指定的位置。BDS 会话不是 fastbootd，
-它之下也没有用户空间会话，因此 `fastboot reboot fastboot` 会被拒绝，而不会
-被当作重启到 bootloader。这仅指 BDS 会话：设备本身在刚解锁时是提供
-fastbootd 的——在 Android 中用 `adb reboot fastboot` 进入，或在 bootloader
-自己的 fastboot 中用 `fastboot reboot fastboot` 进入。ABL 及其他关键分区只能
-在 fastbootd 中刷写，因此首次安装要在原厂 fastbootd 里进行。
+其他目标会失败。该 BDS 会话不是系统用户空间会话，因此这里会拒绝
+`fastboot reboot fastboot`，而不是把它当作重启到 bootloader。本文只有首次安装
+Provision 流程会要求进入系统用户空间的 `fastbootd`。
 
-结束导出本身仍然要在设备上按音量下。导出进行时 USB 链路是 mass storage
-gadget，不承载 fastboot 通道，任何主机命令都到不了 BDS。主机发出的 SCSI
-eject 在本硬件上确实会结束会话，但那是厂商栈的副作用而非契约，canoe 不依赖它。
+## USB 导出与主机/设备边界
+
+应用和 CLI 会驱动 USB Mass Storage 导出；详见[`mass-storage.md`](./mass-storage.md)。
+每次会话只导出一个分区。**设备上的音量下是结束导出的唯一契约方式。**导出进行时，
+USB 链路是 mass-storage gadget，不提供 fastboot 通道，因此主机命令无法到达 BDS。
+主机使用实时 `persist` 导出时，不得让 Android 同时使用同一文件系统。
 
 ## 模式与 DeviceInfo
 
-菜单中的模式选择是下一次启动的临时覆盖，绝不会保存。启动项自身的模式优先，
-文件全局 `mode` 作为回退；详见 [`canoe-cfg.md`](./canoe-cfg.md)。
+BDS 菜单中的模式选择只是下一次启动的会话覆盖，绝不保存。启动项自身的模式优先，
+文件全局 `mode` 作为回退；见[`canoe.cfg`](./canoe-cfg.md)。
 
-- **Mode 0** 是不启用 hook 的直通模式，不读取也不写入 `DeviceInfo`；
-- **Mode 1** 投射锁定的 DeviceInfo 视图并应用受管理 hook；
-- **Mode 2** 还使用受管理 `boot_a.efi`、`boot_b.efi` 或 `boot_backup.efi` 对应的
-  120 字节 `.gm2p` profile 和生成的映射。它通过内核命令行禁止
-  `oplus_secure_guard_new`，无需重新打包 boot 镜像。
+- **Mode 0** 是不启用 hook 的直通模式，不读取也不写入 `DeviceInfo`。
+- **Mode 1** 投射锁定的 `DeviceInfo` 视图并应用受管理 hook。
+- **Mode 2** 还使用受管理的 `boot_a.efi`、`boot_b.efi` 或 `boot_backup.efi` 对应的
+  120 字节 `.gm2p` profile 和映射。无需重新打包 boot 镜像，它会通过内核命令行黑名单
+  处理 `oplus_secure_guard_new`。
 
-Mode 1 或 Mode 2 在观测状态不满足策略时可以修复 `DeviceInfo`。
-`devinfo-repair never` 会拒绝修复并如实以 Mode 0 继续，`asneeded` 允许修复。
-启动日志会记录观测状态与采取的动作。
+Mode 1 或 Mode 2 在观测状态不符合请求策略时可能修复 `DeviceInfo`。
+`devinfo-repair never` 拒绝修复并如实以 Mode 0 继续；`asneeded` 允许修复。启动日志
+会记录观测状态与动作。成功的 Mode 2 派生只能证明 vbmeta 已解析并带有签名和公钥 blob，
+不能证明该密钥属于 OEM。
 
-Mode 2 profile 只能证明 `vbmeta` 已解析并带有签名和公钥 blob，不能证明密钥属于
-OEM，本工具无法证明这一点。自动保护只检测公钥摘要是否相对于已安装世代发生变化。
+## CLI 与协议操作
+
+`canoe` 是友好的原生 CLI。`canoe-bootmgr` 是写入器；它可以用 `--json` 为单次操作
+输出一个 JSON 响应，也可以接收 JSONL 请求会话。应用的 Tauri sidecar 使用同一 wire
+契约。支持的 CLI 形式例如：
+
+```bash
+canoe config set-policy --menu-mode silent --key-window-ms 1200 --menu-timeout-s 5
+canoe entry list
+canoe entry remove --id android-backup
+canoe default set android-a
+canoe bls list
+canoe source detect --json
+
+canoe-bootmgr --json config show
+canoe-bootmgr --json entry list
+canoe-bootmgr --json slot status
+canoe-bootmgr ota-apply --staged <DIR> --target-slot b --mode 1
+canoe-bootmgr install --staged <DIR> --slot a --mode 1
+canoe-bootmgr fastboot identify
+canoe-bootmgr fastboot export --target persist
+canoe-bootmgr fastboot end-export --node <RAW_NODE>
+canoe-bootmgr tools-update --source <TOOLS_DIR>
+canoe-bootmgr vbmeta-inspect --vbmeta <VBMETA>
+canoe-bootmgr vbmeta-header --vbmeta <VBMETA>
+canoe-bootmgr vbmeta-extract --image <IMAGE> --output <VBMETA>
+canoe-bootmgr vbmeta-check --image <IMAGE> --vbmeta <VBMETA> --partition recovery
+canoe-bootmgr vbmeta-graft <OFFICIAL_VBMETA> <CUSTOM_RECOVERY> <OUTPUT>
+canoe-bootmgr fastboot reboot --target recovery
+```
+
+本版本公开的协议 operation 名称如下：
+
+```text
+protocol.version  build  abl.verify  tools.update  block.write
+config.show  config.set-policy  entry.list  entry.set  entry.remove  entry.mode
+mode.plan  default.get  default.set  source.detect  bls.list  bls.show  bls.stage
+slot.status  install  ota-apply  vbmeta.graft  vbmeta.extract  vbmeta.check
+vbmeta.inspect  vbmeta.header  vendorboot.patch
+fastboot.identify  fastboot.export  fastboot.end-export  fastboot.fetch
+fastboot.abl-coverage  fastboot.flash  fastboot.reboot
+```
+
+依赖功能前先调用 `protocol.version`。应用和写入器会忽略不认识的响应字段，但客户端
+不能绕过这些操作自行派生或修改启动根目录状态。
 
 ## Bootloader 命令
 
-回锁 Bootloader 会触发平台的数据清除行为：
+回锁会触发平台的数据清除行为：
 
 ```bash
 fastboot flashing lock
@@ -208,40 +219,19 @@ fastboot flashing unlock
 fastboot flashing unlock_critical
 ```
 
-TEE 状态不一致时，设备可能拒绝提供数据密钥。
+TEE 状态不一致时，设备可能拒绝数据密钥。
 
-## 刷写与擦除
+## 在应用之外执行刷写、擦除与重启
+
+流程明确要求分区操作时，由操作员执行外部 fastboot 命令：
 
 ```bash
 fastboot flash <partition> <file.img>
 fastboot erase <partition>
-```
-
-操作员先将带漏洞的 ABL 刷入 `abl`，再将 `BDS.efi` 刷入 `efisp`；电脑端安装器
-不会写入分区。
-
-## 重启
-
-```bash
-fastboot reboot bootloader
 fastboot reboot
+fastboot reboot bootloader
 ```
 
-此 BDS 的 fastboot `reboot` 处理器只支持 **Normal** 模式。
-`fastboot reboot recovery` 在这里不是进入 Recovery 的命令；请在 BDS 菜单选择
-**Reboot to Recovery**，或通过 **EFI Tools** 打开 Recovery 启动项。
-## 启动策略与源探测
-
-电脑端原生 `canoe` 将策略修改转交给唯一的 `canoe-bootmgr` 写入器：
-
-```bash
-canoe config set-policy [--menu-mode silent|menu] \
-  [--key-window-ms N] [--menu-timeout-s N]
-canoe default set android-a
-canoe default set bls:pmos
-canoe source detect --json
-```
-
-`default set bls:<stem>` 只有在与 `bls list` 相同的发现流程找到该 BLS 行时
-才会接受。`source detect` 只读，目录或镜像源不需要提权；需要设备访问权限时会
-报告 `needs_privilege`。
+应用的 `fastboot.flash` 操作会记录并执行指定镜像的刷写，不是擦除操作。首次安装
+Provision 流程在确认后把带漏洞的 ABL 写入两个 ABL 槽位、把 `BDS.efi` 写入
+`efisp`，然后执行普通重启。电脑端安装器不会静默刷写分区。

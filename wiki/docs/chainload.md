@@ -1,7 +1,7 @@
 # Chainloading a third-party UEFI stack
 
 BDS is a read-only UEFI selector. It scans retained volumes for well-known EFI
-loaders and BLS Type #1 entries, and starts the selected one. For a plain row
+loaders and BLS Type #1 entries, and starts the selected one. For a plain row,
 that remains `LoadImage` followed by `StartImage`, with the row's `options`
 handed over byte for byte; a BLS `linux` row additionally publishes its initrd
 and device tree to an EFI-stub kernel. BDS is not a general operating-system
@@ -19,30 +19,30 @@ entry mu
 ```
 
 `image` is the PE. `options` is whatever that PE's own argument grammar wants —
-BDS neither parses nor validates it. See the
-[`canoe.cfg` contract](./canoe-cfg.md) for the grammar, and in particular why
-the `options` path carries `\efisp` while `image` does not.
+BDS neither parses nor validates it. See the [`canoe.cfg` contract](./canoe-cfg.md),
+and in particular why the `options` path carries `\efisp` while `image` does not.
 
 That example is `place.efi`, which lives in the `canoe-uefi-handoff` side
-project. Its argument is a path and nothing else: the blob it enters is a Project
-Mu boot shim followed by the descriptor, and the shim's header already carries
-the load base and window size, so there is no hex for anyone to transcribe. An
-earlier design took `<path> <base> <size>`; two of four device cycles were lost
-to getting those numbers and their prefix right, which is why the surviving
-design does not ask for them.
+project. Its argument is a path and nothing else: the blob it enters is a
+Project Mu boot shim followed by the descriptor, and the shim's header already
+carries the load base and window size, so there is no hex for anyone to
+transcribe. An earlier design took `<path> <base> <size>`; two of four device
+cycles were lost to getting those numbers and their prefix right, which is why
+the surviving design does not ask for them.
 
 ## BLS Type #1 entries
 
 BLS provides a second declaration namespace for bootable artifacts. Each
-`loader/entries/<name>.conf` file is one Type #1 row and must contain exactly
-one `linux` or `efi` key. A `linux` row names an EFI-stub kernel and may name
-one `initrd`, one `devicetree`, and command-line `options`; an `efi` row names
-an ordinary UEFI application and uses `options` as its opaque LoadOptions.
-Unknown standard BLS keys are retained for compatibility, while malformed
-entries, missing images, and unsupported duplicate fields are skipped.
+`loader/entries/<name>.conf` file is one Type #1 row and must contain exactly one
+`linux` or `efi` key. A `linux` row names an EFI-stub kernel and may name one
+`initrd`, one `devicetree`, and command-line `options`; an `efi` row names an
+ordinary UEFI application and uses `options` as its opaque LoadOptions. Unknown
+standard BLS keys are retained for compatibility, while malformed entries,
+missing images, and unsupported duplicate fields are skipped.
 
-The boot manager stages a row and every referenced artifact with SHA-256
-verification:
+The **Boot entries** route displays discovered BLS rows as unmanaged evidence.
+The app uses `bls.list`/`bls.show` for reads; the CLI can stage a row with
+`bls.stage` and SHA-256 verification:
 
 ```bash
 # A local boot-root directory:
@@ -65,10 +65,10 @@ A complete, commented entry to copy from lives at
 `--artifact` is `SOURCE,DESTINATION,SHA256`; every destination must be
 referenced by the parsed BLS file, and every digest must be 64 hexadecimal
 characters. The operation verifies the source before and during the copy,
-writes `loader/entries/<name>.conf` only after all artifacts pass, and rolls
-back the whole set on failure. `--source` and `--ext4-image` select the direct
-ext4 backend; `--boot-root` selects a local directory and cannot be combined
-with them.
+writes `loader/entries/<name>.conf` only after all artifacts pass, and rolls back
+the whole set on failure. `--source` and `--ext4-image` select the direct ext4
+backend; `--boot-root` selects a local directory and cannot be combined with
+them.
 
 ### The two path namespaces
 
@@ -81,22 +81,25 @@ The two declaration grammars name paths relative to different roots:
 | BLS `linux`/`efi`/`initrd`/`devicetree` | relative or leading-`/` path | prefixed to `\efisp\...` | volume-root `\...` |
 
 Thus a BLS file staged in `persist/efisp/loader/entries` can say
-`linux /vmlinuz-canoe`, and BDS opens `\efisp\vmlinuz-canoe`. A Canoe row
-staged in the same boot root says `image mu/place.efi` without the prefix.
-The path in a plain row's `options` belongs to the launched payload and must
-include `\efisp` when that payload lives on persist.
+`linux /vmlinuz-canoe`, and BDS opens `\efisp\vmlinuz-canoe`. A Canoe row staged
+in the same boot root says `image mu/place.efi` without the prefix. The path in a
+plain row's `options` belongs to the launched payload and must include `\efisp`
+when that payload lives on persist.
 
-### Discovery is not an unattended default
+### Discovery and unattended defaults
 
 BDS appends discovered BLS rows after configured `canoe.cfg` rows. The
-unattended default resolver accepts only a non-removable plain EFI row from
-`canoe.cfg`; a discovered BLS `efi` or `linux` row cannot be named by
-`canoe.cfg default`. Hold **Volume Up** during the startup sampling window,
-choose the BLS row in the menu, and press Power. For repeatable unattended
-tests, add a small wrapper UEFI application as a plain `canoe.cfg` row and
-make that wrapper row the default; the wrapper can select or chain to the BLS
-artifacts.
+unattended default resolver accepts a discovered BLS `efi` or `linux` row only
+when it is on the non-removable device boot root and `default bls:<stem>` names
+that discovered stem. A USB-hosted BLS row remains ineligible. An absent or
+unreadable target produces the existing notice and never falls through to a
+different row.
 
+To launch a BLS row interactively, hold **VOL UP** during the startup sampling
+window, choose the row, and press Power. For repeatable unattended tests, add a
+small wrapper UEFI application as a plain `canoe.cfg` row and make that wrapper
+the default; the wrapper can select or chain to the BLS artifacts. BLS rows are
+always passthrough: Mode 1/2 hooks and managed sidecars do not apply.
 
 ## Why BDS ships no payload loaders
 
@@ -139,11 +142,11 @@ allocator gives and aligns inside it.
 | Android | the managed `boot_a.efi`, `boot_b.efi`, or `boot_backup.efi` triplet | starts the PE, with mode hooks |
 
 A `canoe.cfg` row pointing at a self-compiled ABL is a legitimate entry: the
-inner artefact of something like `abl2esp` is an ordinary UEFI application before
-it gets wrapped for the `abl` partition.
+inner artefact of something like `abl2esp` is an ordinary UEFI application
+before it gets wrapped for the `abl` partition.
 
-The full analysis — reference implementations, the four candidate pathways, and
-what each upstream project would change — lives in the `canoe-uefi-handoff`
+The full analysis — reference implementations, the four candidate pathways,
+and what each upstream project would change — lives in the `canoe-uefi-handoff`
 side project.
 
 ## Not a managed launch

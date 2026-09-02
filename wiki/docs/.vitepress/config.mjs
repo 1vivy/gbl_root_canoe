@@ -24,6 +24,7 @@ export default defineConfig({
                 { text: 'Usage', link: '/usage' },
                 { text: 'Uninstall', link: '/uninstall' },
                 { text: 'Build', link: '/build' },
+                { text: 'Release', link: '/release' },
                 { text: 'Contribute', link: '/contribute' },
                 { text: 'Contributors', link: '/contributors' },
               ]
@@ -51,6 +52,7 @@ export default defineConfig({
                 { text: '使用说明', link: '/zh/usage' },
                 { text: '卸载', link: '/zh/uninstall' },
                 { text: '构建', link: '/zh/build' },
+                { text: '发布', link: '/zh/release' },
                 { text: '贡献', link: '/zh/contribute' },
                 { text: '贡献者', link: '/zh/contributors' },
               ]

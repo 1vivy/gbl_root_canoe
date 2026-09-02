@@ -19,21 +19,30 @@ hero:
       link: https://github.com/1vivy/gbl_root_canoe
 
 features:
-  - title: Install
-    details: Five supported scenarios: host install and update, KernelSU install and post-OTA action, and a locked-device temporary-root wrapper
-    link: /install
-  - title: Usage
-    details: Super Fastboot command reference — boot menu, mass storage, lock/unlock BL, flash, and reboot
+  - title: One Canoe Boot Manager
+    details: One Svelte application, one JSON protocol, and one writer across Linux, Windows, and KernelSU Android
+    link: /intro
+  - title: Desktop (Linux and Windows)
+    details: Start the app, wait for a Super Fastboot answer, then use GENERAL, Boot entries, Settings, the guided flow, or Graft
+    link: /usage
+  - title: KernelSU Android
+    details: The same app reads the local boot root directly; a readable root opens GENERAL and an unavailable root opens first-install Provision
+    link: /usage
+  - title: CLI
+    details: canoe is the operator CLI and canoe-bootmgr is the JSON-protocol writer; both expose the same boot-root operations
+    link: /usage
+  - title: Super Fastboot
+    details: Enter Super Fastboot during boot with VOL UP for the BDS fastboot session, flashing, reboot, and USB export
     link: /usage
   - title: USB Mass Storage
-    details: Export persist or logfs, repair the boot root, and access ext4 on Windows with the bundled tool without mounting it
+    details: Drive persist or logfs export from the app or CLI, with safe ext4 handling and a device-side Volume-Down exit
     link: /mass-storage
-  - title: OTA
-    details: Press Flash To Other Slot after installing an OTA and before rebooting; includes anti-rollback cautions
+  - title: OTA and uninstall
+    details: Apply a prepared loader to the inactive slot before rebooting, or remove canoe.cfg and efisp when retiring the chain
     link: /ota
-  - title: Uninstall
-    details: Remove the efisp chain and canoe.cfg, then restore the device's remaining boot state
-    link: /uninstall
+  - title: BDS configuration and chainloading
+    details: Use canoe.cfg for policy and third-party UEFI rows; BDS remains a selector, not a payload loader
+    link: /canoe-cfg
   - title: Build
     details: Build the Linux, Windows, Android, and KernelSU packages from source
     link: /build
