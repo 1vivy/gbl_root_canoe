@@ -28,10 +28,14 @@ jobs:
         unzip -q -o toolkit_linux/toolkit_linux.zip -d modecheck
         for exe in canoe \
                    bin/patch_abl bin/mode2_profile \
-                   bin/abl_tzmap bin/canoe-bootmgr bin/extractfv \
+                   bin/abl_tzmap bin/canoe-bootmgr \
+                   bin/canoe-boot-manager bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in release asset: $exe"; exit 1; }
         done
+        test -x modecheck/canoe-boot-manager.sh || {
+          echo "not executable in release asset: canoe-boot-manager.sh"; exit 1;
+        }
         rm -rf modecheck
 
     - name: Create Release

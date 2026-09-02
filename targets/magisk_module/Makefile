@@ -81,7 +81,7 @@ submodule_patcher: copy_resources
 submodule_mode2_profile: copy_resources
 	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for mode2_profile"; exit 1; }
 	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
-	test -d "$$(rustc --print target-libdir --target aarch64-linux-android 2>/dev/null)" || { echo "Rust Android std is unavailable; use a rustup toolchain with aarch64-linux-android installed and put its cargo first on PATH"; exit 1; }
+	test -d "$$(rustc --print target-libdir --target aarch64-linux-android 2>/dev/null)" || { echo "Rust Android std is unavailable; use rustup cargo first on PATH (for example: PATH=\"\$$HOME/.cargo/bin:\$$PATH\" make target_magisk_module NDK_PATH=/path/to/android-ndk) with aarch64-linux-android installed"; exit 1; }
 	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/mode2-profile/Cargo.toml
 	test -f ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile
 	cp ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile ./build/module/bin/mode2_profile
