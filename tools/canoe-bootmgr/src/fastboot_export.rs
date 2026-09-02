@@ -1,15 +1,17 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::fastboot::FastbootError;
+use crate::fastboot::fastboot_command::ReapedChild;
 
 #[derive(Debug)]
 pub struct Exported {
     pub node: PathBuf,
     pub adopted: bool,
-    _child: Option<Child>,
+    _child: Option<ReapedChild>,
 }
 
 /// Start or adopt a BDS mass-storage export and return its raw block node.
@@ -29,16 +31,22 @@ where
             _child: None,
         });
     }
-    let mut child = Command::new(fastboot)
-        .arg("oem")
-        .arg(format!("mass-storage:{target}"))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|source| FastbootError::Spawn {
-            path: fastboot.to_owned(),
-            source,
-        })?;
+    // The mass-storage command may own the live export. On success, dropping
+    // `Exported` must never kill it; the detached guard only reaps an exited
+    // child or hands a running one to a waiter thread.
+    let mut child = ReapedChild::spawn_detached(
+        fastboot,
+        &[
+            OsString::from("oem"),
+            OsString::from(format!("mass-storage:{target}")),
+        ],
+        Stdio::null(),
+        Stdio::null(),
+    )
+    .map_err(|source| FastbootError::Spawn {
+        path: fastboot.to_owned(),
+        source,
+    })?;
     let deadline = Instant::now().checked_add(timeout);
     loop {
         match find() {
@@ -51,17 +59,17 @@ where
             }
             Ok(None) => {}
             Err(error) => {
-                terminate_child(&mut child);
+                child.terminate_gracefully();
                 return Err(error);
             }
         }
         let Some(deadline) = deadline else {
-            terminate_child(&mut child);
+            child.terminate_gracefully();
             return Err(FastbootError::Timeout { timeout });
         };
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            terminate_child(&mut child);
+            child.terminate_gracefully();
             return Err(FastbootError::Timeout { timeout });
         }
         thread::sleep(remaining.min(Duration::from_millis(100)));
@@ -221,35 +229,3 @@ fn command_error(command: &str, detail: String) -> FastbootError {
     }
 }
 
-fn terminate_child(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        use nix::sys::signal::{Signal, kill};
-        use nix::unistd::Pid;
-        if let Ok(pid) = i32::try_from(child.id()) {
-            let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = child.kill();
-    }
-    let Some(deadline) = Instant::now().checked_add(Duration::from_secs(1)) else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return;
-    };
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) | Err(_) => return,
-            Ok(None) => {}
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return;
-        }
-        thread::sleep(remaining.min(Duration::from_millis(10)));
-    }
-}

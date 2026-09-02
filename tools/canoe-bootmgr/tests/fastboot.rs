@@ -4,7 +4,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use canoe_bootmgr::detect::{SourceCandidate, SourceKind, is_export_candidate};
 use canoe_bootmgr::fastboot::{self, FastbootError};
@@ -539,6 +539,86 @@ fn flash_succeeds_and_reports_stderr_on_command_failure() {
     let error = fastboot::flash(&fastboot, "boot", &image, Duration::from_secs(1))
         .expect_err("flash failure");
     assert!(error.to_string().contains("flash-failed"));
+}
+
+#[cfg(target_os = "linux")]
+fn process_state(pid: u32) -> Option<char> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.split_whitespace().nth(2)?.chars().next()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fastboot_timeout_reaps_slow_child() {
+    let root = TempDir::new().expect("fixture");
+    let image = root.path().join("boot.img");
+    let pid_file = root.path().join("pid");
+    fs::write(&image, b"image").expect("image");
+    let (_guard, fastboot) = script(
+        root.path(),
+        &format!(
+            "printf '%s\\n' \"$$\" > {}; while :; do :; done",
+            pid_file.display()
+        ),
+    );
+
+    let error = fastboot::flash(&fastboot, "boot", &image, Duration::from_millis(100))
+        .expect_err("slow fastboot should time out");
+    assert!(matches!(error, FastbootError::CommandTimeout { .. }));
+    let pid = fs::read_to_string(pid_file)
+        .expect("child pid")
+        .trim()
+        .parse::<u32>()
+        .expect("numeric child pid");
+    assert_eq!(
+        process_state(pid),
+        None,
+        "timed-out fastboot child {pid} was not reaped"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn dropping_export_does_not_terminate_live_mass_storage_child() {
+    let root = TempDir::new().expect("fixture");
+    let pid_file = root.path().join("pid");
+    let (_guard, fastboot) = script(
+        root.path(),
+        &format!(
+            "printf '%s\\n' \"$$\" > {}; {} 0.5",
+            pid_file.display(),
+            system_tool("sleep").display()
+        ),
+    );
+    let exported = fastboot::export(&fastboot, "persist", Duration::from_secs(1), || {
+        if pid_file.exists() {
+            Ok(Some(PathBuf::from("/dev/sdz")))
+        } else {
+            Ok(None)
+        }
+    })
+    .expect("discover export");
+    let pid = fs::read_to_string(&pid_file)
+        .expect("child pid")
+        .trim()
+        .parse::<u32>()
+        .expect("numeric child pid");
+
+    drop(exported);
+    assert!(
+        process_state(pid).is_some(),
+        "dropping an export terminated its live mass-storage child"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while process_state(pid).is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        process_state(pid),
+        None,
+        "detached mass-storage child was not eventually reaped"
+    );
 }
 
 #[test]

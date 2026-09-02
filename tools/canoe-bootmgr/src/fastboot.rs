@@ -152,39 +152,49 @@ fn getvar(fastboot: &Path, name: &str, timeout: Duration) -> Option<String> {
 }
 
 fn getvar_once(fastboot: &Path, name: &str, timeout: Duration) -> Option<String> {
-    use std::process::{Command, Stdio};
+    use std::io::Read;
+    use std::process::Stdio;
     use std::time::Instant;
 
-    let mut child = Command::new(fastboot)
-        .arg("getvar")
-        .arg(name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child = fastboot_command::ReapedChild::spawn(
+        fastboot,
+        &[OsString::from("getvar"), OsString::from(name)],
+        Stdio::null(),
+        Stdio::piped(),
+    )
+    .ok()?;
     let deadline = Instant::now().checked_add(timeout);
-    loop {
-        if child.try_wait().ok()?.is_some() {
-            break;
+    let status = loop {
+        if let Some(status) = child.try_wait().ok()? {
+            break status;
         }
         let Some(deadline) = deadline else {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.terminate();
             return None;
         };
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            let _ = child.kill();
-            let _ = child.wait();
+            child.terminate();
             return None;
         }
         thread::sleep(remaining.min(Duration::from_millis(10)));
-    }
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
+    };
+    let mut stderr = child.take_stderr()?;
+    let mut output = String::new();
+    stderr.read_to_string(&mut output).ok()?;
+    if !status.success() {
         return None;
     }
-    parse_getvar(&String::from_utf8_lossy(&output.stderr), name)
+    parse_getvar(&output, name)
+}
+
+pub(crate) fn display_command(fastboot: &Path, args: &[OsString]) -> String {
+    let mut command = fastboot.display().to_string();
+    for arg in args {
+        command.push(' ');
+        command.push_str(&arg.to_string_lossy());
+    }
+    command
 }
 
 fn parse_getvar(stderr: &str, name: &str) -> Option<String> {
