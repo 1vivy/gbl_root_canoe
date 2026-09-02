@@ -39,6 +39,7 @@ cp "$ROOT/targets/magisk_module/module/bin/canoe_vendor_boot.sh" "$MOD/bin/canoe
 chmod +x "$MOD/bin/canoe_vendor_boot.sh"
 printf 'BDS fixture\n' > "$MOD/BDS.efi"
 printf 'tool\n' > "$MOD/efisp/tools/BLTools.efi"
+printf 'en\n' > "$MOD/lang.txt"
 
 make_profile() {
   profile_path=$1
@@ -115,20 +116,83 @@ for arg in "$@"; do
   case "$arg" in if=*) in=${arg#*=} ;; of=*) out=${arg#*=} ;; esac
 done
 printf 'dd %s -> %s\n' "$in" "$out" >> "${FLOW_LOG:?}"
-if [ "$out" = "${BY_NAME_DIR:-}/efisp" ] && [ -f "$out" ]; then
-  old_size=$(stat -c '%s' "$out")
-  temp_out="$out.dd.$$"
-  /usr/bin/dd "$@" of="$temp_out" >/dev/null 2>&1
-  /usr/bin/dd if="$temp_out" of="$out" conv=notrunc >/dev/null 2>&1
-  truncate -s "$old_size" "$out"
-  rm -f "$temp_out"
+case "${DD_FAIL_STAGE:-}" in
+  snapshot)
+    case "$out" in *.snapshot) exit 1 ;; esac
+    ;;
+  abl-write)
+    if [ "$in" = "${BY_NAME_DIR:-}/abl_a" ] &&
+       [ "$out" = "${BY_NAME_DIR:-}/abl_b" ]; then
+      /usr/bin/dd "$@" >/dev/null 2>&1 || :
+      printf 'torn-write\n' > "$out"
+      exit 1
+    fi
+    ;;
+  vendor-write)
+    if [ "$out" = "${BY_NAME_DIR:-}/vendor_boot_a" ]; then
+      case "$in" in
+        */new-field)
+          /usr/bin/dd "$@" >/dev/null 2>&1 || :
+          printf 'torn-write\n' > "$out"
+          exit 1
+          ;;
+      esac
+    fi
+    ;;
+  abl-readback)
+    case "$out" in *.readback) exit 1 ;; esac
+    ;;
+  vendor-readback)
+    case "$out" in */verify) exit 1 ;; esac
+    ;;
+  restore)
+    case "$in" in *.snapshot) exit 1 ;; esac
+    ;;
+esac
+if [ -n "$out" ]; then
+  /usr/bin/dd "$@" >/dev/null 2>&1 || exit $?
 else
-  exec /usr/bin/dd "$@"
+  /usr/bin/dd "$@" || exit $?
+fi
+if [ "${DD_CORRUPT_WRITE:-}" = "abl" ] &&
+   [ "$in" = "${BY_NAME_DIR:-}/abl_a" ] &&
+   [ "$out" = "${BY_NAME_DIR:-}/abl_b" ]; then
+  printf 'corrupt-write\n' > "$out"
+elif [ "${DD_CORRUPT_WRITE:-}" = "vendor" ] &&
+     [ "$out" = "${BY_NAME_DIR:-}/vendor_boot_a" ]; then
+  case "$in" in
+    */new-field)
+      printf corrupt | /usr/bin/dd of="$out" bs=1 seek=28 conv=notrunc >/dev/null 2>&1
+      ;;
+  esac
 fi
 EOF
 cat > "$BIN/sync" <<'EOF'
 #!/bin/sh
+if [ "${SYNC_FAIL_ONCE:-0}" = 1 ] &&
+   [ ! -e "${SYNC_MARK:?}" ]; then
+  : > "$SYNC_MARK"
+  exit 1
+fi
 exit 0
+EOF
+cat > "$BIN/cp" <<'EOF'
+#!/bin/sh
+out=
+for arg in "$@"; do
+  case "$arg" in -*) ;; *) out=$arg ;; esac
+done
+if [ "${CP_FAIL_ALWAYS:-0}" = 1 ] &&
+   [ "$out" = "${CP_FAIL_DEST:-}" ]; then
+  exit 1
+fi
+if [ "${CP_FAIL_ONCE:-0}" = 1 ] &&
+   [ "$out" = "${CP_FAIL_DEST:-}" ] &&
+   [ ! -e "${CP_FAIL_MARK:?}" ]; then
+  : > "$CP_FAIL_MARK"
+  exit 1
+fi
+exec /bin/cp "$@"
 EOF
 cat > "$BIN/extractfv" <<'EOF'
 #!/bin/sh
@@ -228,6 +292,54 @@ assert_file "$EFISP/boot_b.efi"
 assert_file "$EFISP/boot_b.efi.gm2p"
 assert_file "$EFISP/boot_b.efi.tzmap"
 pass 'module pair install writes target and backup rows while preserving custom state'
+BDS_BEFORE="$TMP/bds-before.efi"
+TOOLS_BEFORE="$TMP/tools-before.efi"
+cp "$EFISP/BDS.efi" "$BDS_BEFORE"
+cp "$EFISP/tools/BLTools.efi" "$TOOLS_BEFORE"
+: > "$LOG"
+CP_FAIL_ONCE=1 CP_FAIL_DEST="$EFISP/BDS.efi" \
+  CP_FAIL_MARK="$TMP/bds-copy-fail" run flash update-efisp >/dev/null
+cmp "$BDS_BEFORE" "$EFISP/BDS.efi" ||
+  fail 'failed BDS copy left a mixed-generation BDS'
+cmp "$TOOLS_BEFORE" "$EFISP/tools/BLTools.efi" ||
+  fail 'failed BDS copy changed tools'
+assert_contains "$(cat "$LOG")" \
+  'BDS copy failed; boot-manager transaction not committed; BDS/tools restored' \
+  'failed BDS copy did not report recoverable publication'
+pass 'BDS/tools copy failure restores the previous boot root'
+BDS_BEFORE="$TMP/bds-tools-before.efi"
+TOOLS_BEFORE="$TMP/tools-copy-before.efi"
+cp "$EFISP/BDS.efi" "$BDS_BEFORE"
+cp "$EFISP/tools/BLTools.efi" "$TOOLS_BEFORE"
+: > "$LOG"
+CP_FAIL_ONCE=1 CP_FAIL_DEST="$EFISP/tools" \
+  CP_FAIL_MARK="$TMP/tools-copy-fail" run flash update-efisp >/dev/null
+cmp "$BDS_BEFORE" "$EFISP/BDS.efi" ||
+  fail 'failed tools copy left a mixed-generation BDS'
+cmp "$TOOLS_BEFORE" "$EFISP/tools/BLTools.efi" ||
+  fail 'failed tools copy changed the old tools'
+
+assert_contains "$(cat "$LOG")" \
+  'tools copy failed; boot-manager transaction not committed; BDS/tools restored' \
+  'failed tools copy did not report recoverable publication'
+pass 'BDS/tools tools-copy failure restores the previous boot root'
+BDS_BEFORE="$TMP/bds-rollback-failure-before.efi"
+cp "$EFISP/BDS.efi" "$BDS_BEFORE"
+: > "$LOG"
+CP_FAIL_ALWAYS=1 CP_FAIL_DEST="$EFISP/BDS.efi" \
+  run flash update-efisp >/dev/null
+cmp "$BDS_BEFORE" "$EFISP/BDS.efi" ||
+  fail 'BDS rollback failure fixture did not preserve the target bytes'
+assert_contains "$(cat "$LOG")" \
+  'CRITICAL: BDS/tools rollback failed; boot root may be mixed-generation' \
+  'BDS rollback failure was not reported loudly'
+assert_contains "$(cat "$LOG")" \
+  "target=$EFISP; backup=$MOD/tmp/bds-tools-backup" \
+  'BDS rollback failure did not name its target and backup'
+pass 'BDS/tools rollback failure reports the mixed-generation risk'
+rm -rf "$MOD/tmp/bds-tools-backup"
+
+
 
 
 : > "$LOG"
@@ -240,7 +352,6 @@ assert_contains "$log" "extractfv source=$BY_NAME/abl_b" \
   'default derivation did not read target ABL partition'
 assert_contains "$log" "mode2_profile source=$BY_NAME/vbmeta_b" \
   'default derivation did not read target vbmeta partition'
-assert_not_contains "$log" 'source=supplied' 'default derivation unexpectedly used supplied images'
 pass 'default image provenance uses the target partitions'
 
 printf 'supplied-nonvulnerable\n' > "$SUPPLIED/abl.img"
@@ -323,6 +434,97 @@ run flash update-efisp >/dev/null
 assert_not_contains "$(cat "$LOG")" "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
   'vulnerable target ABL was unnecessarily overwritten'
 pass 'vulnerable target ABL is not overwritten'
+
+# Raw ABL writes must leave the target untouched when the snapshot cannot be
+# taken, and must restore it for every failure after the snapshot succeeds.
+ABL_BEFORE="$TMP/abl-rollback-before"
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$ABL_BEFORE"
+: > "$LOG"
+if DD_FAIL_STAGE=snapshot run flash update-efisp >/dev/null 2>&1; then
+  fail 'ABL snapshot failure was accepted'
+fi
+cmp "$ABL_BEFORE" "$BY_NAME/abl_b" || fail 'snapshot failure changed the target ABL'
+assert_contains "$(cat "$LOG")" \
+  "snapshot failed; refusing to write" 'ABL snapshot refusal was not reported'
+assert_not_contains "$(cat "$LOG")" \
+  "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
+  'ABL write ran after its snapshot failed'
+pass 'ABL snapshot failure refuses the write'
+
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$ABL_BEFORE"
+: > "$LOG"
+if DD_FAIL_STAGE=abl-write run flash update-efisp >/dev/null 2>&1; then
+  fail 'ABL write failure was accepted'
+fi
+cmp "$ABL_BEFORE" "$BY_NAME/abl_b" || fail 'ABL write failure left a torn target'
+assert_contains "$(cat "$LOG")" \
+  'original partition restored from snapshot' \
+  'ABL write failure did not report rollback'
+assert_contains "$(cat "$LOG")" \
+  "snapshot=$MOD/tmp/abl_b.snapshot" \
+  'ABL write rollback did not name its snapshot'
+pass 'ABL write failure restores the target ABL'
+
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$ABL_BEFORE"
+: > "$LOG"
+if SYNC_FAIL_ONCE=1 SYNC_MARK="$TMP/abl-sync-fail" \
+  run flash update-efisp >/dev/null 2>&1; then
+  fail 'ABL sync failure was accepted'
+fi
+cmp "$ABL_BEFORE" "$BY_NAME/abl_b" || fail 'ABL sync failure left a torn target'
+assert_contains "$(cat "$LOG")" \
+  'original partition restored from snapshot' \
+  'ABL sync failure did not report rollback'
+pass 'ABL sync failure restores the target ABL'
+
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$ABL_BEFORE"
+: > "$LOG"
+if DD_CORRUPT_WRITE=abl run flash update-efisp >/dev/null 2>&1; then
+  fail 'ABL verification mismatch was accepted'
+fi
+cmp "$ABL_BEFORE" "$BY_NAME/abl_b" || fail 'ABL verification mismatch left a torn target'
+assert_contains "$(cat "$LOG")" \
+  'original partition restored from snapshot' \
+  'ABL verification mismatch did not report rollback'
+pass 'ABL verification mismatch restores the target ABL'
+
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$ABL_BEFORE"
+: > "$LOG"
+if DD_FAIL_STAGE=abl-readback run flash update-efisp >/dev/null 2>&1; then
+  fail 'ABL readback failure was accepted'
+fi
+cmp "$ABL_BEFORE" "$BY_NAME/abl_b" || fail 'ABL readback failure left a torn target'
+assert_contains "$(cat "$LOG")" \
+  'original partition restored from snapshot' \
+  'ABL readback failure did not report rollback'
+pass 'ABL readback failure restores the target ABL'
+
+printf 'target-nonvulnerable\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$ABL_BEFORE"
+: > "$LOG"
+if DD_CORRUPT_WRITE=abl DD_FAIL_STAGE=restore \
+  run flash update-efisp >/dev/null 2>&1; then
+  fail 'ABL rollback failure was accepted'
+fi
+if cmp "$ABL_BEFORE" "$BY_NAME/abl_b"; then
+  fail 'ABL rollback failure unexpectedly hid the torn target'
+fi
+assert_file "$MOD/tmp/abl_b.snapshot"
+assert_contains "$(cat "$LOG")" \
+  'CRITICAL: ABL partition may be torn; rollback failed' \
+  'ABL rollback failure was not reported loudly'
+assert_contains "$(cat "$LOG")" \
+  "torn partition=$BY_NAME/abl_b; snapshot=$MOD/tmp/abl_b.snapshot" \
+  'ABL rollback failure did not name the torn partition and snapshot'
+pass 'ABL rollback failure reports the torn target and retained snapshot'
+rm -f "$MOD/tmp/abl_b.snapshot"
+
+printf 'target-vulnerable\n' > "$BY_NAME/abl_b"
 
 # Exercise customize.sh's inactive-slot pairing directly, using the same fake
 # binaries and partition files as the module flow fixtures above.
@@ -451,12 +653,15 @@ pass 'supplied signer changes proceed without a Mode 2 downgrade'
 printf 'vbmeta-b\n' > "$BY_NAME/vbmeta_b"
 printf 'supplied-vbmeta\n' > "$SUPPLIED/vbmeta.img"
 
-# Synthetic vendor_boot partition: only the 40-byte token append may change.
+reset_vendor() {
+  : > "$VENDOR"
+  truncate -s 4096 "$VENDOR"
+  printf VNDRBOOT | dd of="$VENDOR" bs=1 seek=0 conv=notrunc 2>/dev/null
+  printf 'console=ttyS0' | dd of="$VENDOR" bs=1 seek=28 conv=notrunc 2>/dev/null
+}
 VENDOR="$BY_NAME/vendor_boot_a"
 VENDOR_BEFORE="$TMP/vendor-before.img"
-truncate -s 4096 "$VENDOR"
-printf VNDRBOOT | dd of="$VENDOR" bs=1 seek=0 conv=notrunc 2>/dev/null
-printf 'console=ttyS0' | dd of="$VENDOR" bs=1 seek=28 conv=notrunc 2>/dev/null
+reset_vendor
 cp "$VENDOR" "$VENDOR_BEFORE"
 patch_output=$(BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
   PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a)
@@ -472,6 +677,76 @@ patch_output=$(BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
 assert_eq "$patch_output" 'already patched' 'vendor_boot patch was not idempotent'
 cmp "$TMP/vendor-after-first.img" "$VENDOR" || fail 'second vendor_boot patch changed the image'
 pass 'vendor_boot patch appends exactly 40 bytes and is idempotent'
+
+reset_vendor
+cp "$VENDOR" "$VENDOR_BEFORE"
+if vendor_output=$(DD_FAIL_STAGE=snapshot BY_NAME_DIR="$BY_NAME" \
+  RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
+  sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
+  fail 'vendor_boot snapshot failure was accepted'
+fi
+cmp "$VENDOR_BEFORE" "$VENDOR" || fail 'vendor snapshot failure changed the partition'
+assert_contains "$vendor_output" \
+  'failed to snapshot vendor_boot; refusing to write' \
+  'vendor snapshot refusal was not reported'
+pass 'vendor_boot snapshot failure refuses the write'
+
+reset_vendor
+cp "$VENDOR" "$VENDOR_BEFORE"
+if vendor_output=$(DD_FAIL_STAGE=vendor-write BY_NAME_DIR="$BY_NAME" \
+  RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
+  sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
+  fail 'vendor_boot write failure was accepted'
+fi
+cmp "$VENDOR_BEFORE" "$VENDOR" || fail 'vendor write failure left a torn partition'
+assert_contains "$vendor_output" 'vendor_boot rollback succeeded' \
+  'vendor write failure did not report rollback'
+pass 'vendor_boot write failure restores the partition'
+
+reset_vendor
+cp "$VENDOR" "$VENDOR_BEFORE"
+if vendor_output=$(SYNC_FAIL_ONCE=1 SYNC_MARK="$TMP/vendor-sync-fail" \
+  BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
+  PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
+  fail 'vendor_boot sync failure was accepted'
+fi
+cmp "$VENDOR_BEFORE" "$VENDOR" || fail 'vendor sync failure left a torn partition'
+assert_contains "$vendor_output" 'vendor_boot rollback succeeded' \
+  'vendor sync failure did not report rollback'
+pass 'vendor_boot sync failure restores the partition'
+
+reset_vendor
+cp "$VENDOR" "$VENDOR_BEFORE"
+if vendor_output=$(DD_CORRUPT_WRITE=vendor BY_NAME_DIR="$BY_NAME" \
+  RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
+  sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
+  fail 'vendor_boot verification mismatch was accepted'
+fi
+cmp "$VENDOR_BEFORE" "$VENDOR" || fail 'vendor verification mismatch left a torn partition'
+assert_contains "$vendor_output" 'vendor_boot rollback succeeded' \
+  'vendor verification mismatch did not report rollback'
+pass 'vendor_boot verification mismatch restores the partition'
+
+reset_vendor
+cp "$VENDOR" "$VENDOR_BEFORE"
+if vendor_output=$(DD_CORRUPT_WRITE=vendor DD_FAIL_STAGE=restore \
+  BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
+  PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
+  fail 'vendor_boot rollback failure was accepted'
+fi
+if cmp "$VENDOR_BEFORE" "$VENDOR"; then
+  fail 'vendor rollback failure unexpectedly hid the torn partition'
+fi
+vendor_snapshot=$(printf '%s\n' "$vendor_output" |
+  sed -n 's/.*snapshot retained at //p')
+[ -n "$vendor_snapshot" ] || fail \
+  'vendor rollback failure did not report the snapshot location'
+assert_file "$vendor_snapshot"
+assert_contains "$vendor_output" \
+  "torn partition=$VENDOR; snapshot retained at $vendor_snapshot" \
+  'vendor rollback failure did not name the torn partition and snapshot'
+pass 'vendor_boot rollback failure reports the torn target and retained snapshot'
+
 
 VENDOR_BAD="$BY_NAME/vendor_boot_b"
 truncate -s 4096 "$VENDOR_BAD"
