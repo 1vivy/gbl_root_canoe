@@ -68,7 +68,6 @@ impl AppError {
             Self::Fastboot(error) => error.protocol_code(),
             Self::Config(_)
             | Self::Artifact(_)
-            | Self::Graft(_)
             | Self::Slot(_)
             | Self::VendorBoot(_)
             | Self::Detect(_)
@@ -76,6 +75,7 @@ impl AppError {
             | Self::Install(_)
             | Self::DefaultTarget(_)
             | Self::Output(_) => "operation",
+            Self::Graft(error) => error.protocol_code(),
         }
     }
 }

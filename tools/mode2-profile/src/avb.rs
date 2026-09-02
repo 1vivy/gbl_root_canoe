@@ -75,6 +75,15 @@ pub struct VbmetaInspection {
     pub build_properties: BuildProperties,
 }
 
+/// Public-key comparison between an image's vbmeta and a main vbmeta chain.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VbmetaKeyCheck {
+    pub key_matches: bool,
+    pub image_key_sha256: [u8; 32],
+    pub chain_key_sha256: [u8; 32],
+    pub rollback_index_location: u32,
+}
+
 /// AVB parsing or property-encoding failures.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum DeriveError {
@@ -82,6 +91,8 @@ pub enum DeriveError {
     TooSmall,
     #[error("vbmeta magic is not AVB0")]
     BadMagic,
+    #[error("image has no AVB footer")]
+    NoFooter,
     #[error("image has no valid AVB footer")]
     BadFooter,
     #[error("AVB footer vbmeta range lies outside the image")]
@@ -110,6 +121,8 @@ pub enum DeriveError {
     InvalidPartitionNameUtf8,
     #[error("duplicate AVB property: {0}")]
     DuplicateProperty(String),
+    #[error("no chain descriptor for partition: {0}")]
+    ChainPartitionMissing(String),
     #[error("required os-version property is absent")]
     NoOsVersionProperty,
     #[error("required security-patch property is absent")]
@@ -119,6 +132,7 @@ pub enum DeriveError {
     #[error("security-patch property is malformed or out of range")]
     SecurityPatchMalformed,
 }
+
 fn be_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let raw = bytes.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_be_bytes(raw.try_into().ok()?))
@@ -363,7 +377,7 @@ fn inspect_property(body: &[u8], properties: &mut ParsedProperties) -> Result<()
     Ok(())
 }
 
-fn inspect_chain_partition(body: &[u8]) -> Result<Option<ChainPartition>, DeriveError> {
+fn parse_chain_partition(body: &[u8]) -> Result<ChainPartition, DeriveError> {
     if body.len() < 76 {
         return Err(DeriveError::MalformedChainPartition);
     }
@@ -387,14 +401,19 @@ fn inspect_chain_partition(body: &[u8]) -> Result<Option<ChainPartition>, Derive
     }
     let partition_name = std::str::from_utf8(&body[76..name_end])
         .map_err(|_| DeriveError::InvalidPartitionNameUtf8)?;
-    if partition_name.starts_with("vbmeta") {
-        return Ok(None);
-    }
-    Ok(Some(ChainPartition {
+    Ok(ChainPartition {
         rollback_index_location,
         partition_name: partition_name.to_owned(),
         public_key: body[name_end..public_key_end].to_vec(),
-    }))
+    })
+}
+
+fn inspect_chain_partition(body: &[u8]) -> Result<Option<ChainPartition>, DeriveError> {
+    let chain = parse_chain_partition(body)?;
+    if chain.partition_name.starts_with("vbmeta") {
+        return Ok(None);
+    }
+    Ok(Some(chain))
 }
 
 fn expected_auth_sizes(algorithm_type: u32) -> Option<(u64, u64)> {
@@ -407,6 +426,183 @@ fn expected_auth_sizes(algorithm_type: u32) -> Option<(u64, u64)> {
         6 => Some((64, 1024)),
         _ => None,
     }
+}
+struct CheckVbmeta<'a> {
+    public_key: &'a [u8],
+    descriptors: &'a [u8],
+}
+
+fn check_vbmeta_layout(vbmeta: &[u8]) -> Result<CheckVbmeta<'_>, DeriveError> {
+    let header = parse_header(vbmeta)?;
+    let auth_size = usize::try_from(be_u64(vbmeta, 12).ok_or(DeriveError::MalformedHeader)?)
+        .map_err(|_| DeriveError::MalformedHeader)?;
+    let aux_size = usize::try_from(be_u64(vbmeta, 20).ok_or(DeriveError::MalformedHeader)?)
+        .map_err(|_| DeriveError::MalformedHeader)?;
+    let total = HEADER_SIZE
+        .checked_add(auth_size)
+        .and_then(|size| size.checked_add(aux_size))
+        .ok_or(DeriveError::MalformedHeader)?;
+    if total > vbmeta.len() {
+        return Err(DeriveError::MalformedHeader);
+    }
+    if let Some((expected_hash_size, expected_signature_size)) =
+        expected_auth_sizes(header.algorithm_type)
+    {
+        let hash_size =
+            be_u64(vbmeta, 40).ok_or(DeriveError::MalformedHeader)?;
+        let signature_size =
+            be_u64(vbmeta, 56).ok_or(DeriveError::MalformedHeader)?;
+        if hash_size != expected_hash_size || signature_size != expected_signature_size {
+            return Err(DeriveError::MalformedHeader);
+        }
+        let hash_offset =
+            usize::try_from(be_u64(vbmeta, 32).ok_or(DeriveError::MalformedHeader)?)
+                .map_err(|_| DeriveError::MalformedHeader)?;
+        let hash_size =
+            usize::try_from(hash_size).map_err(|_| DeriveError::MalformedHeader)?;
+        let signature_offset =
+            usize::try_from(be_u64(vbmeta, 48).ok_or(DeriveError::MalformedHeader)?)
+                .map_err(|_| DeriveError::MalformedHeader)?;
+        let signature_size =
+            usize::try_from(signature_size).map_err(|_| DeriveError::MalformedHeader)?;
+        let hash_end = hash_offset
+            .checked_add(hash_size)
+            .ok_or(DeriveError::MalformedHeader)?;
+        let signature_end = signature_offset
+            .checked_add(signature_size)
+            .ok_or(DeriveError::MalformedHeader)?;
+        if hash_end > auth_size
+            || signature_end > auth_size
+            || (hash_offset < signature_end && signature_offset < hash_end)
+        {
+            return Err(DeriveError::MalformedHeader);
+        }
+    } else if header.algorithm_type != 0 {
+        return Err(DeriveError::MalformedHeader);
+    }
+    let public_key_offset =
+        usize::try_from(be_u64(vbmeta, 64).ok_or(DeriveError::MalformedHeader)?)
+            .map_err(|_| DeriveError::PublicKeyPastAux)?;
+    let public_key_size =
+        usize::try_from(be_u64(vbmeta, 72).ok_or(DeriveError::MalformedHeader)?)
+            .map_err(|_| DeriveError::PublicKeyPastAux)?;
+    if public_key_offset > aux_size || public_key_size > aux_size - public_key_offset {
+        return Err(DeriveError::PublicKeyPastAux);
+    }
+    let descriptors_offset =
+        usize::try_from(be_u64(vbmeta, 96).ok_or(DeriveError::MalformedHeader)?)
+            .map_err(|_| DeriveError::DescriptorsPastAux)?;
+    let descriptors_size =
+        usize::try_from(be_u64(vbmeta, 104).ok_or(DeriveError::MalformedHeader)?)
+            .map_err(|_| DeriveError::DescriptorsPastAux)?;
+    if descriptors_offset > aux_size || descriptors_size > aux_size - descriptors_offset {
+        return Err(DeriveError::DescriptorsPastAux);
+    }
+    let aux_start = HEADER_SIZE
+        .checked_add(auth_size)
+        .ok_or(DeriveError::MalformedHeader)?;
+    let public_key_start = aux_start
+        .checked_add(public_key_offset)
+        .ok_or(DeriveError::MalformedHeader)?;
+    let public_key_end = public_key_start
+        .checked_add(public_key_size)
+        .ok_or(DeriveError::MalformedHeader)?;
+    let descriptor_start = aux_start
+        .checked_add(descriptors_offset)
+        .ok_or(DeriveError::MalformedHeader)?;
+    let descriptor_end = descriptor_start
+        .checked_add(descriptors_size)
+        .ok_or(DeriveError::MalformedHeader)?;
+    Ok(CheckVbmeta {
+        public_key: &vbmeta[public_key_start..public_key_end],
+        descriptors: &vbmeta[descriptor_start..descriptor_end],
+    })
+}
+
+fn resolve_check_image(image: &[u8]) -> Result<&[u8], DeriveError> {
+    if image.starts_with(b"AVB0") {
+        return Ok(image);
+    }
+    let footer_start = image.len().checked_sub(FOOTER_SIZE).ok_or(DeriveError::NoFooter)?;
+    let footer = image.get(footer_start..).ok_or(DeriveError::NoFooter)?;
+    if footer.get(0..4) != Some(b"AVBf") {
+        return Err(DeriveError::NoFooter);
+    }
+    let vbmeta_offset = usize::try_from(be_u64(footer, 20).ok_or(DeriveError::BadFooter)?)
+        .map_err(|_| DeriveError::VbmetaPastImage)?;
+    let vbmeta_size = usize::try_from(be_u64(footer, 28).ok_or(DeriveError::BadFooter)?)
+        .map_err(|_| DeriveError::VbmetaPastImage)?;
+    let vbmeta_end = vbmeta_offset
+        .checked_add(vbmeta_size)
+        .ok_or(DeriveError::VbmetaPastImage)?;
+    if vbmeta_end > footer_start {
+        return Err(DeriveError::VbmetaPastImage);
+    }
+    let vbmeta = image
+        .get(vbmeta_offset..vbmeta_end)
+        .ok_or(DeriveError::VbmetaPastImage)?;
+    if vbmeta.get(0..4) != Some(b"AVB0") {
+        return Err(DeriveError::BadMagic);
+    }
+    Ok(vbmeta)
+}
+
+fn find_chain_partition(
+    descriptors: &[u8],
+    partition: &str,
+) -> Result<ChainPartition, DeriveError> {
+    let mut cursor = 0;
+    while cursor < descriptors.len() {
+        let remaining = descriptors.len() - cursor;
+        if remaining < 16 {
+            return Err(DeriveError::MalformedDescriptor);
+        }
+        let tag = be_u64(descriptors, cursor).ok_or(DeriveError::MalformedDescriptor)?;
+        let body_len = usize::try_from(
+            be_u64(descriptors, cursor + 8).ok_or(DeriveError::MalformedDescriptor)?,
+        )
+        .map_err(|_| DeriveError::MalformedDescriptor)?;
+        let padded_body_len = body_len
+            .checked_add(7)
+            .map(|length| length & !7)
+            .ok_or(DeriveError::MalformedDescriptor)?;
+        let total_len = 16usize
+            .checked_add(padded_body_len)
+            .ok_or(DeriveError::MalformedDescriptor)?;
+        if total_len > remaining {
+            return Err(DeriveError::MalformedDescriptor);
+        }
+        if tag == CHAIN_PARTITION_TAG {
+            let body_start = cursor + 16;
+            let body = &descriptors[body_start..body_start + body_len];
+            let chain = parse_chain_partition(body)?;
+            if chain.partition_name == partition {
+                return Ok(chain);
+            }
+        }
+        cursor += total_len;
+    }
+    Err(DeriveError::ChainPartitionMissing(partition.to_owned()))
+}
+
+/// Compare an image's public key with a main vbmeta chain descriptor.
+pub fn check_vbmeta(
+    image: &[u8],
+    main_vbmeta: &[u8],
+    partition: &str,
+) -> Result<VbmetaKeyCheck, DeriveError> {
+    let image_vbmeta = resolve_check_image(image)?;
+    let image_layout = check_vbmeta_layout(image_vbmeta)?;
+    let main_layout = check_vbmeta_layout(main_vbmeta)?;
+    let chain = find_chain_partition(main_layout.descriptors, partition)?;
+    let image_key_sha256: [u8; 32] = Sha256::digest(image_layout.public_key).into();
+    let chain_key_sha256: [u8; 32] = Sha256::digest(&chain.public_key).into();
+    Ok(VbmetaKeyCheck {
+        key_matches: image_key_sha256 == chain_key_sha256,
+        image_key_sha256,
+        chain_key_sha256,
+        rollback_index_location: chain.rollback_index_location,
+    })
 }
 
 /// Inspect one stock root vbmeta image using the profile descriptor walk.

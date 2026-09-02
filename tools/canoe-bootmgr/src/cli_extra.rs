@@ -127,6 +127,26 @@ pub struct VbmetaHeaderArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct VbmetaExtractArgs {
+    #[arg(long)]
+    pub image: PathBuf,
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct VbmetaCheckArgs {
+    #[arg(long)]
+    pub image: PathBuf,
+    #[arg(long)]
+    pub vbmeta: PathBuf,
+    #[arg(long)]
+    pub partition: String,
+    #[arg(long)]
+    pub tools: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 pub struct GraftArgs {
     #[arg(value_name = "OFFICIAL_VBMETA")]
     pub vbmeta: PathBuf,

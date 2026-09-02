@@ -1,0 +1,1 @@
+{"verb":"vbmeta.check","image":"@FOOTER@","vbmeta":"tests/fixtures/vbmeta-inspect-happy.img","partition":"recovery","tools":"@TOOLS@"}

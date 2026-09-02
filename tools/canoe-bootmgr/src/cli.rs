@@ -10,8 +10,8 @@ pub use crate::cli_extra::{
     AblVerifyArgs, BlsStageArgs, BlockWriteArgs, FastbootAblCoverageArgs, FastbootCommand,
     FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
     FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
-    SlotCommand, SlotStatusArgs, ToolsUpdateArgs, VbmetaHeaderArgs, VendorBootCommand,
-    VendorBootPatchArgs,
+    SlotCommand, SlotStatusArgs, ToolsUpdateArgs, VbmetaCheckArgs, VbmetaExtractArgs,
+    VbmetaHeaderArgs, VendorBootCommand, VendorBootPatchArgs,
 };
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
@@ -130,6 +130,12 @@ pub enum Command {
     /// Inspect AVB header fields without walking descriptors.
     #[command(name = "vbmeta-header")]
     VbmetaHeader(VbmetaHeaderArgs),
+    /// Extract the embedded vbmeta blob from a footer-bearing image.
+    #[command(name = "vbmeta-extract")]
+    VbmetaExtract(VbmetaExtractArgs),
+    /// Compare an image vbmeta key with a main vbmeta chain descriptor.
+    #[command(name = "vbmeta-check")]
+    VbmetaCheck(VbmetaCheckArgs),
     Fastboot {
         #[command(subcommand)]
         command: FastbootCommand,
@@ -435,6 +441,17 @@ pub enum Success {
         rollback_index: u64,
         flags: u32,
         release_string: String,
+    },
+    #[serde(rename = "vbmeta.extract")]
+    VbmetaExtract { ok: bool, receipt: crate::graft::ExtractReceipt },
+    #[serde(rename = "vbmeta.check")]
+    VbmetaCheck {
+        ok: bool,
+        partition: String,
+        key_matches: bool,
+        image_key_sha256: String,
+        chain_key_sha256: String,
+        rollback_index_location: u32,
     },
     #[serde(rename = "vendorboot.patch")]
     VendorBootPatch { ok: bool, receipt: PatchReceipt },

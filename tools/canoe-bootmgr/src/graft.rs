@@ -15,10 +15,24 @@ pub struct GraftReceipt {
     pub bytes: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtractReceipt {
+    pub output: String,
+    pub bytes: usize,
+    pub vbmeta_offset: u64,
+    pub vbmeta_size: u64,
+}
+
 #[derive(Debug, Error)]
 pub enum GraftError {
     #[error("vbmeta graft: {0}")]
     Invalid(String),
+    #[error("vbmeta extract: image has no AVB footer")]
+    NoFooter,
+    #[error("vbmeta extract: footer points at bytes whose magic is not AVB0")]
+    BadMagic,
+    #[error("vbmeta extract: footer vbmeta range lies outside the image")]
+    RangeInvalid,
     #[error("vbmeta graft {operation} {path}: {source}")]
     Io {
         operation: &'static str,
@@ -26,6 +40,50 @@ pub enum GraftError {
         source: std::io::Error,
     },
 }
+
+impl GraftError {
+    pub fn protocol_code(&self) -> &'static str {
+        match self {
+            Self::NoFooter => "vbmeta-no-footer",
+            Self::BadMagic => "vbmeta-bad-magic",
+            Self::RangeInvalid => "vbmeta-range-invalid",
+            Self::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
+                "permission-denied"
+            }
+            Self::Invalid(_) | Self::Io { .. } => "operation",
+        }
+    }
+}
+
+pub fn extract(image: &Path, output: &Path) -> Result<ExtractReceipt, GraftError> {
+    let image_bytes = fs::read(image).map_err(|error| io("read image", image, error))?;
+    let (vbmeta_offset, _, vbmeta_size) =
+        read_footer(&image_bytes).ok_or(GraftError::NoFooter)?;
+    let offset = usize::try_from(vbmeta_offset).map_err(|_| GraftError::RangeInvalid)?;
+    let size = usize::try_from(vbmeta_size).map_err(|_| GraftError::RangeInvalid)?;
+    let footer_offset = image_bytes
+        .len()
+        .checked_sub(FOOTER_BYTES)
+        .ok_or(GraftError::RangeInvalid)?;
+    let end = offset.checked_add(size).ok_or(GraftError::RangeInvalid)?;
+    if end > footer_offset {
+        return Err(GraftError::RangeInvalid);
+    }
+    let vbmeta = image_bytes
+        .get(offset..end)
+        .ok_or(GraftError::RangeInvalid)?;
+    if vbmeta.get(0..4) != Some(AVB_MAGIC) {
+        return Err(GraftError::BadMagic);
+    }
+    write_atomic(output, vbmeta)?;
+    Ok(ExtractReceipt {
+        output: output.display().to_string(),
+        bytes: vbmeta.len(),
+        vbmeta_offset,
+        vbmeta_size,
+    })
+}
+
 
 pub fn graft(source: &Path, target: &Path, output: &Path) -> Result<GraftReceipt, GraftError> {
     let vbmeta = fs::read(source).map_err(|error| io("read source", source, error))?;
@@ -70,7 +128,7 @@ pub fn graft(source: &Path, target: &Path, output: &Path) -> Result<GraftReceipt
     })
 }
 
-fn read_footer(bytes: &[u8]) -> Option<(u64, u64, u64)> {
+pub(crate) fn read_footer(bytes: &[u8]) -> Option<(u64, u64, u64)> {
     let footer = bytes.get(bytes.len().checked_sub(FOOTER_BYTES)?..)?;
     if &footer[..4] != FOOTER_MAGIC {
         return None;
@@ -127,7 +185,7 @@ fn put_be64(bytes: &mut [u8], value: u64) {
     bytes.copy_from_slice(&value.to_be_bytes());
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), GraftError> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), GraftError> {
     let parent = path
         .parent()
         .ok_or_else(|| GraftError::Invalid("output has no parent".to_owned()))?;

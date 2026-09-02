@@ -4,8 +4,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use mode2_profile::{
-    DeriveError, GraftClassification, VbmetaHeader, ValidateFileError, classify_graft,
-    derive_to_file, inspect_vbmeta, inspect_vbmeta_header, validate_file,
+    DeriveError, GraftClassification, VbmetaHeader, VbmetaKeyCheck, ValidateFileError,
+    check_vbmeta, classify_graft, derive_to_file, inspect_vbmeta, inspect_vbmeta_header,
+    validate_file,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -41,6 +42,15 @@ enum Command {
         #[arg(long)]
         vbmeta: PathBuf,
     },
+    /// Compare an image vbmeta key with a main vbmeta chain descriptor as JSON.
+    Check {
+        #[arg(long)]
+        image: PathBuf,
+        #[arg(long)]
+        vbmeta: PathBuf,
+        #[arg(long)]
+        partition: String,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -69,6 +79,20 @@ struct HeaderEnvelope {
     header: VbmetaHeader,
     classification: GraftClassification,
 }
+#[derive(Serialize)]
+struct CheckEnvelope {
+    ok: bool,
+    check: CheckReceipt,
+}
+
+#[derive(Serialize)]
+struct CheckReceipt {
+    key_matches: bool,
+    image_key_sha256: String,
+    chain_key_sha256: String,
+    rollback_index_location: u32,
+}
+
 
 #[derive(Serialize)]
 struct ChainPartition {
@@ -85,22 +109,11 @@ struct BuildProperties {
     boot_security_patch: Option<String>,
 }
 
-#[derive(Serialize)]
-struct ErrorEnvelope<'a> {
-    ok: bool,
-    error: ErrorBody<'a>,
-}
-
-#[derive(Serialize)]
-struct ErrorBody<'a> {
-    code: &'a str,
-    message: String,
-}
-
 fn inspect_error_code(error: &DeriveError) -> &'static str {
     match error {
         DeriveError::TooSmall => "vbmeta-too-small",
         DeriveError::BadMagic => "vbmeta-bad-magic",
+        DeriveError::NoFooter => "vbmeta-no-footer",
         DeriveError::BadFooter => "vbmeta-bad-footer",
         DeriveError::VbmetaPastImage => "vbmeta-range-invalid",
         DeriveError::InvalidReleaseStringUtf8 => "vbmeta-release-string-invalid",
@@ -115,18 +128,111 @@ fn inspect_error_code(error: &DeriveError) -> &'static str {
         DeriveError::InvalidPropertyUtf8 => "vbmeta-property-utf8",
         DeriveError::InvalidPartitionNameUtf8 => "vbmeta-partition-name-utf8",
         DeriveError::DuplicateProperty(_) => "vbmeta-duplicate-property",
+        DeriveError::ChainPartitionMissing(_) => "vbmeta-chain-partition-missing",
         DeriveError::NoOsVersionProperty => "vbmeta-os-version-missing",
         DeriveError::NoSecurityPatchProperty => "vbmeta-security-patch-missing",
         DeriveError::OsVersionMalformed => "vbmeta-os-version-malformed",
         DeriveError::SecurityPatchMalformed => "vbmeta-security-patch-malformed",
     }
 }
+#[derive(Serialize)]
+struct ErrorEnvelope<'a> {
+    ok: bool,
+    error: ErrorBody<'a>,
+}
+
+#[derive(Serialize)]
+struct ErrorBody<'a> {
+    code: &'a str,
+    message: String,
+}
+
 
 fn emit_json<T: Serialize>(value: &T) -> Result<(), serde_json::Error> {
     serde_json::to_writer(std::io::stdout().lock(), value)?;
     println!();
     Ok(())
 }
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn check(image_path: &Path, vbmeta_path: &Path, partition: &str) -> ExitCode {
+    let image = match fs::read(image_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let envelope = ErrorEnvelope {
+                ok: false,
+                error: ErrorBody {
+                    code: "vbmeta-read",
+                    message: format!("read image {}: {error}", image_path.display()),
+                },
+            };
+            return match emit_json(&envelope) {
+                Ok(()) => ExitCode::FAILURE,
+                Err(error) => {
+                    eprintln!("check output: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+    };
+    let vbmeta = match fs::read(vbmeta_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let envelope = ErrorEnvelope {
+                ok: false,
+                error: ErrorBody {
+                    code: "vbmeta-read",
+                    message: format!("read vbmeta {}: {error}", vbmeta_path.display()),
+                },
+            };
+            return match emit_json(&envelope) {
+                Ok(()) => ExitCode::FAILURE,
+                Err(error) => {
+                    eprintln!("check output: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+    };
+    let result: VbmetaKeyCheck = match check_vbmeta(&image, &vbmeta, partition) {
+        Ok(check) => check,
+        Err(error) => {
+            let envelope = ErrorEnvelope {
+                ok: false,
+                error: ErrorBody {
+                    code: inspect_error_code(&error),
+                    message: error.to_string(),
+                },
+            };
+            return match emit_json(&envelope) {
+                Ok(()) => ExitCode::FAILURE,
+                Err(error) => {
+                    eprintln!("check output: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+    };
+    let envelope = CheckEnvelope {
+        ok: true,
+        check: CheckReceipt {
+            key_matches: result.key_matches,
+            image_key_sha256: hex(&result.image_key_sha256),
+            chain_key_sha256: hex(&result.chain_key_sha256),
+            rollback_index_location: result.rollback_index_location,
+        },
+    };
+    match emit_json(&envelope) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("check output: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 
 fn inspect(path: &Path) -> ExitCode {
     let bytes = match fs::read(path) {
@@ -257,7 +363,9 @@ fn run(command: Command) -> Result<(), CliError> {
             validate_file(&input)?;
             Ok(())
         }
-        Command::Inspect { .. } | Command::InspectHeader { .. } => {
+        Command::Inspect { .. }
+        | Command::InspectHeader { .. }
+        | Command::Check { .. } => {
             unreachable!("inspection commands are dispatched by main")
         }
     }
@@ -267,6 +375,11 @@ fn main() -> ExitCode {
     match Cli::parse().command {
         Command::Inspect { vbmeta } => inspect(&vbmeta),
         Command::InspectHeader { vbmeta } => inspect_header(&vbmeta),
+        Command::Check {
+            image,
+            vbmeta,
+            partition,
+        } => check(&image, &vbmeta, &partition),
         command => match run(command) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {

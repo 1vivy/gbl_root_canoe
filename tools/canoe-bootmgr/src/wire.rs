@@ -176,6 +176,16 @@ pub enum JsonRequest {
         #[serde(default)]
         tools: Option<PathBuf>,
     },
+    #[serde(rename = "vbmeta.extract")]
+    VbmetaExtract { image: PathBuf, output: PathBuf },
+    #[serde(rename = "vbmeta.check")]
+    VbmetaCheck {
+        image: PathBuf,
+        vbmeta: PathBuf,
+        partition: String,
+        #[serde(default)]
+        tools: Option<PathBuf>,
+    },
     #[serde(rename = "vendorboot.patch", alias = "vendor_boot.patch")]
     VendorBootPatch { input: PathBuf, output: PathBuf },
     #[serde(rename = "fastboot.identify")]
