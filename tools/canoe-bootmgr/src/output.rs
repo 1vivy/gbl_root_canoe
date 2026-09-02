@@ -152,6 +152,7 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             receipt.generation,
             receipt.backup_present
         ),
+        Success::ToolsUpdate { files, .. } => format!("updated tools: {}\n", files.join(",")),
         Success::ModePlan { id, plan, .. } => format!(
             "mode.plan id={id} from={} target={} outcome={} preconditions={}\n",
             plan.from_mode,

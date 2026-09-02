@@ -124,6 +124,7 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
         Command::Slot { command } => extra_ops::slot_command(backend, command),
         Command::Install(args) => extra_ops::install_command(backend, args),
         Command::OtaApply(args) => extra_ops::ota_apply(backend, args),
+        Command::ToolsUpdate(args) => extra_ops::tools_update(backend, args),
         Command::ModePlan(args) => mode_plan_command(backend, args),
         Command::Graft(args) => extra_ops::graft_command(args),
         Command::VbmetaInspect(args) => vbmeta_inspect_command(args),

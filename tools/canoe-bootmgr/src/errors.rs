@@ -11,6 +11,7 @@ use crate::fastboot::FastbootError;
 use crate::graft::GraftError;
 use crate::mode_plan::ModePlanError;
 use crate::slots::SlotError;
+use crate::tools_update::ToolsUpdateError;
 use crate::vbmeta_inspect::VbmetaInspectError;
 use crate::vendorboot::VendorBootError;
 
@@ -37,6 +38,8 @@ pub enum AppError {
     #[error(transparent)]
     BlockWrite(#[from] BlockWriteError),
     #[error(transparent)]
+    ToolsUpdate(#[from] ToolsUpdateError),
+    #[error(transparent)]
     Fastboot(#[from] FastbootError),
     #[error(transparent)]
     ModePlan(#[from] ModePlanError),
@@ -61,6 +64,7 @@ impl AppError {
             Self::VbmetaInspect(error) => error.protocol_code(),
             Self::AblVerify(error) => error.protocol_code(),
             Self::BlockWrite(error) => error.protocol_code(),
+            Self::ToolsUpdate(error) => error.protocol_code(),
             Self::Fastboot(error) => error.protocol_code(),
             Self::Config(_)
             | Self::Artifact(_)

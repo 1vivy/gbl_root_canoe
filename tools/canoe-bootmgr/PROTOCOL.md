@@ -56,6 +56,13 @@ A failed JSON response is one object, followed by `\n`:
 | `rollback-failed` | `block.write` readback differed and restoring the snapshot failed; the response names the snapshot artifact. |
 | `digest-mismatch` | `abl.verify` image SHA-256 differed from the supplied expected digest; no probe was run. |
 | `unsupported-platform` | `block.write` is unavailable on this platform. |
+| `tools-source-missing` | `tools.update` source does not exist; no boot-root write was attempted. |
+| `tools-source-not-directory` | `tools.update` source is not a directory; no boot-root write was attempted. |
+| `tools-source-empty` | `tools.update` source contains no regular files; no boot-root write was attempted. |
+| `tools-source-name` | `tools.update` source contains a file whose name cannot be represented in the wire receipt. |
+| `tools-snapshot` | `tools.update` could not snapshot an existing destination; no boot-root write was attempted. |
+| `tools-write` | `tools.update` failed while copying a staged file; the pre-update snapshot was restored. |
+| `tools-rollback` | `tools.update` failed and could not restore the pre-update snapshot. |
 | `mode-plan-invalid` | `mode.plan` received a mode outside `0..=2`; no boot-root lookup or write was attempted. |
 | `mode-precondition-unsatisfied` | `entry.mode` was asked to apply a transition whose planned preconditions are missing, unknown, or require a post-action. |
 | `response-too-large` | A successful response exceeded 1 MB. |
@@ -98,16 +105,13 @@ Shared response records:
 - `bls_file`: `{name:string,entry:bls_entry}`.
 - `install_receipt`: `{active_slot:"a"|"b",installed:("a"|"b")[],generation:u32,signer_changed:bool,backup_present:bool}`.
 
-## Verb catalogue
-
-Every success response below also has `ok:true` and `operation` with the stated value.
-
 | Verb | Request fields | Success response fields |
 | --- | --- | --- |
 | `protocol.version` | `verb` only | `operation:"protocol.version"`, `app_version:string`, `protocol_version:u32`. |
 | `build` | `abl:path` required; `vbmeta:path?`, `staged:path?`, `tools:path?`, `efisp_tools:path?`, `keep_unpatched:path?`, `patch_log:path?`, `probe:bool?`. | Full build: `operation:"build"`, `kind:"build"`, `receipt:{staged:path,loader_bytes:u64,gm2p_bytes:u64,tzmap_bytes:u64,tools_staged:usize,gbl_patched:bool,loader_sha256:string,gm2p_sha256:string,tzmap_sha256:string,unpatched_sha256:string}`. Probe build: `operation:"build.probe"`, `kind:"build.probe"`, `receipt:{gbl_patched:bool,unpatched_sha256:string}`. |
 | `abl.verify` | `image:path` required; `expected_sha256:string?`. If supplied, verification returns `digest-mismatch` before probing on a mismatch. | `operation:"abl.verify"`, `sha256:string`, `gbl_patched:bool`. The vulnerability result comes from the existing `build --probe` path. |
 | `block.write` | `partition:string`, `image:path`, `snapshot:path` required; `slot:"a"|"b"?`. The partition must match ASCII `[A-Za-z0-9_]` and be 1..=36 bytes. The server resolves `/dev/block/by-name/<partition><suffix>`, snapshots the full target, writes without truncation, verifies readback, and restores on mismatch. | `operation:"block.write"`, `partition:string`, `node:string`, `bytes_written:u64`, `sha256:string`, `snapshot:string`, `verified:bool`. |
+| `tools.update` | `source:path` required. The source must be a directory containing at least one regular file. Each direct child file is copied to `tools/<name>` through the boot-root transaction; destinations are snapshotted and restored if any copy fails. | `operation:"tools.update"`, `files:string[]` (sorted names written to the boot root). |
 | `config.show` | `verb` only | `operation:"config.show"`, `config:config`. |
 | `config.set-policy` | `menu_mode:"silent"|"menu"?`, `key_window_ms:u32?`, `menu_timeout_s:u32?`. | `operation:"config.policy"`, `kind:"config.policy"`, `config:config`, `generation:u32`, `mark:string`. |
 | `entry.list` | `verb` only | `operation:"entry.list"`, `generation:u32`, `entries:entry[]`. |

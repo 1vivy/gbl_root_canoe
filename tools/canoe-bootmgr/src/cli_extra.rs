@@ -80,6 +80,11 @@ pub struct OtaApplyArgs {
     #[arg(long)]
     pub allow_new_signer: bool,
 }
+#[derive(Debug, Args)]
+pub struct ToolsUpdateArgs {
+    #[arg(long)]
+    pub source: PathBuf,
+}
 
 #[derive(Debug, Args)]
 pub struct AblVerifyArgs {

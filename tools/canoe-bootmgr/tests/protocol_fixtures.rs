@@ -92,8 +92,10 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
         let expected_document: serde_json::Value =
             serde_json::from_slice(&expected).expect("golden response JSON");
         let expected_success = expected_document["ok"] == true;
+        let boot_root = tempfile::tempdir().expect("fixture boot root");
         let mut child = Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"))
-            .arg("--json")
+            .args(["--json", "--boot-root"])
+            .arg(boot_root.path())
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

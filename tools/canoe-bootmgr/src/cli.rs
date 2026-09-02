@@ -10,7 +10,8 @@ pub use crate::cli_extra::{
     AblVerifyArgs, BlsStageArgs, BlockWriteArgs, FastbootAblCoverageArgs, FastbootCommand,
     FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
     FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
-    SlotCommand, SlotStatusArgs, VbmetaHeaderArgs, VendorBootCommand, VendorBootPatchArgs,
+    SlotCommand, SlotStatusArgs, ToolsUpdateArgs, VbmetaHeaderArgs, VendorBootCommand,
+    VendorBootPatchArgs,
 };
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
@@ -109,6 +110,9 @@ pub enum Command {
     /// Write an image to a block partition with a rollback snapshot.
     #[command(name = "block-write")]
     BlockWrite(BlockWriteArgs),
+    /// Update the boot-root EFI tools directory without installing a loader.
+    #[command(name = "tools-update")]
+    ToolsUpdate(ToolsUpdateArgs),
     /// Install one or both per-slot managed loader triplets.
     Install(InstallArgs),
     /// Apply a post-OTA loader to the explicitly confirmed target slot.
@@ -411,6 +415,8 @@ pub enum Success {
     Install { ok: bool, receipt: InstallReceipt },
     #[serde(rename = "ota-apply")]
     OtaApply { ok: bool, receipt: InstallReceipt },
+    #[serde(rename = "tools.update")]
+    ToolsUpdate { ok: bool, files: Vec<String> },
     #[serde(rename = "mode.plan")]
     ModePlan { ok: bool, id: String, plan: ModePlan },
     #[serde(rename = "vbmeta.graft")]
