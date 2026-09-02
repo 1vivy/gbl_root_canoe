@@ -222,6 +222,15 @@ fallback. The native helper may be built with
 `tools/canoe-ext4/build-windows.sh` on a host with MinGW and an e2fsprogs
 source tree, then supplied to the package build.
 
+This is deliberate, not a Windows limitation to work around: no Canoe operation
+on any host mounts persist. Writes go through the userspace ext4 helper against
+the raw exported source, so Windows gives up nothing by lacking a mount. A
+persist partition carries no `efisp` directory before the first install; the
+install transaction creates it (and every parent of every staged path) rather
+than expecting one. For manual inspection or repair outside the app, point the
+same helper at the raw drive — `canoe-ext4.exe inspect \\.\PhysicalDrive<N>` —
+never at a mounted letter.
+
 ## First run and Super Fastboot
 
 ### First-run behavior
