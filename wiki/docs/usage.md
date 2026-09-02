@@ -154,10 +154,24 @@ this guide that asks for stock userspace `fastbootd`.
 
 The app and the CLI drive USB Mass Storage exports; see
 [`mass-storage.md`](./mass-storage.md). Only one partition is exported per
-session. **VOL DOWN on the device is the only contractual way to end an
-export.** While an export is active, the USB link is a mass-storage gadget and
-has no fastboot channel, so a host command cannot reach BDS. Do not use a live
-`persist` export from a host while Android is using that same filesystem.
+session. An export has two equal, ordinary endings: the host ends it (the boot
+manager or CLI issues a SCSI eject), or the operator presses **VOL DOWN** on the
+device. Neither is a failure, and neither is a workaround for the other.
+
+When Canoe's bundled mass-storage driver serves the export, it delivers the
+SCSI reply before the gadget goes away, and the device returns to the surface it
+came from—the menu or fastboot. That round trip is the point: a host tool can
+export `persist`, do its work, and hand the device back without the operator
+touching the phone. This depends on Canoe's own bundled driver serving the
+export; the stock resident platform driver never reports the eject, so a
+session it serves ends only the old way. On an SM8850 Canoe target, the export
+enumerates as **`1209:ca0e`** "USB MASS STORAGE", which is Canoe's bundled
+driver, so the host eject is the normal path there.
+
+While an export is active, the USB link is a mass-storage gadget and has no
+fastboot channel, so a fastboot command legitimately reports
+`waiting-for-any-device`. Do not use a live `persist` export from a host while
+Android is using that same filesystem.
 
 ## Modes and DeviceInfo
 

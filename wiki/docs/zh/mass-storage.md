@@ -23,10 +23,13 @@ canoe-bootmgr fastboot export --target logfs
 响应会给出原始块设备节点。每次会话只导出一个分区。如果已有 Canoe 导出的未挂载
 设备，`fastboot.export` 会接管它，不会再启动第二个导出。
 
-**应用和 CLI 路径都必须在设备上按音量下结束会话。**断开或失去 USB 连接不会取消
-会话；重新连接并完成操作后，再在设备上按音量下。导出进行时 USB 链路是 mass-storage
-gadget，不提供 fastboot 通道，因此主机命令无法到达 BDS。操作完成后 CLI 也提供
-`fastboot.end-export --node <RAW_NODE>`，但设备上的音量下仍是契约规定的唯一取消控制。
+一次导出有两种同等、正常的结束方式：由主机结束（boot manager 或 CLI 发出 SCSI eject），或操作员在设备上按音量下。两者都不是失败，也互不构成对另一种方式的替代。
+
+当 Canoe 自带的大容量存储驱动提供该导出时，它会在 gadget 消失前交付 SCSI 应答，随后设备返回发起导出的界面——菜单或 fastboot。这次往返正是设计目的：主机工具可以导出 `persist`、完成工作，再把设备交还原来的界面，而无需操作员触碰手机。
+
+此行为依赖 Canoe 自带驱动实际提供导出。原驻平台驱动从不报告 eject，因此由它提供的会话只能按原来的方式结束。在 SM8850 Canoe 目标设备上，导出枚举为 **`1209:ca0e`**“USB MASS STORAGE”，这是 Canoe 自带驱动的身份，因此主机 eject 在该硬件上是正常路径。
+
+断开或失去 USB 连接不会取消导出；重新连接并完成操作后，再使用上述任一正常结束方式。导出期间 USB 链路是 mass-storage gadget，不提供 fastboot 通道，因此此时发出的 fastboot 命令正常会报告 `waiting-for-any-device`。CLI 可通过 `fastboot.end-export --node <RAW_NODE>` 使用主机结束路径。
 
 较旧的 BDS 构建会在没有界面的情况下启动导出并静默吞掉按键。如果界面没有变化，
 正在运行的 BDS 就早于该修复。
@@ -83,11 +86,13 @@ canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
 回滚。主机安装器不会刷写分区；带漏洞的 ABL 与 `BDS.efi` 操作仍是安装指南中分开
 且需明确执行的 fastboot 操作。
 
-事务完成后结束导出，并在设备上按音量下：
+事务完成后，从主机或设备结束导出。使用主机结束路径：
 
 ```bash
 canoe-bootmgr fastboot end-export --node <RAW_NODE>
 ```
+
+也可以在设备上按音量下。
 
 如果应用报告导出仍被保持，请完成当前应用流程，不要从另一个终端启动第二次导出。
 

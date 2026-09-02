@@ -137,10 +137,21 @@ Provision 流程会要求进入系统用户空间的 `fastbootd`。
 
 ## USB 导出与主机/设备边界
 
-应用和 CLI 会驱动 USB Mass Storage 导出；详见[`mass-storage.md`](./mass-storage.md)。
-每次会话只导出一个分区。**设备上的音量下是结束导出的唯一契约方式。**导出进行时，
-USB 链路是 mass-storage gadget，不提供 fastboot 通道，因此主机命令无法到达 BDS。
-主机使用实时 `persist` 导出时，不得让 Android 同时使用同一文件系统。
+应用和 CLI 会驱动 USB Mass Storage 导出；详见
+[`mass-storage.md`](./mass-storage.md)。每次会话只导出一个分区。一次导出有两种同等、
+正常的结束方式：由主机结束（boot manager 或 CLI 发出 SCSI eject），或操作员在设备上按
+音量下。两者都不是失败，也互不构成对另一种方式的替代。
+
+当 Canoe 自带的大容量存储驱动提供该导出时，它会在 gadget 消失前交付 SCSI 应答，随后
+设备返回发起导出的界面——菜单或 fastboot。这次往返正是设计目的：主机工具可以导出
+`persist`、完成工作，再把设备交还原来的界面，而无需操作员触碰手机。此行为依赖 Canoe
+自带驱动实际提供导出；原驻平台驱动从不报告 eject，因此由它提供的会话只能按原来的方式
+结束。在 SM8850 Canoe 目标设备上，导出枚举为 **`1209:ca0e`**“USB MASS STORAGE”，这是 Canoe 自带
+驱动的身份，因此主机 eject 在该硬件上是正常路径。
+
+导出活动期间，USB 链路是 mass-storage gadget，不提供 fastboot 通道，因此此时发出的
+fastboot 命令正常会报告 `waiting-for-any-device`。主机使用实时 `persist` 导出时，不得
+让 Android 同时使用同一文件系统。
 
 ## 模式与 DeviceInfo
 
