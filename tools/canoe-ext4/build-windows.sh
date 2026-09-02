@@ -53,9 +53,11 @@ fi
 # The journal replay entry point lives in the debugfs/e2fsck sources rather
 # than the libext2fs archive itself.  Build those three objects and link them
 # into the helper; they use only libext2fs' block read/write/flush callbacks.
+make -C "$BUILD/lib/et"
 make -C "$BUILD/lib/uuid"
 make -C "$BUILD/lib/blkid"
 JOURNAL_CFLAGS="-I$BUILD/lib/uuid -I$BUILD/lib/blkid -I$BUILD/lib -I$SOURCE/include/mingw -I$SOURCE/lib/ext2fs -I$SOURCE/debugfs -I$SOURCE/e2fsck -I$SOURCE/lib -DHAVE_CONFIG_H -DDEBUGFS -Dunix_io_manager=windows_io_manager"
+make -C "$BUILD/lib/ext2fs"
 make -C "$BUILD/lib/ext2fs" \
     DEBUGFS_CFLAGS="$JOURNAL_CFLAGS" \
     journal.o revoke.o recovery.o
