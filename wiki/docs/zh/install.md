@@ -19,9 +19,14 @@ GUI 使用平台的 WebView 运行时：
 - **Linux：** 在运行 `./canoe-boot-manager.sh` 前安装
   `webkit2gtk-4.1`、`javascriptcoregtk-4.1` 和 `libsoup-3.0`。缺少这些
   库时 GUI 不会启动。
-- **Windows：** 安装 Microsoft WebView2 运行时。当前 Windows 11 默认
-  提供它；不包含它的 Windows 系统必须另行安装。缺少 WebView2 时 GUI
-  不会启动。
+- **Windows：** 安装 Microsoft WebView2 运行时。当前 Windows 11 默认提供
+  它；不包含它的 Windows 系统必须另行安装。缺少 WebView2 时 GUI 不会启动。
+  GUI 还会在启动时请求管理员权限，因为写入导出的原始磁盘卷
+  （`\\.\PhysicalDrive<N>`）需要提升权限；这与同类 Windows 原始磁盘工具的做法
+  一致。由于二进制文件没有进行代码签名，UAC 提示会显示发布者未知。Windows
+  工具包可以完成构建，但这里没有 Windows 机器，Wine 也没有 UAC，因此 GUI
+  运行时行为尚未验证。如果不愿批准 GUI 提示，可改用同一压缩包中的 `canoe.exe`；
+  它不需要 WebView2，在已提升权限的命令提示符中运行即可完成相同工作。
 
 命令行客户端不依赖上述 GUI 运行时。既没有 Linux WebKit 库也没有 WebView2
 的主机仍可使用 `./canoe` 或 `canoe.exe`，以及
