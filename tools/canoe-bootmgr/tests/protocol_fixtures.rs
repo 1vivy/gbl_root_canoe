@@ -49,19 +49,27 @@ fn install_identify_fastboot(
 ) -> Option<MutexGuard<'static, ()>> {
     let name = request.file_name()?.to_str()?;
     let stem = name.strip_suffix(REQUEST_SUFFIX)?;
-    let userspace_value = match stem {
-        "fastboot.identify-userspace" => "yes",
-        "fastboot.identify-bootloader" => "no",
-        "fastboot.identify-unknown" => "FAILED (unknown variable)",
+    let script_body = match stem {
+        "fastboot.fetch" => "printf 'fetched fixture' > \"$3\"\nexit 0".to_owned(),
+        "fastboot.identify-userspace" => {
+            "case \"$2\" in\n  is-userspace) echo \"is-userspace: yes\" >&2 ;;\nesac\nexit 0"
+                .to_owned()
+        }
+        "fastboot.identify-bootloader" => {
+            "case \"$2\" in\n  is-userspace) echo \"is-userspace: no\" >&2 ;;\nesac\nexit 0"
+                .to_owned()
+        }
+        "fastboot.identify-unknown" => {
+            "case \"$2\" in\n  is-userspace) echo \"is-userspace: FAILED (unknown variable)\" >&2 ;;\nesac\nexit 0"
+                .to_owned()
+        }
         _ => return None,
     };
     let guard = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
-    let script = format!(
-        "#!/bin/sh\ncase \"$2\" in\n  is-userspace) echo \"is-userspace: {userspace_value}\" >&2 ;;\nesac\nexit 0\n"
-    );
     let path = root.join("fastboot");
-    fs::write(&path, script).expect("fake fastboot");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("fake fastboot executable");
+    fs::write(&path, format!("#!/bin/sh\n{script_body}\n")).expect("fake fastboot");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+        .expect("fake fastboot executable");
     Some(guard)
 }
 const ROOT_PLACEHOLDER: &str = "@ROOT@";
@@ -124,6 +132,21 @@ fn write_footer_fixture(root: &Path) -> PathBuf {
     path
 }
 
+fn prepare_fixture_root(root: &Path, request: &Path) {
+    let Some(name) = request.file_name().and_then(|value| value.to_str()) else {
+        return;
+    };
+    if name != "default.get-dangling.request.json" {
+        return;
+    }
+    fs::write(
+        root.join("canoe.cfg"),
+        b"version 1\ngeneration 1\nmode 1\ndefault bls:missing\n\nentry android-a\n  title Android\n  image boot_a.efi\n  mode 1\n  role active\n",
+    )
+    .expect("dangling default config");
+    fs::create_dir_all(root.join("loader/entries")).expect("dangling default BLS directory");
+}
+
 #[test]
 fn golden_protocol_transcripts_replay_byte_for_byte() {
     let fixtures = fixture_paths();
@@ -135,6 +158,7 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
     for request_path in fixtures {
         let response_path = response_path(&request_path);
         let boot_root = tempfile::tempdir().expect("fixture boot root");
+        prepare_fixture_root(boot_root.path(), &request_path);
         let footer_fixture = write_footer_fixture(boot_root.path());
         let root = boot_root
             .path()
@@ -162,10 +186,12 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"));
         command
             .args(["--json", "--boot-root"])
-            .arg(boot_root.path())
-            .env_clear();
-        if identify_guard.is_some() {
-            command.env("PATH", boot_root.path());
+            .arg(boot_root.path());
+        command.env("PATH", boot_root.path());
+        if request_path.file_name().and_then(|value| value.to_str())
+            == Some("mode.plan-target-image.request.json")
+        {
+            command.env("CANOE_TOOLS_DIR", &*WORKER_TOOLS_DIRECTORY);
         }
         let mut child = command
             .stdin(Stdio::piped())

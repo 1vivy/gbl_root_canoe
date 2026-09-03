@@ -1,12 +1,14 @@
 use crate::artifact::ArtifactSpec;
 use crate::build::BuildArgs;
 use crate::cli::{
-    BlsCommand, BlsStageArgs, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand,
-    EntryIdArgs, EntryModeArgs, EntrySetArgs, FastbootAblCoverageArgs, FastbootCommand,
-    FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
-    FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
-    PolicyArgs, SlotCommand, SlotStatusArgs, SourceCommand, ToolsUpdateArgs, VbmetaCheckArgs,
-    VbmetaExtractArgs, VbmetaHeaderArgs, VbmetaInspectArgs, VendorBootCommand, VendorBootPatchArgs,
+    AblLookupArgs, BlsCommand, BlsStageArgs, BlockReadArgs, Command, ConfigCommand, DefaultCommand,
+    DefaultSetArgs, EntryCommand, EntryIdArgs, EntryModeArgs, EntrySetArgs,
+    FastbootAblCoverageArgs, FastbootCommand, FastbootEndExportArgs, FastbootExportArgs,
+    FastbootFetchArgs, FastbootFlashArgs, FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs,
+    ImageDigestArgs, InstallArgs, ModePlanArgs, OtaApplyArgs, PolicyArgs, SlotCommand,
+    SlotStatusArgs, SourceCommand, SystemRebootArgs, ToolsUpdateArgs, VbmetaCheckArgs,
+    VbmetaExtractArgs, VbmetaHeaderArgs, VbmetaInspectArgs, VendorBootCommand,
+    VendorBootPatchArgs,
 };
 use crate::wire::JsonRequest;
 
@@ -40,6 +42,9 @@ impl JsonRequest {
                 image,
                 expected_sha256,
             }),
+            Self::ImageDigest { image, bytes } => {
+                Command::ImageDigest(ImageDigestArgs { image, bytes })
+            }
             Self::BlockWrite {
                 partition,
                 image,
@@ -51,7 +56,22 @@ impl JsonRequest {
                 snapshot,
                 slot,
             }),
-            Self::ToolsUpdate { source } => Command::ToolsUpdate(ToolsUpdateArgs { source }),
+            Self::BlockRead {
+                partition,
+                output,
+                slot,
+            } => Command::BlockRead(BlockReadArgs {
+                partition,
+                output,
+                slot,
+            }),
+            Self::ToolsUpdate {
+                source,
+                boot_root_source,
+            } => Command::ToolsUpdate(ToolsUpdateArgs {
+                source,
+                boot_root_source,
+            }),
             Self::ConfigShow => Command::Config {
                 command: ConfigCommand::Show,
             },
@@ -101,6 +121,7 @@ impl JsonRequest {
                 acknowledge,
                 current_vbmeta,
                 target_vbmeta,
+                target_image,
             } => Command::Entry {
                 command: EntryCommand::Mode(EntryModeArgs {
                     id,
@@ -108,21 +129,27 @@ impl JsonRequest {
                     acknowledge,
                     current_vbmeta,
                     target_vbmeta,
+                    target_image,
                     tools: None,
                 }),
             },
             Self::ModePlan {
                 id,
                 target_mode,
+                from_mode,
                 current_vbmeta,
                 target_vbmeta,
+                target_image,
             } => Command::ModePlan(ModePlanArgs {
                 id,
                 target_mode,
+                from_mode,
                 current_vbmeta,
                 target_vbmeta,
+                target_image,
                 tools: None,
             }),
+            Self::SystemReboot { target } => Command::SystemReboot(SystemRebootArgs { target }),
             Self::DefaultGet => Command::Default {
                 command: DefaultCommand::Get,
             },
@@ -132,6 +159,15 @@ impl JsonRequest {
                     id: None,
                 }),
             },
+            Self::AblLookup {
+                product,
+                output,
+                local_repo,
+            } => Command::AblLookup(AblLookupArgs {
+                product,
+                output,
+                local_repo,
+            }),
             Self::SourceDetect => Command::Source {
                 command: SourceCommand::Detect,
             },
@@ -184,6 +220,7 @@ impl JsonRequest {
                 gpt_active_slot,
                 mode,
                 allow_new_signer,
+                boot_root_source,
             } => Command::Install(InstallArgs {
                 staged,
                 slot,
@@ -195,6 +232,7 @@ impl JsonRequest {
                 gpt_active_slot,
                 mode,
                 allow_new_signer,
+                boot_root_source,
             }),
             Self::OtaApply {
                 target_slot,
@@ -203,6 +241,7 @@ impl JsonRequest {
                 staged,
                 mode,
                 allow_new_signer,
+                boot_root_source,
             } => Command::OtaApply(OtaApplyArgs {
                 target_slot,
                 bootctl_output,
@@ -210,6 +249,7 @@ impl JsonRequest {
                 staged,
                 mode,
                 allow_new_signer,
+                boot_root_source,
             }),
             Self::VbmetaGraft {
                 vbmeta,

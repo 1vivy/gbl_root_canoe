@@ -1,0 +1,1 @@
+{"operation":"mode.plan","ok":true,"id":null,"plan":{"from_mode":0,"target_mode":0,"preconditions":[],"post_actions":[],"outcome":{"status":"ready","reason":null},"refusal":null,"vbmeta":{"current":null,"target":null,"relationship":null}}}

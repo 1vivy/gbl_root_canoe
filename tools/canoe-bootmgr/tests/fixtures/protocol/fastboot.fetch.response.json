@@ -1,0 +1,1 @@
+{"operation":"fastboot.fetch","ok":true,"partition":"boot","output":"@ROOT@/fetched.img","sha256":"1008bfd64dc7f5930fab0f4a651481472ff9e767b9d413a6c9d4ed8e2b5a4202","bytes":15}

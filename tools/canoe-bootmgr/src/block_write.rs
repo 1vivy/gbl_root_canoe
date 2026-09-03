@@ -1,19 +1,24 @@
+
+
+pub use crate::block_partition::BlockError as BlockWriteError;
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 
 use serde::Serialize;
-use thiserror::Error;
-
 #[path = "block_write_io.rs"]
-mod block_write_io;
+pub(crate) mod block_write_io;
 
 use block_write_io::{
-    corrupt_first_byte, hash_region, io_error, restore_snapshot, set_writable, snapshot_target,
-    target_size, write_image,
+    corrupt_first_byte, restore_snapshot, set_writable, snapshot_target, target_size, write_image,
 };
+use block_write_io::io_error;
 
-const BY_NAME_ROOT: &str = "/dev/block/by-name";
+pub(crate) use crate::block_partition::{slot_suffix, validate_partition};
+const BY_NAME_ROOT: &str = crate::block_partition::BY_NAME_ROOT;
 
 #[derive(Debug, Clone)]
 pub struct BlockWriteRequest {
@@ -33,55 +38,17 @@ pub struct BlockWriteReceipt {
     pub verified: bool,
 }
 
-#[derive(Debug, Error)]
-pub enum BlockWriteError {
-    #[error("partition name `{partition}` must contain only ASCII letters, digits, or `_` and be 1..=36 bytes")]
-    PartitionNameInvalid { partition: String },
-    #[error("block.write slot must be `a`, `b`, or null (got `{slot}`)")]
-    InvalidSlot { slot: String },
-    #[error("partition node is missing: {node}")]
-    PartitionMissing { node: PathBuf },
-    #[error("block.write {operation} {path}: {source}")]
-    Io { operation: &'static str, path: PathBuf, #[source] source: io::Error },
-    #[error("image size {source_bytes} bytes is invalid for target size {target_bytes} bytes")]
-    ImageTooLarge { source_bytes: u64, target_bytes: u64 },
-    #[error("target `{node}` could not be made writable: {message}")]
-    BlockNotWritable { node: PathBuf, message: String },
-    #[error("snapshot `{snapshot}` failed: {message}")]
-    SnapshotFailed { snapshot: PathBuf, message: String },
-    #[error("readback mismatch for `{node}`: expected {expected}, got {actual}")]
-    ReadbackMismatch { node: PathBuf, expected: String, actual: String },
-    #[error("rollback failed; snapshot `{snapshot}` is the recovery artifact: {message}")]
-    RollbackFailed { snapshot: PathBuf, message: String },
-    #[error(transparent)]
-    Device(#[from] crate::fastboot::FastbootError),
-    #[error("block.write is unsupported on this platform")]
-    UnsupportedPlatform,
-}
-
-impl BlockWriteError {
-    pub fn protocol_code(&self) -> &str {
-        match self {
-            Self::PartitionNameInvalid { .. } => "partition-name-invalid",
-            Self::InvalidSlot { .. } => "request",
-            Self::PartitionMissing { .. } => "partition-missing",
-            Self::ImageTooLarge { .. } => "image-too-large",
-            Self::BlockNotWritable { .. } => "block-not-writable",
-            Self::SnapshotFailed { .. } => "snapshot-failed",
-            Self::ReadbackMismatch { .. } => "readback-mismatch",
-            Self::RollbackFailed { .. } => "rollback-failed",
-            Self::UnsupportedPlatform => "unsupported-platform",
-            Self::Device(error) => error.protocol_code(),
-            Self::Io { .. } => "operation",
-        }
-    }
-}
+// BlockWriteError is retained as the public operation name while the shared
+// BlockError taxonomy is used by both block.read and block.write.
 
 pub fn write(request: &BlockWriteRequest) -> Result<BlockWriteReceipt, BlockWriteError> {
     validate_partition(&request.partition)?;
     slot_suffix(request.slot.as_deref())?;
-    let _guard = crate::device_access::require_export("block.write")?;
-    write_at_root(request, Path::new(BY_NAME_ROOT))
+    let _guard = crate::device_access::DeviceGuard::exclusive()?;
+    #[cfg(windows)]
+    return Err(BlockWriteError::UnsupportedPlatform);
+    #[cfg(not(windows))]
+    write_at_root_inner(request, Path::new(BY_NAME_ROOT), None, true)
 }
 
 /// Test seam for replacing `/dev/block/by-name` with a temporary directory.
@@ -92,7 +59,7 @@ pub fn write_at_root(
     #[cfg(windows)]
     return Err(BlockWriteError::UnsupportedPlatform);
     #[cfg(not(windows))]
-    write_at_root_inner(request, root, None)
+    write_at_root_inner(request, root, None, false)
 }
 
 #[doc(hidden)]
@@ -115,13 +82,26 @@ pub fn write_at_root_with_fault(
     #[cfg(windows)]
     return Err(BlockWriteError::UnsupportedPlatform);
     #[cfg(not(windows))]
-    write_at_root_inner(request, root, Some(fault))
+    write_at_root_inner(request, root, Some(fault), false)
+}
+
+/// Test seam that retains the production block-device requirement.
+#[doc(hidden)]
+pub fn write_at_root_require_block_device(
+    request: &BlockWriteRequest,
+    root: &Path,
+) -> Result<BlockWriteReceipt, BlockWriteError> {
+    #[cfg(windows)]
+    return Err(BlockWriteError::UnsupportedPlatform);
+    #[cfg(not(windows))]
+    write_at_root_inner(request, root, None, true)
 }
 
 fn write_at_root_inner(
     request: &BlockWriteRequest,
     root: &Path,
     fault: Option<BlockWriteTestFault>,
+    require_block_device: bool,
 ) -> Result<BlockWriteReceipt, BlockWriteError> {
     validate_partition(&request.partition)?;
     let node = root.join(format!(
@@ -133,6 +113,10 @@ fn write_at_root_inner(
         io::ErrorKind::NotFound => BlockWriteError::PartitionMissing { node: node.clone() },
         _ => io_error("read target metadata", &node, source),
     })?;
+    #[cfg(unix)]
+    if require_block_device && !metadata.file_type().is_block_device() {
+        return Err(BlockWriteError::NotABlockDevice { node });
+    }
     let target_bytes = target_size(&node, &metadata)?;
     let source_bytes = fs::metadata(&request.image)
         .map_err(|source| io_error("read image metadata", &request.image, source))?
@@ -160,7 +144,7 @@ fn write_at_root_inner(
         ) {
             corrupt_first_byte(&node).map_err(|source| io_error("corrupt readback", &node, source))?;
         }
-        let expected = hash_region(&request.image, source_bytes)
+        let expected = crate::build_tools::sha256_prefix(&request.image, source_bytes)
             .map_err(|source| io_error("hash image", &request.image, source))?;
         let actual = if matches!(fault, Some(BlockWriteTestFault::Readback)) {
             return Err(io_error(
@@ -169,7 +153,7 @@ fn write_at_root_inner(
                 io::Error::other("injected readback failure"),
             ));
         } else {
-            hash_region(&node, source_bytes)
+            crate::build_tools::sha256_prefix(&node, source_bytes)
                 .map_err(|source| io_error("hash readback", &node, source))?
         };
         if expected != actual {
@@ -206,24 +190,6 @@ fn write_at_root_inner(
                 }),
             }
         }
-    }
-}
-
-fn validate_partition(partition: &str) -> Result<(), BlockWriteError> {
-    let valid = !partition.is_empty()
-        && partition.len() <= 36
-        && partition.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
-    valid.then_some(()).ok_or_else(|| BlockWriteError::PartitionNameInvalid {
-        partition: partition.to_owned(),
-    })
-}
-
-fn slot_suffix(slot: Option<&str>) -> Result<&'static str, BlockWriteError> {
-    match slot {
-        None => Ok(""),
-        Some("a") => Ok("_a"),
-        Some("b") => Ok("_b"),
-        Some(slot) => Err(BlockWriteError::InvalidSlot { slot: slot.to_owned() }),
     }
 }
 

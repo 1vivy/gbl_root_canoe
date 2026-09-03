@@ -12,6 +12,8 @@ mod operations_build;
 mod operations_fastboot;
 #[path = "operations_vbmeta.rs"]
 mod operations_vbmeta;
+#[path = "operations_device.rs"]
+mod operations_device;
 
 pub use crate::errors::AppError;
 
@@ -30,6 +32,18 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     }
     if let Command::BlockWrite(args) = command {
         return operations_build::block_write(args);
+    }
+    if let Command::ImageDigest(args) = command {
+        return operations_device::image_digest(args);
+    }
+    if let Command::BlockRead(args) = command {
+        return operations_device::block_read(args);
+    }
+    if let Command::SystemReboot(args) = command {
+        return operations_device::system_reboot(args);
+    }
+    if let Command::AblLookup(args) = command {
+        return operations_device::abl_lookup(args);
     }
     if let Command::ModePlan(args) = command {
         operations_build::validate_mode_plan_target(args.target_mode)?;
@@ -64,6 +78,18 @@ pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, App
     if let Command::BlockWrite(args) = &command {
         return operations_build::block_write(args);
     }
+    if let Command::ImageDigest(args) = &command {
+        return operations_device::image_digest(args);
+    }
+    if let Command::BlockRead(args) = &command {
+        return operations_device::block_read(args);
+    }
+    if let Command::SystemReboot(args) = &command {
+        return operations_device::system_reboot(args);
+    }
+    if let Command::AblLookup(args) = &command {
+        return operations_device::abl_lookup(args);
+    }
     if let Command::VbmetaExtract(args) = &command {
         return operations_vbmeta::extract(args);
     }
@@ -82,7 +108,7 @@ pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, App
     if let Command::Fastboot { command } = &command {
         return operations_fastboot::command(command);
     }
-    let backend = Backend::local(root)?;
+    let (backend, _export_guard) = backend_for_request(root, &command)?;
     execute_command(&backend, &command)
 }
 
@@ -103,6 +129,18 @@ pub fn execute_request_cli(
     if let Command::BlockWrite(args) = &command {
         return operations_build::block_write(args);
     }
+    if let Command::ImageDigest(args) = &command {
+        return operations_device::image_digest(args);
+    }
+    if let Command::BlockRead(args) = &command {
+        return operations_device::block_read(args);
+    }
+    if let Command::SystemReboot(args) = &command {
+        return operations_device::system_reboot(args);
+    }
+    if let Command::AblLookup(args) = &command {
+        return operations_device::abl_lookup(args);
+    }
     if let Command::ModePlan(args) = &command {
         operations_build::validate_mode_plan_target(args.target_mode)?;
     }
@@ -121,7 +159,7 @@ pub fn execute_request_cli(
     if let Command::Fastboot { command } = &command {
         return operations_fastboot::command(command);
     }
-    let (backend, _export_guard) = backend_for_cli(cli)?;
+    let (backend, _export_guard) = backend_for_cli_request(cli, &command)?;
     execute_command(&backend, &command)
 }
 
@@ -139,6 +177,45 @@ fn backend_for_cli(
         .transpose()?;
     Ok((backend, guard))
 }
+fn backend_for_request(
+    root: &Path,
+    command: &Command,
+) -> Result<(Backend, Option<crate::device_access::DeviceGuard>), AppError> {
+    match request_boot_root_source(command) {
+        Some(source) => backend_from_request_source(source),
+        None => Ok((Backend::local(root)?, None)),
+    }
+}
+
+fn backend_for_cli_request(
+    cli: &crate::cli::Cli,
+    command: &Command,
+) -> Result<(Backend, Option<crate::device_access::DeviceGuard>), AppError> {
+    match request_boot_root_source(command) {
+        Some(source) => backend_from_request_source(source),
+        None => backend_for_cli(cli),
+    }
+}
+
+fn request_boot_root_source(command: &Command) -> Option<&Path> {
+    match command {
+        Command::Install(args) => args.boot_root_source.as_deref(),
+        Command::OtaApply(args) => args.boot_root_source.as_deref(),
+        Command::ToolsUpdate(args) => args.boot_root_source.as_deref(),
+        _ => None,
+    }
+}
+
+fn backend_from_request_source(
+    source: &Path,
+) -> Result<(Backend, Option<crate::device_access::DeviceGuard>), AppError> {
+    let backend = Backend::from_paths(None, Some(source), None)?;
+    let guard = backend
+        .source_is_block_device()
+        .then(|| crate::device_access::require_export("ext4"))
+        .transpose()?;
+    Ok((backend, guard))
+}
 
 fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppError> {
     match command {
@@ -146,6 +223,10 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
         Command::Build(args) => operations_build::build(args),
         Command::AblVerify(args) => operations_build::abl_verify(args),
         Command::BlockWrite(args) => operations_build::block_write(args),
+        Command::ImageDigest(args) => operations_device::image_digest(args),
+        Command::BlockRead(args) => operations_device::block_read(args),
+        Command::SystemReboot(args) => operations_device::system_reboot(args),
+        Command::AblLookup(args) => operations_device::abl_lookup(args),
         Command::Config { command } => operations_bootroot::config(backend, command),
         Command::Entry { command } => operations_bootroot::entry(backend, command),
         Command::Default { command } => operations_bootroot::default(backend, command),

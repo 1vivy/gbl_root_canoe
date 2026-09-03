@@ -1,5 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::fs;
 use std::time::Duration;
+use std::path::{Path, PathBuf};
 
 use crate::build::arg;
 use crate::build_tools;
@@ -143,30 +144,27 @@ pub fn plan_transition(
         },
     })
 }
-
-pub fn plan_for_entry(
-    root: &Path,
-    entry: &ConfigEntry,
+pub fn plan_for_mode(
+    from_mode: u8,
     target_mode: u8,
     current_vbmeta: Option<&PathBuf>,
     target_vbmeta: Option<&PathBuf>,
+    target_image: Option<&PathBuf>,
     tools: Option<&Path>,
 ) -> Result<ModePlan, ModePlanError> {
     let current = current_vbmeta
         .map(|path| inspect_header(path, tools).map(|inspection| inspection.evidence()))
         .transpose()?;
-    let target = target_vbmeta
-        .map(|path| inspect_header(path, tools).map(|inspection| inspection.evidence()))
-        .transpose()?;
-    let mut plan = plan_transition(entry.mode, target_mode, current, target)?;
-    if target_mode == 2 && entry.mode != 2 {
-        let profile = root.join(&entry.image).with_extension("efi.gm2p");
-        let valid = profile.is_file() && profile.metadata().is_ok_and(|metadata| metadata.len() == PROFILE_BYTES);
-        if let Some(precondition) = plan.preconditions.iter_mut().find(|item| item.code == "P-PROFILE") {
-            precondition.satisfied = Some(valid);
-        }
-    }
-    if target_mode == 1 && entry.mode != 1 {
+    // A boot/recovery image is the more complete evidence source: when both
+    // fields are supplied, its embedded vbmeta takes precedence.
+    let target = match target_image {
+        Some(path) => Some(inspect_target_image(path, tools)?),
+        None => target_vbmeta
+            .map(|path| inspect_header(path, tools).map(|inspection| inspection.evidence()))
+            .transpose()?,
+    };
+    let mut plan = plan_transition(from_mode, target_mode, current, target)?;
+    if target_mode == 1 && from_mode != 1 {
         if let Some(precondition) = plan.preconditions.iter().find(|item| item.code == "P-GRAFT") {
             if precondition.satisfied == Some(false) {
                 plan.refusal = Some(ModeRefusal {
@@ -174,6 +172,50 @@ pub fn plan_for_entry(
                     reason: "target vbmeta is tree-built; graft is required before entering mode 1".to_owned(),
                 });
             }
+        }
+    }
+    Ok(plan)
+}
+
+fn inspect_target_image(path: &Path, tools: Option<&Path>) -> Result<HeaderEvidence, ModePlanError> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let output = std::env::temp_dir().join(format!(
+        "canoe-target-vbmeta-{}-{stamp}.img",
+        std::process::id()
+    ));
+    let result = (|| {
+        crate::graft::extract(path, &output)?;
+        inspect_header(&output, tools)
+            .map(|inspection| inspection.evidence())
+    })();
+    let _ = fs::remove_file(&output);
+    result
+}
+
+pub fn plan_for_entry(
+    root: &Path,
+    entry: &ConfigEntry,
+    target_mode: u8,
+    current_vbmeta: Option<&PathBuf>,
+    target_vbmeta: Option<&PathBuf>,
+    target_image: Option<&PathBuf>,
+    tools: Option<&Path>,
+) -> Result<ModePlan, ModePlanError> {
+    let mut plan = plan_for_mode(
+        entry.mode,
+        target_mode,
+        current_vbmeta,
+        target_vbmeta,
+        target_image,
+        tools,
+    )?;
+    if target_mode == 2 && entry.mode != 2 {
+        let profile = root.join(&entry.image).with_extension("efi.gm2p");
+        let valid = profile.is_file() && profile.metadata().is_ok_and(|metadata| metadata.len() == PROFILE_BYTES);
+        if let Some(precondition) = plan.preconditions.iter_mut().find(|item| item.code == "P-PROFILE") {
+            precondition.satisfied = Some(valid);
         }
     }
     Ok(plan)

@@ -917,3 +917,49 @@ fn protocol_error_taxonomy_distinguishes_source_known_failures() {
     }
     assert_eq!(seen.len(), cases.len());
 }
+
+#[test]
+fn system_reboot_uses_the_path_binary_and_returns_its_receipt() {
+    let root = TempDir::new().expect("fixture");
+    let (_guard, reboot_script) = script(root.path(), "exit 0");
+    fs::hard_link(reboot_script, root.path().join("reboot")).expect("reboot PATH entry");
+
+    let output = protocol_json(
+        root.path(),
+        "{\"verb\":\"system.reboot\",\"target\":\"recovery\"}\n",
+    );
+    assert!(output.status.success());
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["operation"], "system.reboot");
+    assert_eq!(response["target"], "recovery");
+}
+
+#[test]
+fn system_reboot_reports_an_unavailable_binary() {
+    let root = TempDir::new().expect("fixture");
+    let output = protocol_json(
+        root.path(),
+        "{\"verb\":\"system.reboot\",\"target\":\"system\"}\n",
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["code"], "reboot-unavailable");
+}
+
+#[test]
+fn system_reboot_rejects_unknown_targets() {
+    let root = TempDir::new().expect("fixture");
+    let output = protocol_json(
+        root.path(),
+        "{\"verb\":\"system.reboot\",\"target\":\"bootloader\"}\n",
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["code"], "request");
+}

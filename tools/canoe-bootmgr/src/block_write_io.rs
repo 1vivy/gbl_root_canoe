@@ -5,11 +5,9 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::process::Command;
 
-use sha2::{Digest, Sha256};
-
 use super::{BlockWriteError, BlockWriteTestFault};
 
-pub(super) fn target_size(path: &Path, metadata: &Metadata) -> Result<u64, BlockWriteError> {
+pub(crate) fn target_size(path: &Path, metadata: &Metadata) -> Result<u64, BlockWriteError> {
     #[cfg(unix)]
     if metadata.file_type().is_block_device() {
         let output = Command::new("blockdev")
@@ -121,12 +119,12 @@ pub(super) fn write_image(
 }
 
 pub(super) fn restore_snapshot(node: &Path, bytes: u64, snapshot: &Path) -> io::Result<()> {
-    let expected = hash_region(snapshot, bytes)?;
+    let expected = crate::build_tools::sha256_prefix(snapshot, bytes)?;
     let mut source = File::open(snapshot)?;
     let mut target = OpenOptions::new().write(true).open(node)?;
     copy_bytes(&mut source, &mut target, bytes)?;
     target.sync_all()?;
-    if expected == hash_region(node, bytes)? {
+    if expected == crate::build_tools::sha256_prefix(node, bytes)? {
         Ok(())
     } else {
         Err(io::Error::other("restored target does not match snapshot"))
@@ -143,7 +141,11 @@ pub(super) fn corrupt_first_byte(path: &Path) -> io::Result<()> {
     file.sync_all()
 }
 
-fn copy_bytes(reader: &mut impl Read, writer: &mut impl Write, mut bytes: u64) -> io::Result<()> {
+pub(crate) fn copy_bytes(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    mut bytes: u64,
+) -> io::Result<()> {
     let mut buffer = [0_u8; 64 * 1024];
     while bytes > 0 {
         let chunk = usize::try_from(bytes.min(buffer.len() as u64))
@@ -155,19 +157,6 @@ fn copy_bytes(reader: &mut impl Read, writer: &mut impl Write, mut bytes: u64) -
     Ok(())
 }
 
-pub(super) fn hash_region(path: &Path, mut bytes: u64) -> io::Result<String> {
-    let mut file = File::open(path)?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    while bytes > 0 {
-        let chunk = usize::try_from(bytes.min(buffer.len() as u64))
-            .map_err(|_| io::Error::other("hash size exceeds platform usize"))?;
-        file.read_exact(&mut buffer[..chunk])?;
-        digest.update(&buffer[..chunk]);
-        bytes -= chunk as u64;
-    }
-    Ok(format!("{:x}", digest.finalize()))
-}
 
 fn snapshot_error(snapshot: &Path, source: io::Error) -> BlockWriteError {
     BlockWriteError::SnapshotFailed {
@@ -176,7 +165,7 @@ fn snapshot_error(snapshot: &Path, source: io::Error) -> BlockWriteError {
     }
 }
 
-pub(super) fn io_error(operation: &'static str, path: &Path, source: io::Error) -> BlockWriteError {
+pub(crate) fn io_error(operation: &'static str, path: &Path, source: io::Error) -> BlockWriteError {
     BlockWriteError::Io {
         operation,
         path: path.to_owned(),

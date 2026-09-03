@@ -47,7 +47,14 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
         Success::EntrySet { mark, .. }
         | Success::EntryRemove { mark, .. }
         | Success::EntryMode { mark, .. } => format!("{mark}\n"),
-        Success::DefaultGet { default, .. } => format!("{}\n", default.as_deref().unwrap_or("")),
+        Success::DefaultGet {
+            default,
+            resolution,
+            ..
+        } => format!(
+            "default={} resolution={resolution}\n",
+            default.as_deref().unwrap_or("")
+        ),
         Success::DefaultSet { default, .. } => format!("default {default}\n"),
         // An empty enumeration is a result, not silence: printing nothing left the
         // operator unable to tell a working probe from a broken one.
@@ -131,6 +138,9 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             gbl_patched,
             ..
         } => format!("verified ABL sha256={sha256} gbl_patched={gbl_patched}\n"),
+        Success::ImageDigest {
+            path, sha256, bytes, ..
+        } => format!("digested {path} ({bytes} bytes, sha256={sha256})\n"),
         Success::BlockWrite {
             partition,
             bytes_written,
@@ -140,6 +150,15 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             ..
         } => format!(
             "wrote {partition} ({bytes_written} bytes, sha256={sha256}, snapshot={snapshot}, verified={verified})\n"
+        ),
+        Success::BlockRead {
+            partition,
+            output,
+            bytes,
+            sha256,
+            ..
+        } => format!(
+            "read {partition} to {output} ({bytes} bytes, sha256={sha256})\n"
         ),
         Success::Install { receipt, .. } | Success::OtaApply { receipt, .. } => format!(
             "installed={} generation={} backup={}\n",
@@ -153,8 +172,19 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             receipt.backup_present
         ),
         Success::ToolsUpdate { files, .. } => format!("updated tools: {}\n", files.join(",")),
+        Success::AblLookup {
+            product,
+            output,
+            bytes,
+            sha256,
+            source,
+            ..
+        } => format!(
+            "resolved ABL {product} from {source} to {output} ({bytes} bytes, sha256={sha256})\n"
+        ),
         Success::ModePlan { id, plan, .. } => format!(
-            "mode.plan id={id} from={} target={} outcome={} preconditions={}\n",
+            "mode.plan id={} from={} target={} outcome={} preconditions={}\n",
+            id.as_deref().unwrap_or("<none>"),
             plan.from_mode,
             plan.target_mode,
             plan.outcome.status,
@@ -164,6 +194,7 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
                 .collect::<Vec<_>>()
                 .join(",")
         ),
+        Success::SystemReboot { target, .. } => format!("rebooting to {target}\n"),
         Success::VbmetaGraft { receipt, .. } => {
             format!("grafted {} ({} bytes)\n", receipt.output, receipt.bytes)
         }
@@ -216,8 +247,12 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             format!("ended mass-storage export for {node}\n")
         }
         Success::FastbootFetch {
-            partition, output, ..
-        } => format!("fetched {partition} to {output}\n"),
+            partition,
+            output,
+            sha256,
+            bytes,
+            ..
+        } => format!("fetched {partition} to {output} ({bytes} bytes, sha256={sha256})\n"),
         Success::FastbootAblCoverage { slots, .. } => slots
             .iter()
             .map(|slot| format!("{}={}\n", slot.slot, slot.coverage))

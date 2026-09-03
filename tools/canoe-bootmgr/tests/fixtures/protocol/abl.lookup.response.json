@@ -1,0 +1,1 @@
+{"ok":false,"error":{"code":"ablrepo-unavailable","message":"ABL repository is unavailable: @ROOT@/ablrepo/foo/abl.img: No such file or directory (os error 2)"}}

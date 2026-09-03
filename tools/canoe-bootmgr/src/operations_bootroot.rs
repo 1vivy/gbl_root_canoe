@@ -82,6 +82,7 @@ fn entry_mode(
         args.mode,
         args.current_vbmeta.as_ref(),
         args.target_vbmeta.as_ref(),
+        args.target_image.as_ref(),
         args.tools.as_deref(),
     )?;
     let acknowledged = crate::mode_plan::ensure_applyable(&plan, &args.acknowledge)?;
@@ -134,13 +135,35 @@ fn entry_set(backend: &dyn BootRoot, args: &EntrySetArgs) -> Result<Success, App
         ),
     })
 }
-
 pub(super) fn default(backend: &dyn BootRoot, command: &DefaultCommand) -> Result<Success, AppError> {
     match command {
-        DefaultCommand::Get => Ok(Success::DefaultGet {
-            ok: true,
-            default: read_or_empty(backend)?.default,
-        }),
+        DefaultCommand::Get => {
+            let (default, resolution) = match backend.read_config() {
+                Ok(None) => (None, "no-default"),
+                Ok(Some(config)) => {
+                    let default = config.default.clone();
+                    let resolution = match default.as_deref() {
+                        None => "no-default",
+                        Some(target) if target.starts_with("bls:") => {
+                            match bls_target_exists(backend, target) {
+                                Ok(true) => "resolved",
+                                Ok(false) => "dangling",
+                                Err(_) => "unknown",
+                            }
+                        }
+                        Some(target) if config.entry(target).is_some() => "resolved",
+                        Some(_) => "dangling",
+                    };
+                    (default, resolution)
+                }
+                Err(_) => (None, "unknown"),
+            };
+            Ok(Success::DefaultGet {
+                ok: true,
+                default,
+                resolution,
+            })
+        }
         DefaultCommand::Set(args) => {
             let target = default_target(args)?;
             if target.starts_with("bls:") && !bls_target_exists(backend, target)? {

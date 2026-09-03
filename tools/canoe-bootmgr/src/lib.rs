@@ -1,3 +1,4 @@
+pub mod abl_lookup;
 pub mod abl_verify;
 pub mod artifact;
 pub mod backend;
@@ -5,11 +6,14 @@ pub mod bls;
 mod bls_parse;
 mod bls_render;
 pub mod block_write;
+pub mod block_partition;
+pub mod block_read;
 pub mod build;
 mod build_cleanup;
 mod build_efisp_tools;
 mod build_steps;
 mod build_tools;
+pub mod image_digest;
 #[cfg(feature = "cli")]
 pub mod cli;
 #[cfg(feature = "cli")]
@@ -37,6 +41,7 @@ mod tools_update;
 mod slot_tools;
 pub mod slot_transaction;
 pub mod slots;
+pub mod system_reboot;
 mod vbmeta_inspect;
 mod mode_plan_types;
 pub mod mode_plan;

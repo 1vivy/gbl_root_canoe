@@ -320,3 +320,18 @@ pub fn sha256_file(path: &Path) -> io::Result<String> {
     }
     Ok(format!("{:x}", digest.finalize()))
 }
+
+pub fn sha256_prefix(path: &Path, mut bytes: u64) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    while bytes > 0 {
+        let chunk = usize::try_from(bytes.min(buffer.len() as u64))
+            .map_err(|_| io::Error::other("hash size exceeds platform usize"))?;
+        file.read_exact(&mut buffer[..chunk])?;
+        digest.update(&buffer[..chunk]);
+        bytes -= chunk as u64;
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}

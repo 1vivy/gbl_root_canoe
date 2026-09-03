@@ -46,24 +46,40 @@ pub(super) fn mode_plan(
     backend: &dyn BootRoot,
     args: &ModePlanArgs,
 ) -> Result<Success, AppError> {
-    let config = super::operations_bootroot::read_existing(backend)?;
-    let entry = config.entry(&args.id).cloned().ok_or_else(|| {
-        AppError::Config(crate::config::ConfigError::Invalid(format!(
-            "no such entry: {}",
-            args.id
-        )))
-    })?;
-    let plan = crate::mode_plan::plan_for_entry(
-        backend.root(),
-        &entry,
-        args.target_mode,
-        args.current_vbmeta.as_ref(),
-        args.target_vbmeta.as_ref(),
-        args.tools.as_deref(),
-    )?;
+    let (id, plan) = match args.id.as_deref() {
+        Some(id) => {
+            let config = super::operations_bootroot::read_existing(backend)?;
+            let entry = config.entry(id).cloned().ok_or_else(|| {
+                AppError::Config(crate::config::ConfigError::Invalid(format!(
+                    "no such entry: {id}"
+                )))
+            })?;
+            let plan = crate::mode_plan::plan_for_entry(
+                backend.root(),
+                &entry,
+                args.target_mode,
+                args.current_vbmeta.as_ref(),
+                args.target_vbmeta.as_ref(),
+                args.target_image.as_ref(),
+                args.tools.as_deref(),
+            )?;
+            (Some(id.to_owned()), plan)
+        }
+        None => {
+            let plan = crate::mode_plan::plan_for_mode(
+                args.from_mode.unwrap_or(0),
+                args.target_mode,
+                args.current_vbmeta.as_ref(),
+                args.target_vbmeta.as_ref(),
+                args.target_image.as_ref(),
+                args.tools.as_deref(),
+            )?;
+            (None, plan)
+        }
+    };
     Ok(Success::ModePlan {
         ok: true,
-        id: args.id.clone(),
+        id,
         plan,
     })
 }
