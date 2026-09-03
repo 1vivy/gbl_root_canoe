@@ -172,6 +172,13 @@ BDS 字节。
 - 独立 EFI 工具 `ArbTools.efi`、`BLTools.efi`、`RebootTools.efi`、
   `SurfaceTools.efi` 和 `UsbTools.efi`。
 
+`make -C submodules/uefi tools` 还会构建三个任何软件包都不携带的工具：
+`LogTools.efi`、`MdTools.efi` 和 `CrashTools.efi`。它们由主机通过
+`fastboot boot <tool>.efi` 针对已运行存在漏洞 ABL 的设备启动，用于调查固件
+而不是操作固件：`MdTools` 在 RAM 中扫描并编辑高通 minidump 区域表，
+`CrashTools` 触发有意的故障以进入 900e memory-debug 模式。因此上面的打包
+清单比构建输出更窄，这是有意的；不要通过把它们加入某个 target 来“修复”。
+
 打包配方在每个 workspace 中各构建一次 EDK2 构件并复用，而不是每个包都
 重新链接。这项检查很重要，因为相同源码的 EDK2 重新链接可能产生不同字节；
 分别重建会使各包的启动菜单或独立工具不一致。字节一致能明确保证已发布的

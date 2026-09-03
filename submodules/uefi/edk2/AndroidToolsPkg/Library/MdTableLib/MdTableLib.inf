@@ -1,0 +1,35 @@
+#/** @file
+#  MdTableLib - content-scan discovery and RAM-only edits for the Qualcomm
+#  Sahara minidump region table (see Include/MdTable.h).
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = MdTableLib
+  FILE_GUID                      = 3F7A9C42-1B58-4E6D-A921-5C0D8E2F6B47
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  LIBRARY_CLASS                  = MdTableLib
+
+[Sources]
+  MdTableMap.c
+  MdTableScan.c
+  MdTableFire.c
+  MdTableToc.c
+  MdTableEdit.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  CacheMaintenanceLib
+  MemoryAllocationLib
+  PrintLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib

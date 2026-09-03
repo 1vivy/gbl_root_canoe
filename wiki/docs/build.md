@@ -197,6 +197,15 @@ Every toolkit and module package carries the same bytes for:
 - the standalone EFI tools `ArbTools.efi`, `BLTools.efi`, `RebootTools.efi`,
   `SurfaceTools.efi`, and `UsbTools.efi`.
 
+`make -C submodules/uefi tools` builds three more that no package carries:
+`LogTools.efi`, `MdTools.efi`, and `CrashTools.efi`. They are launched from a
+host with `fastboot boot <tool>.efi` against a device already running a
+vulnerable ABL, and they exist to investigate the firmware rather than to
+operate it - `MdTools` scans and edits the Qualcomm minidump region table in
+RAM, and `CrashTools` triggers deliberate faults to reach 900e memory-debug
+mode. The packaged list above is therefore narrower than the build output on
+purpose; do not "fix" it by adding them to a target.
+
 The package recipes build each EDK2 artifact once per workspace and reuse it
 instead of relinking once per package. This is checked because EDK2 relinking
 can produce different bytes from the same sources; rebuilding separately would

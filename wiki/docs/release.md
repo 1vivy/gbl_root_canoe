@@ -109,9 +109,10 @@ then run `make version-check`; the gate checks every entry.
 
 **`android-efi-tools` satellite.** Update `VERSION_STRING` independently in
 each declared INF and update the matching `[import.versions]` entries in
-`imports.toml`: `ArbTools.inf`, `BLTools.inf`, `LogTools.inf`,
-`RebootTools.inf`, `SurfaceTools.inf`, `UsbTools.inf`, and
-`Library/AndroidToolsUi/AndroidToolsUi.inf`. The current expected set is
+`imports.toml`: `ArbTools.inf`, `BLTools.inf`, `CrashTools.inf`,
+`LogTools.inf`, `MdTools.inf`, `RebootTools.inf`, `SurfaceTools.inf`,
+`UsbTools.inf`, `Library/AndroidToolsUi/AndroidToolsUi.inf`, and
+`Library/MdTableLib/MdTableLib.inf`. The current expected set is
 `0.1` for every listed file except `SurfaceTools.inf`, which is `0.2`. Keep
 the versions consistent with the satellite change, but do not change
 `CANOE_VERSION`: this project is deliberately not versioned by Canoe. Run

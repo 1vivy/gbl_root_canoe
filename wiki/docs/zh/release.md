@@ -102,9 +102,10 @@ product 目录：复制 `abl.img`，生成 `abl.sha256`，并根据测量到的�
 
 **`android-efi-tools` satellite。** 在每个声明的 INF 中独立更新
 `VERSION_STRING`，并同步更新 `imports.toml` 中对应的 `[import.versions]`：
-`ArbTools.inf`、`BLTools.inf`、`LogTools.inf`、`RebootTools.inf`、
-`SurfaceTools.inf`、`UsbTools.inf` 以及
-`Library/AndroidToolsUi/AndroidToolsUi.inf`。当前预期值是所有列出的文件为
+`ArbTools.inf`、`BLTools.inf`、`CrashTools.inf`、`LogTools.inf`、
+`MdTools.inf`、`RebootTools.inf`、`SurfaceTools.inf`、`UsbTools.inf`、
+`Library/AndroidToolsUi/AndroidToolsUi.inf` 以及
+`Library/MdTableLib/MdTableLib.inf`。当前预期值是所有列出的文件为
 `0.1`，只有 `SurfaceTools.inf` 为 `0.2`。让版本与 satellite 变更保持一致，
 但不要修改 `CANOE_VERSION`：该项目有意不由 Canoe 版本管理。运行
 `make version-check`。
