@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -52,10 +53,16 @@ pub(super) fn command(command: &FastbootCommand) -> Result<Success, AppError> {
                 &args.output,
                 Duration::from_secs(30),
             )?;
+            let sha256 = crate::build_tools::sha256_file(&args.output).map_err(AppError::Output)?;
+            let bytes = fs::metadata(&args.output)
+                .map_err(AppError::Output)?
+                .len();
             Ok(Success::FastbootFetch {
                 ok: true,
                 partition: args.partition.clone(),
                 output: args.output.display().to_string(),
+                sha256,
+                bytes,
             })
         }
         FastbootCommand::AblCoverage(args) => {

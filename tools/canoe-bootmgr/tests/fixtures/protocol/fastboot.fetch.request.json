@@ -1,0 +1,1 @@
+{"verb":"fastboot.fetch","partition":"boot","output":"@ROOT@/fetched.img"}

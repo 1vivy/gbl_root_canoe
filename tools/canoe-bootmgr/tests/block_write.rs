@@ -40,6 +40,30 @@ fn image_larger_than_target_is_refused_without_writing_target() {
 }
 
 #[test]
+fn snapshot_failure_refuses_without_writing_target() {
+    // Given a regular-file target and a snapshot path whose parent is missing.
+    let fixture = TempDir::new().expect("temporary fixture");
+    let target = fixture.path().join("boot");
+    let image = fixture.path().join("image");
+    let snapshot = fixture.path().join("missing").join("snapshot");
+    fs::write(&target, b"original-target").expect("target");
+    fs::write(&image, b"replacement").expect("image");
+
+    // When the guarded write cannot create its snapshot.
+    let error = canoe_bootmgr::block_write::write_at_root(
+        &request("boot", &image, &snapshot),
+        fixture.path(),
+    )
+    .expect_err("snapshot failure must refuse the write");
+
+    // Then the snapshot-specific identity is returned and the target is unchanged.
+    assert_eq!(error.protocol_code(), "snapshot-failed");
+    assert!(matches!(error, BlockWriteError::SnapshotFailed { .. }));
+    assert_eq!(fs::read(&target).expect("target bytes"), b"original-target");
+    assert!(!snapshot.exists());
+}
+
+#[test]
 fn readback_mismatch_restores_target_from_snapshot() {
     // Given a regular-file target and a source image.
     let fixture = TempDir::new().expect("temporary fixture");

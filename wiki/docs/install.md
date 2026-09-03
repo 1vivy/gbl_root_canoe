@@ -196,13 +196,22 @@ remain verbatim. A managed install does not invent a `default`; use
 
 ### 3. KernelSU module install
 
-Install the module on a rooted device and follow its bilingual first-install
-questionnaire. Its static WebUI is the same Svelte app shipped for the desktop
-surface, built from the same `dist/` output; it is not a second presentation
-implementation. The module uses the same `canoe-bootmgr build` orchestrator and
-the same four worker binaries as the host path, then commits the boot root
-through `canoe-bootmgr` and performs any required device partition writes.
-`canoe-bootmgr` remains the only writer.
+Install the module on a rooted device. The module's `customize.sh` is only a
+bootstrap: it derives and stores the language preference, displays the device
+facts it read, sets payload permissions, and installs the static WebUI. It does
+not ask mode questions, read or write a boot partition, change the boot root, or
+reboot the device. The bundled ABL repository is package data for the WebUI's
+`abl.lookup` provider, not a shell-side downloader or writer.
+
+Open the WebUI after installation. It is the same Svelte app shipped for the
+desktop surface, built from the same `dist/` output.
+The WebUI opens in the stored `lang.txt`/`user_lang` language and provides the
+language switch for any later change.
+The WebUI precaptures its partition facts, plans the required session and
+operations, and then drives
+`block.read`, `block.write`, `system.reboot`, and `canoe-bootmgr` for the
+on-device adapter. `canoe-bootmgr` remains the only boot-root and partition
+writer; the module installer itself performs no partition write.
 
 ### 4. KernelSU update or post-OTA install
 

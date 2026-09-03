@@ -1,5 +1,6 @@
 use thiserror::Error;
 
+use crate::abl_lookup::AblLookupError;
 use crate::abl_verify::AblVerifyError;
 use crate::artifact::ArtifactError;
 use crate::backend::BackendError;
@@ -34,9 +35,15 @@ pub enum AppError {
     #[error(transparent)]
     Build(#[from] BuildError),
     #[error(transparent)]
+    AblLookup(#[from] AblLookupError),
+    #[error(transparent)]
     AblVerify(#[from] AblVerifyError),
     #[error(transparent)]
     BlockWrite(#[from] BlockWriteError),
+    #[error(transparent)]
+    ImageDigest(#[from] crate::image_digest::ImageDigestError),
+    #[error(transparent)]
+    SystemReboot(#[from] crate::system_reboot::SystemRebootError),
     #[error(transparent)]
     ToolsUpdate(#[from] ToolsUpdateError),
     #[error(transparent)]
@@ -60,16 +67,19 @@ impl AppError {
         match self {
             Self::Backend(error) => error.protocol_code(),
             Self::Build(error) => error.protocol_code(),
+            Self::AblLookup(error) => error.protocol_code(),
+            Self::ImageDigest(error) => error.protocol_code(),
+            Self::SystemReboot(error) => error.protocol_code(),
             Self::ModePlan(error) => error.protocol_code(),
             Self::VbmetaInspect(error) => error.protocol_code(),
             Self::AblVerify(error) => error.protocol_code(),
             Self::BlockWrite(error) => error.protocol_code(),
             Self::ToolsUpdate(error) => error.protocol_code(),
             Self::Fastboot(error) => error.protocol_code(),
+            Self::VendorBoot(error) => error.protocol_code(),
             Self::Config(_)
             | Self::Artifact(_)
             | Self::Slot(_)
-            | Self::VendorBoot(_)
             | Self::Detect(_)
             | Self::Request(_)
             | Self::Install(_)

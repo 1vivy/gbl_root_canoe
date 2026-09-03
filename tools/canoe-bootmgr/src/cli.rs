@@ -7,11 +7,12 @@ use crate::artifact::BlsStageReceipt;
 use crate::backend::BlsFile;
 use crate::build::{BuildArgs, BuildProbeReceipt, BuildReceipt};
 pub use crate::cli_extra::{
-    AblVerifyArgs, BlsStageArgs, BlockWriteArgs, FastbootAblCoverageArgs, FastbootCommand,
-    FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
-    FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
-    SlotCommand, SlotStatusArgs, ToolsUpdateArgs, VbmetaCheckArgs, VbmetaExtractArgs,
-    VbmetaHeaderArgs, VendorBootCommand, VendorBootPatchArgs,
+    AblLookupArgs, AblVerifyArgs, BlsStageArgs, BlockReadArgs, BlockWriteArgs, FastbootAblCoverageArgs,
+    FastbootCommand, FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs,
+    FastbootFlashArgs, FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, ImageDigestArgs,
+    InstallArgs, ModePlanArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs, SystemRebootArgs,
+    ToolsUpdateArgs, VbmetaCheckArgs, VbmetaExtractArgs, VbmetaHeaderArgs, VendorBootCommand,
+    VendorBootPatchArgs,
 };
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
@@ -110,6 +111,18 @@ pub enum Command {
     /// Write an image to a block partition with a rollback snapshot.
     #[command(name = "block-write")]
     BlockWrite(BlockWriteArgs),
+    /// Read a local image or image prefix and return its SHA-256 digest.
+    #[command(name = "image-digest")]
+    ImageDigest(ImageDigestArgs),
+    /// Read a partition node into a local image.
+    #[command(name = "block-read")]
+    BlockRead(BlockReadArgs),
+    /// Reboot an on-device Linux system.
+    #[command(name = "system-reboot")]
+    SystemReboot(SystemRebootArgs),
+    /// Resolve and verify a product ABL candidate.
+    #[command(name = "abl-lookup")]
+    AblLookup(AblLookupArgs),
     /// Update the boot-root EFI tools directory without installing a loader.
     #[command(name = "tools-update")]
     ToolsUpdate(ToolsUpdateArgs),
@@ -216,6 +229,8 @@ pub struct EntryModeArgs {
     pub current_vbmeta: Option<PathBuf>,
     #[arg(long)]
     pub target_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub target_image: Option<PathBuf>,
     #[arg(long)]
     pub tools: Option<PathBuf>,
 }
@@ -362,7 +377,11 @@ pub enum Success {
         warnings: Vec<String>,
     },
     #[serde(rename = "default.get")]
-    DefaultGet { ok: bool, default: Option<String> },
+    DefaultGet {
+        ok: bool,
+        default: Option<String>,
+        resolution: &'static str,
+    },
     #[serde(rename = "default.set")]
     DefaultSet {
         ok: bool,
@@ -407,6 +426,13 @@ pub enum Success {
         sha256: String,
         gbl_patched: bool,
     },
+    #[serde(rename = "image.digest")]
+    ImageDigest {
+        ok: bool,
+        path: String,
+        sha256: String,
+        bytes: u64,
+    },
     #[serde(rename = "block.write")]
     BlockWrite {
         ok: bool,
@@ -417,14 +443,38 @@ pub enum Success {
         snapshot: String,
         verified: bool,
     },
+    #[serde(rename = "block.read")]
+    BlockRead {
+        ok: bool,
+        partition: String,
+        node: String,
+        output: String,
+        bytes: u64,
+        sha256: String,
+    },
     #[serde(rename = "install")]
     Install { ok: bool, receipt: InstallReceipt },
     #[serde(rename = "ota-apply")]
     OtaApply { ok: bool, receipt: InstallReceipt },
     #[serde(rename = "tools.update")]
     ToolsUpdate { ok: bool, files: Vec<String> },
+    #[serde(rename = "abl.lookup")]
+    AblLookup {
+        ok: bool,
+        product: String,
+        output: String,
+        sha256: String,
+        bytes: u64,
+        source: &'static str,
+    },
     #[serde(rename = "mode.plan")]
-    ModePlan { ok: bool, id: String, plan: ModePlan },
+    ModePlan {
+        ok: bool,
+        id: Option<String>,
+        plan: ModePlan,
+    },
+    #[serde(rename = "system.reboot")]
+    SystemReboot { ok: bool, target: String },
     #[serde(rename = "vbmeta.graft")]
     VbmetaGraft { ok: bool, receipt: GraftReceipt },
     #[serde(rename = "vbmeta.inspect")]
@@ -473,6 +523,8 @@ pub enum Success {
         ok: bool,
         partition: String,
         output: String,
+        sha256: String,
+        bytes: u64,
     },
     #[serde(rename = "fastboot.abl-coverage")]
     FastbootAblCoverage { ok: bool, slots: Vec<AblCoverage> },

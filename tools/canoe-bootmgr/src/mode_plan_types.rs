@@ -95,6 +95,8 @@ pub enum ModePlanError {
     InvalidMode { mode: u8 },
     #[error("mode.plan preconditions unsatisfied: {codes}")]
     PreconditionsUnsatisfied { codes: String },
+    #[error(transparent)]
+    Extract(#[from] crate::graft::GraftError),
     #[error("mode2_profile could not be resolved: {tool}")]
     WorkerUnavailable { tool: String },
     #[error("mode2_profile could not start: {0}")]
@@ -113,6 +115,7 @@ impl ModePlanError {
         match self {
             Self::InvalidMode { .. } => "mode-plan-invalid",
             Self::PreconditionsUnsatisfied { .. } => "mode-precondition-unsatisfied",
+            Self::Extract(error) => error.protocol_code(),
             Self::Worker { code, .. } => code,
             Self::WorkerUnavailable { .. } => "vbmeta-worker-unavailable",
             Self::WorkerSpawn(_) => "vbmeta-worker-spawn",

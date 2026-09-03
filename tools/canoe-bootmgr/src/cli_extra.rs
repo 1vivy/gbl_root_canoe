@@ -40,6 +40,8 @@ pub struct InstallArgs {
     pub mode: Option<u8>,
     #[arg(long)]
     pub allow_new_signer: bool,
+    #[arg(long)]
+    pub boot_root_source: Option<PathBuf>,
 }
 
 impl TryFrom<&InstallArgs> for crate::InstallRequest {
@@ -79,11 +81,15 @@ pub struct OtaApplyArgs {
     pub mode: Option<u8>,
     #[arg(long)]
     pub allow_new_signer: bool,
+    #[arg(long)]
+    pub boot_root_source: Option<PathBuf>,
 }
 #[derive(Debug, Args)]
 pub struct ToolsUpdateArgs {
     #[arg(long)]
     pub source: PathBuf,
+    #[arg(long)]
+    pub boot_root_source: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -105,16 +111,54 @@ pub struct BlockWriteArgs {
     #[arg(long, value_name = "A|B")]
     pub slot: Option<String>,
 }
+
+#[derive(Debug, Args)]
+pub struct ImageDigestArgs {
+    #[arg(long)]
+    pub image: PathBuf,
+    #[arg(long)]
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+pub struct BlockReadArgs {
+    #[arg(long)]
+    pub partition: String,
+    #[arg(long = "out")]
+    pub output: PathBuf,
+    #[arg(long, value_name = "A|B")]
+    pub slot: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct SystemRebootArgs {
+    #[arg(long)]
+    pub target: String,
+}
+
+#[derive(Debug, Args)]
+pub struct AblLookupArgs {
+    #[arg(long)]
+    pub product: String,
+    #[arg(long = "out")]
+    pub output: PathBuf,
+    #[arg(long)]
+    pub local_repo: Option<PathBuf>,
+}
 #[derive(Debug, Args)]
 pub struct ModePlanArgs {
-    #[arg(long)]
-    pub id: String,
+    #[arg(long, required = true)]
+    pub id: Option<String>,
     #[arg(long)]
     pub target_mode: u8,
+    #[arg(long)]
+    pub from_mode: Option<u8>,
     #[arg(long)]
     pub current_vbmeta: Option<PathBuf>,
     #[arg(long)]
     pub target_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub target_image: Option<PathBuf>,
     #[arg(long)]
     pub tools: Option<PathBuf>,
 }

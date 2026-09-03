@@ -204,3 +204,102 @@ fn wire_request_accepts_optional_vbmeta_paths() {
     let command = request.into_command();
     assert!(matches!(command, canoe_bootmgr::cli::Command::ModePlan(_)));
 }
+
+#[test]
+fn first_install_mode_plan_uses_optional_id_and_from_mode() {
+    let root = tempdir().expect("empty boot root");
+    let request = parse_json(br#"{"verb":"mode.plan","target_mode":1,"from_mode":1}"#)
+        .expect("first-install request");
+    let response = canoe_bootmgr::operations::execute_request(root.path(), request)
+        .expect("first-install mode plan");
+    let json = serde_json::to_value(response).expect("response JSON");
+    assert_eq!(json["id"], serde_json::Value::Null);
+    assert_eq!(json["plan"]["from_mode"], 1);
+
+    let request =
+        parse_json(br#"{"verb":"mode.plan","target_mode":0}"#).expect("default-mode request");
+    let response = canoe_bootmgr::operations::execute_request(root.path(), request)
+        .expect("default-mode plan");
+    let json = serde_json::to_value(response).expect("response JSON");
+    assert_eq!(json["plan"]["from_mode"], 0);
+
+    let request =
+        parse_json(br#"{"verb":"mode.plan","id":"missing","target_mode":1}"#).expect("id request");
+    let error = canoe_bootmgr::operations::execute_request(root.path(), request)
+        .expect_err("missing entry must retain the existing lookup contract");
+    assert!(error.to_string().contains("canoe.cfg does not exist"));
+}
+
+#[test]
+fn target_image_extracts_embedded_vbmeta_and_wins_precedence() {
+    let directory = tempdir().expect("fixture directory");
+    let standalone = fs::read("tests/fixtures/vbmeta-inspect-happy.img").expect("vbmeta fixture");
+    let mut tree_built = standalone.clone();
+    tree_built[28..32].copy_from_slice(&0_u32.to_be_bytes());
+    let tree_path = directory.path().join("tree-built.img");
+    fs::write(&tree_path, &tree_built).expect("tree-built vbmeta");
+    let image_path = directory.path().join("boot.img");
+    let vbmeta_offset = 4096_usize;
+    let footer_offset = 8192_usize;
+    let mut image = vec![0_u8; footer_offset + 64];
+    image[vbmeta_offset..vbmeta_offset + standalone.len()].copy_from_slice(&standalone);
+    image[footer_offset..footer_offset + 4].copy_from_slice(b"AVBf");
+    image[footer_offset + 4..footer_offset + 8].copy_from_slice(&1_u32.to_be_bytes());
+    image[footer_offset + 12..footer_offset + 20]
+        .copy_from_slice(&(vbmeta_offset as u64).to_be_bytes());
+    image[footer_offset + 20..footer_offset + 28]
+        .copy_from_slice(&(vbmeta_offset as u64).to_be_bytes());
+    image[footer_offset + 28..footer_offset + 36]
+        .copy_from_slice(&(standalone.len() as u64).to_be_bytes());
+    fs::write(&image_path, image).expect("footed boot image");
+
+    let tree_plan = canoe_bootmgr::mode_plan::plan_for_mode(
+        0,
+        1,
+        None,
+        Some(&tree_path),
+        None,
+        Some(&WORKER_TOOLS),
+    )
+    .expect("tree-built target plan");
+    assert_eq!(
+        tree_plan
+            .refusal
+            .as_ref()
+            .map(|refusal| refusal.code),
+        Some("graft-required")
+    );
+
+    let plan = canoe_bootmgr::mode_plan::plan_for_mode(
+        0,
+        1,
+        None,
+        Some(&tree_path),
+        Some(&image_path),
+        Some(&WORKER_TOOLS),
+    )
+    .expect("target image plan");
+    assert_eq!(plan.vbmeta.target.expect("target evidence").algorithm_type, 1);
+    assert_eq!(
+        plan.preconditions
+            .iter()
+            .find(|precondition| precondition.code == "P-GRAFT")
+            .expect("graft precondition")
+            .satisfied,
+        Some(true)
+    );
+    assert!(plan.refusal.is_none());
+
+    let no_footer = directory.path().join("no-footer.img");
+    fs::write(&no_footer, b"not an AVB image").expect("no-footer image");
+    let error = canoe_bootmgr::mode_plan::plan_for_mode(
+        0,
+        1,
+        None,
+        None,
+        Some(&no_footer),
+        Some(&WORKER_TOOLS),
+    )
+    .expect_err("target image without footer must fail");
+    assert!(error.to_string().contains("no AVB footer"));
+}

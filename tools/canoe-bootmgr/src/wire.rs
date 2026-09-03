@@ -38,13 +38,30 @@ pub enum JsonRequest {
         #[serde(default)]
         expected_sha256: Option<String>,
     },
+    #[serde(rename = "image.digest")]
+    ImageDigest {
+        image: PathBuf,
+        #[serde(default)]
+        bytes: Option<u64>,
+    },
     #[serde(rename = "tools.update")]
-    ToolsUpdate { source: PathBuf },
+    ToolsUpdate {
+        source: PathBuf,
+        #[serde(default)]
+        boot_root_source: Option<PathBuf>,
+    },
     #[serde(rename = "block.write")]
     BlockWrite {
         partition: String,
         image: PathBuf,
         snapshot: PathBuf,
+        #[serde(default)]
+        slot: Option<String>,
+    },
+    #[serde(rename = "block.read")]
+    BlockRead {
+        partition: String,
+        output: PathBuf,
         #[serde(default)]
         slot: Option<String>,
     },
@@ -90,16 +107,25 @@ pub enum JsonRequest {
         current_vbmeta: Option<PathBuf>,
         #[serde(default)]
         target_vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        target_image: Option<PathBuf>,
     },
     #[serde(rename = "mode.plan")]
     ModePlan {
-        id: String,
+        #[serde(default)]
+        id: Option<String>,
         target_mode: u8,
+        #[serde(default)]
+        from_mode: Option<u8>,
         #[serde(default)]
         current_vbmeta: Option<PathBuf>,
         #[serde(default)]
         target_vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        target_image: Option<PathBuf>,
     },
+    #[serde(rename = "system.reboot")]
+    SystemReboot { target: String },
     #[serde(rename = "default.get")]
     DefaultGet,
     #[serde(rename = "default.set")]
@@ -115,6 +141,13 @@ pub enum JsonRequest {
         name: String,
         entry: PathBuf,
         artifacts: Vec<ArtifactSpec>,
+    },
+    #[serde(rename = "abl.lookup")]
+    AblLookup {
+        product: String,
+        output: PathBuf,
+        #[serde(default)]
+        local_repo: Option<PathBuf>,
     },
     #[serde(rename = "slot.status")]
     SlotStatus {
@@ -146,6 +179,8 @@ pub enum JsonRequest {
         mode: Option<u8>,
         #[serde(default)]
         allow_new_signer: bool,
+        #[serde(default)]
+        boot_root_source: Option<PathBuf>,
     },
     #[serde(rename = "ota-apply")]
     OtaApply {
@@ -157,6 +192,8 @@ pub enum JsonRequest {
         mode: Option<u8>,
         #[serde(default)]
         allow_new_signer: bool,
+        #[serde(default)]
+        boot_root_source: Option<PathBuf>,
     },
     #[serde(rename = "vbmeta.graft", alias = "graft", alias = "vbmetaport")]
     VbmetaGraft {
