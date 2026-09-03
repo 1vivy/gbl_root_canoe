@@ -592,17 +592,7 @@ flash_bds_partition() {
 
 run_optional_patch() {
   if [ "$EXTRA_PATCH_MODE" = "vendor_boot" ]; then
-    ui_print "$T_MODE_VENDOR_YES"
-    ui_print "- 当前槽位: $slot_letter"
-    if [ ! -x "$MODPATH/bin/canoe_vendor_boot.sh" ]; then
-      ui_print "$T_BIN_FAIL: canoe_vendor_boot.sh binary not found!"
-      abort "canoe_vendor_boot.sh missing"
-    fi
-    if ! sh "$MODPATH/bin/canoe_vendor_boot.sh" "$slot_letter"; then
-      ui_print "$T_BIN_FAIL (vendor_boot)"
-      abort "vendor_boot patch failed"
-    fi
-    ui_print "$T_MODE_VENDOR_YES"
+    abort "vendor_boot patching is handled by the Canoe WebUI"
   fi
 }
 

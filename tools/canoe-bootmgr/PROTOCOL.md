@@ -68,6 +68,10 @@ A failed JSON response is one object, followed by `\n`:
 | `ablrepo-unavailable` | `abl.lookup` could not obtain the repository metadata, digest, or image. |
 | `ablrepo-digest` | `abl.lookup` image SHA-256 differed from `abl.sha256`. |
 | `ablrepo-metadata` | `abl.lookup` metadata was missing, malformed, or disagreed with the image. |
+| `vendorboot-header` | `vendorboot.patch` refused an image whose vendor_boot header is invalid; no output was written. |
+| `vendorboot-cmdline-full` | `vendorboot.patch` refused an image whose cmdline field has no room for Canoe's blacklist; no output was written. |
+| `vendorboot-verification` | `vendorboot.patch` could not verify its output; callers must not use the output as a patched image. |
+| `vendorboot-output` | `vendorboot.patch` received an invalid output path; no patched image was returned. |
 | `unsupported-platform` | `block.read`, `block.write`, or `system.reboot` is unavailable on this platform. |
 | `tools-source-missing` | `tools.update` source does not exist; no boot-root write was attempted. |
 | `tools-source-not-directory` | `tools.update` source is not a directory; no boot-root write was attempted. |

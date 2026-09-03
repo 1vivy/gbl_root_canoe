@@ -19,8 +19,14 @@ pub struct PatchReceipt {
 
 #[derive(Debug, Error)]
 pub enum VendorBootError {
-    #[error("vendor_boot: {0}")]
-    Invalid(String),
+    #[error("vendor_boot header is invalid: {message}")]
+    InvalidHeader { message: String },
+    #[error("vendor_boot cmdline field has no room for the blacklist")]
+    CmdlineFull,
+    #[error("vendor_boot patch verification failed: {message}")]
+    VerificationFailed { message: String },
+    #[error("vendor_boot output is invalid: {message}")]
+    OutputInvalid { message: String },
     #[error("vendor_boot {operation} {path}: {source}")]
     Io {
         operation: &'static str,
@@ -29,18 +35,30 @@ pub enum VendorBootError {
     },
 }
 
+impl VendorBootError {
+    pub fn protocol_code(&self) -> &str {
+        match self {
+            Self::InvalidHeader { .. } => "vendorboot-header",
+            Self::CmdlineFull => "vendorboot-cmdline-full",
+            Self::VerificationFailed { .. } => "vendorboot-verification",
+            Self::OutputInvalid { .. } => "vendorboot-output",
+            Self::Io { .. } => "operation",
+        }
+    }
+}
+
 pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, VendorBootError> {
     let mut bytes = fs::read(source).map_err(|error| io("read source", source, error))?;
     let field_end = CMDLINE_OFFSET + CMDLINE_BYTES;
     if bytes.len() < field_end {
-        return Err(VendorBootError::Invalid(
-            "image is shorter than its cmdline field".to_owned(),
-        ));
+        return Err(VendorBootError::InvalidHeader {
+            message: "image is shorter than its cmdline field".to_owned(),
+        });
     }
     if &bytes[..MAGIC.len()] != MAGIC {
-        return Err(VendorBootError::Invalid(
-            "image has invalid magic (expected VNDRBOOT)".to_owned(),
-        ));
+        return Err(VendorBootError::InvalidHeader {
+            message: "image has invalid magic (expected VNDRBOOT)".to_owned(),
+        });
     }
     let current_end = bytes[CMDLINE_OFFSET..field_end]
         .iter()
@@ -56,9 +74,7 @@ pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, Vendo
             .saturating_add(1)
             .saturating_add(BLACKLIST.len());
         if needed >= CMDLINE_BYTES {
-            return Err(VendorBootError::Invalid(
-                "cmdline has no room for the blacklist".to_owned(),
-            ));
+            return Err(VendorBootError::CmdlineFull);
         }
         let field = &mut bytes[CMDLINE_OFFSET..field_end];
         field.fill(0);
@@ -73,9 +89,9 @@ pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, Vendo
             .windows(BLACKLIST.len())
             .any(|window| window == BLACKLIST)
     {
-        return Err(VendorBootError::Invalid(
-            "cmdline patch could not be verified".to_owned(),
-        ));
+        return Err(VendorBootError::VerificationFailed {
+            message: "cmdline patch could not be verified".to_owned(),
+        });
     }
     Ok(PatchReceipt {
         output: output.display().to_string(),
@@ -85,9 +101,9 @@ pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, Vendo
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), VendorBootError> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| VendorBootError::Invalid("output has no parent".to_owned()))?;
+    let parent = path.parent().ok_or_else(|| VendorBootError::OutputInvalid {
+        message: "output has no parent".to_owned(),
+    })?;
     if !parent.as_os_str().is_empty() {
         fs::create_dir_all(parent).map_err(|error| io("create output directory", parent, error))?;
     }

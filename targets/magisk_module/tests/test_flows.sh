@@ -35,8 +35,6 @@ mkdir -p "$ROOT/tools/canoe-bootmgr/target"
 cargo build --quiet --locked --manifest-path "$ROOT/tools/canoe-bootmgr/Cargo.toml"
 cp "$ROOT/tools/canoe-bootmgr/target/debug/canoe-bootmgr" "$MOD/bin/canoe-bootmgr"
 chmod +x "$MOD/bin/canoe-bootmgr"
-cp "$ROOT/targets/magisk_module/module/bin/canoe_vendor_boot.sh" "$MOD/bin/canoe_vendor_boot.sh"
-chmod +x "$MOD/bin/canoe_vendor_boot.sh"
 printf 'BDS fixture\n' > "$MOD/BDS.efi"
 printf 'tool\n' > "$MOD/efisp/tools/BLTools.efi"
 printf 'en\n' > "$MOD/lang.txt"
@@ -128,22 +126,8 @@ case "${DD_FAIL_STAGE:-}" in
       exit 1
     fi
     ;;
-  vendor-write)
-    if [ "$out" = "${BY_NAME_DIR:-}/vendor_boot_a" ]; then
-      case "$in" in
-        */new-field)
-          /usr/bin/dd "$@" >/dev/null 2>&1 || :
-          printf 'torn-write\n' > "$out"
-          exit 1
-          ;;
-      esac
-    fi
-    ;;
   abl-readback)
     case "$out" in *.readback) exit 1 ;; esac
-    ;;
-  vendor-readback)
-    case "$out" in */verify) exit 1 ;; esac
     ;;
   restore)
     case "$in" in *.snapshot) exit 1 ;; esac
@@ -158,13 +142,6 @@ if [ "${DD_CORRUPT_WRITE:-}" = "abl" ] &&
    [ "$in" = "${BY_NAME_DIR:-}/abl_a" ] &&
    [ "$out" = "${BY_NAME_DIR:-}/abl_b" ]; then
   printf 'corrupt-write\n' > "$out"
-elif [ "${DD_CORRUPT_WRITE:-}" = "vendor" ] &&
-     [ "$out" = "${BY_NAME_DIR:-}/vendor_boot_a" ]; then
-  case "$in" in
-    */new-field)
-      printf corrupt | /usr/bin/dd of="$out" bs=1 seek=28 conv=notrunc >/dev/null 2>&1
-      ;;
-  esac
 fi
 EOF
 cat > "$BIN/sync" <<'EOF'
@@ -653,122 +630,6 @@ pass 'supplied signer changes proceed without a Mode 2 downgrade'
 printf 'vbmeta-b\n' > "$BY_NAME/vbmeta_b"
 printf 'supplied-vbmeta\n' > "$SUPPLIED/vbmeta.img"
 
-reset_vendor() {
-  : > "$VENDOR"
-  truncate -s 4096 "$VENDOR"
-  printf VNDRBOOT | dd of="$VENDOR" bs=1 seek=0 conv=notrunc 2>/dev/null
-  printf 'console=ttyS0' | dd of="$VENDOR" bs=1 seek=28 conv=notrunc 2>/dev/null
-}
-VENDOR="$BY_NAME/vendor_boot_a"
-VENDOR_BEFORE="$TMP/vendor-before.img"
-reset_vendor
-cp "$VENDOR" "$VENDOR_BEFORE"
-patch_output=$(BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
-  PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a)
-assert_eq "$patch_output" patched 'vendor_boot patch did not report a change'
-diff_count=$(cmp -l "$VENDOR_BEFORE" "$VENDOR" | wc -l | tr -d '[:space:]')
-assert_eq "$diff_count" 40 'vendor_boot patch changed the wrong number of bytes'
-if cmp -l "$VENDOR_BEFORE" "$VENDOR" | awk '$1 - 1 < 28 || $1 - 1 > 2075 { bad=1 } END { exit bad }'; then :; else
-  fail 'vendor_boot patch changed bytes outside the cmdline field'
-fi
-cp "$VENDOR" "$TMP/vendor-after-first.img"
-patch_output=$(BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
-  PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a)
-assert_eq "$patch_output" 'already patched' 'vendor_boot patch was not idempotent'
-cmp "$TMP/vendor-after-first.img" "$VENDOR" || fail 'second vendor_boot patch changed the image'
-pass 'vendor_boot patch appends exactly 40 bytes and is idempotent'
-
-reset_vendor
-cp "$VENDOR" "$VENDOR_BEFORE"
-if vendor_output=$(DD_FAIL_STAGE=snapshot BY_NAME_DIR="$BY_NAME" \
-  RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
-  sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
-  fail 'vendor_boot snapshot failure was accepted'
-fi
-cmp "$VENDOR_BEFORE" "$VENDOR" || fail 'vendor snapshot failure changed the partition'
-assert_contains "$vendor_output" \
-  'failed to snapshot vendor_boot; refusing to write' \
-  'vendor snapshot refusal was not reported'
-pass 'vendor_boot snapshot failure refuses the write'
-
-reset_vendor
-cp "$VENDOR" "$VENDOR_BEFORE"
-if vendor_output=$(DD_FAIL_STAGE=vendor-write BY_NAME_DIR="$BY_NAME" \
-  RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
-  sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
-  fail 'vendor_boot write failure was accepted'
-fi
-cmp "$VENDOR_BEFORE" "$VENDOR" || fail 'vendor write failure left a torn partition'
-assert_contains "$vendor_output" 'vendor_boot rollback succeeded' \
-  'vendor write failure did not report rollback'
-pass 'vendor_boot write failure restores the partition'
-
-reset_vendor
-cp "$VENDOR" "$VENDOR_BEFORE"
-if vendor_output=$(SYNC_FAIL_ONCE=1 SYNC_MARK="$TMP/vendor-sync-fail" \
-  BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
-  PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
-  fail 'vendor_boot sync failure was accepted'
-fi
-cmp "$VENDOR_BEFORE" "$VENDOR" || fail 'vendor sync failure left a torn partition'
-assert_contains "$vendor_output" 'vendor_boot rollback succeeded' \
-  'vendor sync failure did not report rollback'
-pass 'vendor_boot sync failure restores the partition'
-
-reset_vendor
-cp "$VENDOR" "$VENDOR_BEFORE"
-if vendor_output=$(DD_CORRUPT_WRITE=vendor BY_NAME_DIR="$BY_NAME" \
-  RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
-  sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
-  fail 'vendor_boot verification mismatch was accepted'
-fi
-cmp "$VENDOR_BEFORE" "$VENDOR" || fail 'vendor verification mismatch left a torn partition'
-assert_contains "$vendor_output" 'vendor_boot rollback succeeded' \
-  'vendor verification mismatch did not report rollback'
-pass 'vendor_boot verification mismatch restores the partition'
-
-reset_vendor
-cp "$VENDOR" "$VENDOR_BEFORE"
-if vendor_output=$(DD_CORRUPT_WRITE=vendor DD_FAIL_STAGE=restore \
-  BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" \
-  PATH="$BIN:$PATH" sh "$MOD/bin/canoe_vendor_boot.sh" a 2>&1); then
-  fail 'vendor_boot rollback failure was accepted'
-fi
-if cmp "$VENDOR_BEFORE" "$VENDOR"; then
-  fail 'vendor rollback failure unexpectedly hid the torn partition'
-fi
-vendor_snapshot=$(printf '%s\n' "$vendor_output" |
-  sed -n 's/.*snapshot retained at //p')
-[ -n "$vendor_snapshot" ] || fail \
-  'vendor rollback failure did not report the snapshot location'
-assert_file "$vendor_snapshot"
-assert_contains "$vendor_output" \
-  "torn partition=$VENDOR; snapshot retained at $vendor_snapshot" \
-  'vendor rollback failure did not name the torn partition and snapshot'
-pass 'vendor_boot rollback failure reports the torn target and retained snapshot'
-
-
-VENDOR_BAD="$BY_NAME/vendor_boot_b"
-truncate -s 4096 "$VENDOR_BAD"
-printf BADMAGIC | dd of="$VENDOR_BAD" bs=1 seek=0 conv=notrunc 2>/dev/null
-cp "$VENDOR_BAD" "$TMP/vendor-bad-before.img"
-if BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
-  sh "$MOD/bin/canoe_vendor_boot.sh" b >/dev/null 2>&1; then
-  fail 'bad vendor_boot magic was accepted'
-fi
-cmp "$TMP/vendor-bad-before.img" "$VENDOR_BAD" || fail 'bad magic changed vendor_boot'
-
-truncate -s 4096 "$VENDOR_BAD"
-printf VNDRBOOT | dd of="$VENDOR_BAD" bs=1 seek=0 conv=notrunc 2>/dev/null
-awk 'BEGIN { for (i = 0; i < 2048; i++) printf "x" }' > "$TMP/full-field"
-dd if="$TMP/full-field" of="$VENDOR_BAD" bs=1 seek=28 conv=notrunc 2>/dev/null
-cp "$VENDOR_BAD" "$TMP/vendor-full-before.img"
-if BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$MOD/tmp" FLOW_LOG="$LOG" PATH="$BIN:$PATH" \
-  sh "$MOD/bin/canoe_vendor_boot.sh" b >/dev/null 2>&1; then
-  fail 'overfull vendor_boot cmdline was accepted'
-fi
-cmp "$TMP/vendor-full-before.img" "$VENDOR_BAD" || fail 'overfull cmdline changed vendor_boot'
-pass 'vendor_boot patch refuses invalid magic and a full cmdline without writing'
 
 run_questionnaire() {
   question_name=$1
@@ -784,8 +645,6 @@ run_questionnaire() {
     "$question_bin" "$question_efisp"
   cp "$MOD/bin/canoe-bootmgr" "$question_mod/bin/canoe-bootmgr"
   cp "$ROOT/targets/magisk_module/module/customize.sh" "$question_mod/customize.sh"
-  cp "$ROOT/targets/magisk_module/module/bin/canoe_vendor_boot.sh" \
-    "$question_mod/bin/canoe_vendor_boot.sh"
   cp "$BIN/extractfv" "$BIN/patch_abl" "$BIN/mode2_profile" "$BIN/abl_tzmap" \
     "$question_mod/bin/"
   cp "$MOD/BDS.efi" "$question_mod/BDS.efi"
@@ -840,14 +699,5 @@ assert_contains "$(cat "$TMP/questionnaire-mode2.log")" \
   'Data format is required. On a first-time installation it is not optional' 'format-data explanation was not printed'
 pass 'questionnaire reaches Mode 2 and skips Mode 1-only questions'
 
-run_questionnaire questionnaire-mode1 DUUUUU
-assert_contains "$(cat "$TMP/questionnaire-mode1-persist/efisp/canoe.cfg")" 'mode 1' \
-  'Mode 1 questionnaire selection did not reach the device transaction'
-assert_contains "$(cat "$TMP/questionnaire-mode1.log")" \
-  'Mode 1: patch vendor_boot? Vol+ = yes, Vol- = no' \
-  'Mode 1 vendor_boot question was not shown'
-assert_contains "$(cat "$TMP/questionnaire-mode1.stdout")" patched \
-  'Mode 1 vendor_boot selection did not invoke the patcher'
-pass 'questionnaire reaches Mode 1 and enables the vendor_boot patch'
 
 echo 'all module flow fixtures passed'

@@ -790,7 +790,8 @@ print_status() {
   emit "$out"
 }
 
-# Return values: 0=success, 1=patch failure, 2=no patch selected.
+# The WebUI owns vendor_boot.patch followed by block.write. Keep this legacy
+# entry point explicit rather than silently claiming the partition was patched.
 exec_patch_by_args() {
   arg_str="$1"
   slot_override="$2"
@@ -818,11 +819,7 @@ exec_patch_by_args() {
   write_log "$TEXT_PATCH_VENDORBOOT_START"
   if [ "$arg_debug" = "1" ]; then
     write_log "$TEXT_PATCH_DEBUG_SAVE"
-  elif [ ! -x "$BINDIR/canoe_vendor_boot.sh" ]; then
-    write_log "$TEXT_BIN_NOT_FOUND: canoe_vendor_boot.sh"
-    cd "$_old_pwd"
-    return 1
-  elif ! sh "$BINDIR/canoe_vendor_boot.sh" "$slot_letter" >> "$LOG_FILE" 2>&1; then
+  else
     write_log "$TEXT_PATCH_ERR"
     cd "$_old_pwd"
     return 1

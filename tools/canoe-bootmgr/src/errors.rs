@@ -76,10 +76,10 @@ impl AppError {
             Self::BlockWrite(error) => error.protocol_code(),
             Self::ToolsUpdate(error) => error.protocol_code(),
             Self::Fastboot(error) => error.protocol_code(),
+            Self::VendorBoot(error) => error.protocol_code(),
             Self::Config(_)
             | Self::Artifact(_)
             | Self::Slot(_)
-            | Self::VendorBoot(_)
             | Self::Detect(_)
             | Self::Request(_)
             | Self::Install(_)
