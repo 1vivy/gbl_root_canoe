@@ -299,6 +299,35 @@ fn fresh_install_sets_active_row_as_default() {
 }
 
 #[test]
+fn ota_apply_prefers_target_slot_as_default() {
+    let root = tempfile::tempdir().expect("fresh boot root");
+    let initial_staging = tempfile::tempdir().expect("initial staging root");
+    let initial = staged_root(&initial_staging, b"initial", 6);
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":initial,"slot":"a"}),
+    )
+    .expect("initial install into active slot");
+
+    let ota_staging = tempfile::tempdir().expect("OTA staging root");
+    let ota = staged_root(&ota_staging, b"ota", 6);
+    request_json(
+        root.path(),
+        serde_json::json!({
+            "verb":"ota-apply",
+            "staged":ota,
+            "target_slot":"b",
+            "bootctl_output":"current-slot: a"
+        }),
+    )
+    .expect("OTA install into inactive slot");
+
+    let rendered = fs::read_to_string(root.path().join("canoe.cfg")).expect("written config");
+    let config = ConfigDocument::parse(rendered.as_bytes()).expect("parse written config");
+    assert_eq!(config.default.as_deref(), Some("android-b"));
+}
+
+#[test]
 fn fresh_install_preserves_preexisting_non_managed_default() {
     let root = tempfile::tempdir().expect("fresh boot root");
     let initial_staging = tempfile::tempdir().expect("initial staging root");

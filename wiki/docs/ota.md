@@ -21,10 +21,14 @@ its matching sidecars. A managed Mode 2 profile belongs to the installed
 generation and is refreshed by this explicit action, never by the system
 updater.
 
-If the action is forgotten, the new slot carries a stock ABL. The GBL exploit is
-absent, so BDS is simply not loaded and the device boots stock and unhooked.
-Nothing is bricked. Boot back into the other slot, or run **Install to inactive
-slot** and reboot again.
+If the action is forgotten, the new slot carries a stock ABL. The GBL exploit
+is absent, so BDS is simply not loaded and the device boots stock and
+unhooked. Nothing is bricked. Run **Install to inactive slot** and reboot again;
+this recovery needs no slot switch. The other slot is the slot you were running
+moments ago, so its health is known-good in this scenario. Canoe does not
+provide a slot-switch action; if you choose to boot back to the other slot, you
+must switch the active slot yourself outside Canoe (for example with
+`fastboot set_active`).
 
 There is no OTA watcher in this release. The module performs this work only
 when the operator presses the WebUI action before rebooting.

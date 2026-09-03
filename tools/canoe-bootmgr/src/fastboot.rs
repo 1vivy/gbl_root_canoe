@@ -16,10 +16,12 @@ mod fastboot_fetch;
 pub use fastboot_export::{Exported, export, export_seconds};
 pub use fastboot_fetch::fetch;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Identity {
     pub bds_version: Option<String>,
     pub current_slot: Option<String>,
+    pub devinfo: Option<String>,
+    pub last_launch: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -34,6 +36,13 @@ pub enum FastbootError {
     },
     #[error("mass-storage discovery timed out after {timeout:?}")]
     Timeout { timeout: Duration },
+    #[error("fastboot command {command} failed: {detail}")]
+    CommandTimeout {
+        command: String,
+        detail: String,
+    },
+    #[error("{message}")]
+    PermissionDenied { message: String },
     #[error("mass-storage discovery failed: {message}")]
     Discovery { message: String },
     #[error("mass-storage discovery timeout must be finite and non-negative: {value}")]
@@ -42,6 +51,21 @@ pub enum FastbootError {
     Command { command: String, detail: String },
     #[error("fastboot operation {operation} is unsupported on this platform")]
     Unsupported { operation: &'static str },
+}
+
+impl FastbootError {
+    pub fn protocol_code(&self) -> &str {
+        match self {
+            Self::NotFound { .. } => "fastboot-unavailable",
+            Self::Timeout { .. } | Self::CommandTimeout { .. } => "timeout",
+            Self::PermissionDenied { .. } => "permission-denied",
+            Self::Unsupported { .. } => "unsupported-platform",
+            Self::Spawn { .. }
+            | Self::Discovery { .. }
+            | Self::InvalidTimeout { .. }
+            | Self::Command { .. } => "operation",
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -105,9 +129,13 @@ fn is_executable(path: &Path) -> bool {
 pub fn identify(fastboot: &Path, timeout: Duration) -> Identity {
     let current_slot = getvar(fastboot, "current-slot", timeout);
     let bds_version = getvar(fastboot, "canoe-bds", timeout);
+    let devinfo = getvar(fastboot, "canoe-devinfo", timeout);
+    let last_launch = getvar(fastboot, "canoe-last-launch", timeout);
     Identity {
         bds_version,
         current_slot: current_slot.filter(|slot| slot == "a" || slot == "b"),
+        devinfo,
+        last_launch,
     }
 }
 

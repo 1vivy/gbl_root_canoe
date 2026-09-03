@@ -163,7 +163,30 @@ impl GuiApp {
     }
 
     pub(crate) fn set_mode(&mut self, id: String, mode: u8) {
-        if let Some(Response::EntryMode { .. }) = self.request(Request::EntryMode { id, mode }) {
+        let Some(current_mode) = self
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .map(|entry| entry.mode)
+        else {
+            return;
+        };
+        let mut acknowledge = Vec::new();
+        if current_mode != mode {
+            if mode == 1 {
+                acknowledge.push("P-GRAFT".to_owned());
+            }
+            if current_mode == 0 || mode == 0 {
+                acknowledge.push("P-FORMAT".to_owned());
+            }
+        }
+        if let Some(Response::EntryMode { .. }) = self.request(Request::EntryMode {
+            id,
+            mode,
+            acknowledge,
+            current_vbmeta: None,
+            target_vbmeta: None,
+        }) {
             self.refresh();
         }
     }
@@ -247,6 +270,7 @@ fn request_name(request: &Request) -> &'static str {
         Request::FastbootIdentify { .. } => "fastboot.identify",
         Request::FastbootExport { .. } => "fastboot.export",
         Request::FastbootFlash { .. } => "fastboot.flash",
+        Request::FastbootFetch { .. } => "fastboot.fetch",
         Request::FastbootReboot { .. } => "fastboot.reboot",
         Request::FastbootEndExport { .. } => "fastboot.end-export",
         Request::VendorBootPatch { .. } => "vendorboot.patch",

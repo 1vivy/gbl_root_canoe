@@ -17,7 +17,7 @@ impl Backend {
     pub fn ext4(source: impl AsRef<Path>) -> Result<Self, BackendError> {
         crate::ext4::Ext4Dir::new(source)
             .map(Self::Ext4)
-            .map_err(|error| BackendError::Ext4(error.to_string()))
+            .map_err(BackendError::Ext4Typed)
     }
 
     pub fn ext4_with_helper(
@@ -26,7 +26,7 @@ impl Backend {
     ) -> Result<Self, BackendError> {
         crate::ext4::Ext4Dir::with_helper(source, helper)
             .map(Self::Ext4)
-            .map_err(|error| BackendError::Ext4(error.to_string()))
+            .map_err(BackendError::Ext4Typed)
     }
 
     pub fn from_paths(
@@ -58,7 +58,7 @@ impl Backend {
             Self::Local(local) => action(local.root()).map_err(BackendError::Transaction),
             Self::Ext4(ext4) => ext4
                 .with_temp_root(action)
-                .map_err(|error| BackendError::Ext4(error.to_string())),
+                .map_err(BackendError::Ext4Typed),
         }
     }
 
@@ -70,7 +70,7 @@ impl Backend {
             Self::Local(local) => action(local.root()).map_err(BackendError::Transaction),
             Self::Ext4(ext4) => ext4
                 .with_temp_root_readonly(action)
-                .map_err(|error| BackendError::Ext4(error.to_string())),
+                .map_err(BackendError::Ext4Typed),
         }
     }
 }

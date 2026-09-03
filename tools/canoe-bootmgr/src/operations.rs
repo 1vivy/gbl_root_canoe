@@ -5,7 +5,8 @@ use crate::backend::{Backend, BackendError, BootRoot};
 use crate::build::{self, BuildArgs, BuildOutcome};
 use crate::cli::{
     AblCoverage, BlsCommand, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand,
-    EntrySetArgs, FastbootCommand, FastbootFlashReceipt, PolicyArgs, SourceCommand, Success,
+    EntrySetArgs, FastbootCommand, FastbootFlashReceipt, ModePlanArgs, PolicyArgs, SourceCommand,
+    Success,
 };
 use crate::config::{ConfigDocument, EntryRequest, PolicyUpdate};
 pub use crate::errors::AppError;
@@ -21,6 +22,15 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     }
     if let Command::Build(args) = command {
         return build_command(args);
+    }
+    if let Command::AblVerify(args) = command {
+        return abl_verify_command(args);
+    }
+    if let Command::BlockWrite(args) = command {
+        return block_write_command(args);
+    }
+    if let Command::ModePlan(args) = command {
+        validate_mode_plan_target(args.target_mode)?;
     }
     if let Command::VbmetaInspect(args) = command {
         return vbmeta_inspect_command(args);
@@ -44,6 +54,15 @@ pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, App
     if let Command::Build(args) = &command {
         return build_command(args);
     }
+    if let Command::AblVerify(args) = &command {
+        return abl_verify_command(args);
+    }
+    if let Command::BlockWrite(args) = &command {
+        return block_write_command(args);
+    }
+    if let Command::ModePlan(args) = &command {
+        validate_mode_plan_target(args.target_mode)?;
+    }
     if let Command::VbmetaInspect(args) = &command {
         return vbmeta_inspect_command(args);
     }
@@ -65,8 +84,20 @@ pub fn execute_request_cli(
     if let Command::Build(args) = &command {
         return build_command(args);
     }
+    if let Command::AblVerify(args) = &command {
+        return abl_verify_command(args);
+    }
+    if let Command::BlockWrite(args) = &command {
+        return block_write_command(args);
+    }
+    if let Command::ModePlan(args) = &command {
+        validate_mode_plan_target(args.target_mode)?;
+    }
     if let Command::VbmetaInspect(args) = &command {
         return vbmeta_inspect_command(args);
+    }
+    if let Command::VbmetaHeader(args) = &command {
+        return vbmeta_header_command(args);
     }
     if let Command::Fastboot { command } = &command {
         return fastboot_command(command);
@@ -83,6 +114,8 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
     match command {
         Command::ProtocolVersion => Ok(protocol_version()),
         Command::Build(args) => build_command(args),
+        Command::AblVerify(args) => abl_verify_command(args),
+        Command::BlockWrite(args) => block_write_command(args),
         Command::Config { command } => config_command(backend, command),
         Command::Entry { command } => entry_command(backend, command),
         Command::Default { command } => default_command(backend, command),
@@ -91,13 +124,77 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
         Command::Slot { command } => extra_ops::slot_command(backend, command),
         Command::Install(args) => extra_ops::install_command(backend, args),
         Command::OtaApply(args) => extra_ops::ota_apply(backend, args),
+        Command::ModePlan(args) => mode_plan_command(backend, args),
         Command::Graft(args) => extra_ops::graft_command(args),
         Command::VbmetaInspect(args) => vbmeta_inspect_command(args),
+        Command::VbmetaHeader(args) => vbmeta_header_command(args),
         Command::Fastboot { command } => fastboot_command(command),
         Command::VendorBoot { command } => extra_ops::vendorboot_command(command),
     }
 }
+fn abl_verify_command(args: &crate::cli::AblVerifyArgs) -> Result<Success, AppError> {
+    let receipt = crate::abl_verify::verify(&crate::abl_verify::AblVerifyRequest {
+        image: args.image.clone(),
+        expected_sha256: args.expected_sha256.clone(),
+    })?;
+    Ok(Success::AblVerify {
+        ok: true,
+        sha256: receipt.sha256,
+        gbl_patched: receipt.gbl_patched,
+    })
+}
 
+fn block_write_command(args: &crate::cli::BlockWriteArgs) -> Result<Success, AppError> {
+    let receipt = crate::block_write::write(&crate::block_write::BlockWriteRequest {
+        partition: args.partition.clone(),
+        image: args.image.clone(),
+        snapshot: args.snapshot.clone(),
+        slot: args.slot.clone(),
+    })?;
+    Ok(Success::BlockWrite {
+        ok: true,
+        partition: receipt.partition,
+        node: receipt.node,
+        bytes_written: receipt.bytes_written,
+        sha256: receipt.sha256,
+        snapshot: receipt.snapshot,
+        verified: receipt.verified,
+    })
+}
+fn validate_mode_plan_target(target_mode: u8) -> Result<(), AppError> {
+    if target_mode > 2 {
+        return Err(AppError::ModePlan(
+            crate::mode_plan::ModePlanError::InvalidMode { mode: target_mode },
+        ));
+    }
+    Ok(())
+}
+
+fn mode_plan_command(
+    backend: &dyn crate::backend::BootRoot,
+    args: &ModePlanArgs,
+) -> Result<Success, AppError> {
+    let config = read_existing(backend)?;
+    let entry = config.entry(&args.id).cloned().ok_or_else(|| {
+        AppError::Config(crate::config::ConfigError::Invalid(format!(
+            "no such entry: {}",
+            args.id
+        )))
+    })?;
+    let plan = crate::mode_plan::plan_for_entry(
+        backend.root(),
+        &entry,
+        args.target_mode,
+        args.current_vbmeta.as_ref(),
+        args.target_vbmeta.as_ref(),
+        args.tools.as_deref(),
+    )?;
+    Ok(Success::ModePlan {
+        ok: true,
+        id: args.id.clone(),
+        plan,
+    })
+}
 fn vbmeta_inspect_command(args: &crate::cli::VbmetaInspectArgs) -> Result<Success, AppError> {
     let receipt = crate::vbmeta_inspect::inspect(&args.vbmeta, args.tools.as_deref())?;
     Ok(Success::VbmetaInspect {
@@ -105,6 +202,16 @@ fn vbmeta_inspect_command(args: &crate::cli::VbmetaInspectArgs) -> Result<Succes
         rollback_index: receipt.rollback_index,
         chain_partitions: receipt.chain_partitions,
         build_properties: receipt.build_properties,
+    })
+}
+fn vbmeta_header_command(args: &crate::cli::VbmetaHeaderArgs) -> Result<Success, AppError> {
+    let header = crate::vbmeta_inspect::inspect_header(&args.vbmeta, args.tools.as_deref())?;
+    Ok(Success::VbmetaHeader {
+        ok: true,
+        algorithm_type: header.algorithm_type,
+        rollback_index: header.rollback_index,
+        flags: header.flags,
+        release_string: header.release_string,
     })
 }
 
@@ -119,20 +226,15 @@ fn protocol_version() -> Success {
 fn fastboot_command(command: &FastbootCommand) -> Result<Success, AppError> {
     match command {
         FastbootCommand::Identify(args) => {
-            let identity = match crate::fastboot::binary(None) {
-                Ok(fastboot) => {
-                    crate::fastboot::identify(&fastboot, Duration::from_secs(args.timeout_seconds))
-                }
-                Err(crate::fastboot::FastbootError::NotFound { .. }) => crate::fastboot::Identity {
-                    bds_version: None,
-                    current_slot: None,
-                },
-                Err(error) => return Err(error.into()),
-            };
+            let fastboot = crate::fastboot::binary(None)?;
+            let identity =
+                crate::fastboot::identify(&fastboot, Duration::from_secs(args.timeout_seconds));
             Ok(Success::FastbootIdentify {
                 ok: true,
                 bds_version: identity.bds_version,
                 current_slot: identity.current_slot,
+                devinfo: identity.devinfo,
+                last_launch: identity.last_launch,
             })
         }
         FastbootCommand::Export(args) => {
@@ -149,7 +251,7 @@ fn fastboot_command(command: &FastbootCommand) -> Result<Success, AppError> {
             })
         }
         FastbootCommand::EndExport(args) => {
-            crate::fastboot::end_export(&args.node).map_err(end_export_error)?;
+            crate::fastboot::end_export(&args.node)?;
             Ok(Success::FastbootEndExport {
                 ok: true,
                 node: args.node.display().to_string(),
@@ -269,16 +371,6 @@ fn find_export_node() -> Result<Option<std::path::PathBuf>, crate::fastboot::Fas
         .map(|candidate| candidate.path))
 }
 
-fn end_export_error(error: crate::fastboot::FastbootError) -> AppError {
-    let message = error.to_string();
-    if message.to_ascii_lowercase().contains("permission denied") {
-        AppError::Request(format!(
-            "fastboot end-export needs permission to open the raw block node: {message}"
-        ))
-    } else {
-        AppError::Fastboot(error)
-    }
-}
 
 fn build_command(args: &BuildArgs) -> Result<Success, AppError> {
     match build::execute(args)? {
@@ -361,12 +453,32 @@ fn entry_command(backend: &dyn BootRoot, command: &EntryCommand) -> Result<Succe
             })
         }
         EntryCommand::Mode(args) => {
+            validate_mode_plan_target(args.mode)?;
             let mut config = read_existing(backend)?;
-            let generation = config.set_mode(&args.id, args.mode)?;
+            let entry = config.entry(&args.id).cloned().ok_or_else(|| {
+                AppError::Config(crate::config::ConfigError::Invalid(format!(
+                    "no such entry: {}",
+                    args.id
+                )))
+            })?;
+            let plan = crate::mode_plan::plan_for_entry(
+                backend.root(),
+                &entry,
+                args.mode,
+                args.current_vbmeta.as_ref(),
+                args.target_vbmeta.as_ref(),
+                args.tools.as_deref(),
+            )?;
+            let acknowledged =
+                crate::mode_plan::ensure_applyable(&plan, &args.acknowledge)?;
+            let warnings = crate::mode_plan::warnings(&plan);
+            let generation = config.set_mode_planned(&args.id, args.mode)?;
             backend.write_config(&config)?;
             Ok(Success::EntryMode {
                 ok: true,
                 generation,
+                acknowledged,
+                warnings,
                 mark: format!(
                     "CANOE-MARK: entry-mode-set id={} mode={} generation={generation}",
                     args.id, args.mode

@@ -20,6 +20,8 @@ fn fastboot_identify_protocol_round_trip_has_operation() {
         ok: true,
         bds_version: Some("7.0.0".to_owned()),
         current_slot: Some("a".to_owned()),
+        devinfo: None,
+        last_launch: None,
     };
     let document: serde_json::Value = serde_json::from_slice(
         &canoe_bootmgr::output::json_success(&response).expect("response JSON"),

@@ -30,7 +30,11 @@ fn ask_uses_device_slot_and_empty_yes_no_answers_use_defaults() {
     let (toolkit, root) = temp_toolkit();
     let (plan, _) = run_ask(
         &toolkit,
-        canoe_bootmgr::fastboot::Identity { bds_version: Some("7.0.0-b2".to_owned()), current_slot: Some("b".to_owned()) },
+        canoe_bootmgr::fastboot::Identity {
+            bds_version: Some("7.0.0-b2".to_owned()),
+            current_slot: Some("b".to_owned()),
+            ..Default::default()
+        },
         "0\n\n",
     );
     assert_eq!(plan, Some(WizardPlan { slot: "b".to_owned(), mode: 0, vendor_boot: None }));
@@ -45,7 +49,11 @@ fn ask_requests_unknown_device_slot_and_carries_mode_one_vendor_choice() {
     fs::write(&vendor_boot, b"vendor").expect("vendor boot");
     let (plan, _) = run_ask(
         &toolkit,
-        canoe_bootmgr::fastboot::Identity { bds_version: Some("7.0.0-b2".to_owned()), current_slot: None },
+        canoe_bootmgr::fastboot::Identity {
+            bds_version: Some("7.0.0-b2".to_owned()),
+            current_slot: None,
+            ..Default::default()
+        },
         "b\n1\ny\ny\n\n",
     );
     assert_eq!(plan, Some(WizardPlan { slot: "b".to_owned(), mode: 1, vendor_boot: Some(vendor_boot) }));
@@ -57,7 +65,11 @@ fn ask_reasks_invalid_choice_and_yes_no_before_accepting_valid_input() {
     let (toolkit, root) = temp_toolkit();
     let (plan, _) = run_ask(
         &toolkit,
-        canoe_bootmgr::fastboot::Identity { bds_version: Some("7.0.0-b2".to_owned()), current_slot: None },
+        canoe_bootmgr::fastboot::Identity {
+            bds_version: Some("7.0.0-b2".to_owned()),
+            current_slot: None,
+            ..Default::default()
+        },
         "invalid\nb\n0\nmaybe\nn\n",
     );
     assert_eq!(plan, None);
@@ -69,7 +81,11 @@ fn ask_mode_one_decline_returns_abort_plan() {
     let (toolkit, root) = temp_toolkit();
     let (plan, _) = run_ask(
         &toolkit,
-        canoe_bootmgr::fastboot::Identity { bds_version: Some("7.0.0-b2".to_owned()), current_slot: Some("a".to_owned()) },
+        canoe_bootmgr::fastboot::Identity {
+            bds_version: Some("7.0.0-b2".to_owned()),
+            current_slot: Some("a".to_owned()),
+            ..Default::default()
+        },
         "1\nn\n",
     );
     assert_eq!(plan, None);
@@ -81,7 +97,11 @@ fn ask_generation_decline_returns_abort_plan() {
     let (toolkit, root) = temp_toolkit();
     let (plan, _) = run_ask(
         &toolkit,
-        canoe_bootmgr::fastboot::Identity { bds_version: Some("7.0.0-b2".to_owned()), current_slot: Some("a".to_owned()) },
+        canoe_bootmgr::fastboot::Identity {
+            bds_version: Some("7.0.0-b2".to_owned()),
+            current_slot: Some("a".to_owned()),
+            ..Default::default()
+        },
         "0\nn\n",
     );
     assert_eq!(plan, None);
@@ -99,11 +119,15 @@ fn confirm_probe_failure_defaults_to_abort() {
 
 #[test]
 fn confirm_environment_non_super_fastboot_defaults_to_abort() {
-    let (toolkit, root) = temp_toolkit();
+    let (_toolkit, root) = temp_toolkit();
     let mut reader = Cursor::new(b"\n".as_slice());
     let mut output = Vec::new();
     let result = confirm_identity(
-        canoe_bootmgr::fastboot::Identity { bds_version: None, current_slot: None },
+        canoe_bootmgr::fastboot::Identity {
+            bds_version: None,
+            current_slot: None,
+            ..Default::default()
+        },
         &mut reader,
         &mut output,
     )

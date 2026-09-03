@@ -49,6 +49,10 @@ const KNOWN_FILES: [&str; 17] = [
 pub enum Ext4Error {
     #[error("canoe-ext4: {0}")]
     Operation(String),
+    #[error("canoe-ext4 helper reported missing or empty: {message}")]
+    Missing { message: String },
+    #[error("canoe-ext4 helper failed: {message}")]
+    Helper { message: String },
     #[error("canoe-ext4 helper {operation} {path}: {source}")]
     Io {
         operation: &'static str,
@@ -57,6 +61,19 @@ pub enum Ext4Error {
     },
     #[error("canoe-ext4 output is invalid: {0}")]
     Output(String),
+}
+
+impl Ext4Error {
+    pub fn protocol_code(&self) -> &str {
+        match self {
+            Self::Missing { .. } => "ext4-missing",
+            Self::Helper { .. } => "helper-failed",
+            Self::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
+                "permission-denied"
+            }
+            Self::Operation(_) | Self::Io { .. } | Self::Output(_) => "operation",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -211,11 +228,13 @@ fn resolve_prefix(source: &Path, helper: &Path) -> Result<String, Ext4Error> {
         return Ok(String::new());
     }
     let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(Ext4Error::Operation(if detail.is_empty() {
-        format!("cannot probe {BOOT_ROOT_DIR} on {source_arg}")
-    } else {
-        detail
-    }))
+    Err(Ext4Error::Helper {
+        message: if detail.is_empty() {
+            format!("cannot probe {BOOT_ROOT_DIR} on {source_arg}")
+        } else {
+            detail
+        },
+    })
 }
 
 fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Ext4Error {

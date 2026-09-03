@@ -63,6 +63,7 @@ fn confirm_probe_failure<R: BufRead, W: Write>(
     Ok(Some(canoe_bootmgr::fastboot::Identity {
         bds_version: None,
         current_slot: None,
+        ..Default::default()
     }))
 }
 

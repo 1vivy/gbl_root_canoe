@@ -82,6 +82,46 @@ pub struct OtaApplyArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct AblVerifyArgs {
+    #[arg(long)]
+    pub image: PathBuf,
+    #[arg(long)]
+    pub expected_sha256: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct BlockWriteArgs {
+    #[arg(long)]
+    pub partition: String,
+    #[arg(long)]
+    pub image: PathBuf,
+    #[arg(long)]
+    pub snapshot: PathBuf,
+    #[arg(long, value_name = "A|B")]
+    pub slot: Option<String>,
+}
+#[derive(Debug, Args)]
+pub struct ModePlanArgs {
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub target_mode: u8,
+    #[arg(long)]
+    pub current_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub target_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub tools: Option<PathBuf>,
+}
+#[derive(Debug, Args)]
+pub struct VbmetaHeaderArgs {
+    #[arg(long)]
+    pub vbmeta: PathBuf,
+    #[arg(long)]
+    pub tools: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
 pub struct GraftArgs {
     #[arg(value_name = "OFFICIAL_VBMETA")]
     pub vbmeta: PathBuf,

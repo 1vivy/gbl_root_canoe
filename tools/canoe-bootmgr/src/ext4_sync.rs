@@ -41,9 +41,14 @@ impl Ext4Dir {
             return Ok(());
         }
         if !output.status.success() {
-            return Err(Ext4Error::Operation(
-                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            ));
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(Ext4Error::Helper {
+                message: if message.is_empty() {
+                    format!("helper exited {}", output.status)
+                } else {
+                    message
+                },
+            });
         }
         let entries: Vec<Listed> = serde_json::from_slice(&output.stdout)
             .map_err(|error| Ext4Error::Output(error.to_string()))?;

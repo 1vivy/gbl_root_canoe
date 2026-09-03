@@ -79,6 +79,18 @@ pub enum BuildError {
     Invalid { step: &'static str, message: String },
 }
 
+impl BuildError {
+    pub fn protocol_code(&self) -> &str {
+        match self {
+            Self::Tool(error) => error.protocol_code(),
+            Self::Io { source, .. } if source.kind() == io::ErrorKind::PermissionDenied => {
+                "permission-denied"
+            }
+            Self::Io { .. } | Self::StepFailed { .. } | Self::Invalid { .. } => "operation",
+        }
+    }
+}
+
 pub fn execute(args: &BuildArgs) -> Result<BuildOutcome, BuildError> {
     if args.probe {
         validate_probe_args(args)?;

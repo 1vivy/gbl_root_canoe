@@ -28,10 +28,37 @@ pub enum BackendError {
     InvalidBlsName(String),
     #[error("ext4 backend: {0}")]
     Ext4(String),
+    #[error("ext4 backend: {0}")]
+    Ext4Typed(#[source] crate::ext4::Ext4Error),
     #[error("backend transaction: {0}")]
     Transaction(String),
     #[error("clock is before the Unix epoch")]
     Clock,
+}
+
+impl BackendError {
+    pub fn protocol_code(&self) -> &str {
+        match self {
+            Self::Io { operation, source, .. }
+                if source.kind() == std::io::ErrorKind::NotFound && *operation == "stat" =>
+            {
+                "boot-root-missing"
+            }
+            Self::Io { source, .. }
+                if source.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                "permission-denied"
+            }
+            Self::Ext4Typed(error) => error.protocol_code(),
+            Self::Io { .. }
+            | Self::Config(_)
+            | Self::Bls(_)
+            | Self::InvalidBlsName(_)
+            | Self::Ext4(_)
+            | Self::Transaction(_)
+            | Self::Clock => "operation",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

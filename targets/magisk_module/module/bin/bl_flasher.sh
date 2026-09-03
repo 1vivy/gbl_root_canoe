@@ -442,8 +442,10 @@ install_efisp_pair() {
     write_log "$TEXT_SIGNER_CHANGED"
     if [ "$install_mode" = "2" ]; then
       entry_id=$(config_active_id "$active_slot")
-      if ! "$CANOE_BOOTMGR" --boot-root "$target" entry mode \
-           --id "$entry_id" --mode 1 >> "$LOG_FILE" 2>&1; then
+      # The installer records this signer-change override; acknowledge P-GRAFT
+      # because it owns the Mode 2 to Mode 1 demotion.
+      if ! "$CANOE_BOOTMGR" --json --boot-root "$target" entry mode \
+           --id "$entry_id" --mode 1 --acknowledge P-GRAFT >> "$LOG_FILE" 2>&1; then
         rm -rf "$stage"
         return 1
       fi
@@ -920,12 +922,26 @@ run_config_mode_worker() {
     exit 1
   }
   entry_id=$(config_active_id "$current_slot")
+  current_mode=$(config_mode_for_slot "$EFISP_DIR/canoe.cfg" "$current_slot" &&
+    printf '%s' "$PREFERRED_MODE") || {
+    write_state error "entry mode source unavailable"
+    exit 1
+  }
   [ -x "$CANOE_BOOTMGR" ] || {
     write_state error "$TEXT_BIN_NOT_FOUND: $CANOE_BOOTMGR"
     exit 1
   }
+  set --
+  if [ "$current_mode" != "$mode_value" ]; then
+    if [ "$mode_value" = "1" ]; then
+      set -- "$@" --acknowledge P-GRAFT
+    fi
+    if [ "$current_mode" = "0" ] || [ "$mode_value" = "0" ]; then
+      set -- "$@" --acknowledge P-FORMAT
+    fi
+  fi
   if ! "$CANOE_BOOTMGR" --json --boot-root "$EFISP_DIR" entry mode \
-       --id "$entry_id" --mode "$mode_value" >> "$LOG_FILE" 2>&1; then
+       --id "$entry_id" --mode "$mode_value" "$@" >> "$LOG_FILE" 2>&1; then
     write_state error "canoe.cfg mode write failed"
     exit 1
   fi

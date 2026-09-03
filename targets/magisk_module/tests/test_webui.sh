@@ -123,6 +123,18 @@ try {
   assert(document.querySelector("#keyWindowInput").value === "1200", "key window was not rendered");
   assert(document.querySelector("#menuTimeoutInput").value === "5" && document.querySelector("#menuTimeoutInput").disabled, "silent timeout control was not disabled");
   assert(document.querySelector("meta[http-equiv=Content-Security-Policy]"), "CSP meta is missing");
+  document.querySelector("#entryModeSelect").value = "1";
+  document.querySelector("#saveEntryModeButton").click();
+  await waitFor(() => requests().some(request => request.verb === "entry.mode"), "mode request did not reach the core");
+  const graftModeRequest = requests().find(request => request.verb === "entry.mode");
+  assert(graftModeRequest.acknowledge.length === 1 && graftModeRequest.acknowledge[0] === "P-GRAFT", "Mode 2 to Mode 1 did not acknowledge only P-GRAFT");
+  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "graft mode save did not settle");
+  document.querySelector("#entryModeSelect").value = "0";
+  document.querySelector("#saveEntryModeButton").click();
+  await waitFor(() => requests().filter(request => request.verb === "entry.mode").length === 2, "format mode request did not reach the core");
+  const formatModeRequest = requests().find(request => request.verb === "entry.mode" && request.mode === 0);
+  assert(formatModeRequest.acknowledge.length === 1 && formatModeRequest.acknowledge[0] === "P-FORMAT", "Mode 2 to Mode 0 did not acknowledge only P-FORMAT");
+  await waitFor(() => document.querySelector("#taskMessage").textContent === "Ready", "format mode save did not settle");
 
   document.querySelector("#installTarget").value = "inactive";
   document.querySelector("#installTarget").dispatchEvent(new Event("change"));

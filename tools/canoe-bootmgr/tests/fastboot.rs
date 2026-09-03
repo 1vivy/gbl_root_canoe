@@ -85,6 +85,36 @@ fn protocol_json_with_tools(root: &Path, request: &str, tools: &Path) -> std::pr
         .expect("write JSONL request");
     child.wait_with_output().expect("wait for JSONL CLI")
 }
+fn protocol_json_with_args(
+    root: &Path,
+    args: &[String],
+    ext4_helper: Option<&Path>,
+    request: &str,
+) -> serde_json::Value {
+    use std::io::Write;
+
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"));
+    command
+        .arg("--json")
+        .args(args)
+        .current_dir(root)
+        .env_clear()
+        .env("PATH", root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped());
+    if let Some(helper) = ext4_helper {
+        command.env("CANOE_EXT4", helper);
+    }
+    let mut child = command.spawn().expect("start JSONL CLI");
+    child
+        .stdin
+        .take()
+        .expect("CLI stdin")
+        .write_all(request.as_bytes())
+        .expect("write JSONL request");
+    let output = child.wait_with_output().expect("wait for JSONL CLI");
+    serde_json::from_slice(&output.stdout).expect("JSON response")
+}
 
 fn install_probe_tools(root: &Path) -> PathBuf {
     let tools = root.join("probe-tools");
@@ -226,11 +256,12 @@ fn fastboot_identify_protocol_reports_fake_values() {
     let root = TempDir::new().expect("fixture");
     let (guard, fastboot) = script(
         root.path(),
-        r#"if [ "$2" = "current-slot" ]; then
-    echo "current-slot: b" >&2
-  else
-    echo "canoe-bds: 7.0.0" >&2
-  fi"#,
+        r#"case "$2" in
+    current-slot) echo "current-slot: b" >&2 ;;
+    canoe-bds) echo "canoe-bds: 7.0.0" >&2 ;;
+    canoe-devinfo) echo "canoe-devinfo: unlocked=0 critical=0 waiver=unknown retry_a=3 retry_b=unknown" >&2 ;;
+    canoe-last-launch) echo "canoe-last-launch: requested=2 effective=0 reason=lockstate-refused" >&2 ;;
+  esac"#,
     );
     install_path_fastboot(root.path(), &fastboot);
     let output = protocol_json(root.path(), "{\"verb\":\"fastboot.identify\"}\n");
@@ -241,6 +272,14 @@ fn fastboot_identify_protocol_reports_fake_values() {
         serde_json::from_slice(&output.stdout).expect("JSON response");
     assert_eq!(document["operation"], "fastboot.identify");
     assert_eq!(document["bds_version"], "7.0.0");
+    assert_eq!(
+        document["devinfo"],
+        "unlocked=0 critical=0 waiver=unknown retry_a=3 retry_b=unknown"
+    );
+    assert_eq!(
+        document["last_launch"],
+        "requested=2 effective=0 reason=lockstate-refused"
+    );
     assert_eq!(document["current_slot"], "b");
 }
 
@@ -274,8 +313,7 @@ fn fastboot_export_protocol_times_out_with_an_error_envelope() {
     assert!(!output.status.success());
     let document: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("JSON response");
-    assert_eq!(document["ok"], false);
-    assert_eq!(document["error"]["code"], "operation");
+    assert_eq!(document["error"]["code"], "timeout");
     assert!(
         document["error"]["message"]
             .as_str()
@@ -367,12 +405,13 @@ fn getvar_matches_exact_prefix_and_filters_failed_or_empty_values() {
     let root = TempDir::new().expect("fixture");
     let (_guard, fastboot) = script(
         root.path(),
-        r#"if [ "$2" = "current-slot" ]; then
-    echo "not-current-slot: wrong" >&2
-    echo "current-slot: a" >&2
-  else
-    echo "canoe-bds: FAILED (unknown variable)" >&2
-  fi
+        r#"case "$2" in
+    current-slot)
+      echo "not-current-slot: wrong" >&2
+      echo "current-slot: a" >&2
+      ;;
+    canoe-bds) echo "canoe-bds: FAILED (unknown variable)" >&2 ;;
+  esac
   exit 0"#,
     );
     let identity = fastboot::identify(&fastboot, Duration::from_secs(1));
@@ -385,11 +424,10 @@ fn getvar_filters_empty_value() {
     let root = TempDir::new().expect("fixture");
     let (_guard, fastboot) = script(
         root.path(),
-        r#"if [ "$2" = "current-slot" ]; then
-    echo "current-slot: a" >&2
-  else
-    echo "canoe-bds: " >&2
-  fi
+        r#"case "$2" in
+    current-slot) echo "current-slot: a" >&2 ;;
+    canoe-bds) echo "canoe-bds: " >&2 ;;
+  esac
   exit 0"#,
     );
     let identity = fastboot::identify(&fastboot, Duration::from_secs(1));
@@ -404,15 +442,16 @@ fn getvar_retries_one_missed_command() {
     let (_guard, fastboot) = script(
         root.path(),
         &format!(
-            r#"if [ "$2" = "current-slot" ]; then
-    count=0
-    if [ -f "{state}" ]; then read count < "{state}"; fi
-    count=$((count + 1)); echo "$count" > "{state}"
-    if [ "$count" -eq 1 ]; then exit 1; fi
-    echo "current-slot: b" >&2
-  else
-    echo "canoe-bds: 7.0.0" >&2
-  fi
+            r#"case "$2" in
+    current-slot)
+      count=0
+      if [ -f "{state}" ]; then read count < "{state}"; fi
+      count=$((count + 1)); echo "$count" > "{state}"
+      if [ "$count" -eq 1 ]; then exit 1; fi
+      echo "current-slot: b" >&2
+      ;;
+    canoe-bds) echo "canoe-bds: 7.0.0" >&2 ;;
+  esac
   exit 0"#,
             state = state.display()
         ),
@@ -701,4 +740,92 @@ fn candidate() -> SourceCandidate {
 #[test]
 fn export_candidate_predicate_accepts_supported_unmounted_readable_block() {
     assert!(is_export_candidate(&candidate()));
+}
+fn taxonomy_json_fastboot_unavailable() -> serde_json::Value {
+    let root = TempDir::new().expect("fixture");
+    protocol_json_with_args(
+        root.path(),
+        &[],
+        None,
+        "{\"verb\":\"fastboot.identify\"}\n",
+    )
+}
+
+fn taxonomy_json_boot_root_missing() -> serde_json::Value {
+    let root = TempDir::new().expect("fixture");
+    let missing = root.path().join("missing-boot-root");
+    let args = vec!["--boot-root".to_owned(), missing.display().to_string()];
+    protocol_json_with_args(root.path(), &args, None, "{\"verb\":\"config.show\"}\n")
+}
+
+fn taxonomy_json_ext4_helper(exit_status: i32) -> serde_json::Value {
+    let root = TempDir::new().expect("fixture");
+    let source = root.path().join("persist.img");
+    fs::write(&source, b"source").expect("source image");
+    let body = format!("exit {exit_status}");
+    let (guard, helper) = script(root.path(), &body);
+    let ext4_helper = root.path().join("canoe-ext4");
+    fs::hard_link(&helper, &ext4_helper).expect("ext4 helper");
+    let args = vec!["--source".to_owned(), source.display().to_string()];
+    let result = protocol_json_with_args(
+        root.path(),
+        &args,
+        Some(&ext4_helper),
+        "{\"verb\":\"entry.set\",\"id\":\"test\",\"title\":\"Test\",\"image\":\"test.efi\",\"role\":\"other\"}\n",
+    );
+    drop(guard);
+    result
+}
+
+fn taxonomy_json_permission_denied() -> serde_json::Value {
+    let root = TempDir::new().expect("fixture");
+    let node = root.path().join("raw-node");
+    fs::write(&node, b"node").expect("raw node");
+    fs::set_permissions(&node, fs::Permissions::from_mode(0o000)).expect("node permissions");
+    let request = format!(
+        "{{\"verb\":\"fastboot.end-export\",\"node\":\"{}\"}}\n",
+        node.display()
+    );
+    protocol_json_with_args(root.path(), &[], None, &request)
+}
+
+fn taxonomy_json_timeout() -> serde_json::Value {
+    let root = TempDir::new().expect("fixture");
+    let (guard, fastboot) = script(root.path(), "while :; do :; done");
+    install_path_fastboot(root.path(), &fastboot);
+    let result = protocol_json_with_args(
+        root.path(),
+        &[],
+        None,
+        "{\"verb\":\"fastboot.export\",\"timeout_seconds\":1}\n",
+    );
+    drop(guard);
+    result
+}
+
+#[test]
+fn protocol_error_taxonomy_distinguishes_source_known_failures() {
+    let cases: &[(&str, fn() -> serde_json::Value)] = &[
+        ("fastboot-unavailable", taxonomy_json_fastboot_unavailable),
+        ("boot-root-missing", taxonomy_json_boot_root_missing),
+        ("ext4-missing", || taxonomy_json_ext4_helper(7)),
+        ("helper-failed", || taxonomy_json_ext4_helper(5)),
+        ("permission-denied", taxonomy_json_permission_denied),
+        ("timeout", taxonomy_json_timeout),
+    ];
+    let mut seen = std::collections::HashSet::new();
+    for (expected, run) in cases {
+        let document = run();
+        assert_eq!(document["ok"], false, "{expected} should fail");
+        let actual = document["error"]["code"]
+            .as_str()
+            .expect("stable error code")
+            .to_owned();
+        assert_eq!(actual, *expected, "response: {document}");
+        assert!(
+            seen.insert(actual.clone()),
+            "duplicate taxonomy code {actual}"
+        );
+    }
+    assert_eq!(seen.len(), cases.len());
 }

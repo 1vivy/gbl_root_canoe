@@ -93,7 +93,11 @@ impl ConfigDocument {
         self.entries.remove(position);
         self.bump_generation()
     }
-    pub fn sync_managed_rows(&mut self, rows: &[ConfigEntry]) -> Result<u32, ConfigError> {
+    pub fn sync_managed_rows(
+        &mut self,
+        rows: &[ConfigEntry],
+        preferred_default: Option<&str>,
+    ) -> Result<u32, ConfigError> {
         if rows.is_empty() || rows.len() > MAX_ENTRIES {
             return Err(ConfigError::Invalid(
                 "managed rows must contain at least one entry".to_owned(),
@@ -139,10 +143,26 @@ impl ConfigDocument {
         {
             self.default = None;
         }
+        if self.default.is_none()
+            && let Some(preferred_default) = preferred_default
+                .filter(|id| rows.iter().any(|row| row.id == *id))
+        {
+            self.default = Some(preferred_default.to_owned());
+        }
+
         self.bump_generation()
     }
 
     pub fn set_mode(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
+        self.set_mode_inner(id, mode)
+    }
+
+    /// Apply a mode after the caller has evaluated `mode.plan`.
+    pub fn set_mode_planned(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
+        self.set_mode_inner(id, mode)
+    }
+
+    fn set_mode_inner(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
         validate_mode(mode)?;
         if self.generation == MAX_GENERATION {
             return Err(ConfigError::Invalid(

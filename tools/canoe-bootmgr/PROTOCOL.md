@@ -34,12 +34,30 @@ A failed JSON response is one object, followed by `\n`:
 | `request` | The request is too large, malformed JSON, or malformed base64url. |
 | `input` | The JSONL input stream could not be read (including invalid UTF-8). |
 | `operation` | The selected operation refused or failed. |
+| `boot-root-missing` | The selected local boot root does not exist; no operation was attempted. |
+| `ext4-missing` | The `canoe-ext4` helper exited with status 7, whose contract means the requested file or directory is missing or empty. This one code intentionally covers both cases. |
+| `helper-unavailable` | A required build helper could not be resolved or is not executable. |
+| `helper-failed` | A required helper could not start or exited with a status other than 7; these failures are intentionally one code because the source does not distinguish them safely. |
+| `timeout` | A fastboot command or helper exceeded its deadline; the process is stopped, but descendants holding output pipes may be detached. |
+| `fastboot-unavailable` | No bundled or PATH `fastboot` executable exists, so device identification cannot run. |
+| `permission-denied` | The selected local path or raw block node could not be opened because permission was denied. |
 | `vbmeta-duplicate-property` | `vbmeta.inspect` refused an image with a duplicate named build property; clients must not use a partial result. |
 | `vbmeta-worker-unavailable` | The `mode2_profile` worker could not be resolved or is not executable. |
 | `vbmeta-worker-spawn` | The `mode2_profile` worker could not be started. |
 | `vbmeta-worker-timeout` | The `mode2_profile` worker did not finish within 30 seconds. |
 | `vbmeta-worker-malformed` | The `mode2_profile` worker output was not a recognized JSON envelope. |
 | `vbmeta-read`, `vbmeta-too-small`, `vbmeta-bad-magic`, `vbmeta-bad-footer`, `vbmeta-range-invalid`, `vbmeta-release-string-invalid`, `vbmeta-unsigned`, `vbmeta-header-malformed`, `vbmeta-public-key-missing`, `vbmeta-public-key-invalid`, `vbmeta-descriptors-invalid`, `vbmeta-descriptor-malformed`, `vbmeta-property-malformed`, `vbmeta-chain-malformed`, `vbmeta-property-utf8`, `vbmeta-partition-name-utf8`, `vbmeta-duplicate-property`, `vbmeta-os-version-missing`, `vbmeta-security-patch-missing`, `vbmeta-os-version-malformed`, `vbmeta-security-patch-malformed` | `mode2_profile` rejected the image; the code identifies the specific AVB inspection failure. |
+| `partition-name-invalid` | `block.write` rejected a partition name outside ASCII `[A-Za-z0-9_]`, 1..=36 bytes. |
+| `partition-missing` | `block.write` could not find the resolved `/dev/block/by-name` node. |
+| `image-too-large` | `block.write` received an empty image or an image larger than the target; no target bytes were written. |
+| `block-not-writable` | `block.write` could not make the resolved target writable. |
+| `snapshot-failed` | `block.write` could not save and flush the target snapshot; no target bytes were written. |
+| `readback-mismatch` | `block.write` readback differed from the source and restored the snapshot successfully. |
+| `rollback-failed` | `block.write` readback differed and restoring the snapshot failed; the response names the snapshot artifact. |
+| `digest-mismatch` | `abl.verify` image SHA-256 differed from the supplied expected digest; no probe was run. |
+| `unsupported-platform` | `block.write` is unavailable on this platform. |
+| `mode-plan-invalid` | `mode.plan` received a mode outside `0..=2`; no boot-root lookup or write was attempted. |
+| `mode-precondition-unsatisfied` | `entry.mode` was asked to apply a transition whose planned preconditions are missing, unknown, or require a post-action. |
 | `response-too-large` | A successful response exceeded 1 MB. |
 | `output` | The response could not be encoded or written. |
 
@@ -88,12 +106,15 @@ Every success response below also has `ok:true` and `operation` with the stated 
 | --- | --- | --- |
 | `protocol.version` | `verb` only | `operation:"protocol.version"`, `app_version:string`, `protocol_version:u32`. |
 | `build` | `abl:path` required; `vbmeta:path?`, `staged:path?`, `tools:path?`, `efisp_tools:path?`, `keep_unpatched:path?`, `patch_log:path?`, `probe:bool?`. | Full build: `operation:"build"`, `kind:"build"`, `receipt:{staged:path,loader_bytes:u64,gm2p_bytes:u64,tzmap_bytes:u64,tools_staged:usize,gbl_patched:bool,loader_sha256:string,gm2p_sha256:string,tzmap_sha256:string,unpatched_sha256:string}`. Probe build: `operation:"build.probe"`, `kind:"build.probe"`, `receipt:{gbl_patched:bool,unpatched_sha256:string}`. |
+| `abl.verify` | `image:path` required; `expected_sha256:string?`. If supplied, verification returns `digest-mismatch` before probing on a mismatch. | `operation:"abl.verify"`, `sha256:string`, `gbl_patched:bool`. The vulnerability result comes from the existing `build --probe` path. |
+| `block.write` | `partition:string`, `image:path`, `snapshot:path` required; `slot:"a"|"b"?`. The partition must match ASCII `[A-Za-z0-9_]` and be 1..=36 bytes. The server resolves `/dev/block/by-name/<partition><suffix>`, snapshots the full target, writes without truncation, verifies readback, and restores on mismatch. | `operation:"block.write"`, `partition:string`, `node:string`, `bytes_written:u64`, `sha256:string`, `snapshot:string`, `verified:bool`. |
 | `config.show` | `verb` only | `operation:"config.show"`, `config:config`. |
 | `config.set-policy` | `menu_mode:"silent"|"menu"?`, `key_window_ms:u32?`, `menu_timeout_s:u32?`. | `operation:"config.policy"`, `kind:"config.policy"`, `config:config`, `generation:u32`, `mark:string`. |
 | `entry.list` | `verb` only | `operation:"entry.list"`, `generation:u32`, `entries:entry[]`. |
 | `entry.set` | `id:string`, `title:string`, `image:string`, `role:"active"|"inactive"|"backup"|"other"` required; `options:string?`, `mode:u8?`, `global_mode:u8?`, `devinfo_repair:"asneeded"|"never"?`, `default:bool?`. | `operation:"entry.set"`, `generation:u32`, `entry:entry`, `mark:string`. |
 | `entry.remove` | `id:string` required. | `operation:"entry.remove"`, `generation:u32`, `mark:string`. |
-| `entry.mode` | `id:string`, `mode:u8` required. | `operation:"entry.mode"`, `generation:u32`, `mark:string`. |
+| `entry.mode` | `id:string`, `mode:u8` required; `acknowledge:string[]?` acknowledges operator-action preconditions (`P-GRAFT`, `P-FORMAT`); `current_vbmeta:path?`, `target_vbmeta:path?` optionally provide evidence; the CLI-only `tools:path?` selects the worker. | `operation:"entry.mode"`, `generation:u32`, `acknowledged:string[]`, `warnings:string[]`, `mark:string`. `P-PROFILE` is reported as a warning and never blocks; operator-action preconditions must be acknowledged. |
+| `mode.plan` | `id:string`, `target_mode:u8` required; `current_vbmeta:path?`, `target_vbmeta:path?` optionally provide the two AVB images used for R2/R3/R4 analysis. | `operation:"mode.plan"`, `id:string`, `plan:{from_mode:u8,target_mode:u8,preconditions:{code:"P-GRAFT"|"P-PROFILE"|"P-FORMAT",rule:string,blocking:bool,satisfied:bool?,reason:string}[],post_actions:{action:string,reason:string}[],outcome:{status:"ready"|"cannot-predict",reason:string?},refusal:{code:string,reason:string}?,vbmeta:{current:{algorithm_type:u32,rollback_index:u64}?,target:{algorithm_type:u32,rollback_index:u64}?,relationship:"same-or-higher"|"lower"?}}`. R1 always requires `P-FORMAT` for any transition to or from mode 0. R2 omits `P-FORMAT` for a same-or-higher 1↔2 pair. R3 describes lower rollback as bounded-maybe, and R4 names a provenance change. Missing evidence is `cannot-predict`, not a fabricated format requirement. |
 | `default.get` | `verb` only | `operation:"default.get"`, `default:string?`. |
 | `default.set` | `id:string` required. | `operation:"default.set"`, `generation:u32`, `default:string`. |
 | `source.detect` | `verb` only | `operation:"source.detect"`, `kind:"source.detect"`, `sources:source_candidate[]`, where `source_candidate` is `{kind:"block"|"image"|"dir",path:path,identity:string?,model:string,size_bytes:u64,boot_root:path,boot_root_present:bool,readable:bool,writable:bool,needs_privilege:bool,mounted_at:path?,why:string,export_candidate:"candidate"|"mounted"|"not_candidate"?}`. `export_candidate` is `"candidate"` for an unmounted recognized Canoe export, `"mounted"` for a recognized export that is mounted, and `"not_candidate"` otherwise. A mounted recognized export remains a candidate but is unavailable; `mounted_at` retains its mount path. |
@@ -105,8 +126,9 @@ Every success response below also has `ok:true` and `operation` with the stated 
 | `ota-apply` | `staged:path` required; `target_slot:string?`, `bootctl_output:string?`, `gpt_active_slot:string?`, `mode:u8?`, `allow_new_signer:bool?`. | `operation:"ota-apply"`, `receipt:install_receipt`. |
 | `vbmeta.graft` | `vbmeta:path`, `recovery:path`, `output:path` required. Legacy request aliases `graft` and `vbmetaport` are accepted. | `operation:"vbmeta.graft"`, `receipt:{output:string,bytes:usize}`. |
 | `vbmeta.inspect` | `vbmeta:path` required; `tools:path?` optionally selects the `mode2_profile` worker directory. When omitted, the worker is resolved from `CANOE_TOOLS_DIR`, then the executable's directory, then `PATH`. | `operation:"vbmeta.inspect"`, `rollback_index:u64`, `chain_partitions:{rollback_index_location:u32,partition_name:string,public_key:u8[]}[]`, `build_properties:{system_os_version:string?,system_security_patch:string?,vendor_security_patch:string?,boot_security_patch:string?}`. Chain partitions whose name starts with `vbmeta` are excluded; `recovery` is ordinary. Duplicate occurrences of any named build property return `vbmeta-duplicate-property`, never a partial result. |
+| `vbmeta.header` | `vbmeta:path` required; `tools:path?` optionally selects the `mode2_profile` worker directory. | `operation:"vbmeta.header"`, `algorithm_type:u32`, `rollback_index:u64`, `flags:u32`, `release_string:string`. These are raw AVB header fields; clients classify `algorithm_type` themselves (`0` means tree-built; nonzero means signed or grafted). This new verb is additive and keeps protocol version 1. |
 | `vendorboot.patch` | `input:path`, `output:path` required. Legacy request alias `vendor_boot.patch` is accepted. | `operation:"vendorboot.patch"`, `receipt:{output:string,bytes:usize,changed:bool}`. |
-| `fastboot.identify` | `timeout_seconds:u64?` (default `30`). | `operation:"fastboot.identify"`, `bds_version:string?`, `current_slot:"a"|"b"?`. A missing or invalid device value is `null`; the server never guesses a slot. |
+| `fastboot.identify` | `timeout_seconds:u64?` (default `30`). | `operation:"fastboot.identify"`, `bds_version:string?`, `current_slot:"a"|"b"?`, `devinfo:string?`, `last_launch:string?`. The optional `devinfo` and `last_launch` values are raw BDS strings and are carried verbatim when available. A missing or invalid device value is `null`; the server never guesses a slot. If no fastboot executable exists, the operation fails with `fastboot-unavailable` instead of returning a successful response of null fields. |
 | `fastboot.export` | `target:string?` (default `"persist"`), `timeout_seconds:u64?` (default `30`). | `operation:"fastboot.export"`, `node:string`. The server adopts an existing unmounted Canoe export or starts one for `target`, then returns its raw block node. |
 | `fastboot.end-export` | `node:path` required. | `operation:"fastboot.end-export"`, `node:string`. |
 | `fastboot.fetch` | `partition:string`, `output:path` required. | `operation:"fastboot.fetch"`, `partition:string`, `output:string`. |

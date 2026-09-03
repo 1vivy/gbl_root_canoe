@@ -32,6 +32,20 @@ pub enum JsonRequest {
         #[serde(default)]
         probe: bool,
     },
+    #[serde(rename = "abl.verify")]
+    AblVerify {
+        image: PathBuf,
+        #[serde(default)]
+        expected_sha256: Option<String>,
+    },
+    #[serde(rename = "block.write")]
+    BlockWrite {
+        partition: String,
+        image: PathBuf,
+        snapshot: PathBuf,
+        #[serde(default)]
+        slot: Option<String>,
+    },
     #[serde(rename = "config.show")]
     ConfigShow,
     #[serde(rename = "config.set-policy")]
@@ -65,7 +79,25 @@ pub enum JsonRequest {
     #[serde(rename = "entry.remove")]
     EntryRemove { id: String },
     #[serde(rename = "entry.mode")]
-    EntryMode { id: String, mode: u8 },
+    EntryMode {
+        id: String,
+        mode: u8,
+        #[serde(default)]
+        acknowledge: Vec<String>,
+        #[serde(default)]
+        current_vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        target_vbmeta: Option<PathBuf>,
+    },
+    #[serde(rename = "mode.plan")]
+    ModePlan {
+        id: String,
+        target_mode: u8,
+        #[serde(default)]
+        current_vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        target_vbmeta: Option<PathBuf>,
+    },
     #[serde(rename = "default.get")]
     DefaultGet,
     #[serde(rename = "default.set")]
@@ -132,6 +164,12 @@ pub enum JsonRequest {
     },
     #[serde(rename = "vbmeta.inspect")]
     VbmetaInspect {
+        vbmeta: PathBuf,
+        #[serde(default)]
+        tools: Option<PathBuf>,
+    },
+    #[serde(rename = "vbmeta.header")]
+    VbmetaHeader {
         vbmeta: PathBuf,
         #[serde(default)]
         tools: Option<PathBuf>,
@@ -244,14 +282,15 @@ mod tests {
         let requests = [
             serde_json::json!({"verb":"protocol.version"}),
             serde_json::json!({"verb":"build","abl":"a","probe":true}),
+            serde_json::json!({"verb":"abl.verify","image":"a"}),
+            serde_json::json!({"verb":"block.write","partition":"boot","image":"a","snapshot":"b"}),
             serde_json::json!({"verb":"config.show"}),
             serde_json::json!({"verb":"config.set-policy"}),
             serde_json::json!({"verb":"entry.list"}),
             serde_json::json!({"verb":"entry.set","id":"a","title":"A","image":"a.efi","role":"other"}),
             serde_json::json!({"verb":"entry.remove","id":"a"}),
             serde_json::json!({"verb":"entry.mode","id":"a","mode":1}),
-            serde_json::json!({"verb":"default.get"}),
-            serde_json::json!({"verb":"default.set","id":"a"}),
+            serde_json::json!({"verb":"mode.plan","id":"a","target_mode":1}),
             serde_json::json!({"verb":"source.detect"}),
             serde_json::json!({"verb":"bls.list"}),
             serde_json::json!({"verb":"bls.show","name":"a.conf"}),
@@ -261,6 +300,7 @@ mod tests {
             serde_json::json!({"verb":"ota-apply","staged":"a"}),
             serde_json::json!({"verb":"vbmeta.graft","vbmeta":"a","recovery":"b","output":"c"}),
             serde_json::json!({"verb":"vbmeta.inspect","vbmeta":"a"}),
+            serde_json::json!({"verb":"vbmeta.header","vbmeta":"a"}),
             serde_json::json!({"verb":"vendorboot.patch","input":"a","output":"b"}),
             serde_json::json!({"verb":"fastboot.identify"}),
             serde_json::json!({"verb":"fastboot.export"}),

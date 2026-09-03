@@ -93,7 +93,10 @@ cat > "$BIN/blockdev" <<'EOF'
 case "$1" in
   --getsize64) echo 2097152 ;;
   --getss) echo 512 ;;
-  --setrw) exit 0 ;;
+  --setrw)
+    [ "${PAIR_SET_RW_FAIL:-0}" = 1 ] && exit 1
+    exit 0
+    ;;
   --getro) echo 0 ;;
   *) exit 1 ;;
 esac
@@ -321,7 +324,106 @@ assert_not_contains "$(cat "$LOG")" "dd $BY_NAME/abl_a -> $BY_NAME/abl_b" \
   'vulnerable target ABL was unnecessarily overwritten'
 pass 'vulnerable target ABL is not overwritten'
 
+# Exercise customize.sh's inactive-slot pairing directly, using the same fake
+# binaries and partition files as the module flow fixtures above.
+PAIR_FUNCTIONS="$TMP/pair-functions.sh"
+awk '
+  /^abl_source_bytes\(\) \{$/ { capture=1 }
+  capture { print }
+  /^pair_inactive_abl\(\) \{$/ { pair=1 }
+  pair && /^}$/ { exit }
+' "$ROOT/targets/magisk_module/module/customize.sh" > "$PAIR_FUNCTIONS"
+PAIR_BOOTMGR="$TMP/pair-canoe-bootmgr"
+cat > "$PAIR_BOOTMGR" <<'EOF'
+#!/bin/sh
+printf '{"gbl_patched":%s}\n' "${PAIR_GBL:-false}"
+EOF
+chmod +x "$PAIR_BOOTMGR"
+T_INACTIVE_SLOT_VULN_SKIP='pair-test vulnerable skip'
+T_INACTIVE_SLOT_PAIRING='pair-test pairing'
+T_INACTIVE_SLOT_PAIR_WARN='pair-test pairing warning'
+T_INACTIVE_SLOT_UNRESOLVED='pair-test unresolved slot'
+run_pair() {
+  pair_name=$1
+  pair_suffix=$2
+  pair_gbl=$3
+  pair_setrw_fail=${4:-0}
+  pair_runtime="$TMP/$pair_name-runtime"
+  pair_ui_log="$TMP/$pair_name-ui.log"
+  mkdir -p "$pair_runtime"
+  cat > "$TMP/$pair_name-wrapper.sh" <<'EOF'
+#!/bin/sh
+set -u
+ui_print() { printf '%s\n' "$*" >> "${PAIR_UI_LOG:?}"; }
+EOF
+  cat "$PAIR_FUNCTIONS" >> "$TMP/$pair_name-wrapper.sh"
+  cat >> "$TMP/$pair_name-wrapper.sh" <<'EOF'
+current_slot_suffix=${CURRENT_SLOT_SUFFIX:?}
+abl_part=${ABL_PART:?}
+pair_inactive_abl
+EOF
+  chmod +x "$TMP/$pair_name-wrapper.sh"
+  if BY_NAME_DIR="$BY_NAME" RUNTIME_DIR="$pair_runtime" MODPATH="$MOD" \
+       CANOE_BOOTMGR="$PAIR_BOOTMGR" PATH="$BIN:$PATH" \
+       CURRENT_SLOT_SUFFIX="$pair_suffix" ABL_PART="$BY_NAME/abl_a" \
+       PAIR_GBL="$pair_gbl" PAIR_SET_RW_FAIL="$pair_setrw_fail" \
+       FLOW_LOG="$pair_runtime/flash.log" PAIR_UI_LOG="$pair_ui_log" \
+       T_INACTIVE_SLOT_VULN_SKIP="$T_INACTIVE_SLOT_VULN_SKIP" \
+       T_INACTIVE_SLOT_PAIRING="$T_INACTIVE_SLOT_PAIRING" \
+       T_INACTIVE_SLOT_PAIR_WARN="$T_INACTIVE_SLOT_PAIR_WARN" \
+       T_INACTIVE_SLOT_UNRESOLVED="$T_INACTIVE_SLOT_UNRESOLVED" \
+       sh "$TMP/$pair_name-wrapper.sh"; then
+    PAIR_STATUS=0
+  else
+    PAIR_STATUS=$?
+  fi
+}
+
+printf 'inactive-vulnerable-before\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$TMP/pair-vulnerable-before"
+run_pair pair-vulnerable _a true
+assert_eq "$PAIR_STATUS" 0 'already-vulnerable inactive pairing failed'
+cmp "$TMP/pair-vulnerable-before" "$BY_NAME/abl_b" ||
+  fail 'already-vulnerable inactive ABL was written'
+assert_contains "$(cat "$TMP/pair-vulnerable-ui.log")" \
+  "$T_INACTIVE_SLOT_VULN_SKIP" 'already-vulnerable inactive skip path was not taken'
+pass 'already-vulnerable inactive ABL is not written'
+
+printf 'current-slot-abl-for-pairing\n' > "$BY_NAME/abl_a"
+printf 'inactive-stock-before-pairing\n' > "$BY_NAME/abl_b"
+run_pair pair-stock _a false
+assert_eq "$PAIR_STATUS" 0 'stock inactive pairing failed'
+cmp "$BY_NAME/abl_a" "$BY_NAME/abl_b" ||
+  fail 'stock inactive ABL was not paired from the current slot'
+assert_file "$TMP/pair-stock-runtime/inactive_abl_pre.img"
+assert_contains "$(cat "$TMP/pair-stock-ui.log")" \
+  "$T_INACTIVE_SLOT_PAIRING" 'stock inactive pairing path was not taken'
+pass 'stock inactive ABL is paired and its pre-image is snapshotted'
+
+printf 'inactive-stock-before-failed-pairing\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$TMP/pair-failure-before"
+run_pair pair-failure _a false 1
+assert_eq "$PAIR_STATUS" 0 'pairing failure was promoted to install failure'
+cmp "$TMP/pair-failure-before" "$BY_NAME/abl_b" ||
+  fail 'failed inactive pairing changed the target ABL'
+assert_contains "$(cat "$TMP/pair-failure-ui.log")" \
+  "$T_INACTIVE_SLOT_PAIR_WARN" 'pairing failure warning path was not taken'
+pass 'inactive ABL pairing failure warns without failing install'
+
+printf 'inactive-unresolved-before\n' > "$BY_NAME/abl_b"
+cp "$BY_NAME/abl_b" "$TMP/pair-unresolved-before"
+run_pair pair-unresolved _unexpected false
+assert_eq "$PAIR_STATUS" 0 'unresolvable inactive slot failed'
+cmp "$TMP/pair-unresolved-before" "$BY_NAME/abl_b" ||
+  fail 'unresolvable inactive slot changed the target ABL'
+assert_contains "$(cat "$TMP/pair-unresolved-ui.log")" \
+  "$T_INACTIVE_SLOT_UNRESOLVED" 'unresolvable inactive slot path was not taken'
+pass 'unresolvable inactive slot is skipped without a write'
+
 printf 'custom-vbmeta\n' > "$BY_NAME/vbmeta_b"
+# Ensure the automatic signer-change demotion starts from Mode 2.
+"$MOD/bin/canoe-bootmgr" --boot-root "$EFISP" entry mode \
+  --id android-b --mode 2 >/dev/null
 : > "$LOG"
 run flash update-efisp >/dev/null
 cfg=$(cat "$EFISP/canoe.cfg")
@@ -332,6 +434,8 @@ assert_contains "$(cat "$LOG")" 'Mode 2' \
   'Mode 2 was not downgraded after a partition signer change'
 assert_contains "$active_block" 'mode 1' \
   'partition signer change left the active row in Mode 2'
+assert_contains "$(cat "$LOG")" '"acknowledged":["P-GRAFT"]' \
+  'automatic Mode 2 downgrade did not acknowledge P-GRAFT'
 pass 'partition signer changes are reported and Mode 2 is downgraded'
 
 "$MOD/bin/canoe-bootmgr" --boot-root "$EFISP" entry mode --id android-b --mode 2 >/dev/null

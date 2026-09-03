@@ -126,6 +126,21 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
         Success::BuildProbe { receipt, .. } => {
             format!("probe gbl_patched={}\n", receipt.gbl_patched)
         }
+        Success::AblVerify {
+            sha256,
+            gbl_patched,
+            ..
+        } => format!("verified ABL sha256={sha256} gbl_patched={gbl_patched}\n"),
+        Success::BlockWrite {
+            partition,
+            bytes_written,
+            sha256,
+            snapshot,
+            verified,
+            ..
+        } => format!(
+            "wrote {partition} ({bytes_written} bytes, sha256={sha256}, snapshot={snapshot}, verified={verified})\n"
+        ),
         Success::Install { receipt, .. } | Success::OtaApply { receipt, .. } => format!(
             "installed={} generation={} backup={}\n",
             receipt
@@ -137,6 +152,17 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             receipt.generation,
             receipt.backup_present
         ),
+        Success::ModePlan { id, plan, .. } => format!(
+            "mode.plan id={id} from={} target={} outcome={} preconditions={}\n",
+            plan.from_mode,
+            plan.target_mode,
+            plan.outcome.status,
+            plan.preconditions
+                .iter()
+                .map(|precondition| precondition.code)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
         Success::VbmetaGraft { receipt, .. } => {
             format!("grafted {} ({} bytes)\n", receipt.output, receipt.bytes)
         }
@@ -147,6 +173,15 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
         } => format!(
             "rollback_index={rollback_index} chain_partitions={}\n",
             chain_partitions.len()
+        ),
+        Success::VbmetaHeader {
+            algorithm_type,
+            rollback_index,
+            flags,
+            release_string,
+            ..
+        } => format!(
+            "algorithm_type={algorithm_type} rollback_index={rollback_index} flags={flags} release_string={release_string}\n"
         ),
         Success::VendorBootPatch { receipt, .. } => format!(
             "patched {} ({} bytes, changed={})\n",

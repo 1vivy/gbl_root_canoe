@@ -5,10 +5,11 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use wait_timeout::ChildExt;
+const READER_JOIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Error)]
 pub enum ToolError {
@@ -22,6 +23,16 @@ pub enum ToolError {
     },
     #[error("build tool `{tool}` timed out after {timeout:?}")]
     Timeout { tool: String, timeout: Duration },
+}
+
+impl ToolError {
+    pub fn protocol_code(&self) -> &str {
+        match self {
+            Self::Unavailable { .. } => "helper-unavailable",
+            Self::Spawn { .. } => "helper-failed",
+            Self::Timeout { .. } => "timeout",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -185,8 +196,8 @@ pub fn run_with_timeout(
         None => {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+            drop_reader_after_timeout(stdout_reader);
+            drop_reader_after_timeout(stderr_reader);
             return Err(ToolError::Timeout {
                 tool: tool_name,
                 timeout,
@@ -218,6 +229,23 @@ pub fn run_with_timeout(
         stdout,
         stderr,
     }))
+}
+
+fn drop_reader_after_timeout<T>(reader: thread::JoinHandle<T>) {
+    let Some(deadline) = Instant::now().checked_add(READER_JOIN_TIMEOUT) else {
+        return;
+    };
+    loop {
+        if reader.is_finished() {
+            let _ = reader.join();
+            return;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        thread::sleep(remaining.min(Duration::from_millis(1)));
+    }
 }
 
 fn output_to_result(output: Output) -> ToolOutput {

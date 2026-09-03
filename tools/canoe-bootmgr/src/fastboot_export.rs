@@ -116,15 +116,14 @@ fn end_export_linux(node: &Path) -> Result<(), FastbootError> {
         .write(true)
         .open(node)
         .map_err(|error| {
-            let detail = if error.kind() == std::io::ErrorKind::PermissionDenied {
-                format!(
+            if error.kind() == std::io::ErrorKind::PermissionDenied {
+                permission_error(format!(
                     "permission denied opening {} for raw SCSI I/O: {error}",
                     node.display()
-                )
+                ))
             } else {
-                format!("open {}: {error}", node.display())
-            };
-            command_error("end-export", detail)
+                command_error("end-export", format!("open {}: {error}", node.display()))
+            }
         })?;
     let mut cdb = start_stop_unit_cdb(true, false);
     let mut sense = [0_u8; 32];
@@ -164,7 +163,11 @@ fn end_export_linux(node: &Path) -> Result<(), FastbootError> {
         } else {
             format!("SG_IO on {}: {error}", node.display())
         };
-        return Err(command_error("end-export", detail));
+        return Err(if error.kind() == std::io::ErrorKind::PermissionDenied {
+            permission_error(detail)
+        } else {
+            command_error("end-export", detail)
+        });
     }
     if header.status != 0 || header.host_status != 0 || header.driver_status != 0 {
         return Err(command_error(
@@ -203,6 +206,11 @@ struct SgIoHdr {
     resid: libc::c_int,
     duration: u32,
     info: u32,
+}
+fn permission_error(detail: String) -> FastbootError {
+    FastbootError::PermissionDenied {
+        message: format!("fastboot end-export needs permission to open the raw block node: fastboot command end-export failed: {detail}"),
+    }
 }
 
 #[cfg(target_os = "linux")]
