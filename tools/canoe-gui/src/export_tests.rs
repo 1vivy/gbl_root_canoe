@@ -1,49 +1,47 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use canoe_bootmgr::fastboot::FastbootError;
+use tempfile::tempdir;
 
-use super::{
-    EXPORT_TIMEOUT, ExportEvent, ExportFailure, ExportPhase, diagnose_rejection, failure_text,
-};
-use crate::detect::{SourceCandidate, SourceKind};
+use super::{ExportEvent, ExportFailure, ExportPhase, diagnose_rejection, failure_text};
+use crate::detect::{ExportCandidate, SourceCandidate, SourceKind};
 use crate::export_drive::{ExportOutcome, run_export_with};
+
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+fn fixture(directory: &Path, body: &str) -> (MutexGuard<'static, ()>, PathBuf) {
+    let guard = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let path = directory.join("bootmgr-fixture");
+    fs::write(&path, body).expect("write fixture");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fixture");
+    (guard, path)
+}
 
 #[test]
 fn state_machine_walks_idle_to_attached() {
     let phase = ExportPhase::Idle;
     let phase = phase.apply(&ExportEvent::Probing);
     assert_eq!(phase, ExportPhase::Starting);
-    let phase = phase.apply(&ExportEvent::Polling);
-    assert_eq!(phase, ExportPhase::Discovering { polls: 1 });
-    let phase = phase.apply(&ExportEvent::Polling);
-    assert_eq!(phase, ExportPhase::Discovering { polls: 2 });
     let phase = phase.apply(&ExportEvent::Succeeded {
         node: PathBuf::from("/dev/sda"),
-        adopted: false,
     });
     assert_eq!(
         phase,
         ExportPhase::Attached {
             node: PathBuf::from("/dev/sda"),
-            adopted: false,
         }
     );
 }
 
 #[test]
 fn state_machine_failure_wins_from_any_phase() {
-    let failure = ExportFailure::NoDevice;
-    for phase in [
-        ExportPhase::Idle,
-        ExportPhase::Starting,
-        ExportPhase::Discovering { polls: 7 },
-    ] {
+    let failure = ExportFailure::Transport("closed stdout".to_owned());
+    for phase in [ExportPhase::Idle, ExportPhase::Starting] {
         assert_eq!(
             phase.apply(&ExportEvent::Failed(failure.clone())),
-            ExportPhase::Failed(ExportFailure::NoDevice)
+            ExportPhase::Failed(ExportFailure::Transport("closed stdout".to_owned()))
         );
     }
 }
@@ -51,47 +49,31 @@ fn state_machine_failure_wins_from_any_phase() {
 #[test]
 fn failure_text_covers_every_branch() {
     assert_eq!(
-        failure_text(&ExportFailure::NoFastboot("no binary".to_owned())),
-        "cannot start the export: no binary"
-    );
-    assert_eq!(
-        failure_text(&ExportFailure::Spawn("spawn blew up".to_owned())),
-        "spawn blew up"
-    );
-    assert_eq!(
-        failure_text(&ExportFailure::NoDevice),
-        "no device answered fastboot; boot the device into the BDS fastboot screen first"
-    );
-    assert_eq!(
-        failure_text(&ExportFailure::Timeout {
-            seconds: EXPORT_TIMEOUT.as_secs(),
-            note: None,
-        }),
-        "the export did not appear within 60s; source detect saw no usable candidate"
-    );
-    assert_eq!(
-        failure_text(&ExportFailure::Timeout {
-            seconds: 60,
-            note: Some("mounted".to_owned()),
-        }),
-        "the export did not become attachable within 60s: mounted"
-    );
-    assert_eq!(
-        failure_text(&ExportFailure::Discovery("probe died".to_owned())),
-        "source detection failed while waiting for the export: probe died"
+        failure_text(&ExportFailure::Transport("closed stdout".to_owned())),
+        "export transport error: closed stdout"
     );
 }
 
 #[test]
 fn diagnose_rejection_reports_mounted_export() {
-    let candidate = export_candidate(true, Some(PathBuf::from("/run/media/persist")), "");
+    let candidate = export_candidate(
+        ExportCandidate::Mounted,
+        true,
+        Some(PathBuf::from("/run/media/persist")),
+        "",
+    );
     let note = diagnose_rejection(&[candidate]).expect("mounted export is rejected");
     assert!(note.contains("already mounted"), "{note}");
 }
 
 #[test]
 fn diagnose_rejection_reports_unreadable_export_with_why() {
-    let candidate = export_candidate(false, None, "permission required");
+    let candidate = export_candidate(
+        ExportCandidate::Candidate,
+        false,
+        None,
+        "permission required",
+    );
     let note = diagnose_rejection(&[candidate]).expect("unreadable export is rejected");
     assert!(note.contains("not readable: permission required"), "{note}");
     assert!(note.contains("needs privilege"), "{note}");
@@ -99,132 +81,86 @@ fn diagnose_rejection_reports_unreadable_export_with_why() {
 
 #[test]
 fn diagnose_rejection_ignores_non_export_candidates() {
-    let mut candidate = export_candidate(false, None, "permission required");
-    candidate.identity = Some("046d:c52b".to_owned());
+    let candidate = export_candidate(
+        ExportCandidate::NotCandidate,
+        false,
+        None,
+        "permission required",
+    );
     assert_eq!(diagnose_rejection(&[candidate]), None);
     assert_eq!(diagnose_rejection(&[]), None);
 }
 
 #[test]
 fn missing_binary_adopts_live_export() {
-    let node = PathBuf::from("/dev/sdz");
-    let mut finder = || Ok(Some(node.clone()));
-    let outcome = run_export_with(missing_binary(), Duration::from_millis(50), no_bootmgr(), &mut finder)
-        .expect("adoption must succeed");
-    assert!(matches!(
-        outcome,
-        ExportOutcome::Attached { adopted: true, .. }
-    ));
+    let directory = tempdir().expect("tempdir");
+    let (_guard, bootmgr) = fixture(directory.path(), SUCCESS_FIXTURE);
+    let outcome = run_export_with(&bootmgr).expect("protocol export must succeed");
+    assert!(matches!(outcome, ExportOutcome::Attached { node } if node == Path::new("/dev/sdz")));
 }
 
 #[test]
 fn missing_binary_without_export_reports_no_fastboot() {
-    let mut finder = || Ok(None);
-    let failure = run_export_with(missing_binary(), Duration::from_millis(50), no_bootmgr(), &mut finder)
-        .expect_err("no binary and no export must fail");
-    assert!(matches!(failure, ExportFailure::NoFastboot(_)));
+    let failure = run_export_with(Path::new("/nonexistent-canoe-bootmgr"))
+        .expect_err("missing boot manager must fail");
+    assert!(matches!(failure, ExportFailure::Transport(_)));
 }
 
 #[test]
 fn started_export_is_reported_once_discovered() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let fastboot = write_fastboot(directory.path(), "#!/bin/sh\nsleep 2\n");
-    let node = PathBuf::from("/dev/sdy");
-    let mut calls = 0_u32;
-    let mut finder = || {
-        calls += 1;
-        Ok((calls >= 2).then(|| node.clone()))
-    };
-    let outcome = run_export_with(Ok(fastboot), Duration::from_secs(5), no_bootmgr(), &mut finder)
-        .expect("started export must succeed");
-    assert!(matches!(
-        outcome,
-        ExportOutcome::Attached { adopted: false, .. }
-    ));
+    let directory = tempdir().expect("tempdir");
+    let (_guard, bootmgr) = fixture(directory.path(), SUCCESS_FIXTURE);
+    let outcome = run_export_with(&bootmgr).expect("boot manager must report the exported node");
+    assert!(matches!(outcome, ExportOutcome::Attached { node } if node == Path::new("/dev/sdz")));
 }
 
 #[test]
 fn silent_device_timeout_reports_no_device() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let fastboot = write_fastboot(directory.path(), "#!/bin/sh\nexit 0\n");
-    let mut finder = || Ok(None);
-    let failure = run_export_with(Ok(fastboot), Duration::from_millis(300), no_bootmgr(), &mut finder)
-        .expect_err("silent device must fail");
-    assert_eq!(failure, ExportFailure::NoDevice);
+    let directory = tempdir().expect("tempdir");
+    let (_guard, bootmgr) = fixture(directory.path(), REJECTED_FIXTURE);
+    let failure = run_export_with(&bootmgr).expect_err("operation rejection must fail");
+    assert!(
+        matches!(failure, ExportFailure::Transport(detail) if detail.contains("device silent"))
+    );
 }
 
 #[test]
 fn answering_device_timeout_reports_timeout() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let fastboot = write_fastboot(
-        directory.path(),
-        "#!/bin/sh\nif [ \"$1\" = getvar ]; then echo \"$2: a\" >&2; exit 0; fi\nsleep 2\n",
-    );
-    let mut finder = || Ok(None);
-    let failure = run_export_with(Ok(fastboot), Duration::from_millis(300), no_bootmgr(), &mut finder)
-        .expect_err("undiscovered export must fail");
+    let directory = tempdir().expect("tempdir");
+    let (_guard, bootmgr) = fixture(directory.path(), WRONG_OPERATION_FIXTURE);
+    let failure = run_export_with(&bootmgr).expect_err("wrong operation must fail");
     assert_eq!(
         failure,
-        ExportFailure::Timeout {
-            seconds: 0,
-            note: None,
-        }
+        ExportFailure::Transport("fastboot.export returned wrong operation".to_owned())
     );
 }
 
 #[test]
 fn unspawnable_fastboot_reports_spawn_failure() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let path = directory.path().join("fastboot");
+    let directory = tempdir().expect("tempdir");
+    let path = directory.path().join("bootmgr");
     fs::write(&path, "#!/bin/sh\n").expect("write stub");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod");
-    let mut finder = || Ok(None);
-    let failure = run_export_with(Ok(path), Duration::from_millis(300), no_bootmgr(), &mut finder)
-        .expect_err("unspawnable binary must fail");
-    assert!(matches!(failure, ExportFailure::Spawn(_)));
+    let failure = run_export_with(&path).expect_err("unspawnable boot manager must fail");
+    assert!(matches!(failure, ExportFailure::Transport(_)));
 }
 
 #[test]
 fn discovery_error_is_reported() {
-    let directory = tempfile::tempdir().expect("tempdir");
-    let fastboot = write_fastboot(directory.path(), "#!/bin/sh\nsleep 2\n");
-    let mut calls = 0_u32;
-    let mut finder = || {
-        calls += 1;
-        if calls >= 2 {
-            return Err(FastbootError::Discovery {
-                message: "probe died".to_owned(),
-            });
-        }
-        Ok(None)
-    };
-    let failure = run_export_with(Ok(fastboot), Duration::from_secs(5), no_bootmgr(), &mut finder)
-        .expect_err("discovery error must fail");
-    assert_eq!(
-        failure,
-        ExportFailure::Discovery("probe died".to_owned())
+    let directory = tempdir().expect("tempdir");
+    let (_guard, bootmgr) = fixture(directory.path(), MALFORMED_FIXTURE);
+    let failure = run_export_with(&bootmgr).expect_err("malformed response must fail");
+    assert!(
+        matches!(failure, ExportFailure::Transport(detail) if detail.contains("response JSON"))
     );
 }
 
-fn no_bootmgr() -> &'static Path {
-    Path::new("/nonexistent-canoe-bootmgr")
-}
-
-fn missing_binary() -> Result<PathBuf, FastbootError> {
-    Err(FastbootError::NotFound {
-        first: PathBuf::from("Platform-Tools/fastboot"),
-        second: PathBuf::from("Platform-Tools/fastboot.exe"),
-    })
-}
-
-fn write_fastboot(directory: &Path, body: &str) -> PathBuf {
-    let path = directory.join("fastboot");
-    fs::write(&path, body).expect("write fake fastboot");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod fake fastboot");
-    path
-}
-
-fn export_candidate(readable: bool, mounted_at: Option<PathBuf>, why: &str) -> SourceCandidate {
+fn export_candidate(
+    export_candidate: ExportCandidate,
+    readable: bool,
+    mounted_at: Option<PathBuf>,
+    why: &str,
+) -> SourceCandidate {
     SourceCandidate {
         kind: SourceKind::Block,
         path: PathBuf::from("/dev/sdx"),
@@ -238,5 +174,32 @@ fn export_candidate(readable: bool, mounted_at: Option<PathBuf>, why: &str) -> S
         needs_privilege: !readable,
         mounted_at,
         why: why.to_owned(),
+        export_candidate: Some(export_candidate),
     }
 }
+
+const SUCCESS_FIXTURE: &str = r##"#!/bin/sh
+while IFS= read -r request; do
+  case "$request" in
+    *fastboot.export*) printf '%s\n' '{"ok":true,"operation":"fastboot.export","node":"/dev/sdz"}' ;;
+  esac
+done
+"##;
+
+const REJECTED_FIXTURE: &str = r##"#!/bin/sh
+while IFS= read -r request; do
+  printf '%s\n' '{"ok":false,"error":{"code":"operation","message":"device silent"}}'
+done
+"##;
+
+const WRONG_OPERATION_FIXTURE: &str = r##"#!/bin/sh
+while IFS= read -r request; do
+  printf '%s\n' '{"ok":true,"operation":"fastboot.reboot"}'
+done
+"##;
+
+const MALFORMED_FIXTURE: &str = r##"#!/bin/sh
+while IFS= read -r request; do
+  printf '%s\n' '{garbage'
+done
+"##;

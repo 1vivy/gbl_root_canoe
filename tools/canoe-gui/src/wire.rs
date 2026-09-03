@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
+use crate::build_model::{BuildReceipt, PatchReceipt};
 use crate::detect::SourceCandidate;
+use crate::identity::Identity;
 use crate::model::{BlsFile, ConfigDocument, ConfigEntry};
 use crate::protocol::ProtocolError;
 use crate::slot_model::{InstallReceipt, Slot, SlotStatus};
@@ -32,6 +34,20 @@ enum Operation {
     BlsShow,
     #[serde(rename = "slot.status")]
     SlotStatus,
+    #[serde(rename = "fastboot.identify")]
+    FastbootIdentify,
+    #[serde(rename = "fastboot.export")]
+    FastbootExport,
+    #[serde(rename = "fastboot.flash")]
+    FastbootFlash,
+    #[serde(rename = "fastboot.reboot")]
+    FastbootReboot,
+    #[serde(rename = "fastboot.end-export")]
+    FastbootEndExport,
+    #[serde(rename = "build")]
+    Build,
+    #[serde(rename = "vendorboot.patch")]
+    VendorBootPatch,
     #[serde(rename = "install")]
     Install,
     #[serde(rename = "ota-apply")]
@@ -60,7 +76,10 @@ struct ResponseEnvelope {
     inactive_slot: Option<Slot>,
     source: Option<String>,
     installed: Option<Vec<Slot>>,
-    receipt: Option<InstallReceipt>,
+    receipt: Option<serde_json::Value>,
+    node: Option<String>,
+    bds_version: Option<String>,
+    current_slot: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,6 +133,23 @@ pub enum Response {
     },
     OtaApply {
         receipt: InstallReceipt,
+    },
+    Build {
+        receipt: BuildReceipt,
+    },
+    FastbootIdentify {
+        identity: Identity,
+    },
+    FastbootExport {
+        node: String,
+    },
+    FastbootFlash,
+    FastbootReboot,
+    FastbootEndExport {
+        node: String,
+    },
+    VendorBootPatch {
+        receipt: PatchReceipt,
     },
 }
 
@@ -184,10 +220,30 @@ pub fn parse_response(bytes: &[u8]) -> Result<Response, ProtocolError> {
             },
         }),
         Operation::Install => Ok(Response::Install {
-            receipt: required(envelope.receipt, "receipt")?,
+            receipt: decode(envelope.receipt, "receipt")?,
         }),
         Operation::OtaApply => Ok(Response::OtaApply {
-            receipt: required(envelope.receipt, "receipt")?,
+            receipt: decode(envelope.receipt, "receipt")?,
+        }),
+        Operation::FastbootIdentify => Ok(Response::FastbootIdentify {
+            identity: Identity {
+                bds_version: envelope.bds_version,
+                current_slot: envelope.current_slot,
+            },
+        }),
+        Operation::FastbootExport => Ok(Response::FastbootExport {
+            node: required(envelope.node, "node")?,
+        }),
+        Operation::FastbootFlash => Ok(Response::FastbootFlash),
+        Operation::FastbootReboot => Ok(Response::FastbootReboot),
+        Operation::FastbootEndExport => Ok(Response::FastbootEndExport {
+            node: envelope.node.unwrap_or_default(),
+        }),
+        Operation::Build => Ok(Response::Build {
+            receipt: decode(envelope.receipt, "receipt")?,
+        }),
+        Operation::VendorBootPatch => Ok(Response::VendorBootPatch {
+            receipt: decode(envelope.receipt, "receipt")?,
         }),
     }
 }

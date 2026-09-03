@@ -1,13 +1,13 @@
 use eframe::egui;
 
-use crate::connect::source_from_candidate;
-use crate::export::{EXPORT_TIMEOUT, ExportPhase, failure_text};
-use crate::detect::{SourceCandidate, SourceKind, display_size, source_kind_label};
-use crate::elevate::ElevationAction;
-use crate::text::TextKey;
-use crate::ui::GuiApp;
 #[cfg(not(windows))]
 use crate::client::BootmgrClient;
+use crate::connect::source_from_candidate;
+use crate::detect::{SourceCandidate, SourceKind, display_size, source_kind_label};
+use crate::elevate::ElevationAction;
+use crate::export::{ExportPhase, failure_text};
+use crate::text::TextKey;
+use crate::ui::GuiApp;
 #[cfg(not(windows))]
 use crate::ui::Screen;
 
@@ -66,21 +66,33 @@ impl GuiApp {
     }
     pub(crate) fn attach_candidate(&mut self, candidate: SourceCandidate) {
         let target = source_from_candidate(&candidate.kind, &candidate.path);
+        let is_block = matches!(candidate.kind, SourceKind::Block);
         self.source_is_ext4 = !matches!(candidate.kind, SourceKind::Dir);
-        self.source_is_block = matches!(candidate.kind, SourceKind::Block);
+        self.source_is_block = is_block;
         self.root_input = candidate.path.display().to_string();
         self.manual_source = self.root_input.clone();
-        if cfg!(windows)
-            && matches!(candidate.kind, SourceKind::Block)
-            && candidate.needs_privilege
-        {
-            self.elevation = Some(ElevationAction::Windows);
-            self.status = "Windows requires Administrator for raw block devices".to_owned();
-            return;
-        }
-        self.reconnect();
-        if self.client.is_none() {
-            self.status = format!("unable to attach {}", target.path().display());
+        // The detector already told us whether this source needs privilege, so
+        // decide here instead of attaching, failing, and showing the operator a
+        // permission error for a requirement we knew about before we started.
+        match crate::elevate::attach_plan(candidate.needs_privilege, is_block, cfg!(windows)) {
+            crate::elevate::AttachPlan::WindowsAdmin => {
+                self.elevation = Some(ElevationAction::Windows);
+                self.status = "Windows requires Administrator for raw block devices".to_owned();
+            }
+            crate::elevate::AttachPlan::Elevated => {
+                self.status = format!(
+                    "{} needs elevation; asking for it before attaching",
+                    candidate.path.display()
+                );
+                self.log(self.status.clone());
+                self.retry_elevated();
+            }
+            crate::elevate::AttachPlan::Direct => {
+                self.reconnect();
+                if self.client.is_none() {
+                    self.status = format!("unable to attach {}", target.path().display());
+                }
+            }
         }
     }
 
@@ -121,7 +133,7 @@ impl GuiApp {
 }
 
 impl GuiApp {
-    fn render_export_control(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn render_export_control(&mut self, ui: &mut egui::Ui) {
         match self.export.phase.clone() {
             ExportPhase::Idle => {
                 if ui.button(self.label(TextKey::StartExport)).clicked() {
@@ -134,25 +146,8 @@ impl GuiApp {
                     ui.label("starting the export over fastboot…");
                 });
             }
-            ExportPhase::Discovering { .. } => {
-                let elapsed = self.export.elapsed().map_or(0, |elapsed| elapsed.as_secs());
-                ui.horizontal(|ui| {
-                    ui.add(egui::Spinner::new());
-                    ui.label(format!(
-                        "waiting for the export to appear… {elapsed}s / {}s",
-                        EXPORT_TIMEOUT.as_secs()
-                    ));
-                });
-            }
-            ExportPhase::Attached { node, adopted } => {
-                if adopted {
-                    ui.label(format!(
-                        "adopted the export already live at {}",
-                        node.display()
-                    ));
-                } else {
-                    ui.label(format!("export live at {}", node.display()));
-                }
+            ExportPhase::Attached { node } => {
+                ui.label(format!("export live at {}", node.display()));
                 if ui.button(self.label(TextKey::StartExport)).clicked() {
                     self.start_export();
                 }
@@ -208,10 +203,12 @@ fn render_elevation(app: &mut GuiApp, ui: &mut egui::Ui, action: ElevationAction
             ui.add(egui::TextEdit::singleline(&mut command));
         }
         ElevationAction::Windows => {
-            if ui.button(app.label(TextKey::RestartAdministrator)).clicked() {
+            if ui
+                .button(app.label(TextKey::RestartAdministrator))
+                .clicked()
+            {
                 app.retry_elevated();
             }
         }
     }
 }
-

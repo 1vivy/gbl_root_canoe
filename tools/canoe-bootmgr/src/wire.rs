@@ -1,17 +1,19 @@
+use crate::artifact::ArtifactSpec;
+use crate::cli::{CliDeviceInfoRepair, CliMenuMode, CliRole};
 use serde::Deserialize;
 use std::path::PathBuf;
 use thiserror::Error;
-use crate::artifact::ArtifactSpec;
-use crate::cli::{CliDeviceInfoRepair, CliMenuMode, CliRole};
-
 
 pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
+pub const PROTOCOL_VERSION: u32 = 1;
 #[path = "wire_command.rs"]
 mod wire_command;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "verb")]
 pub enum JsonRequest {
+    #[serde(rename = "protocol.version")]
+    ProtocolVersion,
     #[serde(rename = "build")]
     Build {
         abl: PathBuf,
@@ -21,6 +23,8 @@ pub enum JsonRequest {
         staged: Option<PathBuf>,
         #[serde(default)]
         tools: Option<PathBuf>,
+        #[serde(default)]
+        efisp_tools: Option<PathBuf>,
         #[serde(default)]
         keep_unpatched: Option<PathBuf>,
         #[serde(default)]
@@ -126,8 +130,52 @@ pub enum JsonRequest {
         recovery: PathBuf,
         output: PathBuf,
     },
+    #[serde(rename = "vbmeta.inspect")]
+    VbmetaInspect {
+        vbmeta: PathBuf,
+        #[serde(default)]
+        tools: Option<PathBuf>,
+    },
     #[serde(rename = "vendorboot.patch", alias = "vendor_boot.patch")]
     VendorBootPatch { input: PathBuf, output: PathBuf },
+    #[serde(rename = "fastboot.identify")]
+    FastbootIdentify {
+        #[serde(default = "default_fastboot_timeout_seconds")]
+        timeout_seconds: u64,
+    },
+    #[serde(rename = "fastboot.export")]
+    FastbootExport {
+        #[serde(default = "default_fastboot_target")]
+        target: String,
+        #[serde(default = "default_fastboot_timeout_seconds")]
+        timeout_seconds: u64,
+    },
+    #[serde(rename = "fastboot.end-export")]
+    FastbootEndExport { node: PathBuf },
+    #[serde(rename = "fastboot.fetch")]
+    FastbootFetch { partition: String, output: PathBuf },
+    #[serde(rename = "fastboot.abl-coverage")]
+    FastbootAblCoverage {
+        #[serde(default)]
+        tools: Option<PathBuf>,
+        #[serde(default = "default_fastboot_timeout_seconds")]
+        timeout_seconds: u64,
+    },
+    #[serde(rename = "fastboot.flash")]
+    FastbootFlash { partition: String, image: PathBuf },
+    #[serde(rename = "fastboot.reboot")]
+    FastbootReboot {
+        #[serde(default)]
+        target: Option<String>,
+    },
+}
+
+fn default_fastboot_target() -> String {
+    "persist".to_owned()
+}
+
+const fn default_fastboot_timeout_seconds() -> u64 {
+    30
 }
 
 #[derive(Debug, Error)]
@@ -139,7 +187,6 @@ pub enum RequestError {
     #[error("request base64url: {0}")]
     Base64(String),
 }
-
 
 pub fn parse_json(bytes: &[u8]) -> Result<JsonRequest, RequestError> {
     if bytes.len() > MAX_REQUEST_BYTES {
@@ -195,6 +242,7 @@ mod tests {
     #[test]
     fn every_dotted_verb_deserializes() {
         let requests = [
+            serde_json::json!({"verb":"protocol.version"}),
             serde_json::json!({"verb":"build","abl":"a","probe":true}),
             serde_json::json!({"verb":"config.show"}),
             serde_json::json!({"verb":"config.set-policy"}),
@@ -212,7 +260,15 @@ mod tests {
             serde_json::json!({"verb":"install","staged":"a"}),
             serde_json::json!({"verb":"ota-apply","staged":"a"}),
             serde_json::json!({"verb":"vbmeta.graft","vbmeta":"a","recovery":"b","output":"c"}),
+            serde_json::json!({"verb":"vbmeta.inspect","vbmeta":"a"}),
             serde_json::json!({"verb":"vendorboot.patch","input":"a","output":"b"}),
+            serde_json::json!({"verb":"fastboot.identify"}),
+            serde_json::json!({"verb":"fastboot.export"}),
+            serde_json::json!({"verb":"fastboot.end-export","node":"a"}),
+            serde_json::json!({"verb":"fastboot.fetch","partition":"boot","output":"a"}),
+            serde_json::json!({"verb":"fastboot.abl-coverage"}),
+            serde_json::json!({"verb":"fastboot.flash","partition":"boot","image":"a"}),
+            serde_json::json!({"verb":"fastboot.reboot"}),
         ];
         for request in requests {
             let bytes = serde_json::to_vec(&request).expect("request JSON");

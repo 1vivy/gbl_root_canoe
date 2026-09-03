@@ -1,37 +1,39 @@
-mod bls_parse;
-mod bls_render;
-mod build_cleanup;
-pub mod build;
-mod build_steps;
-mod build_tools;
-pub mod detect;
-pub mod errors;
-pub mod fastboot;
-mod config_ops;
-mod config_parse;
-mod config_render;
-#[cfg(feature = "cli")]
-mod cli_extra;
-#[cfg(feature = "cli")]
-mod extra_ops;
-#[cfg(feature = "cli")]
-mod cli_runner;
 pub mod artifact;
 pub mod backend;
 pub mod bls;
+mod bls_parse;
+mod bls_render;
+pub mod build;
+mod build_cleanup;
+mod build_efisp_tools;
+mod build_steps;
+mod build_tools;
 #[cfg(feature = "cli")]
 pub mod cli;
+#[cfg(feature = "cli")]
+mod cli_extra;
+#[cfg(feature = "cli")]
+mod cli_runner;
 pub mod config;
+mod config_ops;
+mod config_parse;
+mod config_render;
+pub mod detect;
+pub mod errors;
 pub mod ext4;
+#[cfg(feature = "cli")]
+mod extra_ops;
+pub mod fastboot;
 pub mod graft;
 #[cfg(feature = "cli")]
 pub mod operations;
 #[cfg(feature = "cli")]
 pub mod output;
 pub use slot_transaction::{InstallInput, InstallReceipt};
-pub mod slot_transaction;
 mod slot_tools;
+pub mod slot_transaction;
 pub mod slots;
+mod vbmeta_inspect;
 pub mod vendorboot;
 
 #[cfg(feature = "cli")]
@@ -109,4 +111,3 @@ pub fn verify_tzmap(
 ) -> Result<(), BuildError> {
     build::verify_tzmap(tools_dir, sidecar, abl, allow_zero_digest)
 }
-

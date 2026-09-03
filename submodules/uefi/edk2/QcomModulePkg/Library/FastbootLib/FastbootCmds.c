@@ -102,6 +102,7 @@ found at
 /* Same reasoning for the log: CmdOem's log-flush subcommand is an application
    concern, and FastbootLib is linked into the application it is extending. */
 #include "../../Application/LinuxLoader/SuperFbLog.h"
+#include "../../Application/LinuxLoader/Hook/SuperFbDevInfo.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -2371,6 +2372,19 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     return;
   }
 
+  /* Explicit Super Fastboot-only capability. No slot can be supplied. */
+  if (AsciiStrCmp (Arg, "reset-active-slot-retry") == 0) {
+    Status = SfbResetActiveSlotRetry ();
+    DEBUG ((EFI_D_INFO, "SFB: MARK active-slot-retry-reset status=%r\n",
+            Status));
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("active slot retry reset refused");
+    } else {
+      FastbootOkay ("");
+    }
+    return;
+  }
+
   if (AsciiStrCmp (Arg, "mass-storage") == 0 ||
       AsciiStrCmp (Arg, "mass-storage:persist") == 0) {
     Target = L"persist";
@@ -2823,6 +2837,10 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   EFI_STATUS Status;
   CHAR8 HWPlatformBuf[MAX_RSP_SIZE] = "\0";
   CHAR8 DeviceType[MAX_RSP_SIZE] = "\0";
+  CHAR8 DevInfoBuf[SFB_DEVINFO_VALUE_BYTES];
+  CHAR8 LastLaunchBuf[SFB_LAST_LAUNCH_VALUE_BYTES];
+  SFB_OBSERVED_DEVINFO ObservedDevInfo;
+  SFB_SLOT_RETRIES SlotRetries;
   UINT32 PartitionCount = 0;
   MemCardType Type = UNKNOWN;
   mDataBuffer = Base;
@@ -2872,6 +2890,23 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   FastbootPublishVar ("product", FullProduct);
 
   FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
+
+  /* Keep this one formatter as the append point for retry_a/retry_b. The
+   * observation remains unknown until the verified-boot preflight has read a
+   * valid DeviceInfo; unknown must never become a fabricated waiver. */
+  ObservedDevInfo = SfbGetObservedDevInfo ();
+  SlotRetries = SfbSlotRetries ();
+  if (SfbFormatObservedDevInfo (&ObservedDevInfo, &SlotRetries, DevInfoBuf,
+                                sizeof (DevInfoBuf))) {
+    FastbootPublishVar ("canoe-devinfo", DevInfoBuf);
+  }
+
+  /* A missing/corrupt logfs record stays absent rather than describing a
+   * launch that did not durably reach the final resolution point. */
+  if (!EFI_ERROR (SfbLastLaunchRead (LastLaunchBuf,
+                                     sizeof (LastLaunchBuf)))) {
+    FastbootPublishVar ("canoe-last-launch", LastLaunchBuf);
+  }
 
   /*
    * Without this value the host wizard must ask which slot is active, and a

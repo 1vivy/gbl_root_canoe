@@ -62,6 +62,12 @@ static EFI_STATUS mStartStatus;
 static UINTN mLoadCount;
 static UINTN mStartCount;
 static UINTN mWatchdogDisableCount;
+static EFI_STATUS mRetryResetStatus;
+static UINTN mRetryResetCount;
+static UINTN mLaunchEvent;
+static UINTN mLoadEvent;
+static UINTN mRetryResetEvent;
+static UINTN mStartEvent;
 static EFI_HANDLE mLoadedHandle = (EFI_HANDLE)(UINTN)0x5678;
 static BOOLEAN mFileDevicePathAvailable;
 static EFI_DEVICE_PATH_PROTOCOL mDevicePath;
@@ -74,6 +80,7 @@ static UINTN mImageStartMarkerCount;
 static UINTN mImageReturnMarkerCount;
 static UINTN mImageLoadMarkerCount;
 static UINTN mDemotedMarkerCount;
+static UINTN mRetryResetMarkerCount;
 static BOOLEAN mPrepareDenyFirst;
 static CONST SFB_MODE2_PROFILE *mLastPrepareProfile;
 static SFB_SLOT mFakeActiveSlot;
@@ -293,6 +300,9 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
   }
   if (strstr(Format, "SFB: MARK mode-demoted") != NULL) {
     ++mDemotedMarkerCount;
+  }
+  if (strstr(Format, "SFB: MARK retry-reset") != NULL) {
+    ++mRetryResetMarkerCount;
   }
 }
 
@@ -758,6 +768,7 @@ FakeLoadImage(IN BOOLEAN BootPolicy, IN EFI_HANDLE ParentImageHandle,
   (void)SourceBuffer;
   (void)SourceSize;
   ++mLoadCount;
+  mLoadEvent = ++mLaunchEvent;
   if (EFI_ERROR (mLoadStatus)) {
     return mLoadStatus;
   }
@@ -801,6 +812,7 @@ FakeStartImage(IN EFI_HANDLE ImageHandle, IN OUT UINTN *ExitDataSize,
   (void)ExitDataSize;
   (void)ExitData;
   ++mStartCount;
+  mStartEvent = ++mLaunchEvent;
   assert(ImageHandle == mLoadedHandle);
   mSecurityRestoredAtStart =
     mSecurity.FileAuthenticationState == OriginalSecurityState &&
@@ -976,8 +988,14 @@ ResetLaunchBackend(void)
   mPolicyActive = FALSE;
   mLoadStatus = EFI_SUCCESS;
   mStartStatus = EFI_SUCCESS;
+  mRetryResetStatus = EFI_SUCCESS;
+  mRetryResetCount = 0;
   mLoadCount = 0;
   mStartCount = 0;
+  mLaunchEvent = 0;
+  mLoadEvent = 0;
+  mRetryResetEvent = 0;
+  mStartEvent = 0;
   mWatchdogDisableCount = 0;
   mOpenStatus = EFI_SUCCESS;
   mReadStatus = EFI_SUCCESS;
@@ -992,6 +1010,7 @@ ResetLaunchBackend(void)
   mImageReturnMarkerCount = 0;
   mImageLoadMarkerCount = 0;
   mDemotedMarkerCount = 0;
+  mRetryResetMarkerCount = 0;
   mPrepareDenyFirst = FALSE;
   mLastPrepareProfile = NULL;
   mHandleProtocolCount = 0;
@@ -1150,6 +1169,27 @@ TestLaunchLifecycle(void)
   assert(mImageReturnMarkerCount == ImageReturnBefore + 1);
   assert(mImageLoadMarkerCount == ImageLoadBefore);
   assert(mWatchdogDisableCount == WatchdogBefore + 1);
+}
+
+static void
+TestManagedLaunchResetsRetryBetweenLoadAndStart(void)
+{
+  EFI_DEVICE_PATH_PROTOCOL Path;
+
+  memset (&Path, 0, sizeof (Path));
+  ResetLaunchBackend ();
+  SfbBypassSecurity ();
+  /* An unrecognised active table is harmless to the launch: reset is
+   * deliberately fail-soft after LoadImage and before StartImage. */
+  mRetryResetStatus = EFI_NOT_FOUND;
+  assert(SfbLaunchImage (&Path, TRUE, SfbBootModeHonestUnlocked, NULL, NULL,
+                         NULL) == EFI_SUCCESS);
+  assert(mRetryResetCount == 1);
+  assert(mRetryResetMarkerCount == 1);
+  assert(mLoadEvent != 0);
+  assert(mLoadEvent < mRetryResetEvent);
+  assert(mRetryResetEvent < mStartEvent);
+  assert(mStartCount == 1);
 }
 
 static void
@@ -1980,6 +2020,25 @@ StageBlsRow(const CHAR8 *ConfText, UINTN ConfBytes, SFB_MENU_STATE *Menu)
   return Found;
 }
 
+static void
+TestBlsLaunchDoesNotResetRetry(void)
+{
+  static const CHAR8 ConfText[] =
+    "title postmarketOS\n"
+    "linux /pmos/vmlinuz\n";
+  SFB_MENU_STATE Menu;
+  UINTN Found = StageBlsRow (ConfText, sizeof (ConfText) - 1, &Menu);
+
+  assert(Menu.Entry[Found].Kind == SfbEntryBlsLinux);
+  assert(SfbLaunchEntry (&Menu.Entry[Found], FALSE,
+                         SfbBootModeAblFakeLocked) == EFI_SUCCESS);
+  assert(mRetryResetCount == 0);
+
+  SfbFreeMenu (&Menu);
+  ResetVolumes ();
+  mEntriesFixtureEnabled = FALSE;
+}
+
 /*
  * The publication order and the teardown, which is the part that cannot be seen
  * from a screen.
@@ -2307,6 +2366,7 @@ main(void)
 {
   TestProfileSelection ();
   TestLaunchLifecycle ();
+  TestManagedLaunchResetsRetryBetweenLoadAndStart ();
   TestLaunchOptions ();
   TestLaunchModePrecedence ();
   TestBootRootEmpty ();
@@ -2320,6 +2380,7 @@ main(void)
   TestAdditiveDiscovery ();
   TestBootRootBlsEntryIsDiscovered ();
   TestBlsDefaultResolution ();
+  TestBlsLaunchDoesNotResetRetry ();
   TestBlsLinuxPublishesAndTearsDownBoth ();
   TestBlsLinuxUnwindsTheDtbWhenTheInitrdFails ();
   TestBlsLinuxAbortsWhenTheDtbFails ();
@@ -2527,6 +2588,14 @@ SFB_SLOT
 SfbActiveSlot(VOID)
 {
   return mFakeActiveSlot;
+}
+
+EFI_STATUS
+SfbResetActiveSlotRetry(VOID)
+{
+  ++mRetryResetCount;
+  mRetryResetEvent = ++mLaunchEvent;
+  return mRetryResetStatus;
 }
 
 EFI_STATUS

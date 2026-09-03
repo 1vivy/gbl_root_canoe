@@ -181,6 +181,63 @@ fn cli_jsonl_returns_one_response_per_request() {
 }
 
 #[test]
+fn fastboot_end_export_protocol_round_trip_has_operation() {
+    let request = serde_json::json!({"verb":"fastboot.end-export","node":"/dev/sdz"});
+    let command =
+        canoe_bootmgr::wire::parse_json(&serde_json::to_vec(&request).expect("request JSON"))
+            .expect("wire request")
+            .into_command();
+    let canoe_bootmgr::cli::Command::Fastboot {
+        command: canoe_bootmgr::cli::FastbootCommand::EndExport(args),
+    } = command
+    else {
+        panic!("fastboot end-export command");
+    };
+    let response = canoe_bootmgr::cli::Success::FastbootEndExport {
+        ok: true,
+        node: args.node.display().to_string(),
+    };
+    let document: serde_json::Value = serde_json::from_slice(
+        &canoe_bootmgr::output::json_success(&response).expect("response JSON"),
+    )
+    .expect("JSON response");
+    assert_eq!(document["operation"], "fastboot.end-export");
+    assert_eq!(document["node"], "/dev/sdz");
+}
+
+#[test]
+fn jsonl_fastboot_end_export_missing_node_returns_error_envelope() {
+    let node = tempfile::tempdir()
+        .expect("node directory")
+        .path()
+        .join("missing-node");
+    let input = format!(
+        "{{\"verb\":\"fastboot.end-export\",\"node\":\"{}\"}}\n",
+        node.display()
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"))
+        .arg("--json")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .expect("stdin")
+                .write_all(input.as_bytes())?;
+            child.wait_with_output()
+        })
+        .expect("run JSONL CLI");
+    assert!(!output.status.success());
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    assert_eq!(document["ok"], false);
+    assert!(document.get("operation").is_none());
+    assert!(document["error"]["message"].as_str().is_some());
+}
+
+#[test]
 fn request_b64_accepts_base64url_json() {
     let directory = tempfile::tempdir().expect("temporary root");
     let token = "eyJ2ZXJiIjoiZGVmYXVsdC5nZXQifQ";
@@ -214,6 +271,77 @@ fn request_json(
         canoe_bootmgr::wire::parse_json(&serde_json::to_vec(&request).expect("request"))
             .expect("wire"),
     )
+}
+
+#[test]
+fn fresh_install_sets_active_row_as_default() {
+    let root = tempfile::tempdir().expect("fresh boot root");
+    assert!(
+        fs::read_dir(root.path())
+            .expect("read fresh boot root")
+            .next()
+            .is_none(),
+        "fixture must begin with no inherited boot-root state"
+    );
+    let staging = tempfile::tempdir().expect("staging root");
+    let staged = staged_root(&staging, b"fresh", 6);
+
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"slot":"b"}),
+    )
+    .expect("install into fresh boot root");
+
+    let rendered = fs::read_to_string(root.path().join("canoe.cfg")).expect("written config");
+    println!("FRESH_INSTALL_CANOE_CFG_BEGIN\n{rendered}\nFRESH_INSTALL_CANOE_CFG_END");
+    let config = ConfigDocument::parse(rendered.as_bytes()).expect("parse written config");
+    assert_eq!(config.default.as_deref(), Some("android-b"));
+}
+
+#[test]
+fn fresh_install_preserves_preexisting_non_managed_default() {
+    let root = tempfile::tempdir().expect("fresh boot root");
+    let initial_staging = tempfile::tempdir().expect("initial staging root");
+    let initial = staged_root(&initial_staging, b"initial", 6);
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":initial,"slot":"a"}),
+    )
+    .expect("initial fresh install");
+
+    let mut config =
+        ConfigDocument::parse(&fs::read(root.path().join("canoe.cfg")).expect("config"))
+            .expect("parse initial config");
+    // This assertion makes the setup itself prove the default comes from the
+    // fresh install rather than from a hand-authored fixture.
+    assert_eq!(config.default.as_deref(), Some("android-a"));
+    config
+        .upsert(request("operator-choice", "operator-choice.efi"))
+        .expect("add non-managed row");
+    config
+        .set_default("operator-choice")
+        .expect("set non-managed default");
+    let malformed_generation = String::from_utf8(config.serialize().expect("serialize config"))
+        .expect("UTF-8")
+        .replacen("generation 3", "generation malformed", 1);
+    fs::write(root.path().join("canoe.cfg"), malformed_generation)
+        .expect("write pre-existing config with malformed generation");
+
+    let update_staging = tempfile::tempdir().expect("update staging root");
+    let update = staged_root(&update_staging, b"update", 6);
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":update,"slot":"b","active_slot":"b"}),
+    )
+    .expect("install with non-managed default");
+
+    let config = ConfigDocument::parse(&fs::read(root.path().join("canoe.cfg")).expect("config"))
+        .expect("parse updated config");
+    assert_eq!(config.default.as_deref(), Some("operator-choice"));
+    assert_eq!(
+        config.generation, 1,
+        "an invalid pre-existing generation is retained as zero before this install bumps it"
+    );
 }
 
 #[test]

@@ -5,8 +5,10 @@ use crate::backend::BackendError;
 use crate::build::BuildError;
 use crate::config::ConfigError;
 use crate::detect::DetectError;
+use crate::fastboot::FastbootError;
 use crate::graft::GraftError;
 use crate::slots::SlotError;
+use crate::vbmeta_inspect::VbmetaInspectError;
 use crate::vendorboot::VendorBootError;
 
 #[derive(Debug, Error)]
@@ -27,6 +29,10 @@ pub enum AppError {
     Detect(#[from] DetectError),
     #[error(transparent)]
     Build(#[from] BuildError),
+    #[error(transparent)]
+    Fastboot(#[from] FastbootError),
+    #[error(transparent)]
+    VbmetaInspect(#[from] VbmetaInspectError),
     #[error("request: {0}")]
     Request(String),
     #[error("install: {0}")]
@@ -35,4 +41,13 @@ pub enum AppError {
     DefaultTarget(String),
     #[error("command output: {0}")]
     Output(std::io::Error),
+}
+
+impl AppError {
+    pub fn protocol_code(&self) -> &str {
+        match self {
+            Self::VbmetaInspect(error) => error.protocol_code(),
+            _ => "operation",
+        }
+    }
 }

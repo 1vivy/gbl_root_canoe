@@ -28,6 +28,43 @@ impl BootRoot {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "verb")]
 pub enum Request {
+    /// Derive a managed generation from a stock ABL/vbmeta pair.
+    ///
+    /// The boot manager owns derivation; the GUI only names the inputs and
+    /// reports the receipt. `efisp_tools` carries the EFI tools payload so a
+    /// GUI install produces the same boot root the CLI does.
+    #[serde(rename = "build")]
+    Build {
+        abl: PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        vbmeta: Option<PathBuf>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        staged: Option<PathBuf>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tools: Option<PathBuf>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        efisp_tools: Option<PathBuf>,
+    },
+    #[serde(rename = "fastboot.identify")]
+    FastbootIdentify { timeout_seconds: u64 },
+    #[serde(rename = "fastboot.export")]
+    FastbootExport {
+        target: String,
+        timeout_seconds: u64,
+    },
+    #[serde(rename = "fastboot.flash")]
+    FastbootFlash { partition: String, image: PathBuf },
+    #[serde(rename = "fastboot.reboot")]
+    FastbootReboot {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
+    /// End a live mass-storage export from the host.
+    #[serde(rename = "fastboot.end-export")]
+    FastbootEndExport { node: PathBuf },
+    /// Append the module blacklist to a supplied vendor_boot image.
+    #[serde(rename = "vendorboot.patch")]
+    VendorBootPatch { input: PathBuf, output: PathBuf },
     #[serde(rename = "config.show")]
     ConfigShow,
     #[serde(rename = "config.set-policy")]
@@ -126,9 +163,10 @@ pub enum ProtocolError {
     EmptyResponse,
     #[error("boot manager exited with status {code:?}")]
     Exited { code: Option<i32> },
+    #[error("boot manager did not respond within {seconds}s")]
+    ResponseTimeout { seconds: u64 },
     #[error("malformed boot manager response: {0}")]
     Malformed(String),
     #[error("boot manager rejected request ({code}): {message}")]
     Rejected { code: String, message: String },
 }
-

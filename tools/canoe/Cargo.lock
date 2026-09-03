@@ -79,6 +79,7 @@ name = "canoe_bootmgr"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "libc",
  "nix",
  "serde",
  "serde_json",

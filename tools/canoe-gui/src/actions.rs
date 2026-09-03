@@ -47,8 +47,12 @@ impl GuiApp {
         if let Some(Response::BlsList { entries }) = self.request(Request::BlsList) {
             self.bls_entries = entries;
         }
+        // The device already told us which slot is active; asking the operator to
+        // paste bootctl output for a fact we hold is how the old surface guessed.
+        let identity_slot = crate::slot_view::identity_slot(self.identity.identity.as_ref());
+        self.slot_from_identity = identity_slot.is_some();
         if let Some(Response::SlotStatus { status }) = self.request(Request::SlotStatus {
-            slot: None,
+            slot: identity_slot,
             bootctl_output: optional_input(&self.bootctl_input),
             gpt_active_slot: optional_input(&self.gpt_input),
         }) {
@@ -96,15 +100,11 @@ impl GuiApp {
                     self.elevation = None;
                 }
                 Ok(_) => self.status = "source.detect returned wrong operation".to_owned(),
-                Err(error) => self.record_error_for(
-                    &error,
-                    &BootRoot::LocalDir(PathBuf::from(".")),
-                ),
+                Err(error) => {
+                    self.record_error_for(&error, &BootRoot::LocalDir(PathBuf::from(".")))
+                }
             },
-            Err(error) => self.record_error_for(
-                &error,
-                &BootRoot::LocalDir(PathBuf::from(".")),
-            ),
+            Err(error) => self.record_error_for(&error, &BootRoot::LocalDir(PathBuf::from("."))),
         }
     }
 
@@ -243,6 +243,13 @@ fn request_name(request: &Request) -> &'static str {
         Request::BlsList => "bls.list",
         Request::BlsShow { .. } => "bls.show",
         Request::SlotStatus { .. } => "slot.status",
+        Request::Build { .. } => "build",
+        Request::FastbootIdentify { .. } => "fastboot.identify",
+        Request::FastbootExport { .. } => "fastboot.export",
+        Request::FastbootFlash { .. } => "fastboot.flash",
+        Request::FastbootReboot { .. } => "fastboot.reboot",
+        Request::FastbootEndExport { .. } => "fastboot.end-export",
+        Request::VendorBootPatch { .. } => "vendorboot.patch",
         Request::Install { .. } => "install",
         Request::OtaApply { .. } => "ota-apply",
     }

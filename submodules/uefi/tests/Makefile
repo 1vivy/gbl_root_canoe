@@ -1,11 +1,15 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
-.PHONY: test clean
+.PHONY: test test_gpt_slot_reset clean
 
-test: test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface
+test: test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_gpt_slot_reset test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface
 	./test_profile
 	./test_deviceinfo
+	./test_devinfo
+	./test_slot_attributes
+	./test_slot_retries
+	./test_last_launch
 	./test_tzmap
 	./test_fat
 	./test_hooks
@@ -24,6 +28,30 @@ test_profile: test_profile.c \
 test_deviceinfo: test_deviceinfo.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDeviceInfo.c
 	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $^
+
+test_devinfo: test_devinfo.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDevInfo.c
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -fshort-wchar $(HOOK_INCLUDES) -o $@ $^
+
+test_slot_attributes: test_slot_attributes.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlotAttributes.h
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
+
+test_slot_retries: test_slot_retries.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlots.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlots.h \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlotRetry.h \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlotAttributes.h \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbGptName.h
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $^
+
+test_gpt_slot_reset:
+	./test_gpt_slot_reset.sh
+
+test_last_launch: \
+	../edk2/QcomModulePkg/Application/LinuxLoader/TestLastLaunch.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLastLaunch.c
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -I../edk2/QcomModulePkg/Application/LinuxLoader -o $@ $^
 
 # Pure canoe.cfg parser: no EDK2 types at all, so it builds against stdint.
 test_config: test_config.c \
@@ -54,7 +82,8 @@ test_hooks: test_hooks.c \
 	$(HOOK_DIR)/SuperFbProfile.c \
 	$(HOOK_DIR)/SuperFbDeviceInfo.c \
 	$(HOOK_DIR)/SuperFbTzMap.c \
-	$(HOOK_DIR)/SuperFbProfileRewrite.c
+	$(HOOK_DIR)/SuperFbProfileRewrite.c \
+	$(HOOK_DIR)/HookCommon.h
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $^
 
 test_tzmap: test_tzmap.c $(HOOK_DIR)/SuperFbTzMap.c
@@ -62,12 +91,14 @@ test_tzmap: test_tzmap.c $(HOOK_DIR)/SuperFbTzMap.c
 
 # Pure volume classifier: header-only, so no production .c source is linked.
 # Needs the EDK2 include path because it keeps the real UEFI types.
-test_fat: test_fat.c
+test_fat: test_fat.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbFatClassify.h
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
 test_launch: test_launch.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.h \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.h \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbProfile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbManagedPath.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c
@@ -96,4 +127,4 @@ test_surface: test_surface.c \
 	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 clean:
-	rm -f test_profile test_deviceinfo test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface
+	rm -f test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface

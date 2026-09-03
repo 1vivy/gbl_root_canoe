@@ -32,6 +32,11 @@ pub fn json_error(code: &str, message: &str) -> Result<Vec<u8>, serde_json::Erro
 
 pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
     let text = match success {
+        Success::ProtocolVersion {
+            app_version,
+            protocol_version,
+            ..
+        } => format!("canoe-bootmgr {app_version} (protocol {protocol_version})\n"),
         Success::ConfigShow { config, .. } => String::from_utf8(config.serialize()?)
             .map_err(|_| ConfigError::Invalid("serialized config is not UTF-8".to_owned()))?,
         Success::ConfigPolicy { mark, .. } => format!("{mark}\n"),
@@ -135,10 +140,45 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
         Success::VbmetaGraft { receipt, .. } => {
             format!("grafted {} ({} bytes)\n", receipt.output, receipt.bytes)
         }
+        Success::VbmetaInspect {
+            rollback_index,
+            chain_partitions,
+            ..
+        } => format!(
+            "rollback_index={rollback_index} chain_partitions={}\n",
+            chain_partitions.len()
+        ),
         Success::VendorBootPatch { receipt, .. } => format!(
             "patched {} ({} bytes, changed={})\n",
             receipt.output, receipt.bytes, receipt.changed
         ),
+        Success::FastbootIdentify {
+            bds_version,
+            current_slot,
+            ..
+        } => format!(
+            "bds_version={} current_slot={}\n",
+            bds_version.as_deref().unwrap_or("unknown"),
+            current_slot.as_deref().unwrap_or("unknown")
+        ),
+        Success::FastbootExport { node, .. } => format!("exported mass-storage node {node}\n"),
+        Success::FastbootEndExport { node, .. } => {
+            format!("ended mass-storage export for {node}\n")
+        }
+        Success::FastbootFetch {
+            partition, output, ..
+        } => format!("fetched {partition} to {output}\n"),
+        Success::FastbootAblCoverage { slots, .. } => slots
+            .iter()
+            .map(|slot| format!("{}={}\n", slot.slot, slot.coverage))
+            .collect(),
+        Success::FastbootFlash { receipt, .. } => {
+            format!("flashed {} from {}\n", receipt.partition, receipt.image)
+        }
+        Success::FastbootReboot { target, .. } => match target {
+            Some(target) => format!("rebooted to {target}\n"),
+            None => "rebooted\n".to_owned(),
+        },
     };
     let mut bytes = text.into_bytes();
     if !bytes.ends_with(b"\n") {

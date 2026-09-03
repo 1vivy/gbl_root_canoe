@@ -1,8 +1,11 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod actions;
+mod actions_build;
 mod actions_install;
+mod actions_provision;
 mod args;
+mod build_model;
 mod client;
 mod connect;
 mod detect;
@@ -10,18 +13,24 @@ mod elevate;
 mod export;
 mod export_control;
 mod export_drive;
+mod flow;
 mod helper;
 mod identity;
 mod model;
 mod policy;
 mod protocol;
+mod session;
 mod slot_model;
+mod slot_view;
 mod text;
 mod ui;
 mod views;
 mod views_connect;
-mod views_slots;
+mod views_device;
+mod views_install;
 mod views_secondary;
+mod views_slots;
+mod views_status;
 mod wire;
 use std::fs;
 use std::path::Path;
@@ -117,28 +126,39 @@ fn run_smoke(options: &AppOptions) -> Result<(), AppError> {
 }
 
 fn run_smoke_requests(bootmgr: &Path, root: &Path) -> Result<(), AppError> {
-    let empty = detect::parse_detect_response(
-        br#"{"ok":true,"kind":"source.detect","sources":[]}"#,
-    )
-    .map_err(|error| ProtocolError::Malformed(error.to_string()))?;
+    let empty =
+        detect::parse_detect_response(br#"{"ok":true,"kind":"source.detect","sources":[]}"#)
+            .map_err(|error| ProtocolError::Malformed(error.to_string()))?;
     if !empty.is_empty() {
-        return Err(ProtocolError::Malformed("empty source.detect fixture was not empty".to_owned()).into());
+        return Err(ProtocolError::Malformed(
+            "empty source.detect fixture was not empty".to_owned(),
+        )
+        .into());
     }
     let privileged = detect::parse_detect_response(
         br#"{"ok":true,"kind":"source.detect","sources":[{"kind":"block","path":"/dev/sdb","identity":null,"model":"Canoe persist","size_bytes":1,"boot_root":"/efisp","boot_root_present":true,"readable":false,"writable":false,"needs_privilege":true,"mounted_at":null,"why":"permission required"}]}"#,
     )
     .map_err(|error| ProtocolError::Malformed(error.to_string()))?;
-    if !privileged.first().is_some_and(|source| source.needs_privilege) {
-        return Err(ProtocolError::Malformed("privileged source fixture missing".to_owned()).into());
+    if !privileged
+        .first()
+        .is_some_and(|source| source.needs_privilege)
+    {
+        return Err(
+            ProtocolError::Malformed("privileged source fixture missing".to_owned()).into(),
+        );
     }
     let mut client = BootmgrClient::connect(bootmgr, &BootRoot::LocalDir(root.to_owned()))?;
     let detected = client.request(&Request::SourceDetect)?;
     if !matches!(detected, Response::SourceDetect { .. }) {
-        return Err(ProtocolError::Malformed("source.detect returned wrong operation".to_owned()).into());
+        return Err(
+            ProtocolError::Malformed("source.detect returned wrong operation".to_owned()).into(),
+        );
     }
     let config = client.request(&Request::ConfigShow)?;
     if !matches!(config, Response::ConfigShow { .. }) {
-        return Err(ProtocolError::Malformed("config.show returned wrong operation".to_owned()).into());
+        return Err(
+            ProtocolError::Malformed("config.show returned wrong operation".to_owned()).into(),
+        );
     }
     let policy = client.request(&Request::ConfigSetPolicy {
         menu_mode: Some(model::MenuMode::Menu),
@@ -146,15 +166,21 @@ fn run_smoke_requests(bootmgr: &Path, root: &Path) -> Result<(), AppError> {
         menu_timeout_s: Some(5),
     })?;
     if !matches!(policy, Response::ConfigPolicy { .. }) {
-        return Err(ProtocolError::Malformed("config.policy returned wrong operation".to_owned()).into());
+        return Err(
+            ProtocolError::Malformed("config.policy returned wrong operation".to_owned()).into(),
+        );
     }
     let entries = client.request(&Request::EntryList)?;
     if !matches!(entries, Response::EntryList { .. }) {
-        return Err(ProtocolError::Malformed("entry.list returned wrong operation".to_owned()).into());
+        return Err(
+            ProtocolError::Malformed("entry.list returned wrong operation".to_owned()).into(),
+        );
     }
     let bls = client.request(&Request::BlsList)?;
     let Response::BlsList { entries } = bls else {
-        return Err(ProtocolError::Malformed("bls.list returned wrong operation".to_owned()).into());
+        return Err(
+            ProtocolError::Malformed("bls.list returned wrong operation".to_owned()).into(),
+        );
     };
     let bls_default = entries
         .first()
@@ -164,14 +190,17 @@ fn run_smoke_requests(bootmgr: &Path, root: &Path) -> Result<(), AppError> {
     if let Some(id) = bls_default {
         let default = client.request(&Request::DefaultSet { id })?;
         if !matches!(default, Response::DefaultSet { .. }) {
-            return Err(ProtocolError::Malformed("default.set returned wrong operation".to_owned()).into());
+            return Err(ProtocolError::Malformed(
+                "default.set returned wrong operation".to_owned(),
+            )
+            .into());
         }
     }
-    println!("canoe-gui smoke: source.detect, config.show, config.policy, entry.list, bls.list, default.set passed");
+    println!(
+        "canoe-gui smoke: source.detect, config.show, config.policy, entry.list, bls.list, default.set passed"
+    );
     Ok(())
 }
-
-
 
 fn create_smoke_fixture() -> Result<TempDir, std::io::Error> {
     let directory = tempfile::tempdir()?;

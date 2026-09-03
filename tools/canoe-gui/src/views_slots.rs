@@ -7,10 +7,21 @@ impl GuiApp {
     pub(crate) fn render_slots(&mut self, ui: &mut egui::Ui) {
         ui.heading(self.label(TextKey::Slots));
         ui.label(self.label(TextKey::Status));
-        ui.label("bootctl output (optional)");
-        ui.text_edit_singleline(&mut self.bootctl_input);
-        ui.label("GPT active slot (optional)");
-        ui.text_edit_singleline(&mut self.gpt_input);
+        // The device reports its own slot over fastboot; these inputs exist for
+        // the cases it cannot be asked (an offline image, a device-side
+        // bootctl transcript) and are never the primary path.
+        egui::CollapsingHeader::new("Slot override (advanced)")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.small(
+                    "Only needed when the device cannot be asked. Leave empty to use the slot \
+                     the device reported over fastboot.",
+                );
+                ui.label("bootctl output");
+                ui.text_edit_singleline(&mut self.bootctl_input);
+                ui.label("GPT active slot");
+                ui.text_edit_singleline(&mut self.gpt_input);
+            });
         ui.horizontal(|ui| {
             if ui.button(self.label(TextKey::Refresh)).clicked() {
                 if let Some(crate::protocol::Response::SlotStatus { status }) =

@@ -44,6 +44,11 @@ SfbRestoreSecurity (VOID);
 VOID
 SfbSetLaunchLockPolicy (IN SFB_CONFIG_LOCK_POLICY Policy);
 
+/* Supply the original per-entry request immediately before a managed launch;
+ * SfbLaunchImage consumes it once so profile downgrade does not erase it. */
+VOID
+SfbSetLaunchRequestedMode (IN SFB_BOOT_MODE RequestedMode);
+
 /* Run the real managed-image lifecycle. The caller has already preloaded
  * drivers; this function performs prepare, LoadImage, StartImage, and the
  * required restore/disarm boundaries using gBS directly.

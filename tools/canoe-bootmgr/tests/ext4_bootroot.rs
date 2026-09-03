@@ -26,13 +26,25 @@ use canoe_bootmgr::config::ConfigDocument;
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 fn spawn_guard() -> MutexGuard<'static, ()> {
-    SPAWN_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    SPAWN_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// A fake `canoe-ext4` that records every invocation and answers `list /efisp`
 /// with `probe_exit`.
-fn helper(directory: &Path, name: &str, probe_exit: i32) -> (PathBuf, PathBuf) {
-    let _guard = spawn_guard();
+///
+/// The guard is part of the return value, as in `tests/fastboot.rs`: dropping it
+/// when this function returns leaves the following `exec` unprotected, and a
+/// sibling thread that forks in that window hands its child our still-open write
+/// descriptor, which fails the exec with ETXTBSY instead of the behaviour under
+/// test.
+fn helper(
+    directory: &Path,
+    name: &str,
+    probe_exit: i32,
+) -> (MutexGuard<'static, ()>, PathBuf, PathBuf) {
+    let guard = spawn_guard();
     let log = directory.join(format!("{name}.log"));
     let script = directory.join(name);
     let body = format!(
@@ -55,7 +67,7 @@ exit 0
     );
     fs::write(&script, body).expect("write fake helper");
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod fake helper");
-    (script, log)
+    (guard, script, log)
 }
 
 fn source(directory: &Path) -> PathBuf {
@@ -71,7 +83,7 @@ fn calls(log: &Path) -> String {
 #[test]
 fn config_read_targets_efisp_when_the_volume_carries_one() {
     let root = tempfile::tempdir().expect("fixture");
-    let (script, log) = helper(root.path(), "present", 0);
+    let (_guard, script, log) = helper(root.path(), "present", 0);
     let image = source(root.path());
 
     let backend = Backend::ext4_with_helper(&image, &script).expect("backend");
@@ -91,7 +103,7 @@ fn config_read_targets_efisp_when_the_volume_carries_one() {
 #[test]
 fn config_read_targets_the_volume_root_when_there_is_no_efisp() {
     let root = tempfile::tempdir().expect("fixture");
-    let (script, log) = helper(root.path(), "absent", 7);
+    let (_guard, script, log) = helper(root.path(), "absent", 7);
     let image = source(root.path());
 
     let backend = Backend::ext4_with_helper(&image, &script).expect("backend");
@@ -111,7 +123,7 @@ fn config_read_targets_the_volume_root_when_there_is_no_efisp() {
 #[test]
 fn config_write_lands_under_efisp() {
     let root = tempfile::tempdir().expect("fixture");
-    let (script, log) = helper(root.path(), "write", 0);
+    let (_guard, script, log) = helper(root.path(), "write", 0);
     let image = source(root.path());
 
     let backend = Backend::ext4_with_helper(&image, &script).expect("backend");
@@ -138,7 +150,7 @@ fn bls_discovery_targets_efisp() {
     // path helpers, so it needs its own guard: it silently returned no entries
     // for a volume that had them.
     let root = tempfile::tempdir().expect("fixture");
-    let (script, log) = helper(root.path(), "bls", 0);
+    let (_guard, script, log) = helper(root.path(), "bls", 0);
     let image = source(root.path());
 
     let backend = Backend::ext4_with_helper(&image, &script).expect("backend");
@@ -157,7 +169,7 @@ fn bls_discovery_targets_efisp() {
 fn an_unanswerable_probe_is_an_error_not_the_volume_root() {
     let root = tempfile::tempdir().expect("fixture");
     // 5 is the helper's "source is mounted" refusal.
-    let (script, _log) = helper(root.path(), "mounted", 5);
+    let (_guard, script, _log) = helper(root.path(), "mounted", 5);
     let image = source(root.path());
 
     let error = Backend::ext4_with_helper(&image, &script).expect_err("must refuse");

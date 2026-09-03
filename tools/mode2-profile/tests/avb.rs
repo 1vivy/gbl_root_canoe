@@ -1,6 +1,10 @@
 use std::fs;
 
-use mode2_profile::{DeriveError, DeriveFileError, derive_profile, derive_to_file};
+use mode2_profile::{
+    BuildProperties, DeriveError, DeriveFileError, GraftClassification, GraftConfidence,
+    GraftState, VbmetaHeader, classify_graft, derive_profile, derive_to_file, inspect_vbmeta,
+    inspect_vbmeta_header,
+};
 use tempfile::tempdir;
 
 fn be_u64(target: &mut [u8], offset: usize, value: u64) {
@@ -27,6 +31,16 @@ fn property(key: &[u8], value: &[u8]) -> Vec<u8> {
     body.extend_from_slice(value);
     body.push(0);
     descriptor(0, &body)
+}
+
+fn chain(rollback_index_location: u32, name: &[u8], public_key: &[u8]) -> Vec<u8> {
+    let mut body = vec![0; 76];
+    body[0..4].copy_from_slice(&rollback_index_location.to_be_bytes());
+    body[4..8].copy_from_slice(&(name.len() as u32).to_be_bytes());
+    body[8..12].copy_from_slice(&(public_key.len() as u32).to_be_bytes());
+    body.extend_from_slice(name);
+    body.extend_from_slice(public_key);
+    descriptor(4, &body)
 }
 
 fn fixture_from_descriptors(descriptors: Vec<u8>) -> Vec<u8> {
@@ -68,6 +82,96 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn recorded_header(algorithm_type: u32) -> Vec<u8> {
+    let mut header = vec![0; 256];
+    header[0..4].copy_from_slice(b"AVB0");
+    header[28..32].copy_from_slice(&algorithm_type.to_be_bytes());
+    header[120..124].copy_from_slice(&0u32.to_be_bytes());
+    header[128..141].copy_from_slice(b"avbtool 1.3.0");
+    header
+}
+
+fn footer_image(vbmeta: &[u8]) -> Vec<u8> {
+    let vbmeta_offset = 4096usize;
+    let footer_offset = 8192usize;
+    let mut image = vec![0; footer_offset + 64];
+    image[vbmeta_offset..vbmeta_offset + vbmeta.len()].copy_from_slice(vbmeta);
+    let footer = &mut image[footer_offset..];
+    footer[0..4].copy_from_slice(b"AVBf");
+    footer[4..8].copy_from_slice(&1u32.to_be_bytes());
+    footer[12..20].copy_from_slice(&(vbmeta_offset as u64).to_be_bytes());
+    footer[20..28].copy_from_slice(&(vbmeta_offset as u64).to_be_bytes());
+    footer[28..36].copy_from_slice(&(vbmeta.len() as u64).to_be_bytes());
+    image
+}
+
+#[test]
+fn recorded_real_headers_drive_graft_classifier_confidence_order() {
+    let stock = inspect_vbmeta_header(&recorded_header(2)).expect("recorded stock header");
+    assert_eq!(
+        stock,
+        VbmetaHeader {
+            algorithm_type: 2,
+            flags: 0,
+            release_string: "avbtool 1.3.0".to_owned(),
+        }
+    );
+    assert_eq!(
+        classify_graft(&stock),
+        GraftClassification {
+            state: Some(GraftState::SignedOrGrafted),
+            confidence: GraftConfidence::High,
+            algorithm_type: 2,
+        }
+    );
+
+    let custom = inspect_vbmeta_header(&footer_image(&recorded_header(0)))
+        .expect("recorded custom recovery header");
+    assert_eq!(
+        custom,
+        VbmetaHeader {
+            algorithm_type: 0,
+            flags: 0,
+            release_string: "avbtool 1.3.0".to_owned(),
+        }
+    );
+    assert_eq!(
+        classify_graft(&custom),
+        GraftClassification {
+            state: Some(GraftState::UngraftedTreeBuilt),
+            confidence: GraftConfidence::High,
+            algorithm_type: 0,
+        }
+    );
+}
+
+#[test]
+fn header_inspection_rejects_untrusted_malformed_inputs() {
+    let mut truncated_header = vec![0; 127];
+    truncated_header[0..4].copy_from_slice(b"AVB0");
+    assert_eq!(
+        inspect_vbmeta_header(&truncated_header),
+        Err(DeriveError::TooSmall)
+    );
+
+    let mut non_utf8 = recorded_header(0);
+    non_utf8[128] = 0xff;
+    assert_eq!(
+        inspect_vbmeta_header(&non_utf8),
+        Err(DeriveError::InvalidReleaseStringUtf8)
+    );
+
+    let mut overflowing_footer = vec![0; 320];
+    let footer = &mut overflowing_footer[256..];
+    footer[0..4].copy_from_slice(b"AVBf");
+    footer[20..28].copy_from_slice(&u64::MAX.to_be_bytes());
+    footer[28..36].copy_from_slice(&256u64.to_be_bytes());
+    assert_eq!(
+        inspect_vbmeta_header(&overflowing_footer),
+        Err(DeriveError::VbmetaPastImage)
+    );
+}
+
 #[test]
 fn synthetic_signed_vbmeta_derives_packed_fields_and_digests() {
     let profile = derive_profile(&fixture(true, true)).expect("golden vector derives");
@@ -89,14 +193,132 @@ fn synthetic_signed_vbmeta_derives_packed_fields_and_digests() {
 }
 
 #[test]
-fn donor_infiniti_vbmeta_matches_complete_wire_golden() {
-    let vbmeta = include_bytes!("fixtures/vbmeta-infiniti-IN-16.0.7.201.img");
-    let profile = derive_profile(vbmeta).expect("donor vbmeta derives");
-    assert_eq!(profile.system_version, 0x40000);
-    assert_eq!(profile.system_spl, 0x9a5);
+fn inspection_enumerates_graft_chains_and_filters_vbmeta_names() {
+    let mut descriptors = property(b"com.android.build.boot.os_version", b"16.0.7");
+    descriptors.extend(property(b"com.android.build.system.os_version", b"16"));
+    descriptors.extend(property(
+        b"com.android.build.system.security_patch",
+        b"2026-05-01",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.vendor.security_patch",
+        b"2026-04-05",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.boot.security_patch",
+        b"2026-03-01",
+    ));
+    descriptors.extend(chain(1, b"recovery", b"recovery-key"));
+    descriptors.extend(chain(2, b"vbmeta_system", b"system-key"));
+    descriptors.extend(chain(3, b"vendor", b"vendor-key"));
+    descriptors.extend(chain(4, b"vbmeta", b"root-key"));
+
+    let mut vbmeta = fixture_from_descriptors(descriptors);
+    be_u64(&mut vbmeta, 112, 0x1122_3344_5566_7788);
+    let inspection = inspect_vbmeta(&vbmeta).expect("inspect fixture");
+    assert_eq!(inspection.rollback_index, 0x1122_3344_5566_7788);
+    assert_eq!(inspection.chain_partitions.len(), 2);
+    assert_eq!(inspection.chain_partitions[0].partition_name, "recovery");
+    assert_eq!(inspection.chain_partitions[0].rollback_index_location, 1);
+    assert_eq!(inspection.chain_partitions[0].public_key, b"recovery-key");
+    assert_eq!(inspection.chain_partitions[1].partition_name, "vendor");
+    println!("{inspection:#?}");
+}
+
+#[test]
+fn inspection_extracts_exactly_the_four_named_build_properties() {
+    let mut descriptors = property(b"com.android.build.boot.os_version", b"16.0.7");
+    descriptors.extend(property(b"com.android.build.system.os_version", b"16"));
+    descriptors.extend(property(
+        b"com.android.build.system.security_patch",
+        b"2026-05-01",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.vendor.security_patch",
+        b"2026-04-05",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.boot.security_patch",
+        b"2026-03-01",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.product.security_patch",
+        b"ignored",
+    ));
+
+    let inspection =
+        inspect_vbmeta(&fixture_from_descriptors(descriptors)).expect("inspect fixture");
     assert_eq!(
-        hex(&profile.to_bytes()),
-        "474d325001000000000000000000000000000400a509000044149b5df4f23466590b6e9888b75e618dbe07220a078efcca37ef6218e566c78d897f62492ea617f777bad41a5711ab621fcac1efc1865b890328ee8c3853bbe33289e2ff589b368a1a349ff11f082b7855008798d7b7d9bcb8ede862e6b1bc"
+        inspection.build_properties,
+        BuildProperties {
+            system_os_version: Some("16".to_owned()),
+            system_security_patch: Some("2026-05-01".to_owned()),
+            vendor_security_patch: Some("2026-04-05".to_owned()),
+            boot_security_patch: Some("2026-03-01".to_owned()),
+        }
+    );
+}
+
+#[test]
+fn duplicate_named_property_is_rejected() {
+    let mut descriptors = property(b"com.android.build.boot.os_version", b"16.0.7");
+    descriptors.extend(property(
+        b"com.android.build.system.security_patch",
+        b"2026-05-01",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.system.security_patch",
+        b"2026-06-01",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.boot.security_patch",
+        b"2026-03-01",
+    ));
+
+    let error = inspect_vbmeta(&fixture_from_descriptors(descriptors))
+        .expect_err("duplicate named property must be refused");
+    assert_eq!(
+        error,
+        DeriveError::DuplicateProperty("com.android.build.system.security_patch".to_owned())
+    );
+    println!("{error:?}: {error}");
+}
+
+#[test]
+fn synthetic_vbmeta_matches_pre_change_profile_fixture() {
+    let expected = include_bytes!("fixtures/profile-pre-chain.gm2p");
+    assert_eq!(
+        derive_profile(&fixture(true, true))
+            .expect("synthetic vbmeta derives")
+            .to_bytes(),
+        *expected
+    );
+}
+
+#[test]
+fn duplicate_profile_only_os_version_retains_legacy_last_value_behavior() {
+    let mut descriptors = property(b"com.android.build.boot.os_version", b"15");
+    descriptors.extend(property(b"com.android.build.boot.os_version", b"16.0.7"));
+    descriptors.extend(property(
+        b"com.android.build.boot.security_patch",
+        b"2026-05-01",
+    ));
+    assert_eq!(
+        derive_profile(&fixture_from_descriptors(descriptors))
+            .expect("profile-only duplicate remains accepted")
+            .system_version,
+        0x40007
+    );
+}
+
+#[test]
+fn donor_infiniti_vbmeta_rejects_duplicated_named_property() {
+    let vbmeta = include_bytes!("fixtures/vbmeta-infiniti-IN-16.0.7.201.img");
+    assert_eq!(
+        derive_profile(vbmeta),
+        Err(DeriveError::DuplicateProperty(
+            "com.android.build.boot.security_patch".to_owned()
+        ))
     );
 }
 
@@ -300,6 +522,50 @@ fn malformed_property_descriptor_is_rejected() {
 }
 
 #[test]
+fn malformed_chain_descriptors_and_windows_are_typed_rejections() {
+    let mut base = property(b"com.android.build.boot.os_version", b"16.0.7");
+    base.extend(property(
+        b"com.android.build.boot.security_patch",
+        b"2026-05-01",
+    ));
+
+    let mut zero_name = base.clone();
+    zero_name.extend(chain(1, b"", b"key"));
+    assert_eq!(
+        inspect_vbmeta(&fixture_from_descriptors(zero_name)),
+        Err(DeriveError::MalformedChainPartition)
+    );
+
+    let mut oversized_name_body = vec![0; 76];
+    oversized_name_body[4..8].copy_from_slice(&u32::MAX.to_be_bytes());
+    let mut oversized_name = base.clone();
+    oversized_name.extend(descriptor(4, &oversized_name_body));
+    assert_eq!(
+        inspect_vbmeta(&fixture_from_descriptors(oversized_name)),
+        Err(DeriveError::MalformedChainPartition)
+    );
+
+    let mut overflowing_descriptor = fixture_from_descriptors(base.clone());
+    let descriptor_start = 256 + 288 + 64;
+    be_u64(&mut overflowing_descriptor, descriptor_start + 8, u64::MAX);
+    assert_eq!(
+        inspect_vbmeta(&overflowing_descriptor),
+        Err(DeriveError::MalformedDescriptor)
+    );
+
+    let mut truncated_window = fixture_from_descriptors(base);
+    let descriptor_size = u64::from_be_bytes(
+        truncated_window[104..112]
+            .try_into()
+            .expect("descriptor size"),
+    );
+    be_u64(&mut truncated_window, 104, descriptor_size + 8);
+    let error = inspect_vbmeta(&truncated_window).expect_err("window past aux must be refused");
+    assert_eq!(error, DeriveError::DescriptorsPastAux);
+    println!("{error:?}: {error}");
+}
+
+#[test]
 fn failed_atomic_replacement_preserves_existing_profile() {
     let directory = tempdir().expect("temporary directory");
     let vbmeta = directory.path().join("vbmeta.img");
@@ -317,7 +583,10 @@ fn failed_atomic_replacement_preserves_existing_profile() {
         derive_to_file(&vbmeta, &output),
         Err(DeriveFileError::Write(_))
     ));
-    assert_eq!(fs::read(&output).expect("original profile remains"), b"original");
+    assert_eq!(
+        fs::read(&output).expect("original profile remains"),
+        b"original"
+    );
 }
 
 #[test]

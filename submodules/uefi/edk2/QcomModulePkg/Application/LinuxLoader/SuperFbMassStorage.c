@@ -179,6 +179,7 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
   SFB_USB_MSD_PROTOCOL *Msd = NULL;
   UINT8                 MaxLun = 0;
   BOOLEAN               Cancelled = FALSE;
+  BOOLEAN               HostEjected = FALSE;
   BOOLEAN               Bundled;
   UINT32                Polls = 0;
   UINT32                NotReady = 0;
@@ -319,6 +320,18 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
   while (TRUE) {
     Status = Msd->EventHandler (Msd);
     Polls++;
+    /*
+     * The bundled driver reports a host eject here: the host issued SCSI START
+     * STOP UNIT with LOEJ set, and the driver waited until its CSW had gone out
+     * before saying so. Test it before the error arm, because this is an error
+     * status by encoding and would otherwise be counted as a stalled poll.
+     * A driver without that patch, including the resident platform one, never
+     * returns it and this session ends exactly as it did before.
+     */
+    if (Status == EFI_MEDIA_CHANGED) {
+      HostEjected = TRUE;
+      break;
+    }
     if (Status == EFI_NOT_READY) {
       NotReady++;
       Consecutive = 0;
@@ -356,11 +369,17 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    */
   SfbMassStorageDrainKeys ();
 
-  Status = Cancelled ? EFI_ABORTED : EFI_SUCCESS;
+  if (HostEjected) {
+    Status = EFI_MEDIA_CHANGED;
+  } else {
+    Status = Cancelled ? EFI_ABORTED : EFI_SUCCESS;
+  }
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK msc-session target=%a status=%r stop=%r "
+          "SFB: MARK msc-session target=%a status=%r ending=%a stop=%r "
           "lun-release=%r polls=%u notready=%u errors=%u handler=%r\n",
-          (Tag != NULL) ? Tag : "?", Status, StopStatus, ReleaseStatus,
+          (Tag != NULL) ? Tag : "?", Status,
+          HostEjected ? "host-eject" : (Cancelled ? "volume-down" : "gave-up"),
+          StopStatus, ReleaseStatus,
           Polls, NotReady, Errors, FirstHandlerError));
   return Status;
 }
@@ -511,7 +530,13 @@ SfbHandleMassStorageMenuRow (IN VOID *Context,
 
   Status = SfbMassStorageExportDisk (State->Targets[Row].Name,
                                      State->Targets[Row].Tag);
-  if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
+  /*
+   * Volume Down and a host eject are both ordinary endings that happen to be
+   * error encodings. Reporting either as a failed start would tell the operator
+   * the export never ran, when in fact they ended it themselves.
+   */
+  if (EFI_ERROR (Status) && Status != EFI_ABORTED &&
+      Status != EFI_MEDIA_CHANGED) {
     SfbReportStatus (L"Could not start mass storage", Status);
   }
   return SfbMenuActionRebuild;

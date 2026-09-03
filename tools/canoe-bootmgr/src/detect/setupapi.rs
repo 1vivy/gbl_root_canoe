@@ -3,8 +3,8 @@ use std::mem::size_of;
 use std::ptr::{null, null_mut};
 
 use windows_sys::Win32::Devices::DeviceAndDriverInstallation::{
-    CM_Get_Device_IDW, CM_Get_Parent, CR_SUCCESS, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT,
-    HDEVINFO, SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
+    CM_Get_Device_IDW, CM_Get_Parent, CR_SUCCESS, DIGCF_DEVICEINTERFACE, DIGCF_PRESENT, HDEVINFO,
+    SP_DEVICE_INTERFACE_DATA, SP_DEVICE_INTERFACE_DETAIL_DATA_W, SP_DEVINFO_DATA,
     SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
     SetupDiGetDeviceInterfaceDetailW,
 };
@@ -14,7 +14,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::IO::DeviceIoControl;
 use windows_sys::Win32::System::Ioctl::{
-    IOCTL_STORAGE_GET_DEVICE_NUMBER, GUID_DEVINTERFACE_DISK, STORAGE_DEVICE_NUMBER,
+    GUID_DEVINTERFACE_DISK, IOCTL_STORAGE_GET_DEVICE_NUMBER, STORAGE_DEVICE_NUMBER,
 };
 
 use super::DeviceHandle;
@@ -43,7 +43,13 @@ pub(super) fn setupapi_identities() -> HashMap<u32, String> {
         };
         // SAFETY: interface points to a writable structure with the required cbSize.
         let present = unsafe {
-            SetupDiEnumDeviceInterfaces(set, null(), &GUID_DEVINTERFACE_DISK, member, &mut interface)
+            SetupDiEnumDeviceInterfaces(
+                set,
+                null(),
+                &GUID_DEVINTERFACE_DISK,
+                member,
+                &mut interface,
+            )
         };
         if present == 0 {
             break;
@@ -51,15 +57,30 @@ pub(super) fn setupapi_identities() -> HashMap<u32, String> {
         let mut required = 0_u32;
         // SAFETY: first call intentionally supplies a null detail buffer to obtain its size.
         let _ = unsafe {
-            SetupDiGetDeviceInterfaceDetailW(set, &interface, null_mut(), 0, &mut required, null_mut())
+            SetupDiGetDeviceInterfaceDetailW(
+                set,
+                &interface,
+                null_mut(),
+                0,
+                &mut required,
+                null_mut(),
+            )
         };
         if required != 0 {
-            let words = usize::try_from(required).map_or(0, |value| value).div_ceil(size_of::<u32>());
+            let words = usize::try_from(required)
+                .map_or(0, |value| value)
+                .div_ceil(size_of::<u32>());
             let mut storage = vec![0_u32; words];
-            let detail = storage.as_mut_ptr().cast::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>();
+            let detail = storage
+                .as_mut_ptr()
+                .cast::<SP_DEVICE_INTERFACE_DETAIL_DATA_W>();
             // SAFETY: aligned storage is large enough for the requested detail structure.
             unsafe {
-                (*detail).cbSize = if cfg!(target_pointer_width = "64") { 8 } else { 6 };
+                (*detail).cbSize = if cfg!(target_pointer_width = "64") {
+                    8
+                } else {
+                    6
+                };
             }
             let mut info = SP_DEVINFO_DATA {
                 cbSize: u32::try_from(size_of::<SP_DEVINFO_DATA>()).map_or(0, |value| value),
@@ -67,7 +88,14 @@ pub(super) fn setupapi_identities() -> HashMap<u32, String> {
             };
             // SAFETY: detail/info point to writable buffers sized for this API call.
             let ok = unsafe {
-                SetupDiGetDeviceInterfaceDetailW(set, &interface, detail, required, &mut required, &mut info)
+                SetupDiGetDeviceInterfaceDetailW(
+                    set,
+                    &interface,
+                    detail,
+                    required,
+                    &mut required,
+                    &mut info,
+                )
             };
             if ok != 0 {
                 // SAFETY: SetupAPI's detail buffer stores a NUL-terminated DevicePath string.
@@ -92,7 +120,15 @@ fn interface_drive_number(path: &str) -> Option<u32> {
     let wide = wide_null(path);
     // SAFETY: path is a valid NUL-terminated interface path from SetupAPI.
     let handle = unsafe {
-        CreateFileW(wide.as_ptr(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE, null(), OPEN_EXISTING, 0, null_mut())
+        CreateFileW(
+            wide.as_ptr(),
+            0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            null(),
+            OPEN_EXISTING,
+            0,
+            null_mut(),
+        )
     };
     if handle == INVALID_HANDLE_VALUE || handle.is_null() {
         return None;
@@ -122,7 +158,10 @@ fn devnode_identity(mut devinst: u32) -> Option<String> {
         // SAFETY: buffer is writable and its element count is passed as the capacity.
         let result = unsafe { CM_Get_Device_IDW(devinst, buffer.as_mut_ptr(), 512, 0) };
         if result == CR_SUCCESS {
-            let end = buffer.iter().position(|value| *value == 0).map_or(buffer.len(), |value| value);
+            let end = buffer
+                .iter()
+                .position(|value| *value == 0)
+                .map_or(buffer.len(), |value| value);
             let id = String::from_utf16_lossy(&buffer[..end]);
             if let Some(identity) = parse_usb_identity(&id) {
                 return Some(identity);
@@ -143,7 +182,11 @@ fn parse_usb_identity(value: &str) -> Option<String> {
     let folded = value.to_ascii_uppercase();
     let (vendor, product) = folded.strip_prefix("USB\\VID_")?.split_once("&PID_")?;
     let product = product.get(..4)?;
-    let identity = format!("{}:{}", vendor.to_ascii_lowercase(), product.to_ascii_lowercase());
+    let identity = format!(
+        "{}:{}",
+        vendor.to_ascii_lowercase(),
+        product.to_ascii_lowercase()
+    );
     (identity == CANOE_IDENTITY || identity == FALLBACK_IDENTITY).then_some(identity)
 }
 
@@ -161,4 +204,3 @@ fn utf16_from_ptr(pointer: *const u16) -> String {
 pub(super) fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
-

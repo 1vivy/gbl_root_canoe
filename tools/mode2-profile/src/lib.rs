@@ -3,7 +3,11 @@
 mod avb;
 mod profile;
 
-pub use avb::{DeriveError, derive, derive_profile};
+pub use avb::{
+    BuildProperties, ChainPartition, DeriveError, GraftClassification, GraftConfidence, GraftState,
+    VbmetaHeader, VbmetaInspection, classify_graft, derive, derive_profile, inspect_vbmeta,
+    inspect_vbmeta_header,
+};
 pub use profile::{PROFILE_SIZE, Profile, ProfileError};
 
 use std::fs::{self, File, OpenOptions};

@@ -5,6 +5,10 @@
 test_bls
 test_config
 test_deviceinfo
+test_devinfo
+test_slot_retries
+test_slot_attributes
+test_last_launch
 test_fat
 test_hooks
 test_launch
@@ -13,3 +17,6 @@ test_linuxboot
 test_profile
 test_tzmap
 test_surface
+
+# L2's offline dual-GPT dump fixture is test input, not a build image.
+!fixtures/gpt-slot-reset-dump.img

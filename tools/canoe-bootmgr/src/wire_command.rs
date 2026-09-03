@@ -1,9 +1,11 @@
 use crate::artifact::ArtifactSpec;
 use crate::build::BuildArgs;
 use crate::cli::{
-    BlsCommand, BlsStageArgs, Command, ConfigCommand, DefaultCommand, DefaultSetArgs,
-    EntryCommand, EntryIdArgs, EntryModeArgs, EntrySetArgs, GraftArgs, InstallArgs, OtaApplyArgs,
-    PolicyArgs, SlotCommand, SlotStatusArgs, SourceCommand, VendorBootCommand,
+    BlsCommand, BlsStageArgs, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand,
+    EntryIdArgs, EntryModeArgs, EntrySetArgs, FastbootAblCoverageArgs, FastbootCommand,
+    FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
+    FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, OtaApplyArgs, PolicyArgs,
+    SlotCommand, SlotStatusArgs, SourceCommand, VbmetaInspectArgs, VendorBootCommand,
     VendorBootPatchArgs,
 };
 use crate::wire::JsonRequest;
@@ -11,11 +13,13 @@ use crate::wire::JsonRequest;
 impl JsonRequest {
     pub fn into_command(self) -> Command {
         match self {
+            Self::ProtocolVersion => Command::ProtocolVersion,
             Self::Build {
                 abl,
                 vbmeta,
                 staged,
                 tools,
+                efisp_tools,
                 keep_unpatched,
                 patch_log,
                 probe,
@@ -24,6 +28,7 @@ impl JsonRequest {
                 vbmeta,
                 staged,
                 tools,
+                efisp_tools,
                 keep_unpatched,
                 patch_log,
                 probe,
@@ -171,8 +176,44 @@ impl JsonRequest {
                 recovery,
                 output,
             }),
+            Self::VbmetaInspect { vbmeta, tools } => {
+                Command::VbmetaInspect(VbmetaInspectArgs { vbmeta, tools })
+            }
             Self::VendorBootPatch { input, output } => Command::VendorBoot {
                 command: VendorBootCommand::Patch(VendorBootPatchArgs { input, output }),
+            },
+            Self::FastbootIdentify { timeout_seconds } => Command::Fastboot {
+                command: FastbootCommand::Identify(FastbootIdentifyArgs { timeout_seconds }),
+            },
+            Self::FastbootExport {
+                target,
+                timeout_seconds,
+            } => Command::Fastboot {
+                command: FastbootCommand::Export(FastbootExportArgs {
+                    target,
+                    timeout_seconds,
+                }),
+            },
+            Self::FastbootEndExport { node } => Command::Fastboot {
+                command: FastbootCommand::EndExport(FastbootEndExportArgs { node }),
+            },
+            Self::FastbootFetch { partition, output } => Command::Fastboot {
+                command: FastbootCommand::Fetch(FastbootFetchArgs { partition, output }),
+            },
+            Self::FastbootAblCoverage {
+                tools,
+                timeout_seconds,
+            } => Command::Fastboot {
+                command: FastbootCommand::AblCoverage(FastbootAblCoverageArgs {
+                    tools,
+                    timeout_seconds,
+                }),
+            },
+            Self::FastbootFlash { partition, image } => Command::Fastboot {
+                command: FastbootCommand::Flash(FastbootFlashArgs { partition, image }),
+            },
+            Self::FastbootReboot { target } => Command::Fastboot {
+                command: FastbootCommand::Reboot(FastbootRebootArgs { target }),
             },
         }
     }

@@ -1,16 +1,12 @@
 //! UI-side control of the export session: spawn the worker thread, drain its
 //! events on the frame loop, and hand a verified candidate to the attach path.
 
+use crate::export::{EXPORT_TARGET, ExportEvent, ExportPhase, diagnose_rejection, failure_text};
+use crate::export_drive::{ExportOutcome, is_attachable_export, run_export};
+use crate::ui::GuiApp;
 use std::path::Path;
 use std::sync::mpsc::channel;
 use std::thread;
-use std::time::Instant;
-
-use canoe_bootmgr::detect;
-
-use crate::export::{EXPORT_TARGET, ExportEvent, ExportPhase, failure_text, diagnose_rejection};
-use crate::export_drive::{ExportOutcome, run_export};
-use crate::ui::GuiApp;
 
 impl GuiApp {
     pub(crate) fn start_export(&mut self) {
@@ -18,14 +14,11 @@ impl GuiApp {
             return;
         }
         self.export.phase = ExportPhase::Starting;
-        self.export.started = Some(Instant::now());
         let (sender, receiver) = channel();
         let bootmgr = self.bootmgr_path.clone();
         thread::spawn(move || {
             let event = match run_export(&bootmgr, &sender) {
-                Ok(ExportOutcome::Attached { node, adopted }) => {
-                    ExportEvent::Succeeded { node, adopted }
-                }
+                Ok(ExportOutcome::Attached { node }) => ExportEvent::Succeeded { node },
                 Err(failure) => ExportEvent::Failed(failure),
             };
             let _ = sender.send(event);
@@ -61,18 +54,11 @@ impl GuiApp {
 
     fn finish_export(&mut self) {
         match self.export.phase.clone() {
-            ExportPhase::Attached { node, adopted } => {
-                if adopted {
-                    self.status = format!(
-                        "adopted the mass-storage export already live at {}",
-                        node.display()
-                    );
-                } else {
-                    self.status = format!(
-                        "mass-storage export live at {}; the BDS owns it until Volume Down ends the session",
-                        node.display()
-                    );
-                }
+            ExportPhase::Attached { node } => {
+                self.status = format!(
+                    "mass-storage export live at {}; the BDS owns it until Volume Down ends the session",
+                    node.display()
+                );
                 self.log(self.status.clone());
                 self.attach_export(&node);
             }
@@ -98,7 +84,7 @@ impl GuiApp {
             );
             return;
         };
-        if !detect::is_export_candidate(&crate::export_drive::as_detected(&candidate)) {
+        if !is_attachable_export(&candidate) {
             self.status = diagnose_rejection(&self.candidates)
                 .unwrap_or_else(|| format!("{} is not an attachable export", node.display()));
             return;

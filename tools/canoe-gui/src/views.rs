@@ -46,6 +46,11 @@ impl GuiApp {
             }
         });
         ui.horizontal(|ui| {
+            for (screen, label) in [(Screen::Device, "Device"), (Screen::Install, "Install")] {
+                if ui.selectable_label(self.screen == screen, label).clicked() {
+                    self.screen = screen;
+                }
+            }
             for (screen, key) in [
                 (Screen::Entries, TextKey::Entries),
                 (Screen::Editor, TextKey::Editor),

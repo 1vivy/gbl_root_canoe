@@ -1,10 +1,11 @@
 use std::path::Path;
+use std::time::Duration;
 
 use crate::backend::{Backend, BackendError, BootRoot};
 use crate::build::{self, BuildArgs, BuildOutcome};
 use crate::cli::{
-    BlsCommand, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand, EntrySetArgs,
-    PolicyArgs, SourceCommand, Success,
+    AblCoverage, BlsCommand, Command, ConfigCommand, DefaultCommand, DefaultSetArgs, EntryCommand,
+    EntrySetArgs, FastbootCommand, FastbootFlashReceipt, PolicyArgs, SourceCommand, Success,
 };
 use crate::config::{ConfigDocument, EntryRequest, PolicyUpdate};
 pub use crate::errors::AppError;
@@ -15,8 +16,17 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     let Some(command) = cli.command.as_ref() else {
         return Err(AppError::Request("a command is required".to_owned()));
     };
+    if matches!(command, Command::ProtocolVersion) {
+        return Ok(protocol_version());
+    }
     if let Command::Build(args) = command {
         return build_command(args);
+    }
+    if let Command::VbmetaInspect(args) = command {
+        return vbmeta_inspect_command(args);
+    }
+    if let Command::Fastboot { command } = command {
+        return fastboot_command(command);
     }
     let backend = Backend::from_paths(
         cli.boot_root.as_deref(),
@@ -28,8 +38,17 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
 
 pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, AppError> {
     let command = request.into_command();
+    if matches!(command, Command::ProtocolVersion) {
+        return Ok(protocol_version());
+    }
     if let Command::Build(args) = &command {
         return build_command(args);
+    }
+    if let Command::VbmetaInspect(args) = &command {
+        return vbmeta_inspect_command(args);
+    }
+    if let Command::Fastboot { command } = &command {
+        return fastboot_command(command);
     }
     let backend = Backend::local(root)?;
     execute_command(&backend, &command)
@@ -40,8 +59,17 @@ pub fn execute_request_cli(
     request: JsonRequest,
 ) -> Result<Success, AppError> {
     let command = request.into_command();
+    if matches!(command, Command::ProtocolVersion) {
+        return Ok(protocol_version());
+    }
     if let Command::Build(args) = &command {
         return build_command(args);
+    }
+    if let Command::VbmetaInspect(args) = &command {
+        return vbmeta_inspect_command(args);
+    }
+    if let Command::Fastboot { command } = &command {
+        return fastboot_command(command);
     }
     let backend = Backend::from_paths(
         cli.boot_root.as_deref(),
@@ -53,6 +81,7 @@ pub fn execute_request_cli(
 
 fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppError> {
     match command {
+        Command::ProtocolVersion => Ok(protocol_version()),
         Command::Build(args) => build_command(args),
         Command::Config { command } => config_command(backend, command),
         Command::Entry { command } => entry_command(backend, command),
@@ -63,7 +92,191 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
         Command::Install(args) => extra_ops::install_command(backend, args),
         Command::OtaApply(args) => extra_ops::ota_apply(backend, args),
         Command::Graft(args) => extra_ops::graft_command(args),
+        Command::VbmetaInspect(args) => vbmeta_inspect_command(args),
+        Command::Fastboot { command } => fastboot_command(command),
         Command::VendorBoot { command } => extra_ops::vendorboot_command(command),
+    }
+}
+
+fn vbmeta_inspect_command(args: &crate::cli::VbmetaInspectArgs) -> Result<Success, AppError> {
+    let receipt = crate::vbmeta_inspect::inspect(&args.vbmeta, args.tools.as_deref())?;
+    Ok(Success::VbmetaInspect {
+        ok: true,
+        rollback_index: receipt.rollback_index,
+        chain_partitions: receipt.chain_partitions,
+        build_properties: receipt.build_properties,
+    })
+}
+
+fn protocol_version() -> Success {
+    Success::ProtocolVersion {
+        ok: true,
+        app_version: env!("CARGO_PKG_VERSION"),
+        protocol_version: crate::wire::PROTOCOL_VERSION,
+    }
+}
+
+fn fastboot_command(command: &FastbootCommand) -> Result<Success, AppError> {
+    match command {
+        FastbootCommand::Identify(args) => {
+            let identity = match crate::fastboot::binary(None) {
+                Ok(fastboot) => {
+                    crate::fastboot::identify(&fastboot, Duration::from_secs(args.timeout_seconds))
+                }
+                Err(crate::fastboot::FastbootError::NotFound { .. }) => crate::fastboot::Identity {
+                    bds_version: None,
+                    current_slot: None,
+                },
+                Err(error) => return Err(error.into()),
+            };
+            Ok(Success::FastbootIdentify {
+                ok: true,
+                bds_version: identity.bds_version,
+                current_slot: identity.current_slot,
+            })
+        }
+        FastbootCommand::Export(args) => {
+            let fastboot = crate::fastboot::binary(None)?;
+            let exported = crate::fastboot::export(
+                &fastboot,
+                &args.target,
+                Duration::from_secs(args.timeout_seconds),
+                find_export_node,
+            )?;
+            Ok(Success::FastbootExport {
+                ok: true,
+                node: exported.node.display().to_string(),
+            })
+        }
+        FastbootCommand::EndExport(args) => {
+            crate::fastboot::end_export(&args.node).map_err(end_export_error)?;
+            Ok(Success::FastbootEndExport {
+                ok: true,
+                node: args.node.display().to_string(),
+            })
+        }
+        FastbootCommand::Fetch(args) => {
+            let fastboot = crate::fastboot::binary(None)?;
+            crate::fastboot::fetch(
+                &fastboot,
+                &args.partition,
+                &args.output,
+                Duration::from_secs(30),
+            )?;
+            Ok(Success::FastbootFetch {
+                ok: true,
+                partition: args.partition.clone(),
+                output: args.output.display().to_string(),
+            })
+        }
+        FastbootCommand::AblCoverage(args) => {
+            // Coverage is independently answerable per slot. An unavailable fastboot
+            // binary means neither slot can be fetched, so both are explicitly unknown.
+            let slots = match crate::fastboot::binary(None) {
+                Ok(fastboot) => ["a", "b"].map(|slot| probe_abl_slot(&fastboot, slot, args)),
+                Err(_) => [unknown_abl_coverage("a"), unknown_abl_coverage("b")],
+            };
+            Ok(Success::FastbootAblCoverage {
+                ok: true,
+                slots: Vec::from(slots),
+            })
+        }
+        FastbootCommand::Flash(args) => {
+            let fastboot = crate::fastboot::binary(None)?;
+            crate::fastboot::flash(
+                &fastboot,
+                &args.partition,
+                &args.image,
+                Duration::from_secs(30),
+            )?;
+            Ok(Success::FastbootFlash {
+                ok: true,
+                receipt: FastbootFlashReceipt {
+                    partition: args.partition.clone(),
+                    image: args.image.display().to_string(),
+                },
+            })
+        }
+        FastbootCommand::Reboot(args) => {
+            let fastboot = crate::fastboot::binary(None)?;
+            crate::fastboot::reboot(&fastboot, args.target.as_deref(), Duration::from_secs(30))?;
+            Ok(Success::FastbootReboot {
+                ok: true,
+                target: args.target.clone(),
+            })
+        }
+    }
+}
+
+fn probe_abl_slot(
+    fastboot: &Path,
+    slot: &'static str,
+    args: &crate::cli::FastbootAblCoverageArgs,
+) -> AblCoverage {
+    let Some(coverage) = (|| {
+        let workdir = crate::build_tools::WorkDir::new().ok()?;
+        let abl = workdir.path().join(format!("abl_{slot}.img"));
+        // Fetch and probe failures intentionally become the first-class unknown
+        // verdict below; this preserves any independently answered other slot.
+        crate::fastboot::fetch(
+            fastboot,
+            &format!("abl_{slot}"),
+            &abl,
+            Duration::from_secs(args.timeout_seconds),
+        )
+        .ok()?;
+        let BuildOutcome::Probe(receipt) = build::execute(&BuildArgs {
+            abl,
+            vbmeta: None,
+            staged: None,
+            tools: args.tools.clone(),
+            efisp_tools: None,
+            keep_unpatched: None,
+            patch_log: None,
+            probe: true,
+        })
+        .ok()?
+        else {
+            return None;
+        };
+        Some(if receipt.gbl_patched {
+            "vulnerable"
+        } else {
+            "stock"
+        })
+    })() else {
+        return unknown_abl_coverage(slot);
+    };
+    AblCoverage { slot, coverage }
+}
+
+fn unknown_abl_coverage(slot: &'static str) -> AblCoverage {
+    AblCoverage {
+        slot,
+        coverage: "unknown",
+    }
+}
+
+fn find_export_node() -> Result<Option<std::path::PathBuf>, crate::fastboot::FastbootError> {
+    let sources = crate::detect::detect_sources().map_err(|error| {
+        crate::fastboot::FastbootError::Discovery {
+            message: error.to_string(),
+        }
+    })?;
+    Ok(sources
+        .into_iter()
+        .find(crate::detect::is_export_candidate)
+        .map(|candidate| candidate.path))
+}
+
+fn end_export_error(error: crate::fastboot::FastbootError) -> AppError {
+    let message = error.to_string();
+    if message.to_ascii_lowercase().contains("permission denied") {
+        AppError::Request(format!(
+            "fastboot end-export needs permission to open the raw block node: {message}"
+        ))
+    } else {
+        AppError::Fastboot(error)
     }
 }
 
@@ -87,7 +300,10 @@ fn source_command(command: &SourceCommand) -> Result<Success, AppError> {
         SourceCommand::Detect => Ok(Success::SourceDetect {
             ok: true,
             kind: "source.detect",
-            sources: crate::detect::detect_sources()?,
+            sources: crate::detect::detect_sources()?
+                .into_iter()
+                .map(crate::detect::SourceCandidate::with_export_candidate)
+                .collect(),
         }),
     }
 }
@@ -221,9 +437,10 @@ fn default_command(backend: &dyn BootRoot, command: &DefaultCommand) -> Result<S
 }
 
 fn default_target(args: &DefaultSetArgs) -> Result<&str, AppError> {
-    args.target.as_deref().or(args.id.as_deref()).ok_or_else(|| {
-        AppError::Request("default set requires a TARGET".to_owned())
-    })
+    args.target
+        .as_deref()
+        .or(args.id.as_deref())
+        .ok_or_else(|| AppError::Request("default set requires a TARGET".to_owned()))
 }
 
 fn bls_target_exists(backend: &dyn BootRoot, target: &str) -> Result<bool, AppError> {

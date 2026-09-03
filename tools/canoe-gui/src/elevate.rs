@@ -27,22 +27,25 @@ pub fn access_denied(error: &ProtocolError) -> bool {
         | ProtocolError::Decode(_)
         | ProtocolError::ResponseTooLarge
         | ProtocolError::EmptyResponse
+        | ProtocolError::ResponseTimeout { .. }
         | ProtocolError::Exited { code: Some(126) }
         | ProtocolError::Malformed(_) => false,
         ProtocolError::Exited { code } => code == &Some(127),
     }
 }
 
-pub fn action_for(error: &ProtocolError, helper: &Path, root: &BootRoot) -> Option<ElevationAction> {
+pub fn action_for(
+    error: &ProtocolError,
+    helper: &Path,
+    root: &BootRoot,
+) -> Option<ElevationAction> {
     if !access_denied(error) {
         return None;
     }
     if cfg!(windows) {
         return Some(ElevationAction::Windows);
     }
-    let absolute_helper = helper
-        .canonicalize()
-        .unwrap_or_else(|_| helper.to_owned());
+    let absolute_helper = helper.canonicalize().unwrap_or_else(|_| helper.to_owned());
     let mut arguments = vec![absolute_helper.display().to_string(), "--json".to_owned()];
     match root {
         BootRoot::LocalDir(path) => {
@@ -101,7 +104,14 @@ mod tests {
     #[test]
     fn does_not_offer_elevation_for_other_errors() {
         let error = ProtocolError::Malformed("bad response".to_owned());
-        assert!(action_for(&error, &PathBuf::from("helper"), &BootRoot::LocalDir(PathBuf::from("."))).is_none());
+        assert!(
+            action_for(
+                &error,
+                &PathBuf::from("helper"),
+                &BootRoot::LocalDir(PathBuf::from("."))
+            )
+            .is_none()
+        );
     }
 
     #[cfg(not(windows))]
@@ -117,7 +127,12 @@ mod tests {
             &BootRoot::Ext4Source(PathBuf::from("/tmp/a b.img")),
         );
         assert!(matches!(action, Some(ElevationAction::Linux { .. })));
-        if let Some(ElevationAction::Linux { arguments, sudo_command, .. }) = action {
+        if let Some(ElevationAction::Linux {
+            arguments,
+            sudo_command,
+            ..
+        }) = action
+        {
             assert_eq!(arguments[0], "/opt/canoe-bootmgr");
             assert!(sudo_command.contains("'/tmp/a b.img'"));
         }
@@ -168,4 +183,61 @@ pub fn relaunch_as_admin() -> Result<(), String> {
         return Err("Windows elevation was cancelled or failed".to_owned());
     }
     Ok(())
+}
+
+/// How a source must be attached, decided BEFORE the attempt.
+///
+/// Elevation used to be error recovery: attach unelevated, fail, then offer
+/// pkexec. A raw block export is root-owned, so that path always failed first
+/// and showed the operator a permission error for a requirement we already
+/// knew about. `canoe-ext4: cannot open source` and the failed SCSI eject were
+/// both this.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AttachPlan {
+    /// A directory or image the operator can already read.
+    Direct,
+    /// A privileged source on a platform with pkexec.
+    Elevated,
+    /// Windows cannot elevate one child; the whole program restarts.
+    WindowsAdmin,
+}
+
+/// Decide how to attach, from what the detector already reported.
+pub(crate) fn attach_plan(needs_privilege: bool, is_block: bool, windows: bool) -> AttachPlan {
+    if !needs_privilege || !is_block {
+        return AttachPlan::Direct;
+    }
+    if windows {
+        AttachPlan::WindowsAdmin
+    } else {
+        AttachPlan::Elevated
+    }
+}
+
+#[cfg(test)]
+mod attach_plan_tests {
+    use super::{AttachPlan, attach_plan};
+
+    #[test]
+    fn a_privileged_block_source_is_elevated_before_the_attempt() {
+        assert_eq!(attach_plan(true, true, false), AttachPlan::Elevated);
+    }
+
+    #[test]
+    fn windows_restarts_the_program_instead() {
+        assert_eq!(attach_plan(true, true, true), AttachPlan::WindowsAdmin);
+    }
+
+    #[test]
+    fn a_readable_source_is_attached_directly() {
+        assert_eq!(attach_plan(false, true, false), AttachPlan::Direct);
+        assert_eq!(attach_plan(false, false, false), AttachPlan::Direct);
+    }
+
+    #[test]
+    fn a_directory_is_never_elevated_even_if_unreadable() {
+        // A directory the operator cannot read is their own permissions problem;
+        // pkexec would hide it rather than explain it.
+        assert_eq!(attach_plan(true, false, false), AttachPlan::Direct);
+    }
 }

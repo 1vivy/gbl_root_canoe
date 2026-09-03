@@ -15,6 +15,8 @@ const CJK_FONT: &[u8] = include_bytes!("../assets/NotoSansCJK-Regular.ttc");
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Screen {
     Connect,
+    Device,
+    Install,
     Entries,
     Editor,
     Bls,
@@ -86,6 +88,18 @@ pub(crate) struct GuiApp {
     pub(crate) ota_ack: bool,
     pub(crate) bootctl_input: String,
     pub(crate) gpt_input: String,
+    pub(crate) slot_from_identity: bool,
+    pub(crate) session: crate::session::Session,
+    pub(crate) flow: crate::flow::Flow,
+    pub(crate) phase: crate::flow::Phase,
+    pub(crate) abl_input: String,
+    pub(crate) vbmeta_input: String,
+    pub(crate) vendor_boot_input: String,
+    pub(crate) provision_abl_input: String,
+    pub(crate) provision_bds_input: String,
+    pub(crate) install_mode: u8,
+    pub(crate) build_receipt: Option<crate::build_model::BuildReceipt>,
+    pub(crate) patch_receipt: Option<crate::build_model::PatchReceipt>,
     pub(crate) logs: VecDeque<String>,
     pub(crate) language_zh: bool,
     pub(crate) status: String,
@@ -114,7 +128,7 @@ impl GuiApp {
             .map_or_else(PathBuf::new, |root| root.path().to_owned());
         let root_input = root_path.display().to_string();
         let screen = if client.is_some() {
-            Screen::Entries
+            Screen::Device
         } else {
             Screen::Connect
         };
@@ -142,6 +156,18 @@ impl GuiApp {
             ota_ack: false,
             bootctl_input: String::new(),
             gpt_input: String::new(),
+            slot_from_identity: false,
+            session: crate::session::Session::default(),
+            flow: crate::flow::Flow::FirstInstall,
+            phase: crate::flow::Phase::Provision,
+            abl_input: String::new(),
+            vbmeta_input: String::new(),
+            vendor_boot_input: String::new(),
+            provision_abl_input: String::new(),
+            provision_bds_input: String::new(),
+            install_mode: 1,
+            build_receipt: None,
+            patch_receipt: None,
             logs: VecDeque::new(),
             language_zh,
             status: String::new(),
@@ -161,8 +187,11 @@ impl GuiApp {
                 app.root_input = source;
             }
             app.refresh_sources();
-            app.probe_identity();
         }
+        // The device is asked who it is on every start, attached or not: the
+        // landing page reports the active slot, and a boot root supplied on the
+        // command line is no reason to leave that unknown.
+        app.probe_identity();
 
         app
     }
@@ -184,6 +213,8 @@ impl eframe::App for GuiApp {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(150));
         }
+        self.sync_session();
+        egui::Panel::top("statusbar").show(ui, |ui| self.status_bar(ui));
         if self.screen == Screen::Connect {
             self.render_connect(ui);
             return;
@@ -191,6 +222,8 @@ impl eframe::App for GuiApp {
         egui::Panel::top("header").show(ui, |ui| self.header(ui));
         egui::CentralPanel::default().show(ui, |ui| match self.screen {
             Screen::Connect => self.render_connect(ui),
+            Screen::Device => self.render_device(ui),
+            Screen::Install => self.render_install(ui),
             Screen::Entries => self.render_entries(ui),
             Screen::Editor => self.render_editor(ui),
             Screen::Bls => self.render_bls(ui),

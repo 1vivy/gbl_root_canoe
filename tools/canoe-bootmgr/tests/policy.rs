@@ -33,7 +33,10 @@ fn policy_ranges_are_refused_without_clamping() {
             menu_timeout_s: None,
         })
         .expect_err("range refusal");
-    assert_eq!(error.to_string(), "policy.range: key_window_ms must be in 0..=10000");
+    assert_eq!(
+        error.to_string(),
+        "policy.range: key_window_ms must be in 0..=10000"
+    );
     assert_eq!(config.key_window_ms, 1200);
 }
 
@@ -47,5 +50,9 @@ fn default_bls_target_requires_a_discovered_row() {
     assert!(operations::execute_request(root.path(), accept).is_ok());
     let reject = parse_json(br#"{"verb":"default.set","id":"bls:missing"}"#).expect("request");
     let error = operations::execute_request(root.path(), reject).expect_err("missing BLS row");
-    assert!(error.to_string().contains("default.target: BLS row does not exist"));
+    assert!(
+        error
+            .to_string()
+            .contains("default.target: BLS row does not exist")
+    );
 }

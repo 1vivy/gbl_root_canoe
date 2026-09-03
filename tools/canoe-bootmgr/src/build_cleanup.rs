@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::build::{io_error, BuildError};
+use crate::build::{BuildError, io_error};
 
 struct AuxSnapshot {
     path: PathBuf,
@@ -31,6 +31,12 @@ impl Cleanup {
                 Err(source) => return Err(io_error("remove stale staged output", &path, source)),
             }
         }
+        let tools = staged.join("tools");
+        match fs::remove_dir_all(&tools) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(io_error("remove stale staged tools", &tools, source)),
+        }
         let mut aux = Vec::new();
         for path in [keep, patch_log].into_iter().flatten() {
             let original = match fs::read(path) {
@@ -38,15 +44,23 @@ impl Cleanup {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                 Err(source) => return Err(io_error("snapshot auxiliary output", path, source)),
             };
-            aux.push(AuxSnapshot { path: path.to_owned(), original });
+            aux.push(AuxSnapshot {
+                path: path.to_owned(),
+                original,
+            });
         }
-        Ok(Self { staged: staged.to_owned(), aux, committed: false })
+        Ok(Self {
+            staged: staged.to_owned(),
+            aux,
+            committed: false,
+        })
     }
 
     pub(crate) fn rollback(&self) {
         for name in ["boot.efi", "boot.efi.gm2p", "boot.efi.tzmap"] {
             let _ = fs::remove_file(self.staged.join(name));
         }
+        let _ = fs::remove_dir_all(self.staged.join("tools"));
         for snapshot in &self.aux {
             match &snapshot.original {
                 Some(bytes) => {
@@ -73,13 +87,20 @@ impl Drop for Cleanup {
 }
 
 pub(crate) fn ensure_parent(path: &Path, step: &'static str) -> Result<(), BuildError> {
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent).map_err(|source| io_error(step, parent, source))?;
     }
     Ok(())
 }
 
-pub(crate) fn copy_aux(source: &Path, destination: &Path, step: &'static str) -> Result<(), BuildError> {
+pub(crate) fn copy_aux(
+    source: &Path,
+    destination: &Path,
+    step: &'static str,
+) -> Result<(), BuildError> {
     ensure_parent(destination, step)?;
     fs::copy(source, destination)
         .map(|_| ())

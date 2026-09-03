@@ -92,6 +92,76 @@ pub struct GraftArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum FastbootCommand {
+    /// Read BDS identity variables from fastboot.
+    Identify(FastbootIdentifyArgs),
+    /// Start or adopt a BDS mass-storage export.
+    Export(FastbootExportArgs),
+    /// End a BDS mass-storage export through its raw block node.
+    #[command(name = "end-export")]
+    EndExport(FastbootEndExportArgs),
+    /// Fetch a fastboot partition image to a local file.
+    Fetch(FastbootFetchArgs),
+    /// Fetch and probe both ABL slots without writing device state.
+    #[command(name = "abl-coverage")]
+    AblCoverage(FastbootAblCoverageArgs),
+    /// Flash an existing image to an explicitly named partition.
+    Flash(FastbootFlashArgs),
+    /// Reboot normally or into a supported special target.
+    Reboot(FastbootRebootArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootIdentifyArgs {
+    #[arg(long, default_value_t = 30)]
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootExportArgs {
+    #[arg(long, default_value = "persist")]
+    pub target: String,
+    #[arg(long, default_value_t = 30)]
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootEndExportArgs {
+    #[arg(long)]
+    pub node: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootFetchArgs {
+    #[arg(long)]
+    pub partition: String,
+    #[arg(long = "out")]
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootAblCoverageArgs {
+    #[arg(long)]
+    pub tools: Option<PathBuf>,
+    #[arg(long, default_value_t = 30)]
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootFlashArgs {
+    #[arg(long)]
+    pub partition: String,
+    #[arg(long)]
+    pub image: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct FastbootRebootArgs {
+    #[arg(long)]
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum VendorBootCommand {
     /// Append Canoe's fixed-offset module blacklist to vendor_boot.
     Patch(VendorBootPatchArgs),

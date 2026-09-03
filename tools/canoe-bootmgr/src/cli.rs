@@ -5,16 +5,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::BlsStageReceipt;
 use crate::backend::BlsFile;
+use crate::build::{BuildArgs, BuildProbeReceipt, BuildReceipt};
 pub use crate::cli_extra::{
-    BlsStageArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs,
+    BlsStageArgs, FastbootAblCoverageArgs, FastbootCommand, FastbootEndExportArgs,
+    FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs, FastbootIdentifyArgs,
+    FastbootRebootArgs, GraftArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs,
     VendorBootCommand, VendorBootPatchArgs,
 };
-use crate::build::{BuildArgs, BuildProbeReceipt, BuildReceipt};
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
 use crate::graft::GraftReceipt;
 use crate::slot_transaction::InstallReceipt;
 use crate::slots::Slot;
+use crate::vbmeta_inspect::{VbmetaBuildProperties, VbmetaChainPartition};
 use crate::vendorboot::PatchReceipt;
 #[derive(Debug, Parser)]
 #[command(
@@ -70,6 +73,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Report the application and wire protocol versions.
+    #[command(name = "protocol-version")]
+    ProtocolVersion,
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -104,6 +110,13 @@ pub enum Command {
     /// Graft official recovery vbmeta onto a custom recovery image.
     #[command(name = "vbmeta-graft", visible_alias = "graft")]
     Graft(GraftArgs),
+    /// Inspect AVB chain partitions and build properties.
+    #[command(name = "vbmeta-inspect")]
+    VbmetaInspect(VbmetaInspectArgs),
+    Fastboot {
+        #[command(subcommand)]
+        command: FastbootCommand,
+    },
     VendorBoot {
         #[command(subcommand)]
         command: VendorBootCommand,
@@ -212,6 +225,14 @@ pub enum SourceCommand {
     Detect,
 }
 
+#[derive(Debug, Args)]
+pub struct VbmetaInspectArgs {
+    #[arg(long)]
+    pub vbmeta: PathBuf,
+    #[arg(long)]
+    pub tools: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CliMenuMode {
@@ -266,6 +287,12 @@ impl From<CliDeviceInfoRepair> for DeviceInfoRepair {
 #[derive(Debug, Serialize)]
 #[serde(tag = "operation")]
 pub enum Success {
+    #[serde(rename = "protocol.version")]
+    ProtocolVersion {
+        ok: bool,
+        app_version: &'static str,
+        protocol_version: u32,
+    },
     #[serde(rename = "config.show")]
     ConfigShow { ok: bool, config: ConfigDocument },
     #[serde(rename = "config.policy")]
@@ -330,7 +357,11 @@ pub enum Success {
         installed: Vec<Slot>,
     },
     #[serde(rename = "build")]
-    Build { ok: bool, kind: &'static str, receipt: BuildReceipt },
+    Build {
+        ok: bool,
+        kind: &'static str,
+        receipt: BuildReceipt,
+    },
     #[serde(rename = "build.probe")]
     BuildProbe {
         ok: bool,
@@ -343,9 +374,54 @@ pub enum Success {
     OtaApply { ok: bool, receipt: InstallReceipt },
     #[serde(rename = "vbmeta.graft")]
     VbmetaGraft { ok: bool, receipt: GraftReceipt },
+    #[serde(rename = "vbmeta.inspect")]
+    VbmetaInspect {
+        ok: bool,
+        rollback_index: u64,
+        chain_partitions: Vec<VbmetaChainPartition>,
+        build_properties: VbmetaBuildProperties,
+    },
     #[serde(rename = "vendorboot.patch")]
     VendorBootPatch { ok: bool, receipt: PatchReceipt },
+    #[serde(rename = "fastboot.identify")]
+    FastbootIdentify {
+        ok: bool,
+        bds_version: Option<String>,
+        current_slot: Option<String>,
+    },
+    #[serde(rename = "fastboot.export")]
+    FastbootExport { ok: bool, node: String },
+    #[serde(rename = "fastboot.end-export")]
+    FastbootEndExport { ok: bool, node: String },
+    #[serde(rename = "fastboot.fetch")]
+    FastbootFetch {
+        ok: bool,
+        partition: String,
+        output: String,
+    },
+    #[serde(rename = "fastboot.abl-coverage")]
+    FastbootAblCoverage { ok: bool, slots: Vec<AblCoverage> },
+    #[serde(rename = "fastboot.flash")]
+    FastbootFlash {
+        ok: bool,
+        receipt: FastbootFlashReceipt,
+    },
+    #[serde(rename = "fastboot.reboot")]
+    FastbootReboot { ok: bool, target: Option<String> },
 }
+
+#[derive(Debug, Serialize)]
+pub struct AblCoverage {
+    pub slot: &'static str,
+    pub coverage: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FastbootFlashReceipt {
+    pub partition: String,
+    pub image: String,
+}
+
 impl CliRole {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {

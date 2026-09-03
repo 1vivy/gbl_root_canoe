@@ -39,7 +39,12 @@ pub fn detect_linux(probe: &LinuxProbe) -> Vec<SourceCandidate> {
         .collect::<HashSet<_>>();
     for path in [&probe.persist_path, &probe.by_name_persist] {
         if path == &probe.persist_path && path.is_dir() {
-            add_dir_candidate(&mut candidates, &mut known_dirs, path, "mounted Android persist");
+            add_dir_candidate(
+                &mut candidates,
+                &mut known_dirs,
+                path,
+                "mounted Android persist",
+            );
         } else if path == &probe.by_name_persist && path.exists() {
             add_block_alias(&mut candidates, &mut known_dirs, path);
         }
@@ -101,6 +106,7 @@ fn read_blocks(probe: &LinuxProbe, mounts: &[Mount]) -> Vec<SourceCandidate> {
             needs_privilege: !(readable && writable),
             mounted_at,
             why: "exported persist LUN (canoe identity)".to_owned(),
+            export_candidate: None,
         });
     }
     candidates
@@ -121,7 +127,11 @@ fn ancestry_identity(start: &Path) -> Option<String> {
         let vendor = read_trimmed(&current.join("idVendor"));
         let product = read_trimmed(&current.join("idProduct"));
         if let (Some(vendor), Some(product)) = (vendor, product) {
-            let identity = format!("{}:{}", vendor.to_ascii_lowercase(), product.to_ascii_lowercase());
+            let identity = format!(
+                "{}:{}",
+                vendor.to_ascii_lowercase(),
+                product.to_ascii_lowercase()
+            );
             if identity == CANOE_IDENTITY || identity == FALLBACK_IDENTITY {
                 return Some(identity);
             }
@@ -206,6 +216,7 @@ fn add_dir_candidate(
         needs_privilege: !(readable && writable),
         mounted_at: Some(path.to_path_buf()),
         why: why.to_owned(),
+        export_candidate: None,
     });
 }
 
@@ -228,6 +239,7 @@ fn add_block_alias(
         needs_privilege: !(readable && writable),
         mounted_at: None,
         why: "Android /dev/block/by-name/persist".to_owned(),
+        export_candidate: None,
     });
 }
 
@@ -248,8 +260,7 @@ fn access(path: &Path) -> (bool, bool) {
     {
         use nix::fcntl::AtFlags;
         use nix::unistd::{AccessFlags, faccessat};
-        let reachable =
-            |mode| faccessat(None, path, mode, AtFlags::AT_EACCESS).is_ok();
+        let reachable = |mode| faccessat(None, path, mode, AtFlags::AT_EACCESS).is_ok();
         return (reachable(AccessFlags::R_OK), reachable(AccessFlags::W_OK));
     }
     #[cfg(not(unix))]
@@ -262,7 +273,9 @@ fn access(path: &Path) -> (bool, bool) {
 }
 
 fn read_trimmed(path: &Path) -> Option<String> {
-    fs::read_to_string(path).ok().map(|value| value.trim().to_owned())
+    fs::read_to_string(path)
+        .ok()
+        .map(|value| value.trim().to_owned())
 }
 
 fn unescape_mount_path(value: &str) -> PathBuf {

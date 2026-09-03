@@ -1,4 +1,6 @@
 #include "SuperFbLaunchPolicy.h"
+#include "SuperFbSlots.h"
+#include "SuperFbLog.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -18,12 +20,21 @@ STATIC EFI_SECURITY2_ARCH_PROTOCOL           *mSfbSec2;
 STATIC EFI_SECURITY_FILE_AUTHENTICATION_STATE mSfbOrigSecState;
 STATIC EFI_SECURITY2_FILE_AUTHENTICATION      mSfbOrigSec2Auth;
 STATIC SFB_CONFIG_LOCK_POLICY mSfbLockPolicy = SfbConfigLockAsNeeded;
+STATIC SFB_BOOT_MODE mSfbRequestedMode = SfbBootModeHonestUnlocked;
+STATIC BOOLEAN mSfbRequestedModeValid = FALSE;
 
 VOID
 SfbSetLaunchLockPolicy (IN SFB_CONFIG_LOCK_POLICY Policy)
 {
   mSfbLockPolicy = (Policy == SfbConfigLockNever)
                    ? SfbConfigLockNever : SfbConfigLockAsNeeded;
+}
+
+VOID
+SfbSetLaunchRequestedMode (IN SFB_BOOT_MODE RequestedMode)
+{
+  mSfbRequestedMode = RequestedMode;
+  mSfbRequestedModeValid = (BOOLEAN)(RequestedMode <= SfbBootModeKmProfile);
 }
 
 STATIC
@@ -276,6 +287,17 @@ SfbLaunchImage (
   UINTN      ExitDataSize = 0;
   CHAR16    *Options = NULL;
   SFB_BOOT_MODE LaunchMode = EffectiveMode;
+  SFB_BOOT_MODE RequestedMode = EffectiveMode;
+  SFB_LAUNCH_REASON LaunchReason;
+
+  if (Managed && mSfbRequestedModeValid) {
+    RequestedMode = mSfbRequestedMode;
+  }
+  mSfbRequestedModeValid = FALSE;
+  LaunchReason =
+    (Managed && RequestedMode == SfbBootModeKmProfile &&
+     EffectiveMode == SfbBootModeHonestUnlocked)
+      ? SfbLaunchReasonProfileAbsent : SfbLaunchReasonNone;
 
   if (DevicePath == NULL || gBS == NULL || gBS->LoadImage == NULL ||
       gBS->StartImage == NULL) {
@@ -308,6 +330,7 @@ SfbLaunchImage (
               "SFB: MARK mode-demoted from=%u to=0 reason=lockstate-refused\n",
               (UINT32)LaunchMode));
       LaunchMode = SfbBootModeHonestUnlocked;
+      LaunchReason = SfbLaunchReasonLockstateRefused;
       Status = SfbPrepareManagedAblHooks (LaunchMode, NULL, TzMap,
                                           mSfbLockPolicy);
     }
@@ -363,6 +386,47 @@ SfbLaunchImage (
       (UINT32)((StrLen (LoadOptions) + 1) * sizeof (CHAR16));
     DEBUG ((EFI_D_INFO, "SFB: MARK image-options chars=%u\n",
             (UINT32)StrLen (LoadOptions)));
+  }
+
+  if (Managed) {
+    STATIC CONST CHAR8 *CONST ReasonText[] = {
+      "none", "profile-absent", "lockstate-refused"
+    };
+    CHAR8 LastLaunchValue[SFB_LAST_LAUNCH_VALUE_BYTES];
+    UINTN Offset;
+    UINTN ReasonIndex;
+    CONST CHAR8 *Reason;
+    EFI_STATUS PersistStatus;
+    EFI_STATUS RetryResetStatus;
+
+    Reason = ReasonText[LaunchReason];
+    /* Fixed grammar, built without adding a formatter dependency to the launch
+     * harness. SfbLogFlush validates it before replacing the durable record. */
+    for (Offset = 0; "requested=0 effective=0 reason="[Offset] != '\0';
+         Offset++) {
+      LastLaunchValue[Offset] =
+        "requested=0 effective=0 reason="[Offset];
+    }
+    LastLaunchValue[10] = (CHAR8)('0' + RequestedMode);
+    LastLaunchValue[22] = (CHAR8)('0' + LaunchMode);
+    for (ReasonIndex = 0; Reason[ReasonIndex] != '\0'; ReasonIndex++) {
+      LastLaunchValue[Offset++] = Reason[ReasonIndex];
+    }
+    LastLaunchValue[Offset] = '\0';
+    PersistStatus = SfbLogFlush (LastLaunchValue);
+    DEBUG ((EFI_ERROR (PersistStatus) ? EFI_D_WARN : EFI_D_INFO,
+            "SFB: MARK last-launch requested=%u effective=%u reason=%u "
+            "status=%r\n", (UINT32)RequestedMode, (UINT32)LaunchMode,
+            (UINT32)LaunchReason, PersistStatus));
+
+    /*
+     * Restore the active slot's retry budget before handing control to the
+     * managed image. This is deliberately fail-soft: an unavailable or
+     * malformed partition table must not turn a launch into a boot failure.
+     */
+    RetryResetStatus = SfbResetActiveSlotRetry ();
+    DEBUG ((EFI_ERROR (RetryResetStatus) ? EFI_D_WARN : EFI_D_INFO,
+            "SFB: MARK retry-reset status=%r\n", RetryResetStatus));
   }
 
   DEBUG ((EFI_D_INFO,
