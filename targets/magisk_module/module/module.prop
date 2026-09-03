@@ -1,6 +1,6 @@
 id=fake_bl_efisp
 name=Fake BL EFISP / 假回锁
-version=7.0.0-b2
-versionCode=15
+version=7.0.0-b3
+versionCode=16
 author=1vivy
 description=Installs the Canoe boot manager WebUI; boot-chain operations run through canoe-bootmgr

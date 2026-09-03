@@ -2,4 +2,4 @@
 //!
 //! `make version-check` verifies that this generated module stays synchronized.
 
-pub const VERSION: &str = "7.0.0-b2";
+pub const VERSION: &str = "7.0.0-b3";

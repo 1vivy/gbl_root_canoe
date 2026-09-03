@@ -21,7 +21,7 @@ cd /home/vivy/Projects/efisp-projects/gbl_root_canoe/.work/gui-work
 version files by hand. A release follows this order from the firmware worktree:
 
 ```sh
-make bump VERSION=7.0.0-b2 VERSION_CODE=15
+make bump VERSION=7.0.0-b3 VERSION_CODE=16
 ```
 
 A direct `CANOE_VERSION=<other-version>` override is refused before any recipe

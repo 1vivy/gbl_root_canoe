@@ -1,6 +1,6 @@
 # `canoe.cfg` — the boot-root contract
 
-`canoe.cfg` is the BDS menu state for 7.x. In 7.0.0-b2 the boot policy is
+`canoe.cfg` is the BDS menu state for 7.x. In 7.0.0-b3 the boot policy is
 explicit: fresh installs default to Silent mode, while the writer and BDS share
 the grammar below. The BDS only reads this file; `canoe-bootmgr` transactions
 and the device-side module are the writers. The file lives under `persist/efisp`,
@@ -141,7 +141,7 @@ its `MemoryMapLib.c`; for a Project-Aloha config they are `StackBase` and
 
 ## Managed A/B triplets
 
-The 7.0.0-b2 writer manages one complete triplet per installed slot:
+The 7.0.0-b3 writer manages one complete triplet per installed slot:
 
 | Slot | ID | Title written by `canoe-bootmgr` | Image | Sidecars |
 | --- | --- | --- | --- | --- |
