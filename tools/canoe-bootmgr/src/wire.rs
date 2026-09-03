@@ -38,6 +38,8 @@ pub enum JsonRequest {
         #[serde(default)]
         expected_sha256: Option<String>,
     },
+    #[serde(rename = "tools.update")]
+    ToolsUpdate { source: PathBuf },
     #[serde(rename = "block.write")]
     BlockWrite {
         partition: String,
@@ -174,6 +176,16 @@ pub enum JsonRequest {
         #[serde(default)]
         tools: Option<PathBuf>,
     },
+    #[serde(rename = "vbmeta.extract")]
+    VbmetaExtract { image: PathBuf, output: PathBuf },
+    #[serde(rename = "vbmeta.check")]
+    VbmetaCheck {
+        image: PathBuf,
+        vbmeta: PathBuf,
+        partition: String,
+        #[serde(default)]
+        tools: Option<PathBuf>,
+    },
     #[serde(rename = "vendorboot.patch", alias = "vendor_boot.patch")]
     VendorBootPatch { input: PathBuf, output: PathBuf },
     #[serde(rename = "fastboot.identify")]
@@ -295,6 +307,7 @@ mod tests {
             serde_json::json!({"verb":"bls.list"}),
             serde_json::json!({"verb":"bls.show","name":"a.conf"}),
             serde_json::json!({"verb":"bls.stage","name":"a","entry":"a.conf","artifacts":[]}),
+            serde_json::json!({"verb":"tools.update","source":"tools"}),
             serde_json::json!({"verb":"slot.status"}),
             serde_json::json!({"verb":"install","staged":"a"}),
             serde_json::json!({"verb":"ota-apply","staged":"a"}),

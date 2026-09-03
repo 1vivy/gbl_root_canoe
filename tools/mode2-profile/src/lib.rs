@@ -5,8 +5,8 @@ mod profile;
 
 pub use avb::{
     BuildProperties, ChainPartition, DeriveError, GraftClassification, GraftConfidence, GraftState,
-    VbmetaHeader, VbmetaInspection, classify_graft, derive, derive_profile, inspect_vbmeta,
-    inspect_vbmeta_header,
+    VbmetaHeader, VbmetaInspection, VbmetaKeyCheck, check_vbmeta, classify_graft, derive,
+    derive_profile, inspect_vbmeta, inspect_vbmeta_header,
 };
 pub use profile::{PROFILE_SIZE, Profile, ProfileError};
 

@@ -35,6 +35,9 @@ static WORKER_TOOLS_DIRECTORY: LazyLock<String> = LazyLock::new(|| {
         .expect("worker directory is UTF-8")
 });
 
+const ROOT_PLACEHOLDER: &str = "@ROOT@";
+const FOOTER_PLACEHOLDER: &str = "@FOOTER@";
+
 fn fixture_paths() -> Vec<PathBuf> {
     let mut requests = Vec::new();
     for entry in fs::read_dir(FIXTURE_DIRECTORY).expect("read protocol fixture directory") {
@@ -75,6 +78,23 @@ fn response_path(request: &Path) -> PathBuf {
     request.with_file_name(format!("{stem}{RESPONSE_SUFFIX}"))
 }
 
+fn write_footer_fixture(root: &Path) -> PathBuf {
+    let vbmeta = fs::read("tests/fixtures/vbmeta-inspect-happy.img").expect("read AVB fixture");
+    let vbmeta_offset = 4096usize;
+    let footer_offset = 8192usize;
+    let mut image = vec![0; footer_offset + 64];
+    image[vbmeta_offset..vbmeta_offset + vbmeta.len()].copy_from_slice(&vbmeta);
+    let footer = &mut image[footer_offset..];
+    footer[0..4].copy_from_slice(b"AVBf");
+    footer[4..8].copy_from_slice(&1u32.to_be_bytes());
+    footer[12..20].copy_from_slice(&(vbmeta_offset as u64).to_be_bytes());
+    footer[20..28].copy_from_slice(&(vbmeta_offset as u64).to_be_bytes());
+    footer[28..36].copy_from_slice(&(vbmeta.len() as u64).to_be_bytes());
+    let path = root.join("footed-vbmeta.img");
+    fs::write(&path, image).expect("write AVB footer fixture");
+    path
+}
+
 #[test]
 fn golden_protocol_transcripts_replay_byte_for_byte() {
     let fixtures = fixture_paths();
@@ -85,15 +105,30 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
 
     for request_path in fixtures {
         let response_path = response_path(&request_path);
+        let boot_root = tempfile::tempdir().expect("fixture boot root");
+        let footer_fixture = write_footer_fixture(boot_root.path());
+        let root = boot_root
+            .path()
+            .to_str()
+            .expect("fixture boot root is UTF-8");
+        let footer = footer_fixture
+            .to_str()
+            .expect("footer fixture path is UTF-8");
         let request = fs::read_to_string(&request_path)
             .expect("read golden request")
-            .replace(TOOLS_PLACEHOLDER, &WORKER_TOOLS_DIRECTORY);
-        let expected = fs::read(&response_path).expect("read golden response");
+            .replace(TOOLS_PLACEHOLDER, &WORKER_TOOLS_DIRECTORY)
+            .replace(ROOT_PLACEHOLDER, root)
+            .replace(FOOTER_PLACEHOLDER, footer);
+        let expected = String::from_utf8(fs::read(&response_path).expect("read golden response"))
+            .expect("golden response is UTF-8")
+            .replace(ROOT_PLACEHOLDER, root)
+            .into_bytes();
         let expected_document: serde_json::Value =
             serde_json::from_slice(&expected).expect("golden response JSON");
         let expected_success = expected_document["ok"] == true;
         let mut child = Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"))
-            .arg("--json")
+            .args(["--json", "--boot-root"])
+            .arg(boot_root.path())
             .env_clear()
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

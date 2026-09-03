@@ -3,7 +3,7 @@ include ../../version.mk
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_ablfvextractor submodule_vbmetafixer \
-	canoe platform_tools ext4_tools build
+	canoe canoe_app platform_tools ext4_tools build
 
 ROOT_DIR := $(abspath ../..)
 
@@ -14,6 +14,7 @@ PLATFORM_TOOLS_CACHE ?= $(ROOT_DIR)/.cache/platform-tools
 PLATFORM_TOOLS_ARCHIVE = $(PLATFORM_TOOLS_CACHE)/platform-tools_r37.0.0-win.zip
 
 CANOE_EXT4_WINDOWS ?= $(ROOT_DIR)/tools/canoe-ext4/canoe-ext4.exe
+CANOE_APP_WINDOWS_BIN ?= $(ROOT_DIR)/../canoe-boot-manager/src-tauri/target/x86_64-pc-windows-gnu/release/canoe-boot-manager.exe
 
 clean:
 	rm -rf build || true
@@ -50,6 +51,7 @@ submodule_patcher: copy_resources
 	cd ../../submodules/patcher && make build_windows
 	cp ../../submodules/patcher/build/patch_abl.exe ./build/toolkit/bin/patch_abl.exe
 submodule_mode2_profile: copy_resources
+	test -d "$$(rustc --print target-libdir --target x86_64-pc-windows-gnu 2>/dev/null)" || { echo "Rust target x86_64-pc-windows-gnu is missing; use a rustup toolchain with that target installed and put its cargo first on PATH." >&2; exit 1; }
 	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/mode2-profile/Cargo.toml
 	test -f ../../tools/mode2-profile/target/x86_64-pc-windows-gnu/release/mode2_profile.exe
 	cp ../../tools/mode2-profile/target/x86_64-pc-windows-gnu/release/mode2_profile.exe ./build/toolkit/bin/mode2_profile.exe
@@ -68,7 +70,7 @@ submodule_vbmetafixer: copy_resources
 	# vbmetaport grafts an official vbmeta onto a third-party image;
 	# vbmetabackup lifts that vbmeta out of a local firmware image.
 	# Guarded like submodule_uefi: the vbmetafixer `build_windows` target is not
-	# phony, so a stale build/ directory would otherwise make a plain make build a no-op.
+	# phony, so a stale build/ directory would otherwise make a plain `make build` a no-op.
 	cd ../../tools/vbmetafixer && \
 		if [ ! -f build/toolkit_win/bin/vbmetaport.exe ] || \
 		   [ ! -f build/toolkit_win/bin/vbmetabackup.exe ]; then $(MAKE) build_windows; fi
@@ -109,5 +111,12 @@ ext4_tools: copy_resources
 	}
 	mkdir -p build/toolkit/bin
 	cp "$(CANOE_EXT4_WINDOWS)" ./build/toolkit/bin/canoe-ext4.exe
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor submodule_vbmetafixer canoe platform_tools ext4_tools
+canoe_app: copy_resources
+	@test -f "$(CANOE_APP_WINDOWS_BIN)" || { \
+		echo "canoe-boot-manager Windows binary is required; run 'cd ../canoe-boot-manager && bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci' or set CANOE_APP_WINDOWS_BIN" >&2; \
+		exit 1; \
+	}
+	mkdir -p build/toolkit/bin
+	cp "$(CANOE_APP_WINDOWS_BIN)" ./build/toolkit/bin/canoe-boot-manager.exe
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor submodule_vbmetafixer canoe platform_tools ext4_tools canoe_app
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./

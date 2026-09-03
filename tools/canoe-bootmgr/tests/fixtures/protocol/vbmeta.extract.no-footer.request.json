@@ -1,0 +1,1 @@
+{"verb":"vbmeta.extract","image":"tests/fixtures/vbmeta-inspect-happy.img","output":"@ROOT@/extracted.vbmeta"}

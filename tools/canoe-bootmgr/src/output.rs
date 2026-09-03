@@ -152,6 +152,7 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             receipt.generation,
             receipt.backup_present
         ),
+        Success::ToolsUpdate { files, .. } => format!("updated tools: {}\n", files.join(",")),
         Success::ModePlan { id, plan, .. } => format!(
             "mode.plan id={id} from={} target={} outcome={} preconditions={}\n",
             plan.from_mode,
@@ -166,6 +167,10 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
         Success::VbmetaGraft { receipt, .. } => {
             format!("grafted {} ({} bytes)\n", receipt.output, receipt.bytes)
         }
+        Success::VbmetaExtract { receipt, .. } => format!(
+            "extracted {} ({} bytes at offset {}, footer size {})\n",
+            receipt.output, receipt.bytes, receipt.vbmeta_offset, receipt.vbmeta_size
+        ),
         Success::VbmetaInspect {
             rollback_index,
             chain_partitions,
@@ -182,6 +187,16 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             ..
         } => format!(
             "algorithm_type={algorithm_type} rollback_index={rollback_index} flags={flags} release_string={release_string}\n"
+        ),
+        Success::VbmetaCheck {
+            partition,
+            key_matches,
+            image_key_sha256,
+            chain_key_sha256,
+            rollback_index_location,
+            ..
+        } => format!(
+            "partition={partition} key_matches={key_matches} image_key_sha256={image_key_sha256} chain_key_sha256={chain_key_sha256} rollback_index_location={rollback_index_location}\n"
         ),
         Success::VendorBootPatch { receipt, .. } => format!(
             "patched {} ({} bytes, changed={})\n",

@@ -80,6 +80,11 @@ pub struct OtaApplyArgs {
     #[arg(long)]
     pub allow_new_signer: bool,
 }
+#[derive(Debug, Args)]
+pub struct ToolsUpdateArgs {
+    #[arg(long)]
+    pub source: PathBuf,
+}
 
 #[derive(Debug, Args)]
 pub struct AblVerifyArgs {
@@ -117,6 +122,26 @@ pub struct ModePlanArgs {
 pub struct VbmetaHeaderArgs {
     #[arg(long)]
     pub vbmeta: PathBuf,
+    #[arg(long)]
+    pub tools: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct VbmetaExtractArgs {
+    #[arg(long)]
+    pub image: PathBuf,
+    #[arg(long)]
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct VbmetaCheckArgs {
+    #[arg(long)]
+    pub image: PathBuf,
+    #[arg(long)]
+    pub vbmeta: PathBuf,
+    #[arg(long)]
+    pub partition: String,
     #[arg(long)]
     pub tools: Option<PathBuf>,
 }

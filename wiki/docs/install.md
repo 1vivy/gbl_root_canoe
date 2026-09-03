@@ -51,8 +51,18 @@ host permission required is permission to open the source device.
 
 ### 1. Host install
 
-This is the first installation from a Linux or Windows computer. The device
-must already be in Super Fastboot before the native host surface runs:
+This is the first installation from a Linux or Windows computer. It has two
+halves with different fastboot sessions. First, the vulnerable ABL and
+`BDS.efi` are flashed to `abl_a`/`abl_b` and `efisp` from **stock fastbootd** —
+the userspace fastboot a fresh unlocked device provides, entered from Android
+with `adb reboot fastboot` (or from the bootloader's own fastboot with
+`fastboot reboot fastboot`). ABL and other critical partitions are not
+flashable from the bootloader's fastboot, so there is no alternative session
+for this half; `fastboot getvar is-userspace` answers `yes` in the right one.
+The device then boots into the BDS, which presents Super Fastboot.
+
+The second half installs the boot root and is what this section describes. The
+device must already be in Super Fastboot before the native host surface runs:
 
 ```text
 Linux:   ./canoe
@@ -221,6 +231,15 @@ provide `canoe-ext4.exe`, packaging fails; there is no placeholder or silent
 fallback. The native helper may be built with
 `tools/canoe-ext4/build-windows.sh` on a host with MinGW and an e2fsprogs
 source tree, then supplied to the package build.
+
+This is deliberate, not a Windows limitation to work around: no Canoe operation
+on any host mounts persist. Writes go through the userspace ext4 helper against
+the raw exported source, so Windows gives up nothing by lacking a mount. A
+persist partition carries no `efisp` directory before the first install; the
+install transaction creates it (and every parent of every staged path) rather
+than expecting one. For manual inspection or repair outside the app, point the
+same helper at the raw drive — `canoe-ext4.exe inspect \\.\PhysicalDrive<N>` —
+never at a mounted letter.
 
 ## First run and Super Fastboot
 

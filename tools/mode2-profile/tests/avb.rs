@@ -228,6 +228,51 @@ fn inspection_enumerates_graft_chains_and_filters_vbmeta_names() {
 }
 
 #[test]
+fn key_check_follows_footer_and_ignores_duplicate_properties() {
+    let mut descriptors = property(
+        b"com.android.build.boot.security_patch",
+        b"2026-03-01",
+    );
+    descriptors.extend(property(
+        b"com.android.build.boot.security_patch",
+        b"2026-04-01",
+    ));
+    descriptors.extend(chain(1, b"recovery", b"recovery-key"));
+    let main = fixture_from_descriptors(descriptors);
+    let image = footer_image(&fixture(true, true));
+    let check = mode2_profile::check_vbmeta(&image, &main, "recovery")
+        .expect("chain-only key check ignores properties");
+    assert!(!check.key_matches);
+    assert_eq!(
+        hex(&check.image_key_sha256),
+        "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
+    );
+    assert_eq!(
+        hex(&check.chain_key_sha256),
+        "3b4c84ca21651dd72457deb10a8b6beab049d1b81624b2cc373689a8c28ec362"
+    );
+    assert_eq!(check.rollback_index_location, 1);
+}
+
+#[test]
+fn key_check_accepts_unsigned_image_with_empty_public_key() {
+    let mut image = fixture_from_descriptors(Vec::new());
+    image[28..32].copy_from_slice(&0u32.to_be_bytes());
+    image[12..20].copy_from_slice(&0u64.to_be_bytes());
+    let aux_size = image.len() - 256;
+    image[20..28].copy_from_slice(&(aux_size as u64).to_be_bytes());
+    image[64..80].copy_from_slice(&[0; 16]);
+    let main = fixture_from_descriptors(chain(1, b"recovery", b"recovery-key"));
+    let check = mode2_profile::check_vbmeta(&image, &main, "recovery")
+        .expect("unsigned image key is the empty key");
+    assert!(!check.key_matches);
+    assert_eq!(
+        hex(&check.image_key_sha256),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+}
+
+#[test]
 fn inspection_extracts_exactly_the_four_named_build_properties() {
     let mut descriptors = property(b"com.android.build.boot.os_version", b"16.0.7");
     descriptors.extend(property(b"com.android.build.system.os_version", b"16"));

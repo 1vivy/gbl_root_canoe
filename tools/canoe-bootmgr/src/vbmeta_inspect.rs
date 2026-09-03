@@ -35,6 +35,14 @@ pub struct VbmetaHeaderReceipt {
     pub release_string: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct VbmetaCheckReceipt {
+    pub key_matches: bool,
+    pub image_key_sha256: String,
+    pub chain_key_sha256: String,
+    pub rollback_index_location: u32,
+}
+
 #[derive(Debug, Error)]
 pub enum VbmetaInspectError {
     #[error("mode2_profile could not be resolved: {tool}")]
@@ -51,16 +59,24 @@ pub enum VbmetaInspectError {
     HeaderWorker { code: String, message: String },
     #[error("mode2_profile inspect-header: malformed worker output: {0}")]
     HeaderMalformed(String),
+    #[error("mode2_profile check: {message}")]
+    CheckWorker { code: String, message: String },
+    #[error("mode2_profile check: malformed worker output: {0}")]
+    CheckMalformed(String),
 }
 
 impl VbmetaInspectError {
     pub fn protocol_code(&self) -> &str {
         match self {
-            Self::Worker { code, .. } | Self::HeaderWorker { code, .. } => code,
+            Self::Worker { code, .. }
+            | Self::HeaderWorker { code, .. }
+            | Self::CheckWorker { code, .. } => code,
             Self::Unavailable { .. } => "vbmeta-worker-unavailable",
             Self::Spawn(_) => "vbmeta-worker-spawn",
             Self::Timeout(_) => "vbmeta-worker-timeout",
-            Self::Malformed(_) | Self::HeaderMalformed(_) => "vbmeta-worker-malformed",
+            Self::Malformed(_) | Self::HeaderMalformed(_) | Self::CheckMalformed(_) => {
+                "vbmeta-worker-malformed"
+            }
         }
     }
 }
@@ -81,6 +97,13 @@ struct WorkerError {
 #[serde(untagged)]
 enum HeaderWorkerEnvelope {
     Ok { header: VbmetaHeaderReceipt },
+    Err { error: WorkerError },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum CheckWorkerEnvelope {
+    Ok { check: VbmetaCheckReceipt },
     Err { error: WorkerError },
 }
 
@@ -138,6 +161,45 @@ pub fn inspect(
         Err(_) => {
             let prefix = output.stdout.trim().chars().take(200).collect();
             Err(VbmetaInspectError::Malformed(prefix))
+        }
+    }
+}
+
+pub fn check(
+    image: &Path,
+    vbmeta: &Path,
+    partition: &str,
+    tools: Option<&Path>,
+) -> Result<VbmetaCheckReceipt, VbmetaInspectError> {
+    let worker = build_tools::resolve_mode2_profile(tools).map_err(|error| match error {
+        ToolError::Unavailable { tool } => VbmetaInspectError::Unavailable { tool },
+        ToolError::Spawn { source, .. } => VbmetaInspectError::Spawn(source.to_string()),
+        ToolError::Timeout { timeout, .. } => VbmetaInspectError::Timeout(timeout),
+    })?;
+    let args = vec![
+        arg("check"),
+        arg("--image"),
+        arg(image),
+        arg("--vbmeta"),
+        arg(vbmeta),
+        arg("--partition"),
+        arg(partition),
+    ];
+    let output = build_tools::run_with_timeout(&worker, &args, std::time::Duration::from_secs(30))
+        .map_err(|error| match error {
+            ToolError::Unavailable { tool } => VbmetaInspectError::Unavailable { tool },
+            ToolError::Spawn { source, .. } => VbmetaInspectError::Spawn(source.to_string()),
+            ToolError::Timeout { timeout, .. } => VbmetaInspectError::Timeout(timeout),
+        })?;
+    match serde_json::from_str::<CheckWorkerEnvelope>(&output.stdout) {
+        Ok(CheckWorkerEnvelope::Ok { check }) => Ok(check),
+        Ok(CheckWorkerEnvelope::Err { error }) => Err(VbmetaInspectError::CheckWorker {
+            code: error.code,
+            message: error.message,
+        }),
+        Err(_) => {
+            let prefix = output.stdout.trim().chars().take(200).collect();
+            Err(VbmetaInspectError::CheckMalformed(prefix))
         }
     }
 }

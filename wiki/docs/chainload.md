@@ -59,6 +59,9 @@ canoe-bootmgr --source <ext4-image-or-block-device> bls stage \
   --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
 ```
 
+A complete, commented entry to copy from lives at
+[`examples/pmos.conf`](./examples/pmos.conf).
+
 `--artifact` is `SOURCE,DESTINATION,SHA256`; every destination must be
 referenced by the parsed BLS file, and every digest must be 64 hexadecimal
 characters. The operation verifies the source before and during the copy,

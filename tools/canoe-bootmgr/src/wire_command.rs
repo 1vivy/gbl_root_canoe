@@ -5,8 +5,8 @@ use crate::cli::{
     EntryIdArgs, EntryModeArgs, EntrySetArgs, FastbootAblCoverageArgs, FastbootCommand,
     FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs, FastbootFlashArgs,
     FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, InstallArgs, ModePlanArgs, OtaApplyArgs,
-    PolicyArgs, SlotCommand, SlotStatusArgs, SourceCommand, VbmetaHeaderArgs, VbmetaInspectArgs,
-    VendorBootCommand, VendorBootPatchArgs,
+    PolicyArgs, SlotCommand, SlotStatusArgs, SourceCommand, ToolsUpdateArgs, VbmetaCheckArgs,
+    VbmetaExtractArgs, VbmetaHeaderArgs, VbmetaInspectArgs, VendorBootCommand, VendorBootPatchArgs,
 };
 use crate::wire::JsonRequest;
 
@@ -51,6 +51,7 @@ impl JsonRequest {
                 snapshot,
                 slot,
             }),
+            Self::ToolsUpdate { source } => Command::ToolsUpdate(ToolsUpdateArgs { source }),
             Self::ConfigShow => Command::Config {
                 command: ConfigCommand::Show,
             },
@@ -225,6 +226,20 @@ impl JsonRequest {
             Self::VbmetaHeader { vbmeta, tools } => {
                 Command::VbmetaHeader(VbmetaHeaderArgs { vbmeta, tools })
             }
+            Self::VbmetaExtract { image, output } => {
+                Command::VbmetaExtract(VbmetaExtractArgs { image, output })
+            }
+            Self::VbmetaCheck {
+                image,
+                vbmeta,
+                partition,
+                tools,
+            } => Command::VbmetaCheck(VbmetaCheckArgs {
+                image,
+                vbmeta,
+                partition,
+                tools,
+            }),
             Self::VendorBootPatch { input, output } => Command::VendorBoot {
                 command: VendorBootCommand::Patch(VendorBootPatchArgs { input, output }),
             },

@@ -35,6 +35,12 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     if let Command::VbmetaInspect(args) = command {
         return vbmeta_inspect_command(args);
     }
+    if let Command::VbmetaExtract(args) = command {
+        return vbmeta_extract_command(args);
+    }
+    if let Command::VbmetaCheck(args) = command {
+        return vbmeta_check_command(args);
+    }
     if let Command::Fastboot { command } = command {
         return fastboot_command(command);
     }
@@ -60,11 +66,20 @@ pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, App
     if let Command::BlockWrite(args) = &command {
         return block_write_command(args);
     }
+    if let Command::VbmetaExtract(args) = &command {
+        return vbmeta_extract_command(args);
+    }
+    if let Command::VbmetaCheck(args) = &command {
+        return vbmeta_check_command(args);
+    }
     if let Command::ModePlan(args) = &command {
         validate_mode_plan_target(args.target_mode)?;
     }
     if let Command::VbmetaInspect(args) = &command {
         return vbmeta_inspect_command(args);
+    }
+    if let Command::VbmetaHeader(args) = &command {
+        return vbmeta_header_command(args);
     }
     if let Command::Fastboot { command } = &command {
         return fastboot_command(command);
@@ -99,6 +114,12 @@ pub fn execute_request_cli(
     if let Command::VbmetaHeader(args) = &command {
         return vbmeta_header_command(args);
     }
+    if let Command::VbmetaExtract(args) = &command {
+        return vbmeta_extract_command(args);
+    }
+    if let Command::VbmetaCheck(args) = &command {
+        return vbmeta_check_command(args);
+    }
     if let Command::Fastboot { command } = &command {
         return fastboot_command(command);
     }
@@ -124,10 +145,13 @@ fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppE
         Command::Slot { command } => extra_ops::slot_command(backend, command),
         Command::Install(args) => extra_ops::install_command(backend, args),
         Command::OtaApply(args) => extra_ops::ota_apply(backend, args),
+        Command::ToolsUpdate(args) => extra_ops::tools_update(backend, args),
         Command::ModePlan(args) => mode_plan_command(backend, args),
         Command::Graft(args) => extra_ops::graft_command(args),
         Command::VbmetaInspect(args) => vbmeta_inspect_command(args),
         Command::VbmetaHeader(args) => vbmeta_header_command(args),
+        Command::VbmetaExtract(args) => vbmeta_extract_command(args),
+        Command::VbmetaCheck(args) => vbmeta_check_command(args),
         Command::Fastboot { command } => fastboot_command(command),
         Command::VendorBoot { command } => extra_ops::vendorboot_command(command),
     }
@@ -212,6 +236,32 @@ fn vbmeta_header_command(args: &crate::cli::VbmetaHeaderArgs) -> Result<Success,
         rollback_index: header.rollback_index,
         flags: header.flags,
         release_string: header.release_string,
+    })
+}
+
+fn vbmeta_extract_command(
+    args: &crate::cli::VbmetaExtractArgs,
+) -> Result<Success, AppError> {
+    Ok(Success::VbmetaExtract {
+        ok: true,
+        receipt: crate::graft::extract(&args.image, &args.output)?,
+    })
+}
+
+fn vbmeta_check_command(args: &crate::cli::VbmetaCheckArgs) -> Result<Success, AppError> {
+    let check = crate::vbmeta_inspect::check(
+        &args.image,
+        &args.vbmeta,
+        &args.partition,
+        args.tools.as_deref(),
+    )?;
+    Ok(Success::VbmetaCheck {
+        ok: true,
+        partition: args.partition.clone(),
+        key_matches: check.key_matches,
+        image_key_sha256: check.image_key_sha256,
+        chain_key_sha256: check.chain_key_sha256,
+        rollback_index_location: check.rollback_index_location,
     })
 }
 

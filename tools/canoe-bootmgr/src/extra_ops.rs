@@ -1,8 +1,8 @@
-use crate::backend::Backend;
+use crate::backend::{Backend, BootRoot};
 
 use crate::artifact::{self, BlsStageInput};
 use crate::cli::{
-    BlsStageArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs, Success,
+    BlsStageArgs, InstallArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs, Success, ToolsUpdateArgs,
     VendorBootCommand,
 };
 use crate::graft;
@@ -172,6 +172,21 @@ pub(crate) fn ota_apply(backend: &Backend, args: &OtaApplyArgs) -> Result<Succes
         })
         .map_err(AppError::from)?;
     Ok(Success::OtaApply { ok: true, receipt })
+}
+
+pub(crate) fn tools_update(
+    backend: &Backend,
+    args: &ToolsUpdateArgs,
+) -> Result<Success, AppError> {
+    let files = match backend {
+        Backend::Local(local) => crate::tools_update::update(local.root(), &args.source)?,
+        Backend::Ext4(_) => backend
+            .with_temp_root(|root| {
+                crate::tools_update::update(root, &args.source).map_err(|error| error.to_string())
+            })
+            .map_err(AppError::from)?,
+    };
+    Ok(Success::ToolsUpdate { ok: true, files })
 }
 
 pub(crate) fn vendorboot_command(command: &VendorBootCommand) -> Result<Success, AppError> {

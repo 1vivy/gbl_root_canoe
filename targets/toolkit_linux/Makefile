@@ -3,7 +3,11 @@ include ../../version.mk
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_canoe_ext4 submodule_ablfvextractor \
-	submodule_vbmetafixer canoe build
+	submodule_vbmetafixer canoe canoe_app build
+
+ROOT_DIR := $(abspath ../..)
+
+CANOE_APP_LINUX_BIN ?= $(ROOT_DIR)/../canoe-boot-manager/src-tauri/target/release/canoe-boot-manager
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -77,6 +81,13 @@ canoe: copy_resources
 	test -x ../../tools/canoe/target/release/canoe
 	cp ../../tools/canoe/target/release/canoe ./build/toolkit/canoe
 	chmod +x ./build/toolkit/canoe
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor submodule_vbmetafixer canoe
+canoe_app: copy_resources
+	@test -x "$(CANOE_APP_LINUX_BIN)" || { \
+		echo "canoe-boot-manager Linux binary is required; run 'cd ../canoe-boot-manager && bunx tauri build --no-bundle --ci' or set CANOE_APP_LINUX_BIN" >&2; \
+		exit 1; \
+	}
+	cp "$(CANOE_APP_LINUX_BIN)" ./build/toolkit/bin/canoe-boot-manager
+	chmod +x ./build/toolkit/bin/canoe-boot-manager
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor submodule_vbmetafixer canoe canoe_app
 	# zip
 	cd build/toolkit && zip -r ../toolkit_linux.zip ./

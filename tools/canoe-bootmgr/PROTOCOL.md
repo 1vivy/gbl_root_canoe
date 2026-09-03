@@ -47,6 +47,8 @@ A failed JSON response is one object, followed by `\n`:
 | `vbmeta-worker-timeout` | The `mode2_profile` worker did not finish within 30 seconds. |
 | `vbmeta-worker-malformed` | The `mode2_profile` worker output was not a recognized JSON envelope. |
 | `vbmeta-read`, `vbmeta-too-small`, `vbmeta-bad-magic`, `vbmeta-bad-footer`, `vbmeta-range-invalid`, `vbmeta-release-string-invalid`, `vbmeta-unsigned`, `vbmeta-header-malformed`, `vbmeta-public-key-missing`, `vbmeta-public-key-invalid`, `vbmeta-descriptors-invalid`, `vbmeta-descriptor-malformed`, `vbmeta-property-malformed`, `vbmeta-chain-malformed`, `vbmeta-property-utf8`, `vbmeta-partition-name-utf8`, `vbmeta-duplicate-property`, `vbmeta-os-version-missing`, `vbmeta-security-patch-missing`, `vbmeta-os-version-malformed`, `vbmeta-security-patch-malformed` | `mode2_profile` rejected the image; the code identifies the specific AVB inspection failure. |
+| `vbmeta-no-footer` | `vbmeta.extract` or `vbmeta.check` received an image without an `AVBf` footer. |
+| `vbmeta-chain-partition-missing` | `vbmeta.check` found no chain descriptor for the requested partition in the main vbmeta. |
 | `partition-name-invalid` | `block.write` rejected a partition name outside ASCII `[A-Za-z0-9_]`, 1..=36 bytes. |
 | `partition-missing` | `block.write` could not find the resolved `/dev/block/by-name` node. |
 | `image-too-large` | `block.write` received an empty image or an image larger than the target; no target bytes were written. |
@@ -56,6 +58,13 @@ A failed JSON response is one object, followed by `\n`:
 | `rollback-failed` | `block.write` readback differed and restoring the snapshot failed; the response names the snapshot artifact. |
 | `digest-mismatch` | `abl.verify` image SHA-256 differed from the supplied expected digest; no probe was run. |
 | `unsupported-platform` | `block.write` is unavailable on this platform. |
+| `tools-source-missing` | `tools.update` source does not exist; no boot-root write was attempted. |
+| `tools-source-not-directory` | `tools.update` source is not a directory; no boot-root write was attempted. |
+| `tools-source-empty` | `tools.update` source contains no regular files; no boot-root write was attempted. |
+| `tools-source-name` | `tools.update` source contains a file whose name cannot be represented in the wire receipt. |
+| `tools-snapshot` | `tools.update` could not snapshot an existing destination; no boot-root write was attempted. |
+| `tools-write` | `tools.update` failed while copying a staged file; the pre-update snapshot was restored. |
+| `tools-rollback` | `tools.update` failed and could not restore the pre-update snapshot. |
 | `mode-plan-invalid` | `mode.plan` received a mode outside `0..=2`; no boot-root lookup or write was attempted. |
 | `mode-precondition-unsatisfied` | `entry.mode` was asked to apply a transition whose planned preconditions are missing, unknown, or require a post-action. |
 | `response-too-large` | A successful response exceeded 1 MB. |
@@ -98,16 +107,13 @@ Shared response records:
 - `bls_file`: `{name:string,entry:bls_entry}`.
 - `install_receipt`: `{active_slot:"a"|"b",installed:("a"|"b")[],generation:u32,signer_changed:bool,backup_present:bool}`.
 
-## Verb catalogue
-
-Every success response below also has `ok:true` and `operation` with the stated value.
-
 | Verb | Request fields | Success response fields |
 | --- | --- | --- |
 | `protocol.version` | `verb` only | `operation:"protocol.version"`, `app_version:string`, `protocol_version:u32`. |
 | `build` | `abl:path` required; `vbmeta:path?`, `staged:path?`, `tools:path?`, `efisp_tools:path?`, `keep_unpatched:path?`, `patch_log:path?`, `probe:bool?`. | Full build: `operation:"build"`, `kind:"build"`, `receipt:{staged:path,loader_bytes:u64,gm2p_bytes:u64,tzmap_bytes:u64,tools_staged:usize,gbl_patched:bool,loader_sha256:string,gm2p_sha256:string,tzmap_sha256:string,unpatched_sha256:string}`. Probe build: `operation:"build.probe"`, `kind:"build.probe"`, `receipt:{gbl_patched:bool,unpatched_sha256:string}`. |
 | `abl.verify` | `image:path` required; `expected_sha256:string?`. If supplied, verification returns `digest-mismatch` before probing on a mismatch. | `operation:"abl.verify"`, `sha256:string`, `gbl_patched:bool`. The vulnerability result comes from the existing `build --probe` path. |
 | `block.write` | `partition:string`, `image:path`, `snapshot:path` required; `slot:"a"|"b"?`. The partition must match ASCII `[A-Za-z0-9_]` and be 1..=36 bytes. The server resolves `/dev/block/by-name/<partition><suffix>`, snapshots the full target, writes without truncation, verifies readback, and restores on mismatch. | `operation:"block.write"`, `partition:string`, `node:string`, `bytes_written:u64`, `sha256:string`, `snapshot:string`, `verified:bool`. |
+| `tools.update` | `source:path` required. The source must be a directory containing at least one regular file. Each direct child file is copied to `tools/<name>` through the boot-root transaction; destinations are snapshotted and restored if any copy fails. | `operation:"tools.update"`, `files:string[]` (sorted names written to the boot root). |
 | `config.show` | `verb` only | `operation:"config.show"`, `config:config`. |
 | `config.set-policy` | `menu_mode:"silent"|"menu"?`, `key_window_ms:u32?`, `menu_timeout_s:u32?`. | `operation:"config.policy"`, `kind:"config.policy"`, `config:config`, `generation:u32`, `mark:string`. |
 | `entry.list` | `verb` only | `operation:"entry.list"`, `generation:u32`, `entries:entry[]`. |
@@ -123,6 +129,8 @@ Every success response below also has `ok:true` and `operation` with the stated 
 | `bls.stage` | `name:string`, `entry:path`, `artifacts:artifact[]` required. An `artifact` is `{source:path,destination:string,sha256:string}`. | `operation:"bls.stage"`, `receipt:{name:string,artifacts:string[]}`. |
 | `slot.status` | `slot:string?`, `bootctl_output:string?`, `gpt_active_slot:string?`. | `operation:"slot.status"`, `active_slot:"a"|"b"?`, `inactive_slot:"a"|"b"?`, `source:string`, `installed:("a"|"b")[]`. |
 | `install` | `staged:path` required; `slot:string?`, `both:bool?`, `inactive:bool?`, `i_know_inactive_status:bool?`, `active_slot:string?`, `bootctl_output:string?`, `gpt_active_slot:string?`, `mode:u8?`, `allow_new_signer:bool?`. | `operation:"install"`, `receipt:install_receipt`. |
+| `vbmeta.extract` | `image:path`, `output:path` required. The image must carry an `AVBf` footer; a standalone AVB0 blob is refused. The footer's vbmeta range is copied atomically to `output`. | `operation:"vbmeta.extract"`, `receipt:{output:path,bytes:usize,vbmeta_offset:u64,vbmeta_size:u64}`. |
+| `vbmeta.check` | `image:path`, `vbmeta:path`, `partition:string` required; `tools:path?` optionally selects the `mode2_profile` worker. `image` may be standalone AVB0 or an AVBf-footed partition image; `vbmeta` is the main standalone AVB0 image. The worker walks chain descriptors only, so duplicate build properties do not refuse this key comparison. | `operation:"vbmeta.check"`, `partition:string`, `key_matches:bool`, `image_key_sha256:string`, `chain_key_sha256:string`, `rollback_index_location:u32`. |
 | `ota-apply` | `staged:path` required; `target_slot:string?`, `bootctl_output:string?`, `gpt_active_slot:string?`, `mode:u8?`, `allow_new_signer:bool?`. | `operation:"ota-apply"`, `receipt:install_receipt`. |
 | `vbmeta.graft` | `vbmeta:path`, `recovery:path`, `output:path` required. Legacy request aliases `graft` and `vbmetaport` are accepted. | `operation:"vbmeta.graft"`, `receipt:{output:string,bytes:usize}`. |
 | `vbmeta.inspect` | `vbmeta:path` required; `tools:path?` optionally selects the `mode2_profile` worker directory. When omitted, the worker is resolved from `CANOE_TOOLS_DIR`, then the executable's directory, then `PATH`. | `operation:"vbmeta.inspect"`, `rollback_index:u64`, `chain_partitions:{rollback_index_location:u32,partition_name:string,public_key:u8[]}[]`, `build_properties:{system_os_version:string?,system_security_patch:string?,vendor_security_patch:string?,boot_security_patch:string?}`. Chain partitions whose name starts with `vbmeta` are excluded; `recovery` is ordinary. Duplicate occurrences of any named build property return `vbmeta-duplicate-property`, never a partial result. |

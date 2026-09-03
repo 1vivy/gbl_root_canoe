@@ -32,6 +32,7 @@ pub mod operations;
 #[cfg(feature = "cli")]
 pub mod output;
 pub use slot_transaction::{InstallInput, InstallReceipt};
+mod tools_update;
 mod slot_tools;
 pub mod slot_transaction;
 pub mod slots;
