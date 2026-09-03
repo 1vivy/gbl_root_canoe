@@ -24,12 +24,12 @@
 #include "SuperFbConfig.h"
 /*
  * Value exposed by the canoe-bds fastboot variable and used by the host for
- * Super-Fastboot detection and compatibility checks. The build injects the
- * stamped value from the repo-root version.mk; this fallback appears only in
- * an unstamped local build.
+ * Super-Fastboot detection and compatibility checks. The build must inject
+ * the stamped value from the repo-root version.mk; an unstamped artifact must
+ * never publish a plausible version.
  */
 #ifndef SFB_BDS_VERSION
-#define SFB_BDS_VERSION "0.0.0-dev"
+#error "SFB_BDS_VERSION must be injected; unstamped BDS artifacts are not releaseable"
 #endif
 
 /* The boot loader we look for on every FAT volume, and the optional ANSI

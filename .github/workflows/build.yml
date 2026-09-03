@@ -214,6 +214,11 @@ jobs:
           echo "shipped BDS.efi publishes a stale canoe-bds variable, expected $version"; exit 1; }
         strings -a -e l artifacts/toolkit_linux/BDS.efi | grep -Fq -- "$version" || {
           echo "shipped BDS.efi draws a stale menu credit, expected $version"; exit 1; }
+        fallback='0.0.0-dev'
+        if strings -a -e s artifacts/toolkit_linux/BDS.efi | grep -Fqx -- "$fallback" || \
+           strings -a -e l artifacts/toolkit_linux/BDS.efi | grep -Fqx -- "$fallback"; then
+          echo "shipped BDS.efi contains the unstamped fallback $fallback"; exit 1
+        fi
 
         linux_patcher_type="$(file -b artifacts/toolkit_linux/bin/patch_abl)"
         case "$linux_patcher_type" in

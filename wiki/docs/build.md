@@ -58,10 +58,10 @@ On a tag, the app repository publishes a deterministic
 Windows desktop binaries. The firmware repository consumes those assets by URL
 and SHA-256 through its existing `fetch-verified` target. Until a published app
 asset is selected, the checked-in
-`targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz` is the
-last-known-good fallback. `make version-check` verifies that the fallback bytes
-match `CANOE_WEBUI_SHA256`; it must not be silently replaced with an unrelated
-bundle.
+`targets/magisk_module/webui-cache/canoe-boot-manager-<CANOE_WEBUI_VERSION>.tar.gz`
+is the last-known-good fallback. `make version-check` verifies that the fallback
+bytes match `CANOE_WEBUI_SHA256`; it must not be silently replaced with an
+unrelated bundle.
 
 ## Build prerequisites
 
@@ -126,20 +126,15 @@ rewriting it. This keeps the module UI byte-identical to the app build.
 ## Single-source versioning
 
 The repository-root `version.mk` is the single source of truth for the Canoe
-version and module version pin. It currently contains:
+version, module version code, and Web UI release pin. Do not copy version or
+digest values into documentation: read `CANOE_VERSION`, `CANOE_VERSION_CODE`,
+`CANOE_WEBUI_VERSION`, and `CANOE_WEBUI_SHA256` directly from `version.mk`.
 
-```make
-CANOE_VERSION = 7.0.0-b2
-CANOE_VERSION_CODE = 15
-CANOE_WEBUI_VERSION = 0.1.0
-CANOE_WEBUI_SHA256 = ebc631e5fa91f0011bcdf7fcf5afa512aa50db0881a210b93b9bb326550445a0
-```
-
-Run `make bump VERSION=x.y.z` to regenerate derived version files. Run
-`make version-check` to fail on version drift and to verify the pinned fallback
-archive. The UEFI build stamps the same `CANOE_VERSION` value into
-`SFB_BDS_VERSION`, which is published by the BDS as the `canoe-bds` fastboot
-variable.
+Run `make bump VERSION=<release-version> VERSION_CODE=<release-version-code>`
+to regenerate derived version files, then run `make version-check`. The gate
+checks the generated host and module metadata, the pinned Web UI archive and
+its URL, the BDS's `canoe-bds` and menu strings, the build stamp cache, and
+the BDS bytes embedded in any existing package archives.
 
 ## Byte-identical boot artifacts
 
