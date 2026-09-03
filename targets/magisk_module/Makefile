@@ -39,6 +39,11 @@ webui_dist: copy_resources
 # app, and print the digest to paste into version.mk. The tar flags are what
 # make the digest stable: without them every regeneration embeds a new mtime
 # and owner, and a pin that changes on every run pins nothing.
+# The format must be USTAR: that is what the app's own `dist-tarball` publisher
+# emits, deliberately, so member names fit its 100-byte name and 155-byte prefix
+# limits. GNU format here would produce a different digest from the published
+# asset for byte-identical content, so a pin refreshed by this helper could never
+# match one taken from a release.
 #
 #   make -C targets/magisk_module webui-pin CANOE_WEBUI_SRC=/path/to/canoe-boot-manager
 CANOE_WEBUI_SRC ?= ../../../canoe-boot-manager
@@ -48,7 +53,7 @@ webui-pin:
 		{ echo "run 'bun run build' in $(CANOE_WEBUI_SRC) first" >&2; exit 1; }; \
 	out="webui-cache/canoe-boot-manager-$(CANOE_WEBUI_VERSION).tar.gz"; \
 	tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-		--format=gnu -C "$(CANOE_WEBUI_SRC)/dist" -cf - . \
+		--format=ustar -C "$(CANOE_WEBUI_SRC)/dist" -cf - . \
 		| gzip -n -9 > "$$out"; \
 	echo "CANOE_WEBUI_SHA256 = $$(sha256sum "$$out" | cut -d' ' -f1)"
 submodule_uefi: copy_resources
