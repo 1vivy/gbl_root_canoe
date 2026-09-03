@@ -178,12 +178,20 @@ canoe install --slot b --mode 1
 
 ### 3. KernelSU 模块安装
 
-在已 Root 的设备上安装模块，并按中英文首次安装问卷操作。模块中的静态
-WebUI 与桌面端使用同一份 Svelte 应用构建结果，来自相同的 `dist/` 输出；
-它不是第二套界面实现。模块与电脑端使用同一个
-`canoe-bootmgr build` 编排器和同四个 worker 二进制，然后通过
-`canoe-bootmgr` 提交启动根目录并执行所需的设备分区写入。
-`canoe-bootmgr` 始终是唯一写入器。
+在已 Root 的设备上安装模块。模块的 `customize.sh` 只是启动引导：
+它根据现有模块设置或设备 locale 派生并保存语言偏好，显示读取到的设备事实，
+设置 payload 权限并安装静态 WebUI。它不会询问模式，不会读取或写入启动分区，
+不会改变启动根目录，也不会重启设备。捆绑的 ABL 仓库只是 WebUI 的
+`abl.lookup` provider 数据，不是 shell 端下载器或写入器。
+
+安装后打开 WebUI。它与桌面端使用同一个 Svelte 应用，来自同一份 `dist/`
+构建结果。
+WebUI 会使用已保存的 `lang.txt`/`user_lang` 语言打开；之后的语言切换由
+WebUI 提供。
+WebUI 会预先捕获分区事实，规划所需会话和操作，然后通过设备端
+适配器驱动 `block.read`、`block.write`、`system.reboot` 和
+`canoe-bootmgr`。`canoe-bootmgr` 仍是唯一的启动根目录和分区写入器；
+模块安装脚本本身不写入任何分区。
 
 ### 4. KernelSU 更新或 OTA 后安装
 
