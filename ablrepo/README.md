@@ -68,3 +68,9 @@ TrustZone map are then derived from the ABL that was selected for the device.
 5. If it is byte-identical to another product image, add `same_image_as` on
    both sides and retain the warning that this is not a boot endorsement.
 6. Commit the repository entry and publish the cloud mirror when appropriate.
+
+After adding or replacing entries, run `make version-check` from the firmware
+repository root. The gate verifies every entry's image against its
+`abl.sha256` file and against the `sha256=` and `bytes=` values in `abl.meta`.
+A mis-ingested entry therefore fails the release gate instead of first failing
+on a device.

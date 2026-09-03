@@ -14,36 +14,112 @@ Svelte 5 + Vite `dist/` 和 Tauri 桌面应用。桌面应用是一个全新的�
 cd /home/vivy/Projects/efisp-projects/gbl_root_canoe/.work/gui-work
 ```
 
-## 1. 设置并检查版本
+## 1. 版本、导入项与发布顺序
 
-`version.mk` 是唯一的版本来源。不要手动编辑生成的版本文件。要修改发布版
-时，把新值传给 `make bump`；它会重新生成派生的 Rust 版本和模块元数据。然后
-证明没有漂移：
+`version.mk` 是 Canoe 发布版本的来源。不要手动编辑生成的版本文件。从固件
+worktree 执行发布时，必须按以下顺序操作：
 
 ```sh
 make bump VERSION=7.0.0-b2 VERSION_CODE=15
-make version-check
 ```
 
-如果发布版本保持 `version.mk` 中已有的值，等价的命令就是：
+直接使用 `CANOE_VERSION=<other-version>` 覆盖时，会在任何配方运行前拒绝。
+临时本地构建可以显式传入 `CANOE_VERSION_OVERRIDE=1`；其有效 BDS 版本会追加
+`-local` 后缀，而发布门禁会拒绝该构件。发布时绝不能使用该显式选择。
+
+然后刷新每个发生变化的导入项，并通过清单接口固定它：
 
 ```sh
-make bump
+make import-pin ID=<id>
+```
+
+每个发生变化且可哈希的导入项都运行一次该命令。对于 fetch 行，在
+`imports.toml` 中同时更新 URL 和摘要；它没有可供 `import-pin` 哈希的本地
+文件。对于 subtree、data、satellite 和 external，按下面的逐项流程操作。
+随后运行门禁：
+
+```sh
 make version-check
 ```
-直接使用 `CANOE_VERSION=<other-version>` 覆盖时，会在任何配方运行前拒绝。
-临时本地构建可以在 make 命令行中显式传入 `CANOE_VERSION_OVERRIDE=1`；其
-有效 BDS 版本会追加 `-local` 后缀，而 `make version-check` 会拒绝这个非发布
-构件。构建发布版本时绝不能使用该显式选择。
 
+只有门禁通过后，才构建受影响的软件包。若发布修改了启动链，应只构建一次
+BDS，然后复用它：
 
-`version.mk` 中的 `CANOE_WEBUI_VERSION`、`CANOE_WEBUI_SHA256` 和
-`CANOE_WEBUI_URL` 三元组就是 WebUI pin。对于已 tag 的发布，URL 和摘要指向
-app 仓库发布的 `canoe-boot-manager-<version>.tar.gz`，该压缩包包含 app 的
-确定性 `dist/`。在该资产发布前，签入的
-`targets/magisk_module/webui-cache/` 压缩包是最后已知良好的备用版本，URL 可以
-使用它的 `file://` 路径。`make version-check` 会验证备用压缩包存在且字节与
-pin 相同；只有拿到 app 发布流程打印的摘要后才能更新 release URL 和 pin。
+```sh
+UEFI_REBUILD=1 make target_toolkit_linux target_toolkit_windows
+make target_toolkit_android target_magisk_module
+```
+
+清单是导入项身份的权威来源。本手册有意不出现摘要值：摘要记录在
+`imports.toml` 中，由 `make version-check` 证明。门禁成功不能代替第 4 节的
+软件包专属测试。
+
+### 各导入项的 bump 流程
+
+**`webui` artifact。** 在 app 仓库运行 typecheck、测试和构建，然后生成确定性
+压缩包。在固件 worktree 中运行：
+
+```sh
+make -C targets/magisk_module webui-pin \
+  CANOE_WEBUI_SRC=../../../canoe-boot-manager
+make import-pin ID=webui
+```
+
+应用版本变化时，将相同的新值作为 `CANOE_WEBUI_VERSION=<webui-version>` 传给
+`webui-pin`，并作为 `VERSION=<webui-version>` 传给 `make import-pin`；这样
+压缩包路径、URL 和清单版本保持一致。
+
+第 2 节的确定性 tarball 流程是压缩包生成方式的权威说明。
+
+**`msd-variant` artifact。** 在 `canoe-msd` checkout 中使用它的正常
+`make patch BLOB=... OUT=... CALIBRATION=...` 命令重建校准 blob。将生成的
+`canoe-usbmsd.efi` 复制到
+`submodules/uefi/blobs/canoe-usbmsd.efi`，然后运行：
+
+```sh
+make import-pin ID=msd-variant
+```
+
+发布顺序的 `make version-check` 通过后，必须重建 BDS 以及所有受影响的软件包。
+
+**`platform-tools` fetch。** 上游压缩包变化时，在 `imports.toml` 中同时编辑
+其 `url` 和 `sha256`，然后运行 `make version-check`。不要记录没有匹配摘要的
+URL。
+
+**`xz-utils` fetch。** 该行目前没有记录摘要。保持 URL 和 `pinned = false`
+明确存在，并运行 `make version-check`；在获得并记录上游摘要前，不得将此
+fetch 表述为已验证。
+
+**`edk2-vendor` subtree。** 从上游仓库重新 squash vendored EDK2 源码，并保留
+声明的排除项。将 `upstream.rev` 设置为所用源码 revision，将 `imported_at`
+设置为本仓库中的新提交。将 Canoe 本地修改保留在导入文件之外；有意保留时
+设置 `local_patches = true`，门禁会报告漂移。
+
+**`ablrepo` data。** 按 `ablrepo/README.md` 中的 ingest 流程添加或替换一个
+product 目录：复制 `abl.img`，生成 `abl.sha256`，并根据测量到的身份数据
+写入 `abl.meta`。在本仓库提交该条目，然后运行 `make version-check`；门禁会
+检查每个条目。
+
+**`android-efi-tools` satellite。** 在每个声明的 INF 中独立更新
+`VERSION_STRING`，并同步更新 `imports.toml` 中对应的 `[import.versions]`：
+`ArbTools.inf`、`BLTools.inf`、`LogTools.inf`、`RebootTools.inf`、
+`SurfaceTools.inf`、`UsbTools.inf` 以及
+`Library/AndroidToolsUi/AndroidToolsUi.inf`。当前预期值是所有列出的文件为
+`0.1`，只有 `SurfaceTools.inf` 为 `0.2`。让版本与 satellite 变更保持一致，
+但不要修改 `CANOE_VERSION`：该项目有意不由 Canoe 版本管理。运行
+`make version-check`。
+
+**`desktop-app-linux` external 输入。** 由操作员从兄弟 app checkout 提供
+Linux 二进制，并通过 `CANOE_APP_LINUX_BIN` 指定。该行始终报告为
+`EXTERNAL`，不能固定；发布顺序的门禁通过后，再重建受影响的 Linux 软件包。
+
+**`desktop-app-windows` external 输入。** 由操作员从兄弟 app checkout 提供
+Windows GNU 二进制，并通过 `CANOE_APP_WINDOWS_BIN` 指定。该行始终报告为
+`EXTERNAL`，不能固定；发布顺序的门禁通过后，再重建受影响的 Windows 软件包。
+
+两个桌面二进制目前无法固定，因为 `canoe-boot-manager` 目前没有 remote，也
+没有 tags。另一个必须诚实记录的发布缺口是 `xz-utils`：它在没有摘要的情况
+下被 fetch。不得通过把未经验证的值复制到文档中来掩盖任一缺口。
 
 ## 2. 先构建 app 仓库
 

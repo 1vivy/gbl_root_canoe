@@ -116,17 +116,53 @@ Linux 使用 `canoe-boot-manager.sh`，Windows 使用 `canoe-boot-manager.bat`�
 `fetch-verified` 目标，在下载前后验证 SHA-256，并直接解开应用的 `dist/`
 而不重写它。这样模块 UI 就与应用构建保持字节一致。
 
+## 导入项
+
+该树中有两种开发模式。核心项目按普通的编辑、测试和发布流程维护；其发布
+身份由 `version.mk` 中的 `CANOE_VERSION` 和 `CANOE_VERSION_CODE` 管理。其余
+内容都作为导入项到达：可能是 squash 导入的源码副本、由兄弟仓库生成的编译
+输出，或外部数据。根目录的 `imports.toml` 清单为每个导入项声明一次。
+`make version-check` 会检查清单，能够哈希的导入项统一由
+`make import-pin ID=<id>` 重新固定。
+
+清单每个输入只保留一行。`kind` 说明检查能够证明什么：
+
+- **`artifact`** 是本仓库携带的编译文件。门禁会哈希声明的 `path`，并同时将
+  摘要和字节数与清单比较；不匹配时会报告预期值和实际值。这只能证明签入的
+  文件自固定后没有变化，不能证明生产者如何构建、生产者源码是否存在，或文件
+  是否安全。
+- **`fetch`** 是构建时下载到 gitignored cache 中、从不签入的构件。门禁检查
+  URL、摘要（已固定时）和生成的 make 变量是否完整且一致；它不会哈希本地文件。
+  `pinned = false` 表示供应链缺口尚未闭合，并不是已验证的输入。
+- **`subtree`** 是 squash 导入的源码。门禁移除声明的排除项后，将路径与记录的
+  `imported_at` 提交比较。这只能证明 vendored 副本自该导入提交以来是否在本地
+  改变；它不说明上游、squash 的质量或副本是否最新。`local_patches = false`
+  时漂移会失败；`local_patches = true` 时只报告漂移而不使门禁失败。
+- **`data`** 是带有自身完整性记录的外部数据。门禁哈希每个条目的 image，并将
+  结果与条目的摘要文件以及 metadata 中的 `sha256=` 和 `bytes=` 值比较。这只
+  证明内部内容一致，不能证明数据确实来自声称的设备，或一定能在设备上启动。
+- **`satellite`** 是有意不由 `CANOE_VERSION` 管理的树内项目。门禁检查每个声明
+  文件的 `version_key` 是否等于预期的逐文件版本；它不证明 satellite 文件彼此
+  兼容，也不证明源码没有变化。
+- **`external`** 是操作员从兄弟 checkout 提供的构建输入。门禁将其报告为
+  `EXTERNAL`，永远不失败，也不哈希它。这只记录依赖及其生产命令，不能证明所供
+  二进制存在或具有声称的来源。
+
+清单和生成的 `imports.mk` 是导入项身份的权威来源。不要把摘要值复制到构建
+文档中；改为使用清单和 `make version-check`。门禁成功只对上述具体检查提供
+证据，不能代替构建或测试受影响的软件包。
+
 ## 单一来源的版本管理
 
-仓库根目录的 `version.mk` 是 Canoe 版本、模块版本号和 WebUI 发布 pin 的唯一
-来源。不要把版本或摘要值复制到文档中：直接从 `version.mk` 读取
-`CANOE_VERSION`、`CANOE_VERSION_CODE`、`CANOE_WEBUI_VERSION` 和
-`CANOE_WEBUI_SHA256`。
+仓库根目录的 `version.mk` 是 Canoe 发布版本和模块版本号的唯一来源。导入项身份
+单独声明在 `imports.toml`，并在生成的 `imports.mk` 中输出供 make 使用；不要
+通过文档间接编辑任一文件。不要把版本或摘要值复制到文档中。
 
 运行 `make bump VERSION=<release-version> VERSION_CODE=<release-version-code>`
-重新生成派生版本文件，然后运行 `make version-check`。该门禁会检查生成的主机
-与模块元数据、固定的 WebUI 压缩包及其 URL、BDS 的 `canoe-bds` 和菜单字符串、
-构建 stamp 缓存，以及现有软件包归档中嵌入的 BDS 字节。
+重新生成派生版本文件。适用时，用 `make import-pin ID=<id>` 刷新变化的导入项，
+然后运行 `make version-check`。门禁会检查生成的元数据、每个声明的导入项、
+BDS 的 `canoe-bds` 和菜单字符串、构建 stamp 缓存，以及现有软件包归档中嵌入的
+BDS 字节。
 
 ## 跨软件包字节一致的启动构件
 

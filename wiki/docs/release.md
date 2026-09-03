@@ -15,39 +15,122 @@ Run all firmware commands from this worktree:
 cd /home/vivy/Projects/efisp-projects/gbl_root_canoe/.work/gui-work
 ```
 
-## 1. Set and check the version
+## 1. Version, imports, and release order
 
-`version.mk` is the single version source. Do not edit generated version files by
-hand. To change a release, pass the new values to `make bump`; it regenerates the
-derived Rust version and module metadata. Then prove that nothing drifted:
+`version.mk` is the source of the Canoe release version. Do not edit generated
+version files by hand. A release follows this order from the firmware worktree:
 
 ```sh
 make bump VERSION=7.0.0-b2 VERSION_CODE=15
-make version-check
 ```
 
-For a release that keeps the values already in `version.mk`, the equivalent command is
-simply:
+A direct `CANOE_VERSION=<other-version>` override is refused before any recipe
+runs. A throwaway local build may opt in with `CANOE_VERSION_OVERRIDE=1`; its
+effective BDS version receives a `-local` suffix and the release gate rejects
+that artifact. Never use the opt-in for a release.
+
+Next refresh every import that moved and pin it through the manifest interface:
 
 ```sh
-make bump
+make import-pin ID=<id>
+```
+
+Run that command once for each changed hashable import. For fetch rows, update
+the URL and digest together in `imports.toml`; they have no local file for
+`import-pin` to hash. For subtree, data, satellite, and external rows, follow
+the per-import procedures below. Then run the gate:
+
+```sh
 make version-check
 ```
-A direct `CANOE_VERSION=<other-version>` override is refused before any
-recipe runs. A throwaway local build may opt in with
-`CANOE_VERSION_OVERRIDE=1` on the make command line; its effective BDS version
-receives a `-local` suffix and `make version-check` rejects the non-release
-artifact. Never use that opt-in for a release.
 
+Only after the gate passes, build the affected packages. A release that changes
+the boot chain should rebuild BDS once and then reuse it:
 
-The WebUI pin is the `CANOE_WEBUI_VERSION`, `CANOE_WEBUI_SHA256`, and
-`CANOE_WEBUI_URL` trio in `version.mk`. For a tagged release, the URL and digest point
-at the app repository's published `canoe-boot-manager-<version>.tar.gz`, which contains
-the app's deterministic `dist/`. Before that asset is published, the checked-in
-`targets/magisk_module/webui-cache/` archive is the last-known-good fallback and the
-URL may be its `file://` path. `make version-check` verifies that this fallback archive
-exists and has the pinned bytes; update the release URL and pin only after obtaining the
-digest printed by the app release.
+```sh
+UEFI_REBUILD=1 make target_toolkit_linux target_toolkit_windows
+make target_toolkit_android target_magisk_module
+```
+
+The manifest is the authority for import identity. Digests intentionally never
+appear in this runbook: `imports.toml` records them and `make version-check`
+proves them. A successful gate does not replace the package-specific tests in
+Section 4.
+
+### Per-import bump recipes
+
+**`webui` artifact.** In the app repository, run its typecheck, tests, and
+build, then create the deterministic archive. From the firmware worktree:
+
+```sh
+make -C targets/magisk_module webui-pin \
+  CANOE_WEBUI_SRC=../../../canoe-boot-manager
+make import-pin ID=webui
+```
+
+When the app version changes, pass the same new value as
+`CANOE_WEBUI_VERSION=<webui-version>` to `webui-pin` and
+`VERSION=<webui-version>` to `make import-pin`; this keeps the archive path,
+URL, and manifest version aligned.
+
+The deterministic-tarball procedure in Section 2 is authoritative for how the
+archive is produced.
+
+**`msd-variant` artifact.** In the `canoe-msd` checkout, rebuild the calibrated
+blob with its normal `make patch BLOB=... OUT=... CALIBRATION=...` command.
+Copy the resulting `canoe-usbmsd.efi` to
+`submodules/uefi/blobs/canoe-usbmsd.efi`, then run:
+
+```sh
+make import-pin ID=msd-variant
+```
+
+After the release-order `make version-check` passes, rebuild the BDS and every
+affected package.
+
+**`platform-tools` fetch.** When the upstream archive changes, edit its `url`
+and `sha256` together in `imports.toml`, then run `make version-check`. Do not
+record a URL without its matching digest.
+
+**`xz-utils` fetch.** This row currently has no recorded digest. Keep its URL
+and `pinned = false` explicit, and run `make version-check`; do not present the
+fetch as verified until an upstream digest is available and recorded.
+
+**`edk2-vendor` subtree.** Re-squash the vendored EDK2 source from the upstream
+repository, preserving the declared exclusions. Set `upstream.rev` to the
+source revision used and `imported_at` to the new commit in this repository.
+Keep local Canoe patches outside the imported files and set
+`local_patches = true` when they are intentional; the gate reports that drift.
+
+**`ablrepo` data.** Add or replace one product directory using the ingest recipe
+in `ablrepo/README.md`: copy `abl.img`, generate `abl.sha256`, and write
+`abl.meta` from measured identity data. Commit the entry in this repository,
+then run `make version-check`; the gate checks every entry.
+
+**`android-efi-tools` satellite.** Update `VERSION_STRING` independently in
+each declared INF and update the matching `[import.versions]` entries in
+`imports.toml`: `ArbTools.inf`, `BLTools.inf`, `LogTools.inf`,
+`RebootTools.inf`, `SurfaceTools.inf`, `UsbTools.inf`, and
+`Library/AndroidToolsUi/AndroidToolsUi.inf`. The current expected set is
+`0.1` for every listed file except `SurfaceTools.inf`, which is `0.2`. Keep
+the versions consistent with the satellite change, but do not change
+`CANOE_VERSION`: this project is deliberately not versioned by Canoe. Run
+`make version-check`.
+
+**`desktop-app-linux` external input.** Supply the Linux binary through
+`CANOE_APP_LINUX_BIN` from the operator's sibling app checkout. The row is
+always reported as `EXTERNAL` and cannot be pinned; after the release-order
+gate passes, rebuild the affected Linux package.
+
+**`desktop-app-windows` external input.** Supply the Windows GNU binary through
+`CANOE_APP_WINDOWS_BIN` from the operator's sibling app checkout. The row is
+always reported as `EXTERNAL` and cannot be pinned; after the release-order
+gate passes, rebuild the affected Windows package.
+
+The two desktop binaries cannot be pinned today because
+`canoe-boot-manager` has no remote and no tags today. The `xz-utils` row is
+the other honest release gap: it is fetched without a digest. Neither gap may
+be hidden by copying an unverified value into prose.
 
 ## 2. Build the app repository first
 

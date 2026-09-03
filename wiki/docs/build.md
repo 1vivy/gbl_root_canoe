@@ -123,18 +123,71 @@ The module's package recipe invokes the root `fetch-verified` target, verifies
 its SHA-256 before and after fetching, and extracts the app's `dist/` without
 rewriting it. This keeps the module UI byte-identical to the app build.
 
+## Imports
+
+This tree has two development patterns. The core project is edited, tested, and
+released in the normal way; its release identity is `CANOE_VERSION` and
+`CANOE_VERSION_CODE` in `version.mk`. Everything else arrives as an import:
+either a squashed source copy, a compiled output produced by a sibling
+repository, or foreign data. The root `imports.toml` manifest declares each
+import once. `make version-check` checks that manifest, and
+`make import-pin ID=<id>` is the one re-pinning entry point for imports that
+can be hashed.
+
+The manifest has one row per input. Its `kind` says what the check can prove:
+
+- **`artifact`** is a compiled file carried by this repository. The gate hashes
+  the declared `path` and compares both its digest and byte count with the
+  manifest, reporting expected and actual values on a mismatch. This proves
+  the checked-in file has not changed since it was pinned; it does not prove
+  how the producer built it, that the producer source is present, or that the
+  file is safe.
+- **`fetch`** is an artifact downloaded at build time into a gitignored cache
+  and never committed. The gate checks that the URL, digest (when pinned), and
+  generated make variables are complete and agree; it does not hash a local
+  file. A row with `pinned = false` is an unclosed supply-chain gap, not a
+  verified input.
+- **`subtree`** is a squashed source import. The gate compares the named path
+  with the recorded `imported_at` commit, after removing declared exclusions.
+  This proves only that the vendored copy has (or has not) changed locally
+  since that import commit. It says nothing about upstream, the quality of the
+  squash, or whether the local copy is current. Drift fails when
+  `local_patches = false`; with `local_patches = true`, it is reported without
+  failing.
+- **`data`** is foreign data whose entries carry their own integrity records.
+  The gate hashes every entry image and compares it with the entry digest file
+  and the `sha256=` and `bytes=` values in its metadata. This proves internal
+  consistency, not that the data came from the claimed device or that it will
+  boot there.
+- **`satellite`** is a project in this tree deliberately outside
+  `CANOE_VERSION`. The gate checks each declared file's `version_key` against
+  the expected per-file version. It does not prove that the satellite files
+  are mutually compatible or that their source is unchanged.
+- **`external`** is an operator-supplied input from a sibling checkout. The
+  gate reports it as `EXTERNAL` and never fails or hashes it. This records the
+  dependency and its producer command, but proves neither presence nor
+  provenance of the supplied binary.
+
+The manifest and generated `imports.mk` are the authority for import identity.
+Do not copy digest values into build documentation; use the manifest and
+`make version-check` instead. A successful gate is evidence only for the
+specific checks above, not a substitute for building or testing the affected
+package.
+
 ## Single-source versioning
 
 The repository-root `version.mk` is the single source of truth for the Canoe
-version, module version code, and Web UI release pin. Do not copy version or
-digest values into documentation: read `CANOE_VERSION`, `CANOE_VERSION_CODE`,
-`CANOE_WEBUI_VERSION`, and `CANOE_WEBUI_SHA256` directly from `version.mk`.
+release version and module version code. Import identity is declared separately
+in `imports.toml` and emitted for make consumers in the generated
+`imports.mk`; neither file should be edited indirectly through documentation.
+Do not copy version or digest values into documentation.
 
 Run `make bump VERSION=<release-version> VERSION_CODE=<release-version-code>`
-to regenerate derived version files, then run `make version-check`. The gate
-checks the generated host and module metadata, the pinned Web UI archive and
-its URL, the BDS's `canoe-bds` and menu strings, the build stamp cache, and
-the BDS bytes embedded in any existing package archives.
+to regenerate derived version files. Refresh changed imports with
+`make import-pin ID=<id>` where applicable, then run `make version-check`.
+The gate checks generated metadata, every declared import, the BDS's
+`canoe-bds` and menu strings, the build stamp cache, and the BDS bytes embedded
+in any existing package archives.
 
 ## Byte-identical boot artifacts
 
