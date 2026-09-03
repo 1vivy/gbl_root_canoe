@@ -52,14 +52,19 @@ host permission required is permission to open the source device.
 ### 1. Host install
 
 This is the first installation from a Linux or Windows computer. It has two
-halves with different fastboot sessions. First, the vulnerable ABL and
-`BDS.efi` are flashed to `abl_a`/`abl_b` and `efisp` from **stock fastbootd** —
+halves with different fastboot sessions. The first half uses **stock fastbootd** —
 the userspace fastboot a fresh unlocked device provides, entered from Android
 with `adb reboot fastboot` (or from the bootloader's own fastboot with
-`fastboot reboot fastboot`). ABL and other critical partitions are not
-flashable from the bootloader's fastboot, so there is no alternative session
-for this half; `fastboot getvar is-userspace` answers `yes` in the right one.
-The device then boots into the BDS, which presents Super Fastboot.
+`fastboot reboot fastboot`). This is fastbootd's only role: flash the vulnerable
+ABL and `BDS.efi` to `abl_a`/`abl_b` and `efisp` for the fresh install. ABL and
+other critical partitions are not flashable from the bootloader's fastboot, so
+there is no alternative session for this half; `fastboot getvar is-userspace`
+answers `yes` in the right one.
+
+The device then boots into the BDS, which presents **Super Fastboot**. Super
+Fastboot is BDS's own fastboot session: it waives ABL's critical-partition
+status, so flashing works from here; partitions inside `super` remain the
+exception.
 
 The second half installs the boot root and is what this section describes. The
 device must already be in Super Fastboot before the native host surface runs:
@@ -247,8 +252,9 @@ never at a mounted letter.
 
 An empty, absent, unreachable, or unusable boot root counts as first run. BDS
 shows a first-run screen with **Enter boot menu (Volume Up)** and
-**Enter fastboot (default)**. The cursor starts on fastboot and the screen
-waits two seconds; timeout, Volume Down, and Power keep the fastboot default.
+**Enter Super Fastboot (default)**. The cursor starts on Super Fastboot and the
+screen waits two seconds; timeout, Volume Down, and Power keep the Super Fastboot
+default.
 Volume Up explicitly opens the normal menu, where per-slot and other discovered
 rows can be inspected before installation.
 

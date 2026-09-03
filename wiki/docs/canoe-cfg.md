@@ -42,13 +42,18 @@ Global keys must appear before the first `entry`:
 
 `key-window` is inclusive at both bounds. `key-window 0` means no sampling:
 Silent mode launches the default immediately, while Menu mode still opens the
-menu. In Silent mode, Volume Up during the key window opens the menu and then
-waits indefinitely for input; Volume Down takes the existing fastboot path; no
-key launches the default immediately. In Menu mode, Volume Down during the key
-window takes fastboot, then the menu always opens. The menu counts down for
-`menu-timeout` seconds and launches the default; any key cancels the countdown
-and leaves the menu waiting indefinitely. `menu-timeout 0` disables automatic
-launch.
+menu. In Silent mode, Volume Up during the key window opens the menu and then waits
+indefinitely for input; Volume Down takes the existing Super Fastboot path; no
+key launches the configured default immediately. In Menu mode, Volume Down
+during the key window takes Super Fastboot, then the menu always opens. The menu
+counts down for `menu-timeout` seconds and launches the default; any key cancels
+the countdown and leaves the menu waiting indefinitely. `menu-timeout 0`
+disables automatic launch.
+
+Here, Super Fastboot means the BDS's own fastboot session, which waives ABL's
+critical-partition status so flashing works from it; partitions inside `super`
+remain the exception. Stock userspace `fastbootd` is reserved for the
+fresh-install path.
 
 The writer never emits `timeout`. The BDS accepts a pre-b2 `timeout N` line only
 as a compatibility alias for `menu-mode menu` plus `menu-timeout N`; it is not a
@@ -267,5 +272,5 @@ error. BDS probes the known managed paths `boot.efi` (pre-b2 compatibility),
 `boot_a.efi`, `boot_b.efi`, and `boot_backup.efi`, then shows the menu rather
 than launching unattended when configuration is missing. An empty or
 unreachable boot root with none of those paths is first run: BDS shows its
-first-run screen, whose timeout/default is **Enter fastboot**; Volume Up is the
+first-run screen, whose timeout/default is **Enter Super Fastboot**; Volume Up is the
 only key that opts into the normal menu so discovered rows can be inspected.

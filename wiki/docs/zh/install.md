@@ -44,6 +44,16 @@ fastboot flash efisp BDS.efi
 
 ### 1. 电脑端首次安装
 
+首次安装分为两个不同的 fastboot 会话。第一阶段只在**原厂 fastbootd**（新解锁
+设备提供的用户空间 fastboot）中完成，通过 Android 的 `adb reboot fastboot`（或
+bootloader fastboot 的 `fastboot reboot fastboot`）进入；这一阶段是 `fastbootd`
+的唯一用途，用于将易受攻击的 ABL 与 `BDS.efi` 分别刷入 `abl_a`/`abl_b` 和
+`efisp`。ABL 及其他关键分区无法在 bootloader fastboot 中刷写，所以这一阶段
+没有替代会话；正确会话中 `fastboot getvar is-userspace` 会返回 `yes`。
+
+随后设备启动 BDS，进入 **Super Fastboot**。这是 BDS 自带的 fastboot 会话，会
+放宽 ABL 的关键分区保护状态，因此可以从这里刷写；但 `super` 内部的分区仍是例外。
+
 这是从 Linux 或 Windows 电脑执行首次安装的流程。运行原生主机界面前，设备
 必须已经处于 Super Fastboot：
 
@@ -201,8 +211,8 @@ canoe-ext4.exe inspect \\\\.\\PhysicalDrive<N>
 
 启动根目录为空、缺失、无法访问或不可用时，都会计为首次运行。BDS 会显示
 首次运行界面，其中有 **Enter boot menu (Volume Up)** 与
-**Enter fastboot (default)**。光标默认位于 fastboot，界面等待两秒；超时、
-Volume Down 和 Power 都保持 fastboot 默认值。明确按 Volume Up 才会打开普通
+**Enter Super Fastboot (default)**。光标默认位于 Super Fastboot，界面等待两秒；超时、
+Volume Down 和 Power 都保持 Super Fastboot 默认值。明确按 Volume Up 才会打开普通
 菜单，随后可在安装前检查槽位及其他发现的启动项。
 
 BDS 菜单还提供 **USB Mass Storage** 与 **Reboot to Recovery**，以及已发现或

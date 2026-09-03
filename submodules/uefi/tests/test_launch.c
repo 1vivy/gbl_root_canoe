@@ -1295,7 +1295,7 @@ TestConfigOptionsBecomeLoadOptions(void)
   SFB_MENU_STATE Menu;
   UINTN Index;
   UINTN Found = SFB_NO_INDEX;
-
+  UINTN Fastboot = SFB_NO_INDEX;
   ResetLaunchBackend ();
   ResetVolumes ();
   memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
@@ -1309,9 +1309,13 @@ TestConfigOptionsBecomeLoadOptions(void)
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
       Found = Index;
-      break;
+    }
+    if (Menu.Entry[Index].Kind == SfbEntryFastboot) {
+      Fastboot = Index;
     }
   }
+  assert(Fastboot != SFB_NO_INDEX &&
+         StrCmp (Menu.Entry[Fastboot].Desc, L"Enter Super Fastboot") == 0);
   assert(Found != SFB_NO_INDEX);
   /* It stays a plain application row - carrying arguments does not make it a
    * boot-spec entry - but it now points at an out-of-line payload. */

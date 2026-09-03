@@ -13,6 +13,8 @@ extern int puts (const char *Text);
 struct PartitionEntry PtnEntries[MAX_NUM_PARTITIONS];
 static UINT32 PartitionCount;
 static UINT32 UpdateCount;
+static UINT64 WriterSnapshot[MAX_NUM_PARTITIONS];
+static EFI_STATUS UpdateStatus = EFI_SUCCESS;
 
 VOID
 GetPartitionCount (UINT32 *Value)
@@ -20,11 +22,41 @@ GetPartitionCount (UINT32 *Value)
   *Value = PartitionCount;
 }
 
-VOID
+EFI_STATUS
 UpdatePartitionAttributes (UINT32 UpdateType)
 {
-  if (UpdateType == PARTITION_ATTRIBUTES) {
-    ++UpdateCount;
+  UINT32 Index;
+  BOOLEAN Changed = FALSE;
+
+  if (UpdateType != PARTITION_ATTRIBUTES) {
+    return EFI_SUCCESS;
+  }
+  for (Index = 0; Index < MAX_NUM_PARTITIONS; Index++) {
+    if (PtnEntries[Index].PartEntry.Attributes != WriterSnapshot[Index]) {
+      Changed = TRUE;
+      break;
+    }
+  }
+  if (!Changed) {
+    return EFI_SUCCESS;
+  }
+  ++UpdateCount;
+  if (EFI_ERROR (UpdateStatus)) {
+    return UpdateStatus;
+  }
+  for (Index = 0; Index < MAX_NUM_PARTITIONS; Index++) {
+    WriterSnapshot[Index] = PtnEntries[Index].PartEntry.Attributes;
+  }
+  return EFI_SUCCESS;
+}
+
+static void
+SetWriterSnapshot (void)
+{
+  UINT32 Index;
+
+  for (Index = 0; Index < MAX_NUM_PARTITIONS; Index++) {
+    WriterSnapshot[Index] = PtnEntries[Index].PartEntry.Attributes;
   }
 }
 
@@ -61,6 +93,43 @@ TestMaxRetryAttributeUnchanged(void)
   }
   CHECK(Same);
   puts("active-slot reset at max leaves attribute bytes unchanged");
+  return 0;
+}
+
+static int
+TestFailedWriterRetries (void)
+{
+  EFI_STATUS Status;
+  UINT64 OriginalAttributes;
+  UINT32 AttemptsBefore;
+  UINTN Index;
+  UINT8 *Bytes = (UINT8 *)PtnEntries;
+
+  for (Index = 0; Index < sizeof (PtnEntries); Index++) {
+    Bytes[Index] = 0;
+  }
+  PartitionCount = 2;
+  SetName (&PtnEntries[0].PartEntry, L"abl_a");
+  SetName (&PtnEntries[1].PartEntry, L"abl_b");
+  PtnEntries[0].PartEntry.Attributes = PART_ATT_ACTIVE_VAL |
+      ((UINT64)2 << PART_ATT_MAX_RETRY_CNT_BIT);
+  PtnEntries[1].PartEntry.Attributes = 0;
+  SetWriterSnapshot ();
+  OriginalAttributes = WriterSnapshot[0];
+  AttemptsBefore = UpdateCount;
+  UpdateStatus = EFI_DEVICE_ERROR;
+
+  Status = SfbResetActiveSlotRetry ();
+  CHECK(Status == EFI_DEVICE_ERROR);
+  CHECK(UpdateCount == AttemptsBefore + 1);
+  CHECK(WriterSnapshot[0] == OriginalAttributes);
+
+  Status = SfbResetActiveSlotRetry ();
+  CHECK(Status == EFI_DEVICE_ERROR);
+  CHECK(UpdateCount == AttemptsBefore + 2);
+  CHECK(WriterSnapshot[0] == OriginalAttributes);
+  UpdateStatus = EFI_SUCCESS;
+  puts("failed active-slot reset preserves snapshot for retry");
   return 0;
 }
 
@@ -105,9 +174,12 @@ main (void)
       ((UINT64)4 << PART_ATT_MAX_RETRY_CNT_BIT);
   PtnEntries[1].PartEntry.Attributes =
       ((UINT64)1 << PART_ATT_MAX_RETRY_CNT_BIT) | PART_ATT_UNBOOTABLE_VAL;
+  SetWriterSnapshot ();
   CHECK(SfbActiveSlot() == SfbSlotA);
   PtnEntries[0].PartEntry.Attributes &= ~PART_ATT_ACTIVE_VAL;
   PtnEntries[1].PartEntry.Attributes |= PART_ATT_ACTIVE_VAL;
+  CHECK(!EFI_ERROR(SfbResetActiveSlotRetry()));
+  CHECK(UpdateCount == 1);
   CHECK(!EFI_ERROR(SfbResetActiveSlotRetry()));
   CHECK(UpdateCount == 1);
   CHECK(((PtnEntries[0].PartEntry.Attributes &
@@ -122,6 +194,9 @@ main (void)
   CHECK(UpdateCount == 1);
   puts("active-slot reset refused malformed all-ones attributes");
   if (TestMaxRetryAttributeUnchanged () != 0) {
+    return 1;
+  }
+  if (TestFailedWriterRetries () != 0) {
     return 1;
   }
   return 0;

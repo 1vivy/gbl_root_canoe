@@ -363,7 +363,7 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    * the operator pressed while the host was mounting are still queued, and
    * the next screen receives them as its own input. On the menu path that
    * next screen is the chooser and then the rebuilt boot menu, whose first
-   * row is "Enter Fastboot": a stray confirm makes the session look like it
+   * row is "Enter Super Fastboot": a stray confirm makes the session look like it
    * ended straight into fastboot mode, which is not a place the operator
    * asked to be and has no way back to the menu.
    */

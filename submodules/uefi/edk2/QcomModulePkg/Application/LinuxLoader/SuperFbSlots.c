@@ -174,6 +174,5 @@ SfbResetActiveSlotRetry (VOID)
     return EFI_COMPROMISED_DATA;
   }
 
-  UpdatePartitionAttributes (PARTITION_ATTRIBUTES);
-  return EFI_SUCCESS;
+  return UpdatePartitionAttributes (PARTITION_ATTRIBUTES);
 }

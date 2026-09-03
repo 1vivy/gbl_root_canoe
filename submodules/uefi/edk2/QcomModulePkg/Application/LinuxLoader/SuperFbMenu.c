@@ -374,7 +374,7 @@ SfbShowFirstRunScreen (VOID)
 {
   STATIC SFB_MENU_ROW Rows[] = {
     { L"Enter boot menu (Volume Up)", L" " },
-    { L"Enter fastboot (default)", L" " }
+    { L"Enter Super Fastboot (default)", L" " }
   };
   SFB_MENU_TEMPLATE Template;
   BOOLEAN EnterMenu = FALSE;
