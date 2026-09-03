@@ -1,3 +1,7 @@
+include ../../../version.mk
+
+SFB_VERSION_CFLAGS := -DSFB_BDS_VERSION='"$(CANOE_VERSION)"'
+
 CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 
@@ -102,7 +106,7 @@ test_launch: test_launch.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbProfile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbManagedPath.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c
-	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
+	$(CC) $(CFLAGS) $(SFB_VERSION_CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
 # Initrd and DTB publication. Links the real SuperFbLinuxBoot.c against a fake
 # gBS so the GUIDs, the device-path shape and the LoadFile2 size contract are

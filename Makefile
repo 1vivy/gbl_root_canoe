@@ -59,24 +59,51 @@ clean: targets_clean clean_submodules
 
 bump:
 	@set -eu; \
-	version='$(VERSION)'; \
+	version='$(if $(VERSION),$(VERSION),$(CANOE_VERSION))'; \
+	if [ "$(CANOE_NONRELEASE)" = "1" ]; then \
+		printf 'make bump refuses non-release CANOE_VERSION override %s\n' "$$version" >&2; \
+		exit 2; \
+	fi; \
 	version_code='$(if $(VERSION_CODE),$(VERSION_CODE),$(CANOE_VERSION_CODE))'; \
 	awk -v value="$$version" 'BEGIN { exit !(value ~ /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$$/) }' || { \
 		printf 'Invalid VERSION: %s\n' "$$version" >&2; \
 		exit 2; \
 	}; \
+	if [ "$$version" = "0.0.0-dev" ]; then \
+		printf 'Invalid VERSION: 0.0.0-dev is reserved for unstamped-build detection\n' >&2; \
+		exit 2; \
+	fi; \
 	awk -v value="$$version_code" 'BEGIN { exit !(value ~ /^[0-9]+$$/) }' || { \
 		printf 'Invalid VERSION_CODE: %s\n' "$$version_code" >&2; \
 		exit 2; \
 	}; \
 	mkdir -p tools/canoe/src; \
-	trap 'rm -f version.mk.tmp tools/canoe/src/version.rs.tmp targets/magisk_module/module/module.prop.tmp' EXIT HUP INT TERM; \
+	trap 'rm -f version.mk.tmp tools/canoe/src/version.rs.tmp targets/magisk_module/module/module.prop.tmp README.md.tmp README_zh.md.tmp wiki/docs/canoe-cfg.md.tmp wiki/docs/zh/canoe-cfg.md.tmp wiki/docs/release.md.tmp wiki/docs/zh/release.md.tmp' EXIT HUP INT TERM; \
 	printf '%s\n' \
 		'# Single source of truth for Canoe versions.' \
 		'# `make bump` regenerates every derived file.' \
 		'# `make version-check` fails when they drift.' \
+		'# Direct CANOE_VERSION overrides are refused unless an explicit non-release opt-in is present.' \
+		'_CANOE_VERSION_SOURCE := $$(shell sed -n "/^[[:space:]]*CANOE_VERSION[[:space:]]*=/ { s/^[[:space:]]*CANOE_VERSION[[:space:]]*=[[:space:]]*//; p; q; }" $$(lastword $$(MAKEFILE_LIST)))' \
 		'CANOE_VERSION = '"$$version" \
 		'CANOE_VERSION_CODE = '"$$version_code" \
+		'CANOE_VERSION_OVERRIDE ?= 0' \
+		'ifneq ($$(origin CANOE_VERSION),file)' \
+		'ifneq ($$(CANOE_VERSION),$$(_CANOE_VERSION_SOURCE))' \
+		'ifneq ($$(CANOE_VERSION_OVERRIDE),1)' \
+		'$$(error CANOE_VERSION override refused: canonical $$(_CANOE_VERSION_SOURCE), got $$(CANOE_VERSION); set CANOE_VERSION_OVERRIDE=1 only for a non-release build)' \
+		'endif' \
+		'ifneq ($$(origin CANOE_VERSION_OVERRIDE),command line)' \
+		'$$(error CANOE_VERSION override refused: CANOE_VERSION_OVERRIDE=1 must be supplied on the make command line)' \
+		'endif' \
+		'ifneq ($$(filter %-local,$$(CANOE_VERSION)),)' \
+		'CANOE_NONRELEASE := 1' \
+		'else' \
+		'override CANOE_VERSION := $$(CANOE_VERSION)-local' \
+		'CANOE_NONRELEASE := 1' \
+		'endif' \
+		'endif' \
+		'endif' \
 		'# Web UI release pin; the archive is a checked-in last-known-good fallback' \
 		'# until canoe-boot-manager publishes release assets.' \
 		'CANOE_WEBUI_VERSION = $(CANOE_WEBUI_VERSION)' \
@@ -102,6 +129,32 @@ bump:
 	else \
 		rm targets/magisk_module/module/module.prop.tmp; \
 	fi; \
+	sed -E \
+		-e "s/^(The )?(current|[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?) release surface/The $$version release surface/" \
+		README.md > README.md.tmp; \
+	sed -E \
+		-e "s/^(当前|[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)[[:space:]]*(的)?发布界面/$$version 的发布界面/" \
+		README_zh.md > README_zh.md.tmp; \
+	sed -E \
+		-e "s/(In )([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)( the boot policy)/\\1$$version\\5/" \
+		-e "s/^The ([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?) writer manages/The $$version writer manages/" \
+		wiki/docs/canoe-cfg.md > wiki/docs/canoe-cfg.md.tmp; \
+	sed -E \
+		-e "s/^([^。]*。)([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)( 使用显式启动策略)/\\1$$version\\5/" \
+		-e "s/^([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?) 为每个已安装槽位管理一组三件套/$$version 为每个已安装槽位管理一组三件套/" \
+		wiki/docs/zh/canoe-cfg.md > wiki/docs/zh/canoe-cfg.md.tmp; \
+	if ! cmp -s wiki/docs/canoe-cfg.md.tmp wiki/docs/canoe-cfg.md; then mv wiki/docs/canoe-cfg.md.tmp wiki/docs/canoe-cfg.md; else rm wiki/docs/canoe-cfg.md.tmp; fi; \
+	if ! cmp -s wiki/docs/zh/canoe-cfg.md.tmp wiki/docs/zh/canoe-cfg.md; then mv wiki/docs/zh/canoe-cfg.md.tmp wiki/docs/zh/canoe-cfg.md; else rm wiki/docs/zh/canoe-cfg.md.tmp; fi; \
+	sed -E \
+		-e "s/^(make bump VERSION=)[^ ]+( VERSION_CODE=)[^ ]+$$/\\1$$version\\2$$version_code/" \
+		wiki/docs/release.md > wiki/docs/release.md.tmp; \
+	sed -E \
+		-e "s/^(make bump VERSION=)[^ ]+( VERSION_CODE=)[^ ]+$$/\\1$$version\\2$$version_code/" \
+		wiki/docs/zh/release.md > wiki/docs/zh/release.md.tmp; \
+	if ! cmp -s README.md.tmp README.md; then mv README.md.tmp README.md; else rm README.md.tmp; fi; \
+	if ! cmp -s README_zh.md.tmp README_zh.md; then mv README_zh.md.tmp README_zh.md; else rm README_zh.md.tmp; fi; \
+	if ! cmp -s wiki/docs/release.md.tmp wiki/docs/release.md; then mv wiki/docs/release.md.tmp wiki/docs/release.md; else rm wiki/docs/release.md.tmp; fi; \
+	if ! cmp -s wiki/docs/zh/release.md.tmp wiki/docs/zh/release.md; then mv wiki/docs/zh/release.md.tmp wiki/docs/zh/release.md; else rm wiki/docs/zh/release.md.tmp; fi; \
 	printf 'Bumped Canoe to %s (version code %s)\n' "$$version" "$$version_code"
 
 version-check:
@@ -109,6 +162,101 @@ version-check:
 	version='$(CANOE_VERSION)'; \
 	version_code='$(CANOE_VERSION_CODE)'; \
 	fail=0; \
+	fallback='0.0.0-dev'; \
+	if [ "$$version" = "$$fallback" ]; then \
+		printf 'version invalid: %s is reserved for unstamped-build detection\n' "$$version"; \
+		fail=1; \
+	fi; \
+	if [ "$(CANOE_NONRELEASE)" = "1" ]; then \
+		printf 'version-check refused: %s is a non-release override build\n' "$$version"; \
+		fail=1; \
+	fi; \
+	if [ -f README.md ]; then \
+		actual="$$(sed -n -E 's/^The ([^ ]+) release surface.*/\1/p' README.md)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'README.md release surface' "$$version" "$$actual"; \
+		fail=1; \
+	fi; \
+	if [ -f README_zh.md ]; then \
+		actual="$$(sed -n -E 's/^([^ ]+) 的发布界面.*/\1/p' README_zh.md)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'README_zh.md 发布界面' "$$version" "$$actual"; \
+		fail=1; \
+	fi; \
+	expected_doc_version="$$version $$version_code"; \
+	for doc in wiki/docs/release.md wiki/docs/zh/release.md; do \
+		if [ -f "$$doc" ]; then \
+			actual="$$(sed -n -E 's/^make bump VERSION=([^ ]+) VERSION_CODE=([^ ]+)$$/\1 \2/p' "$$doc")"; \
+		else \
+			actual='<missing>'; \
+		fi; \
+		if [ "$$actual" != "$$expected_doc_version" ]; then \
+			printf 'version mismatch: %s release command expected %s actual %s\n' \
+				"$$doc" "$$expected_doc_version" "$$actual"; \
+			fail=1; \
+		fi; \
+	done; \
+	if [ -f wiki/docs/canoe-cfg.md ]; then \
+		actual="$$(sed -n -E 's/.*In ([^ ]+) the boot policy.*/\1/p' wiki/docs/canoe-cfg.md)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'wiki/docs/canoe-cfg.md boot policy' "$$version" "$$actual"; \
+		fail=1; \
+	fi; \
+	if [ -f wiki/docs/canoe-cfg.md ]; then \
+		actual="$$(sed -n -E 's/^The ([^ ]+) writer manages.*/\1/p' wiki/docs/canoe-cfg.md)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'wiki/docs/canoe-cfg.md managed triplets' "$$version" "$$actual"; \
+		fail=1; \
+	fi; \
+	if [ -f wiki/docs/zh/canoe-cfg.md ]; then \
+		actual="$$(sed -n -E 's/^[^。]*。([^ ]+) 使用显式启动策略.*/\1/p' wiki/docs/zh/canoe-cfg.md)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'wiki/docs/zh/canoe-cfg.md 启动策略' "$$version" "$$actual"; \
+		fail=1; \
+	fi; \
+	if [ -f wiki/docs/zh/canoe-cfg.md ]; then \
+		actual="$$(sed -n -E 's/^([^ ]+) 为每个已安装槽位管理一组三件套.*/\1/p' wiki/docs/zh/canoe-cfg.md)"; \
+	else \
+		actual='<missing>'; \
+	fi; \
+	if [ "$$actual" != "$$version" ]; then \
+		printf 'version mismatch: %s expected %s actual %s\n' \
+			'wiki/docs/zh/canoe-cfg.md 受管理三件套' "$$version" "$$actual"; \
+		fail=1; \
+	fi; \
+	stamp='submodules/uefi/edk2/Build/.canoe-version'; \
+	if [ -f "$$stamp" ] || [ -f submodules/uefi/build/BDS.efi ]; then \
+		if [ -f "$$stamp" ]; then \
+			actual="$$(awk 'NR == 1 { value=$$0 } END { if (NR == 1) print value; else print "<invalid>" }' "$$stamp")"; \
+		else \
+			actual='<missing>'; \
+		fi; \
+		if [ "$$actual" != "$$version" ]; then \
+			printf 'version mismatch: %s expected %s actual %s\n' \
+				"$$stamp" "$$version" "$$actual"; \
+			fail=1; \
+		fi; \
+	fi; \
 	if [ -f tools/canoe/src/version.rs ]; then \
 		actual="$$(awk -F= '$$1 == "pub const VERSION: &str " { value=$$2; gsub(/["; ]/, "", value); print value; found=1 } END { if (!found) print "<missing>" }' tools/canoe/src/version.rs)"; \
 	else \
@@ -161,16 +309,28 @@ version-check:
 			"$$webui_url" "$$expected_asset"; \
 		fail=1; \
 	fi; \
-	if [ -f submodules/uefi/build/BDS.efi ] && command -v strings >/dev/null 2>&1; then \
-		if ! strings -a -e s submodules/uefi/build/BDS.efi | grep -Fq -- "$$version"; then \
-			printf 'version mismatch: %s publishes a stale canoe-bds fastboot variable, expected %s (run: make -C submodules/uefi build)\n' \
-				'submodules/uefi/build/BDS.efi' "$$version"; \
+	if [ -f submodules/uefi/build/BDS.efi ]; then \
+		if ! command -v strings >/dev/null 2>&1; then \
+			printf 'version check unavailable: strings is required to inspect %s\n' \
+				'submodules/uefi/build/BDS.efi'; \
 			fail=1; \
-		fi; \
-		if ! strings -a -e l submodules/uefi/build/BDS.efi | grep -Fq -- "$$version"; then \
-			printf 'version mismatch: %s draws a stale menu credit, expected %s (run: make -C submodules/uefi build)\n' \
-				'submodules/uefi/build/BDS.efi' "$$version"; \
-			fail=1; \
+		else \
+			if ! strings -a -e s submodules/uefi/build/BDS.efi | grep -Fq -- "$$version"; then \
+				printf 'version mismatch: %s publishes a stale canoe-bds fastboot variable, expected %s (run: make -C submodules/uefi build)\n' \
+					'submodules/uefi/build/BDS.efi' "$$version"; \
+				fail=1; \
+			fi; \
+			if ! strings -a -e l submodules/uefi/build/BDS.efi | grep -Fq -- "$$version"; then \
+				printf 'version mismatch: %s draws a stale menu credit, expected %s (run: make -C submodules/uefi build)\n' \
+					'submodules/uefi/build/BDS.efi' "$$version"; \
+				fail=1; \
+			fi; \
+			if strings -a -e s submodules/uefi/build/BDS.efi | grep -Fqx -- "$$fallback" || \
+			   strings -a -e l submodules/uefi/build/BDS.efi | grep -Fqx -- "$$fallback"; then \
+				printf 'version mismatch: %s contains the unstamped fallback %s; rebuild with the injected version\n' \
+					'submodules/uefi/build/BDS.efi' "$$fallback"; \
+				fail=1; \
+			fi; \
 		fi; \
 	fi; \
 	if [ -f submodules/uefi/build/BDS.efi ] && command -v sha256sum >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then \
@@ -179,7 +339,14 @@ version-check:
 			targets/toolkit_windows/build/toolkit_windows.zip \
 			targets/toolkit_android/build/toolkit_android.zip \
 			targets/magisk_module/build/module_android.zip; do \
-			[ -f "$$archive" ] || continue; \
+			if [ ! -f "$$archive" ]; then \
+				if [ -d "$$(dirname "$$archive")" ]; then \
+					printf 'package artifact missing: %s (its build directory exists, so that package build failed rather than never having run)\n' \
+						"$$archive"; \
+					fail=1; \
+				fi; \
+				continue; \
+			fi; \
 			if unzip -l "$$archive" BDS.efi >/dev/null 2>&1; then \
 				member="$$(unzip -p "$$archive" BDS.efi | sha256sum | cut -d" " -f1)"; \
 			else \
@@ -200,9 +367,9 @@ target_toolkit_windows:
 target_toolkit_linux:
 	cd targets/toolkit_linux && $(MAKE) build
 target_magisk_module:
-	cd targets/magisk_module && make build
+	cd targets/magisk_module && $(MAKE) build
 target_toolkit_android:
-	cd targets/toolkit_android && make build
+	cd targets/toolkit_android && $(MAKE) build
 
 dev_target_extract_and_patch:
 	cd dev_targets/extract_and_patch && make patch
