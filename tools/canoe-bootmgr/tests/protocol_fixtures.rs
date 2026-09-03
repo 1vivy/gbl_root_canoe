@@ -1,8 +1,12 @@
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
+#[cfg(unix)]
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 const FIXTURE_DIRECTORY: &str = "tests/fixtures/protocol";
 const REQUEST_SUFFIX: &str = ".request.json";
@@ -35,6 +39,31 @@ static WORKER_TOOLS_DIRECTORY: LazyLock<String> = LazyLock::new(|| {
         .expect("worker directory is UTF-8")
 });
 
+#[cfg(unix)]
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(unix)]
+fn install_identify_fastboot(
+    root: &Path,
+    request: &Path,
+) -> Option<MutexGuard<'static, ()>> {
+    let name = request.file_name()?.to_str()?;
+    let stem = name.strip_suffix(REQUEST_SUFFIX)?;
+    let userspace_value = match stem {
+        "fastboot.identify-userspace" => "yes",
+        "fastboot.identify-bootloader" => "no",
+        "fastboot.identify-unknown" => "FAILED (unknown variable)",
+        _ => return None,
+    };
+    let guard = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    let script = format!(
+        "#!/bin/sh\ncase \"$2\" in\n  is-userspace) echo \"is-userspace: {userspace_value}\" >&2 ;;\nesac\nexit 0\n"
+    );
+    let path = root.join("fastboot");
+    fs::write(&path, script).expect("fake fastboot");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("fake fastboot executable");
+    Some(guard)
+}
 const ROOT_PLACEHOLDER: &str = "@ROOT@";
 const FOOTER_PLACEHOLDER: &str = "@FOOTER@";
 
@@ -126,10 +155,19 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
         let expected_document: serde_json::Value =
             serde_json::from_slice(&expected).expect("golden response JSON");
         let expected_success = expected_document["ok"] == true;
-        let mut child = Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"))
+        #[cfg(unix)]
+        let identify_guard = install_identify_fastboot(boot_root.path(), &request_path);
+        #[cfg(not(unix))]
+        let identify_guard: Option<()> = None;
+        let mut command = Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"));
+        command
             .args(["--json", "--boot-root"])
             .arg(boot_root.path())
-            .env_clear()
+            .env_clear();
+        if identify_guard.is_some() {
+            command.env("PATH", boot_root.path());
+        }
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -141,6 +179,7 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
             .write_all(request.as_bytes())
             .expect("write golden request");
         let output = child.wait_with_output().expect("wait for canoe-bootmgr");
+        drop(identify_guard);
 
         assert_eq!(
             output.status.success(),

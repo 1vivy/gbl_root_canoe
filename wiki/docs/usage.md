@@ -71,23 +71,24 @@ When the boot root is missing or unreachable, has no launchable image, or has a
 configuration whose images are all absent, BDS treats it as first run. The
 first-run screen has these rows:
 
-- **Enter Super Fastboot**
+- **Enter boot menu (Volume Up)**
 - **Enter Super Fastboot (default)**
 
-Press **VOL UP during boot** to reach that menu. The cursor starts on **Enter
-Super Fastboot**, and the default row is **Enter Super Fastboot (default)**.
-The timeout, VOL DOWN, and Power preserve the safe Super Fastboot path; choosing
-the menu row lets an operator inspect the available entries.
+On the first-run screen, press **VOL UP** to enter the normal boot menu. The
+cursor starts on **Enter Super Fastboot (default)**. The two-second timeout,
+VOL DOWN, and Power preserve the safe Super Fastboot path; choosing the boot
+menu row lets an operator inspect the available entries.
 
 For a populated root, BDS reads `menu-mode` and samples keys for `key-window`
 milliseconds:
 
 - **Silent** (fresh-install default): VOL UP opens the menu and then waits
-  indefinitely; VOL DOWN takes the existing Super Fastboot path; no key launches
-  the configured default after the key window.
-- **Menu**: VOL DOWN during the key window takes Super Fastboot, then the menu
-  always opens. It counts down for `menu-timeout` seconds and launches the
-  default; any key cancels the countdown and makes the menu wait indefinitely.
+  indefinitely; VOL DOWN exits directly to Super Fastboot; with no key held,
+  BDS launches the configured default after the key window.
+- **Menu**: VOL DOWN during the key window exits directly to Super Fastboot.
+  Otherwise the menu opens and counts down for `menu-timeout` seconds before
+  launching the default; any key cancels the countdown and makes the menu wait
+  indefinitely.
 
 `key-window` is `0..=10000` milliseconds and defaults to `1200`; zero disables
 sampling. `menu-timeout` is `0..=300` seconds and defaults to `5`; it is used
@@ -154,10 +155,24 @@ this guide that asks for stock userspace `fastbootd`.
 
 The app and the CLI drive USB Mass Storage exports; see
 [`mass-storage.md`](./mass-storage.md). Only one partition is exported per
-session. **VOL DOWN on the device is the only contractual way to end an
-export.** While an export is active, the USB link is a mass-storage gadget and
-has no fastboot channel, so a host command cannot reach BDS. Do not use a live
-`persist` export from a host while Android is using that same filesystem.
+session. An export has two equal, ordinary endings: the host ends it (the boot
+manager or CLI issues a SCSI eject), or the operator presses **VOL DOWN** on the
+device. Neither is a failure, and neither is a workaround for the other.
+
+When Canoe's bundled mass-storage driver serves the export, it delivers the
+SCSI reply before the gadget goes away, and the device returns to the surface it
+came from—the menu or fastboot. That round trip is the point: a host tool can
+export `persist`, do its work, and hand the device back without the operator
+touching the phone. This depends on Canoe's own bundled driver serving the
+export; the stock resident platform driver never reports the eject, so a
+session it serves ends only the old way. On an SM8850 Canoe target, the export
+enumerates as **`1209:ca0e`** "USB MASS STORAGE", which is Canoe's bundled
+driver, so the host eject is the normal path there.
+
+While an export is active, the USB link is a mass-storage gadget and has no
+fastboot channel, so a fastboot command legitimately reports
+`waiting-for-any-device`. Do not use a live `persist` export from a host while
+Android is using that same filesystem.
 
 ## Modes and DeviceInfo
 

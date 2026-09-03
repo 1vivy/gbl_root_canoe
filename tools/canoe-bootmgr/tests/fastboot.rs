@@ -4,7 +4,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use canoe_bootmgr::detect::{SourceCandidate, SourceKind, is_export_candidate};
 use canoe_bootmgr::fastboot::{self, FastbootError};
@@ -261,6 +261,7 @@ fn fastboot_identify_protocol_reports_fake_values() {
     canoe-bds) echo "canoe-bds: 7.0.0" >&2 ;;
     canoe-devinfo) echo "canoe-devinfo: unlocked=0 critical=0 waiver=unknown retry_a=3 retry_b=unknown" >&2 ;;
     canoe-last-launch) echo "canoe-last-launch: requested=2 effective=0 reason=lockstate-refused" >&2 ;;
+    is-userspace) echo "is-userspace: yes" >&2 ;;
   esac"#,
     );
     install_path_fastboot(root.path(), &fastboot);
@@ -281,6 +282,7 @@ fn fastboot_identify_protocol_reports_fake_values() {
         "requested=2 effective=0 reason=lockstate-refused"
     );
     assert_eq!(document["current_slot"], "b");
+    assert_eq!(document["is_userspace"], true);
 }
 
 #[test]
@@ -296,6 +298,7 @@ fn fastboot_identify_protocol_keeps_silent_values_null() {
         serde_json::from_slice(&output.stdout).expect("JSON response");
     assert_eq!(document["operation"], "fastboot.identify");
     assert!(document["bds_version"].is_null());
+    assert!(document["is_userspace"].is_null());
     assert!(document["current_slot"].is_null());
 }
 
@@ -411,12 +414,15 @@ fn getvar_matches_exact_prefix_and_filters_failed_or_empty_values() {
       echo "current-slot: a" >&2
       ;;
     canoe-bds) echo "canoe-bds: FAILED (unknown variable)" >&2 ;;
+    is-userspace) echo "is-userspace: no" >&2 ;;
   esac
   exit 0"#,
     );
-    let identity = fastboot::identify(&fastboot, Duration::from_secs(1));
+    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(1))
+        .expect("identity");
     assert_eq!(identity.current_slot.as_deref(), Some("a"));
     assert_eq!(identity.bds_version, None);
+    assert_eq!(identity.is_userspace, Some(false));
 }
 
 #[test]
@@ -430,7 +436,8 @@ fn getvar_filters_empty_value() {
   esac
   exit 0"#,
     );
-    let identity = fastboot::identify(&fastboot, Duration::from_secs(1));
+    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(1))
+        .expect("identity");
     assert_eq!(identity.current_slot.as_deref(), Some("a"));
     assert_eq!(identity.bds_version, None);
 }
@@ -458,7 +465,8 @@ fn getvar_retries_one_missed_command() {
     );
     // Generous per-command budget: the assertion is that one miss is retried,
     // not that a loaded machine answers within a second.
-    let identity = fastboot::identify(&fastboot, Duration::from_secs(30));
+    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(30))
+        .expect("identity");
     assert_eq!(identity.current_slot.as_deref(), Some("b"));
     assert_eq!(fs::read_to_string(state).expect("attempt count"), "2\n");
 }
@@ -539,6 +547,86 @@ fn flash_succeeds_and_reports_stderr_on_command_failure() {
     let error = fastboot::flash(&fastboot, "boot", &image, Duration::from_secs(1))
         .expect_err("flash failure");
     assert!(error.to_string().contains("flash-failed"));
+}
+
+#[cfg(target_os = "linux")]
+fn process_state(pid: u32) -> Option<char> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.split_whitespace().nth(2)?.chars().next()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fastboot_timeout_reaps_slow_child() {
+    let root = TempDir::new().expect("fixture");
+    let image = root.path().join("boot.img");
+    let pid_file = root.path().join("pid");
+    fs::write(&image, b"image").expect("image");
+    let (_guard, fastboot) = script(
+        root.path(),
+        &format!(
+            "printf '%s\\n' \"$$\" > {}; while :; do :; done",
+            pid_file.display()
+        ),
+    );
+
+    let error = fastboot::flash(&fastboot, "boot", &image, Duration::from_millis(100))
+        .expect_err("slow fastboot should time out");
+    assert!(matches!(error, FastbootError::CommandTimeout { .. }));
+    let pid = fs::read_to_string(pid_file)
+        .expect("child pid")
+        .trim()
+        .parse::<u32>()
+        .expect("numeric child pid");
+    assert_eq!(
+        process_state(pid),
+        None,
+        "timed-out fastboot child {pid} was not reaped"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn dropping_export_does_not_terminate_live_mass_storage_child() {
+    let root = TempDir::new().expect("fixture");
+    let pid_file = root.path().join("pid");
+    let (_guard, fastboot) = script(
+        root.path(),
+        &format!(
+            "printf '%s\\n' \"$$\" > {}; {} 0.5",
+            pid_file.display(),
+            system_tool("sleep").display()
+        ),
+    );
+    let exported = fastboot::export(&fastboot, "persist", Duration::from_secs(1), || {
+        if pid_file.exists() {
+            Ok(Some(PathBuf::from("/dev/sdz")))
+        } else {
+            Ok(None)
+        }
+    })
+    .expect("discover export");
+    let pid = fs::read_to_string(&pid_file)
+        .expect("child pid")
+        .trim()
+        .parse::<u32>()
+        .expect("numeric child pid");
+
+    drop(exported);
+    assert!(
+        process_state(pid).is_some(),
+        "dropping an export terminated its live mass-storage child"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while process_state(pid).is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        process_state(pid),
+        None,
+        "detached mass-storage child was not eventually reaped"
+    );
 }
 
 #[test]

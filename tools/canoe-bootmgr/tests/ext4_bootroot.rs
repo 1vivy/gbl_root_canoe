@@ -14,7 +14,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard};
 
 use canoe_bootmgr::Backend;
 use canoe_bootmgr::backend::BootRoot;

@@ -3,9 +3,21 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::{FastbootError, fastboot_command};
+use crate::device_access::DeviceGuard;
 
 /// Fetch a partition image to an existing destination directory.
 pub fn fetch(
+    fastboot: &Path,
+    partition: &str,
+    destination: &Path,
+    timeout: Duration,
+) -> Result<(), FastbootError> {
+    let guard = DeviceGuard::fastboot()?;
+    fetch_with_guard(&guard, fastboot, partition, destination, timeout)
+}
+
+pub(crate) fn fetch_with_guard(
+    guard: &DeviceGuard,
     fastboot: &Path,
     partition: &str,
     destination: &Path,
@@ -25,6 +37,7 @@ pub fn fetch(
         )));
     }
     fastboot_command::run(
+        guard,
         fastboot,
         &[
             OsString::from("fetch"),

@@ -1,31 +1,32 @@
 use std::ffi::OsString;
 use std::io::{self, Read};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::fastboot_child::ReapedChild;
+use crate::device_access::DeviceGuard;
 use crate::fastboot::FastbootError;
 
 const STDERR_TAIL_BYTES: usize = 4096;
 const STDERR_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(100);
 
+
 pub(crate) fn run(
+    guard: &DeviceGuard,
     fastboot: &Path,
     args: &[OsString],
     timeout: Duration,
 ) -> Result<(), FastbootError> {
-    let command = display_command(fastboot, args);
-    let mut child = Command::new(fastboot)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|source| FastbootError::Spawn {
+    let command = crate::fastboot::display_command(fastboot, args);
+    let mut child = ReapedChild::spawn(guard, fastboot, args, Stdio::null(), Stdio::piped()).map_err(
+        |source| FastbootError::Spawn {
             path: fastboot.to_owned(),
             source,
-        })?;
-    let stderr = child.stderr.take().ok_or_else(|| FastbootError::Command {
+        },
+    )?;
+    let stderr = child.take_stderr().ok_or_else(|| FastbootError::Command {
         command: command.clone(),
         detail: "could not capture stderr".to_owned(),
     })?;
@@ -34,7 +35,7 @@ pub(crate) fn run(
     let status = match wait_for_child(&mut child, deadline) {
         Ok(status) => status,
         Err(source) => {
-            terminate(&mut child);
+            child.terminate();
             let detail = stderr_detail(reader, false, timeout);
             return Err(FastbootError::Command {
                 command,
@@ -44,7 +45,7 @@ pub(crate) fn run(
     };
     let timed_out = status.is_none();
     if timed_out {
-        terminate(&mut child);
+        child.terminate();
     }
     let detail = stderr_detail(reader, timed_out, timeout);
     match status {
@@ -52,24 +53,20 @@ pub(crate) fn run(
         Some(status) if status.success() => Ok(()),
         Some(status) => Err(FastbootError::Command {
             command,
-            detail: nonzero_detail(status.to_string(), detail),
+            detail: if detail == "no stderr output" {
+                format!("exited with {status}")
+            } else {
+                format!("exited with {status}: {detail}")
+            },
         }),
     }
 }
 
-fn display_command(fastboot: &Path, args: &[OsString]) -> String {
-    let mut command = fastboot.display().to_string();
-    for arg in args {
-        command.push(' ');
-        command.push_str(&arg.to_string_lossy());
-    }
-    command
-}
 
 fn wait_for_child(
-    child: &mut std::process::Child,
+    child: &mut ReapedChild,
     deadline: Option<Instant>,
-) -> io::Result<Option<std::process::ExitStatus>> {
+) -> io::Result<Option<ExitStatus>> {
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok(Some(status));
@@ -83,11 +80,6 @@ fn wait_for_child(
         }
         thread::sleep(remaining.min(Duration::from_millis(10)));
     }
-}
-
-fn terminate(child: &mut std::process::Child) {
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 fn read_stderr_tail(mut stderr: impl Read) -> io::Result<String> {
@@ -148,10 +140,3 @@ fn join_with_timeout<T>(
     }
 }
 
-fn nonzero_detail(status: String, stderr: String) -> String {
-    if stderr == "no stderr output" {
-        format!("exited with {status}")
-    } else {
-        format!("exited with {status}: {stderr}")
-    }
-}

@@ -21,6 +21,7 @@ mod config_ops;
 mod config_parse;
 mod config_render;
 pub mod detect;
+mod device_access;
 pub mod errors;
 pub mod ext4;
 #[cfg(feature = "cli")]

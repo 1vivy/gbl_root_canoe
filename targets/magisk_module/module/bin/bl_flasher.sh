@@ -49,6 +49,9 @@ if [ "$LANG" = "zh" ]; then
   TEXT_SET_RW_FAILED="分区设置可写失败"
   TEXT_FLASH_PART="刷写"
   TEXT_FLASH_OK="完成"
+  TEXT_ABL_SNAPSHOT_FAILED="ABL 原分区快照失败，拒绝写入"
+  TEXT_ABL_ROLLBACK_OK="ABL 写入失败，原分区已从快照恢复"
+  TEXT_ABL_ROLLBACK_FAILED="严重：ABL 分区可能已撕裂，恢复失败"
   TEXT_ALL_OK="刷写任务已完成（含 efisp）"
   TEXT_ALL_OK_NO_EFISP="分区修补任务已完成（未刷写 ABL）"
   TEXT_BUSY="任务正在运行"
@@ -94,6 +97,9 @@ else
   TEXT_SET_RW_FAILED="setrw failed"
   TEXT_FLASH_PART="Flashing"
   TEXT_FLASH_OK="done"
+  TEXT_ABL_SNAPSHOT_FAILED="ABL snapshot failed; refusing to write"
+  TEXT_ABL_ROLLBACK_OK="ABL write failed; original partition restored from snapshot"
+  TEXT_ABL_ROLLBACK_FAILED="CRITICAL: ABL partition may be torn; rollback failed"
   TEXT_ALL_OK="Flash task completed (with efisp)"
   TEXT_ALL_OK_NO_EFISP="Partition patch task completed (ABL not flashed)"
   TEXT_BUSY="Task running"
@@ -132,6 +138,7 @@ LOCK_OWNER_FILE="$LOCK_DIR/owner.pid"
 LOCK_TASK_FILE="$LOCK_DIR/task_id"
 export PATH=/data/adb/ksu/bin:/system/bin:/system/xbin:$PATH
 RUNTIME_READY=0
+EFISP_FAILURE_MESSAGE=""
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 read_line() { [ -f "$1" ] && IFS= read -r _line < "$1" && printf "%s\n" "$_line"; }
@@ -152,7 +159,7 @@ clean_workdir() {
   for _f in "$RUNTIME_DIR"/*; do
     [ -e "$_f" ] || continue
     case "${_f##*/}" in
-      flash.pid|state|message|updated|task_id|flash.log|flash.lock) ;;
+      flash.pid|state|message|updated|task_id|flash.log|flash.lock|abl_*.snapshot|bds-tools-backup|vendor_boot_patch.*) ;;
       *) rm -rf "$_f" ;;
     esac
   done
@@ -204,6 +211,81 @@ next_boot_slot() {
 }
 
 partition_path() { echo "$BY_NAME_DIR/$1$2"; }
+
+abl_rollback_partition() {
+  abl_rollback_target="$1"
+  abl_rollback_snapshot="$2"
+  abl_rollback_source="$3"
+  abl_rollback_reason="$4"
+  abl_rollback_verify="$abl_rollback_snapshot.rollback-verify"
+  if ! dd if="$abl_rollback_snapshot" of="$abl_rollback_target" bs=4M conv=fsync \
+       >> "$LOG_FILE" 2>&1 ||
+     ! dd if="$abl_rollback_target" of="$abl_rollback_verify" bs=4M conv=fsync \
+       >> "$LOG_FILE" 2>&1 ||
+     ! cmp -s "$abl_rollback_snapshot" "$abl_rollback_verify"; then
+    rm -f "$abl_rollback_verify"
+    EFISP_FAILURE_MESSAGE="$abl_rollback_reason; $TEXT_ABL_ROLLBACK_FAILED: torn partition=$abl_rollback_target; snapshot=$abl_rollback_snapshot"
+    write_log "$EFISP_FAILURE_MESSAGE"
+    write_state error "$EFISP_FAILURE_MESSAGE"
+    return 1
+  fi
+  rm -f "$abl_rollback_snapshot" "$abl_rollback_verify"
+  EFISP_FAILURE_MESSAGE="$abl_rollback_reason; $TEXT_ABL_ROLLBACK_OK: target=$abl_rollback_target restored; source=$abl_rollback_source did not land; snapshot=$abl_rollback_snapshot"
+  write_log "$EFISP_FAILURE_MESSAGE"
+  write_state error "$EFISP_FAILURE_MESSAGE"
+  return 0
+}
+
+flash_abl_partition() {
+  abl_flash_source="$1"
+  abl_flash_target="$2"
+  abl_flash_part="$3"
+  abl_flash_slot="$4"
+  abl_flash_snapshot="$RUNTIME_DIR/${abl_flash_part}${abl_flash_slot}.snapshot"
+  abl_flash_readback="$RUNTIME_DIR/${abl_flash_part}${abl_flash_slot}.readback"
+  if [ -e "$abl_flash_snapshot" ]; then
+    EFISP_FAILURE_MESSAGE="existing ABL rollback snapshot; refusing to write; partition=$abl_flash_target; snapshot=$abl_flash_snapshot"
+    write_log "$EFISP_FAILURE_MESSAGE"
+    write_state error "$EFISP_FAILURE_MESSAGE"
+    return 1
+  fi
+  rm -f "$abl_flash_readback"
+  if ! dd if="$abl_flash_target" of="$abl_flash_snapshot" bs=4M conv=fsync \
+       >> "$LOG_FILE" 2>&1 ||
+     [ ! -s "$abl_flash_snapshot" ]; then
+    rm -f "$abl_flash_snapshot"
+    EFISP_FAILURE_MESSAGE="$TEXT_ABL_SNAPSHOT_FAILED: partition=$abl_flash_target; snapshot=$abl_flash_snapshot"
+    write_log "$EFISP_FAILURE_MESSAGE"
+    write_state error "$EFISP_FAILURE_MESSAGE"
+    return 1
+  fi
+  if ! dd if="$abl_flash_source" of="$abl_flash_target" bs=4M conv=fsync \
+       >> "$LOG_FILE" 2>&1; then
+    rm -f "$abl_flash_readback"
+    abl_rollback_partition "$abl_flash_target" "$abl_flash_snapshot" \
+      "$abl_flash_source" "ABL write failed"
+    return 1
+  fi
+  if ! sync; then
+    abl_rollback_partition "$abl_flash_target" "$abl_flash_snapshot" \
+      "$abl_flash_source" "ABL flush failed"
+    return 1
+  fi
+  if ! dd if="$abl_flash_target" of="$abl_flash_readback" bs=4M conv=fsync \
+       >> "$LOG_FILE" 2>&1; then
+    abl_rollback_partition "$abl_flash_target" "$abl_flash_snapshot" \
+      "$abl_flash_source" "ABL readback failed"
+    return 1
+  fi
+  if ! cmp -s "$abl_flash_source" "$abl_flash_readback"; then
+    abl_rollback_partition "$abl_flash_target" "$abl_flash_snapshot" \
+      "$abl_flash_source" "ABL verification failed"
+    return 1
+  fi
+  rm -f "$abl_flash_snapshot" "$abl_flash_readback"
+  write_log "$TEXT_FLASH_PART $abl_flash_part -> $abl_flash_target $TEXT_FLASH_OK (source=$abl_flash_source)"
+  return 0
+}
 
 pid_from_file() {
   pid_file="$1"
@@ -277,6 +359,7 @@ acquire_task_lock() {
 claim_worker_lock() {
   worker_task_id="$1"
   [ -d "$LOCK_DIR" ] || return 1
+
   [ "$(read_line "$LOCK_TASK_FILE")" = "$worker_task_id" ] || return 1
   write_atomic_value "$LOCK_OWNER_FILE" "$$" || return 1
   if ! write_atomic_value "$PID_FILE" "$$"; then
@@ -352,6 +435,79 @@ config_mode_for_slot() {
   MODE_DEFAULTED="$CONFIG_MODE_DEFAULTED"
   return 0
 }
+bds_tools_restore() {
+  bds_restore_ok=1
+  if [ "$bds_tools_had_bds" = "1" ]; then
+    cp "$bds_tools_backup/BDS.efi" "$bds_tools_target/BDS.efi" || bds_restore_ok=0
+  else
+    rm -f "$bds_tools_target/BDS.efi" || bds_restore_ok=0
+  fi
+  if [ "$bds_tools_had_tools" = "1" ]; then
+    rm -rf "$bds_tools_target/tools" || bds_restore_ok=0
+    cp -r "$bds_tools_backup/tools" "$bds_tools_target/tools" || bds_restore_ok=0
+  else
+    rm -rf "$bds_tools_target/tools" || bds_restore_ok=0
+  fi
+  [ "$bds_restore_ok" = "1" ]
+}
+
+bds_tools_fail() {
+  bds_failure_reason="$1"
+  if bds_tools_restore; then
+    rm -rf "$bds_tools_backup"
+    EFISP_FAILURE_MESSAGE="$bds_failure_reason; BDS/tools restored; backup=$bds_tools_backup"
+  else
+    EFISP_FAILURE_MESSAGE="CRITICAL: BDS/tools rollback failed; boot root may be mixed-generation; target=$bds_tools_target; backup=$bds_tools_backup"
+  fi
+  write_log "$EFISP_FAILURE_MESSAGE"
+  return 1
+}
+
+publish_bds_tools() {
+  bds_tools_target="$1"
+  bds_tools_stage="$2"
+  bds_tools_backup="$RUNTIME_DIR/bds-tools-backup"
+  bds_tools_had_bds=0
+  bds_tools_had_tools=0
+  if [ -e "$bds_tools_backup" ]; then
+    EFISP_FAILURE_MESSAGE="existing BDS/tools rollback backup; refusing to publish; backup=$bds_tools_backup"
+    write_log "$EFISP_FAILURE_MESSAGE"
+    return 1
+  fi
+  if ! mkdir -p "$bds_tools_backup"; then
+    EFISP_FAILURE_MESSAGE="BDS/tools snapshot failed; refusing to publish; backup=$bds_tools_backup"
+    write_log "$EFISP_FAILURE_MESSAGE"
+    return 1
+  fi
+  if [ -e "$bds_tools_target/BDS.efi" ]; then
+    if ! cp "$bds_tools_target/BDS.efi" "$bds_tools_backup/BDS.efi"; then
+      EFISP_FAILURE_MESSAGE="BDS/tools snapshot failed; refusing to publish; backup=$bds_tools_backup"
+      write_log "$EFISP_FAILURE_MESSAGE"
+      return 1
+    fi
+    bds_tools_had_bds=1
+  fi
+  if [ -d "$bds_tools_target/tools" ]; then
+    if ! cp -r "$bds_tools_target/tools" "$bds_tools_backup/tools"; then
+      EFISP_FAILURE_MESSAGE="BDS/tools snapshot failed; refusing to publish; backup=$bds_tools_backup"
+      write_log "$EFISP_FAILURE_MESSAGE"
+      return 1
+    fi
+    bds_tools_had_tools=1
+  fi
+  if ! cp "$bds_tools_stage/BDS.efi" "$bds_tools_target/BDS.efi"; then
+    bds_tools_fail "BDS copy failed; boot-manager transaction not committed"
+    return 1
+  fi
+  if [ -d "$bds_tools_stage/tools" ]; then
+    if ! rm -rf "$bds_tools_target/tools" ||
+       ! cp -r "$bds_tools_stage/tools" "$bds_tools_target/tools"; then
+      bds_tools_fail "tools copy failed; boot-manager transaction not committed"
+      return 1
+    fi
+  fi
+  return 0
+}
 
 install_efisp_pair() {
   target="$1"
@@ -412,6 +568,15 @@ install_efisp_pair() {
     rm -rf "$stage"
     return 1
   fi
+  if [ "$flash_bds" = "yes" ]; then
+    # bootmgr's transaction owns the boot pair/config, not BDS.efi/tools.
+    # Publish these files before install under a backup so every failure
+    # restores the old boot root. This is ordered recoverability, not atomicity.
+    if ! publish_bds_tools "$target" "$stage"; then
+      rm -rf "$stage"
+      return 1
+    fi
+  fi
   transaction_log="$RUNTIME_DIR/transaction.log"
   rm -f "$transaction_log"
   if "$CANOE_BOOTMGR" --json --boot-root "$target" install \
@@ -424,18 +589,18 @@ install_efisp_pair() {
   fi
   cat "$transaction_log" >> "$LOG_FILE"
   if [ "$transaction_status" -ne 0 ]; then
+    if [ "$flash_bds" = "yes" ] && ! bds_tools_restore; then
+      EFISP_FAILURE_MESSAGE="CRITICAL: boot-manager transaction failed and BDS/tools rollback failed; boot root may be mixed-generation; target=$target; backup=$bds_tools_backup"
+      write_log "$EFISP_FAILURE_MESSAGE"
+    elif [ "$flash_bds" = "yes" ]; then
+      EFISP_FAILURE_MESSAGE="boot-manager transaction failed; BDS/tools restored; backup=$bds_tools_backup"
+      write_log "$EFISP_FAILURE_MESSAGE"
+    fi
     rm -rf "$stage"
     return 1
   fi
   if [ "$flash_bds" = "yes" ]; then
-    if ! cp "$stage/BDS.efi" "$target/BDS.efi" ||
-       { [ -d "$stage/tools" ] &&
-         ! mkdir -p "$target/tools"; } ||
-       { [ -d "$stage/tools" ] &&
-         ! cp -r "$stage/tools/." "$target/tools/"; }; then
-      rm -rf "$stage"
-      return 1
-    fi
+    rm -rf "$bds_tools_backup"
   fi
   if grep -q '"signer_changed":true' "$transaction_log" &&
      [ "$SIGNER_SOURCE" != "supplied" ]; then
@@ -446,6 +611,12 @@ install_efisp_pair() {
       # because it owns the Mode 2 to Mode 1 demotion.
       if ! "$CANOE_BOOTMGR" --json --boot-root "$target" entry mode \
            --id "$entry_id" --mode 1 --acknowledge P-GRAFT >> "$LOG_FILE" 2>&1; then
+        if [ "$flash_bds" = "yes" ]; then
+          EFISP_FAILURE_MESSAGE="boot-manager transaction committed boot pair/config and BDS/tools, but Mode 2 downgrade failed; BDS/tools remain new; target=$target"
+        else
+          EFISP_FAILURE_MESSAGE="boot-manager transaction committed boot pair/config, but Mode 2 downgrade failed; target=$target"
+        fi
+        write_log "$EFISP_FAILURE_MESSAGE"
         rm -rf "$stage"
         return 1
       fi
@@ -815,7 +986,11 @@ run_flash() {
     exit 3
   elif [ $res -eq 1 ]; then
     efisp_fail=1
-    write_state running "$TEXT_EFISP_WARN"
+    if [ -n "$EFISP_FAILURE_MESSAGE" ]; then
+      write_state running "$TEXT_EFISP_WARN: $EFISP_FAILURE_MESSAGE"
+    else
+      write_state running "$TEXT_EFISP_WARN"
+    fi
     if [ "$gbl_vuln" = "1" ]; then
       # The target is the retained image when its GBL is exploitable. Do not
       # flash the current slot after an efisp failure and create a mixed pair.
@@ -834,14 +1009,11 @@ run_flash() {
     for part in $IMAGE_NAMES; do
       dst=$(partition_path "$part" "$target_slot")
       src=$(partition_path "$part" "$current_slot")
-      blockdev --setrw "$dst" >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_SET_RW_FAILED"; exit 1; }
-      dd if="$src" of="$dst" bs=4M conv=fsync >> "$LOG_FILE" 2>&1 || { write_state error "$TEXT_FLASH_PART failed"; exit 1; }
-      if ! sync; then
-        write_log "$TEXT_FLASH_PART $part sync failed"
-        write_state error "$TEXT_FLASH_PART $part sync failed"
+      if ! blockdev --setrw "$dst" >> "$LOG_FILE" 2>&1; then
+        write_state error "$TEXT_SET_RW_FAILED: target=$dst; source=$src did not land"
         exit 1
       fi
-      write_log "$TEXT_FLASH_PART $part -> $dst $TEXT_FLASH_OK"
+      flash_abl_partition "$src" "$dst" "$part" "$target_slot" || exit 1
     done
 
   fi
@@ -860,8 +1032,13 @@ run_flash() {
 
   # 最终状态判定
   if [ $efisp_fail -eq 1 ] || [ $patch_fail -eq 1 ]; then
-    write_log "BL done, partial failed"
-    write_state warning "BL done, partial failed"
+    partial_message="BL done, partial failed"
+    [ -n "$EFISP_FAILURE_MESSAGE" ] &&
+      partial_message="$partial_message: $EFISP_FAILURE_MESSAGE"
+    [ $patch_fail -eq 1 ] &&
+      partial_message="$partial_message: target slot patch did not land"
+    write_log "$partial_message"
+    write_state warning "$partial_message"
   elif [ "$skip_abl_flash" = "1" ] && [ -n "$patch_args" ]; then
     write_log "$TEXT_PATCH_DONE"
     write_state success "$TEXT_PATCH_DONE"

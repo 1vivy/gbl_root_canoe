@@ -22,6 +22,7 @@ fn fastboot_identify_protocol_round_trip_has_operation() {
         current_slot: Some("a".to_owned()),
         devinfo: None,
         last_launch: None,
+        is_userspace: Some(true),
     };
     let document: serde_json::Value = serde_json::from_slice(
         &canoe_bootmgr::output::json_success(&response).expect("response JSON"),

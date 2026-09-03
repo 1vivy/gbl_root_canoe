@@ -1,11 +1,21 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::thread;
 use std::time::Duration;
 
 use thiserror::Error;
+use crate::device_access::DeviceGuard;
 
+#[path = "fastboot_identity.rs"]
+mod fastboot_identity;
+
+pub use fastboot_export::{Exported, export, export_seconds};
+pub use fastboot_fetch::fetch;
+pub use fastboot_identity::{identify_checked, Identity};
+pub(crate) use fastboot_identity::display_command;
+
+#[path = "fastboot_child.rs"]
+mod fastboot_child;
 #[path = "fastboot_command.rs"]
 mod fastboot_command;
 #[path = "fastboot_export.rs"]
@@ -13,16 +23,6 @@ mod fastboot_export;
 #[path = "fastboot_fetch.rs"]
 mod fastboot_fetch;
 
-pub use fastboot_export::{Exported, export, export_seconds};
-pub use fastboot_fetch::fetch;
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Identity {
-    pub bds_version: Option<String>,
-    pub current_slot: Option<String>,
-    pub devinfo: Option<String>,
-    pub last_launch: Option<String>,
-}
 
 #[derive(Debug, Error)]
 pub enum FastbootError {
@@ -34,6 +34,18 @@ pub enum FastbootError {
         #[source]
         source: io::Error,
     },
+    #[error("device lock {path} remained busy for {wait:?}; retry after the current device operation finishes")]
+    DeviceBusy { path: PathBuf, wait: Duration },
+    #[error("could not access device lock {path}: {source}")]
+    DeviceLock {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("fastboot is unavailable while mass-storage export {node} is live; end the export before retrying")]
+    ExportActive { node: PathBuf },
+    #[error("{operation} requires a live mass-storage export; run fastboot.export first")]
+    ExportRequired { operation: &'static str },
     #[error("mass-storage discovery timed out after {timeout:?}")]
     Timeout { timeout: Duration },
     #[error("fastboot command {command} failed: {detail}")]
@@ -57,10 +69,19 @@ impl FastbootError {
     pub fn protocol_code(&self) -> &str {
         match self {
             Self::NotFound { .. } => "fastboot-unavailable",
+            Self::DeviceBusy { .. } => "device-busy",
+            Self::ExportActive { .. } => "export-active",
+            Self::ExportRequired { .. } => "export-required",
+            Self::DeviceLock { source, .. }
+                if source.kind() == io::ErrorKind::PermissionDenied =>
+            {
+                "permission-denied"
+            }
             Self::Timeout { .. } | Self::CommandTimeout { .. } => "timeout",
             Self::PermissionDenied { .. } => "permission-denied",
             Self::Unsupported { .. } => "unsupported-platform",
             Self::Spawn { .. }
+            | Self::DeviceLock { .. }
             | Self::Discovery { .. }
             | Self::InvalidTimeout { .. }
             | Self::Command { .. } => "operation",
@@ -125,84 +146,6 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-/// Read the BDS identity variables, retrying one missed getvar command.
-pub fn identify(fastboot: &Path, timeout: Duration) -> Identity {
-    let current_slot = getvar(fastboot, "current-slot", timeout);
-    let bds_version = getvar(fastboot, "canoe-bds", timeout);
-    let devinfo = getvar(fastboot, "canoe-devinfo", timeout);
-    let last_launch = getvar(fastboot, "canoe-last-launch", timeout);
-    Identity {
-        bds_version,
-        current_slot: current_slot.filter(|slot| slot == "a" || slot == "b"),
-        devinfo,
-        last_launch,
-    }
-}
-
-fn getvar(fastboot: &Path, name: &str, timeout: Duration) -> Option<String> {
-    for attempt in 0..2 {
-        if let Some(value) = getvar_once(fastboot, name, timeout) {
-            return Some(value);
-        }
-        if attempt == 0 {
-            thread::sleep(Duration::from_millis(500));
-        }
-    }
-    None
-}
-
-fn getvar_once(fastboot: &Path, name: &str, timeout: Duration) -> Option<String> {
-    use std::process::{Command, Stdio};
-    use std::time::Instant;
-
-    let mut child = Command::new(fastboot)
-        .arg("getvar")
-        .arg(name)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
-    let deadline = Instant::now().checked_add(timeout);
-    loop {
-        if child.try_wait().ok()?.is_some() {
-            break;
-        }
-        let Some(deadline) = deadline else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        };
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        thread::sleep(remaining.min(Duration::from_millis(10)));
-    }
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    parse_getvar(&String::from_utf8_lossy(&output.stderr), name)
-}
-
-fn parse_getvar(stderr: &str, name: &str) -> Option<String> {
-    let prefix = format!("{name}: ");
-    for line in stderr.lines() {
-        let Some(value) = line.strip_prefix(&prefix) else {
-            continue;
-        };
-        let value = value.trim();
-        return if value.is_empty() || value.starts_with("FAILED") {
-            None
-        } else {
-            Some(value.to_owned())
-        };
-    }
-    None
-}
-
 /// Flash an existing image to an explicitly named partition.
 pub fn flash(
     fastboot: &Path,
@@ -219,7 +162,9 @@ pub fn flash(
             &format!("image is not an existing regular file: {}", image.display()),
         ));
     }
+    let guard = DeviceGuard::fastboot()?;
     fastboot_command::run(
+        &guard,
         fastboot,
         &[
             OsString::from("flash"),
@@ -248,7 +193,8 @@ pub fn reboot(
     if let Some(target) = target {
         args.push(OsString::from(target));
     }
-    fastboot_command::run(fastboot, &args, timeout)
+    let guard = DeviceGuard::fastboot()?;
+    fastboot_command::run(&guard, fastboot, &args, timeout)
 }
 
 /// Build a six-byte SCSI START STOP UNIT command descriptor block.
@@ -265,7 +211,8 @@ pub fn start_stop_unit_cdb(load_eject: bool, start: bool) -> [u8; 6] {
 
 /// End a BDS mass-storage export through its raw block node.
 pub fn end_export(node: &Path) -> Result<(), FastbootError> {
-    fastboot_export::end_export(node)
+    let guard = DeviceGuard::exclusive()?;
+    fastboot_export::end_export(&guard, node)
 }
 
 fn command_error(command: &str, detail: &str) -> FastbootError {

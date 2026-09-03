@@ -27,13 +27,13 @@ The response identifies the raw block node. Only one partition is exported per
 session. `fastboot.export` adopts an existing unmounted Canoe export when one
 is already present instead of starting a second export.
 
-**VOL DOWN on the device ends the session for both the app and CLI paths.**
-Disconnecting or losing the USB link does not cancel it; reconnect and finish
-the operation, then press VOL DOWN on the device. While the export runs, the
-USB link is a mass-storage gadget and carries no fastboot channel, so no host
-command can reach BDS. `fastboot.end-export --node <RAW_NODE>` is available to
-the CLI after the operation, but the device-side VOL DOWN remains the only
-contractual cancellation control.
+An export has two equal, ordinary endings: the host ends it (the boot manager or CLI issues a SCSI eject), or the operator presses **VOL DOWN** on the device. Neither is a failure, and neither is a workaround for the other.
+
+When Canoe's bundled mass-storage driver serves the export, it delivers the SCSI reply before the gadget goes away, and the device returns to the surface it came from—the menu or fastboot. That round trip is the point: a host tool can export `persist`, do its work, and hand the device back without the operator touching the phone.
+
+This depends on Canoe's own bundled driver serving the export. The stock resident platform driver never reports the eject, so a session it serves ends only the old way. On an SM8850 Canoe target, the export enumerates as **`1209:ca0e`** "USB MASS STORAGE", which is Canoe's bundled driver, so the host eject is the normal path there.
+
+Disconnecting or losing the USB link does not cancel the export; reconnect and finish the operation, then use either ordinary ending. While the export runs, the USB link is a mass-storage gadget and carries no fastboot channel, so a fastboot command legitimately reports `waiting-for-any-device`. `fastboot.end-export --node <RAW_NODE>` is available to the CLI for the host-ending path.
 
 Older BDS builds started an export without drawing a screen and silently
 swallowed key presses. If the screen does not change, the running BDS predates
@@ -98,11 +98,13 @@ sidecars, configuration, and rollback as one transaction. The host installer
 does not flash a partition; the vulnerable ABL and `BDS.efi` operations remain
 separate, deliberate fastboot actions in the install guide.
 
-After the transaction, end the export and press VOL DOWN on the device:
+After the transaction, end the export from the host or the device. For the host-ending path:
 
 ```bash
 canoe-bootmgr fastboot end-export --node <RAW_NODE>
 ```
+
+Alternatively, press **VOL DOWN** on the device.
 
 If the app reports a held export, finish that app flow rather than starting a
 second export from another terminal.

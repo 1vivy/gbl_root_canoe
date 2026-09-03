@@ -462,6 +462,7 @@ pub enum Success {
         current_slot: Option<String>,
         devinfo: Option<String>,
         last_launch: Option<String>,
+        is_userspace: Option<bool>,
     },
     #[serde(rename = "fastboot.export")]
     FastbootExport { ok: bool, node: String },

@@ -22,11 +22,47 @@ field="$work/field"
 current="$work/current"
 new_field="$work/new-field"
 verify="$work/verify"
+snapshot="$work/vendor_boot.snapshot"
+restore_verify="$work/vendor_boot.restore-verify"
+rollback_failed=0
+
+restore_vendor_boot() {
+  if ! dd if="$snapshot" of="$partition" bs=4M conv=fsync 2>/dev/null ||
+     ! dd if="$partition" of="$restore_verify" bs=4M conv=fsync 2>/dev/null ||
+     ! cmp -s "$snapshot" "$restore_verify"; then
+    return 1
+  fi
+  return 0
+}
+
+fail_after_snapshot() {
+  failure_message="$1"
+  echo "$failure_message" >&2
+  if restore_vendor_boot; then
+    echo "vendor_boot rollback succeeded: partition=$partition; snapshot=$snapshot" >&2
+  else
+    rollback_failed=1
+    echo "CRITICAL: rollback failed; torn partition=$partition; snapshot retained at $snapshot" >&2
+  fi
+  exit 1
+}
 
 cleanup() {
+  if [ "$rollback_failed" = "1" ]; then
+    return
+  fi
   rm -rf "$work"
 }
-trap cleanup EXIT INT TERM HUP
+
+handle_signal() {
+  if [ -s "$snapshot" ]; then
+    fail_after_snapshot "vendor_boot patch interrupted"
+  fi
+  exit 1
+}
+
+trap cleanup EXIT
+trap handle_signal INT TERM HUP
 
 if [ ! -e "$partition" ]; then
   echo "vendor_boot partition not found: $partition" >&2
@@ -82,17 +118,23 @@ new_field_bytes=$(wc -c < "$new_field" | tr -d '[:space:]')
   exit 1
 }
 
-if ! dd if="$new_field" of="$partition" bs=1 seek=28 conv=notrunc 2>/dev/null; then
-  echo "failed to write vendor_boot cmdline" >&2
+if ! dd if="$partition" of="$snapshot" bs=4M conv=fsync 2>/dev/null ||
+   [ ! -s "$snapshot" ]; then
+  rm -f "$snapshot"
+  echo "failed to snapshot vendor_boot; refusing to write: partition=$partition; snapshot=$snapshot" >&2
   exit 1
+fi
+if ! dd if="$new_field" of="$partition" bs=1 seek=28 conv=notrunc 2>/dev/null; then
+  fail_after_snapshot "failed to write vendor_boot cmdline"
+fi
+if ! sync; then
+  fail_after_snapshot "failed to flush vendor_boot cmdline"
 fi
 if ! dd if="$partition" of="$verify" bs=1 skip=28 count=2048 2>/dev/null; then
-  echo "failed to reread vendor_boot cmdline" >&2
-  exit 1
+  fail_after_snapshot "failed to reread vendor_boot cmdline"
 fi
-if ! tr -d '\000' < "$verify" | grep -F -q "$TOKEN"; then
-  echo "vendor_boot cmdline verification failed" >&2
-  exit 1
+if ! cmp -s "$new_field" "$verify"; then
+  fail_after_snapshot "vendor_boot cmdline verification failed"
 fi
 
 echo "patched"
