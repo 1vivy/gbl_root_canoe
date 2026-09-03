@@ -55,8 +55,8 @@ Windows 上测试生成的应用。MSVC 路线需要 `cargo-xwin` 和真实的 M
 `canoe-boot-manager-<version>.tar.gz`，其中包含 `dist/`，另有 Linux 和
 Windows 桌面二进制。固件仓库通过现有的 `fetch-verified` 目标，按 URL 和
 SHA-256 消费这些构件。在选定已发布的应用构件之前，仓库中签入的
-`targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz` 是
-最后已知良好的 fallback。`make version-check` 会验证 fallback 字节与
+`targets/magisk_module/webui-cache/canoe-boot-manager-<CANOE_WEBUI_VERSION>.tar.gz`
+是最后已知良好的备用版本。`make version-check` 会验证备用版本字节与
 `CANOE_WEBUI_SHA256` 一致；不能静默替换为无关的 bundle。
 
 ## 构建前置条件
@@ -118,20 +118,15 @@ Linux 使用 `canoe-boot-manager.sh`，Windows 使用 `canoe-boot-manager.bat`�
 
 ## 单一来源的版本管理
 
-仓库根目录的 `version.mk` 是 Canoe 版本和模块版本 pin 的唯一来源。当前
-包含：
+仓库根目录的 `version.mk` 是 Canoe 版本、模块版本号和 WebUI 发布 pin 的唯一
+来源。不要把版本或摘要值复制到文档中：直接从 `version.mk` 读取
+`CANOE_VERSION`、`CANOE_VERSION_CODE`、`CANOE_WEBUI_VERSION` 和
+`CANOE_WEBUI_SHA256`。
 
-```make
-CANOE_VERSION = 7.0.0-b2
-CANOE_VERSION_CODE = 15
-CANOE_WEBUI_VERSION = 0.1.0
-CANOE_WEBUI_SHA256 = ebc631e5fa91f0011bcdf7fcf5afa512aa50db0881a210b93b9bb326550445a0
-```
-
-运行 `make bump VERSION=x.y.z` 重新生成派生版本文件。运行
-`make version-check` 检查版本漂移并验证 pinned fallback 归档。UEFI 构建会
-将相同的 `CANOE_VERSION` 值写入 `SFB_BDS_VERSION`，BDS 再将它作为
-`canoe-bds` fastboot 变量发布。
+运行 `make bump VERSION=<release-version> VERSION_CODE=<release-version-code>`
+重新生成派生版本文件，然后运行 `make version-check`。该门禁会检查生成的主机
+与模块元数据、固定的 WebUI 压缩包及其 URL、BDS 的 `canoe-bds` 和菜单字符串、
+构建 stamp 缓存，以及现有软件包归档中嵌入的 BDS 字节。
 
 ## 跨软件包字节一致的启动构件
 

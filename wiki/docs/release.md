@@ -33,6 +33,12 @@ simply:
 make bump
 make version-check
 ```
+A direct `CANOE_VERSION=<other-version>` override is refused before any
+recipe runs. A throwaway local build may opt in with
+`CANOE_VERSION_OVERRIDE=1` on the make command line; its effective BDS version
+receives a `-local` suffix and `make version-check` rejects the non-release
+artifact. Never use that opt-in for a release.
+
 
 The WebUI pin is the `CANOE_WEBUI_VERSION`, `CANOE_WEBUI_SHA256`, and
 `CANOE_WEBUI_URL` trio in `version.mk`. For a tagged release, the URL and digest point
@@ -88,19 +94,22 @@ SHA-256 and use that exact value for `CANOE_WEBUI_SHA256` in the firmware reposi
 The tag workflow uses this exact invocation (with its temporary output path):
 
 ```sh
-VERSION=0.1.0
-bun run dist-tarball -- "$RUNNER_TEMP/canoe-boot-manager-${VERSION}.tar.gz"
-sha256sum "$RUNNER_TEMP/canoe-boot-manager-${VERSION}.tar.gz" | cut -d ' ' -f 1
+APP_VERSION="$(bun -e 'console.log((await Bun.file("package.json").json()).version)')"
+ARCHIVE="$RUNNER_TEMP/canoe-boot-manager-${APP_VERSION}.tar.gz"
+bun run dist-tarball -- "$ARCHIVE"
+sha256sum "$ARCHIVE" | cut -d ' ' -f 1
 ```
 
 A deterministic implementation must produce the same digest when run twice for the
 same `dist/`. Prove that locally with a fixed output path:
 
 ```sh
-bun run dist-tarball -- canoe-boot-manager-0.1.0.tar.gz
-sha256sum canoe-boot-manager-0.1.0.tar.gz
-bun run dist-tarball -- canoe-boot-manager-0.1.0.tar.gz
-sha256sum canoe-boot-manager-0.1.0.tar.gz
+APP_VERSION="$(bun -e 'console.log((await Bun.file("package.json").json()).version)')"
+ARCHIVE="canoe-boot-manager-${APP_VERSION}.tar.gz"
+bun run dist-tarball -- "$ARCHIVE"
+sha256sum "$ARCHIVE"
+bun run dist-tarball -- "$ARCHIVE"
+sha256sum "$ARCHIVE"
 ```
 
 A deterministic implementation produces the same digest both times. The digest
@@ -108,10 +117,9 @@ itself is deliberately not written here: it changes with every app build, so a c
 in prose is stale the moment the app is rebuilt, and a stale digest in a release
 guide is worse than none. The authoritative value is `CANOE_WEBUI_SHA256` in
 `version.mk`, and `make version-check` fails when the checked-in archive does not
-hash to it. The app version remains `0.1.0` because it has not been tagged yet;
-once published, the release URL and digest must move together. The firmware
-repository consumes the tarball by URL and SHA-256; it does not rebuild or
-reinterpret the WebUI.
+hash to it. The app version comes from `package.json`; once published, the release
+URL and digest must move together. The firmware repository consumes the tarball by
+URL and SHA-256; it does not rebuild or reinterpret the WebUI.
 
 ## 3. Build the firmware packages
 

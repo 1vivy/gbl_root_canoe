@@ -31,6 +31,11 @@ make version-check
 make bump
 make version-check
 ```
+直接使用 `CANOE_VERSION=<other-version>` 覆盖时，会在任何配方运行前拒绝。
+临时本地构建可以在 make 命令行中显式传入 `CANOE_VERSION_OVERRIDE=1`；其
+有效 BDS 版本会追加 `-local` 后缀，而 `make version-check` 会拒绝这个非发布
+构件。构建发布版本时绝不能使用该显式选择。
+
 
 `version.mk` 中的 `CANOE_WEBUI_VERSION`、`CANOE_WEBUI_SHA256` 和
 `CANOE_WEBUI_URL` 三元组就是 WebUI pin。对于已 tag 的发布，URL 和摘要指向
@@ -84,26 +89,30 @@ SHA-256，并在固件仓库中把该精确值用于 `CANOE_WEBUI_SHA256`。tag 
 完全相同的调用（输出路径位于临时目录）：
 
 ```sh
-VERSION=0.1.0
-bun run dist-tarball -- "$RUNNER_TEMP/canoe-boot-manager-${VERSION}.tar.gz"
-sha256sum "$RUNNER_TEMP/canoe-boot-manager-${VERSION}.tar.gz" | cut -d ' ' -f 1
+APP_VERSION="$(bun -e 'console.log((await Bun.file("package.json").json()).version)')"
+ARCHIVE="$RUNNER_TEMP/canoe-boot-manager-${APP_VERSION}.tar.gz"
+bun run dist-tarball -- "$ARCHIVE"
+sha256sum "$ARCHIVE" | cut -d ' ' -f 1
 ```
 
-对同一个 `dist/`，确定性实现重复运行必须得到相同摘要。用固定输出路径在本地
+对于同一个 `dist/`，确定性实现重复运行必须得到相同摘要。用固定输出路径在本地
 证明这一点：
 
 ```sh
-bun run dist-tarball -- canoe-boot-manager-0.1.0.tar.gz
-sha256sum canoe-boot-manager-0.1.0.tar.gz
-bun run dist-tarball -- canoe-boot-manager-0.1.0.tar.gz
-sha256sum canoe-boot-manager-0.1.0.tar.gz
+APP_VERSION="$(bun -e 'console.log((await Bun.file("package.json").json()).version)')"
+ARCHIVE="canoe-boot-manager-${APP_VERSION}.tar.gz"
+bun run dist-tarball -- "$ARCHIVE"
+sha256sum "$ARCHIVE"
+bun run dist-tarball -- "$ARCHIVE"
+sha256sum "$ARCHIVE"
 ```
 
-当前尚未 tag 的 app 构建连续两次得到
-`f10c63063d93d8a4b644f7a0ff7989ab2d199ac95c78da96e69fb461fb3eccb1`；签入的
-备用版本已由同一资产重新生成，固件 pin 现在与之匹配。由于 app 尚未 tag，版本
-仍为 `0.1.0`；发布后，release URL 和摘要必须一起变更。固件仓库通过 URL 和
-SHA-256 消费这个压缩包；它不会重新构建或重新解释 WebUI。
+确定性实现两次都必须得到相同摘要。摘要本身有意不写在这里：每次 app 构建都会
+改变它，把摘要复制到文档中会立即过时，发布手册中的过期摘要比不写更糟。权威值
+是 `version.mk` 中的 `CANOE_WEBUI_SHA256`，`make version-check` 会在签入的
+压缩包摘要不匹配时失败。app 版本来自 `package.json`；发布后，release URL 和
+摘要必须一起变更。固件仓库通过 URL 和 SHA-256 消费该压缩包，不会重新构建或
+重新解释 WebUI。
 
 ## 3. 构建固件软件包
 
