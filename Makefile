@@ -1,5 +1,6 @@
 CANOE_ROOT_DIR := $(abspath .)
 include version.mk
+include imports.mk
 
 .PHONY: clean clean_submodules targets_clean \
 	submodule_uefi_clean submodule_patcher_clean submodule_ablfvextractor_clean \
@@ -9,7 +10,7 @@ include version.mk
 	target_toolkit_android dev_target_extract_and_patch \
 	tools_vbmetafixer_linux tools_vbmetafixer_windows \
 	tools_vbmetafixer_android test uefi_discard fetch-verified \
-	bump version-check
+	bump version-check imports import-pin
 
 # UEFI_REBUILD=1 forces a from-scratch BDS, ONCE for the whole invocation.
 #
@@ -78,7 +79,7 @@ bump:
 		exit 2; \
 	}; \
 	mkdir -p tools/canoe/src; \
-	trap 'rm -f version.mk.tmp tools/canoe/src/version.rs.tmp targets/magisk_module/module/module.prop.tmp README.md.tmp README_zh.md.tmp wiki/docs/canoe-cfg.md.tmp wiki/docs/zh/canoe-cfg.md.tmp wiki/docs/release.md.tmp wiki/docs/zh/release.md.tmp' EXIT HUP INT TERM; \
+	trap 'rm -f version.mk.tmp imports.mk.tmp tools/canoe/src/version.rs.tmp targets/magisk_module/module/module.prop.tmp README.md.tmp README_zh.md.tmp wiki/docs/canoe-cfg.md.tmp wiki/docs/zh/canoe-cfg.md.tmp wiki/docs/release.md.tmp wiki/docs/zh/release.md.tmp' EXIT HUP INT TERM; \
 	printf '%s\n' \
 		'# Single source of truth for Canoe versions.' \
 		'# `make bump` regenerates every derived file.' \
@@ -103,13 +104,10 @@ bump:
 		'CANOE_NONRELEASE := 1' \
 		'endif' \
 		'endif' \
-		'endif' \
-		'# Web UI release pin; the archive is a checked-in last-known-good fallback' \
-		'# until canoe-boot-manager publishes release assets.' \
-		'CANOE_WEBUI_VERSION = $(CANOE_WEBUI_VERSION)' \
-		'CANOE_WEBUI_SHA256 = $(CANOE_WEBUI_SHA256)' \
-		'CANOE_WEBUI_URL = file://$$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-$(CANOE_WEBUI_VERSION).tar.gz' > version.mk.tmp; \
+		'endif' > version.mk.tmp; \
 	if ! cmp -s version.mk.tmp version.mk; then mv version.mk.tmp version.mk; else rm version.mk.tmp; fi; \
+	python3 scripts/imports.py mk > imports.mk.tmp; \
+	if ! cmp -s imports.mk.tmp imports.mk; then mv imports.mk.tmp imports.mk; else rm imports.mk.tmp; fi; \
 	printf '%s\n' \
 		'//! Build version generated from version.mk by `make bump`.' \
 		'//!' \
@@ -157,11 +155,35 @@ bump:
 	if ! cmp -s wiki/docs/zh/release.md.tmp wiki/docs/zh/release.md; then mv wiki/docs/zh/release.md.tmp wiki/docs/zh/release.md; else rm wiki/docs/zh/release.md.tmp; fi; \
 	printf 'Bumped Canoe to %s (version code %s)\n' "$$version" "$$version_code"
 
+imports:
+	python3 scripts/imports.py list
+
+import-pin:
+	@set -eu; \
+	test -n "$(ID)" || { printf 'ID is required (usage: make import-pin ID=<id> [VERSION=<version>])\n' >&2; exit 2; }; \
+	trap 'rm -f imports.mk.tmp' EXIT HUP INT TERM; \
+	if [ -n "$(VERSION)" ]; then \
+		python3 scripts/imports.py pin "$(ID)" --version "$(VERSION)"; \
+	else \
+		python3 scripts/imports.py pin "$(ID)"; \
+	fi; \
+	python3 scripts/imports.py mk > imports.mk.tmp; \
+	if ! cmp -s imports.mk.tmp imports.mk; then mv imports.mk.tmp imports.mk; else rm imports.mk.tmp; fi; \
+	trap - EXIT HUP INT TERM
+
 version-check:
 	@set -eu; \
 	version='$(CANOE_VERSION)'; \
 	version_code='$(CANOE_VERSION_CODE)'; \
 	fail=0; \
+	if ! python3 scripts/imports.py check; then \
+		printf 'version-check: imports.py check failed\n'; \
+		fail=1; \
+	fi; \
+	if ! python3 scripts/imports.py mk | cmp -s - imports.mk; then \
+		printf 'version-check: imports.mk is stale or hand-edited\n'; \
+		fail=1; \
+	fi; \
 	fallback='0.0.0-dev'; \
 	if [ "$$version" = "$$fallback" ]; then \
 		printf 'version invalid: %s is reserved for unstamped-build detection\n' "$$version"; \
@@ -287,28 +309,6 @@ version-check:
 			'targets/magisk_module/module/module.prop (versionCode)' "$$version_code" "$$actual"; \
 		fail=1; \
 	fi; \
-	webui_version='$(CANOE_WEBUI_VERSION)'; \
-	webui_url='$(CANOE_WEBUI_URL)'; \
-	webui_cache="$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-$$webui_version.tar.gz"; \
-	if [ ! -f "$$webui_cache" ]; then \
-		printf 'Web UI cache sha256 mismatch: %s expected %s actual <missing>\n' \
-			"$$webui_cache" "$(CANOE_WEBUI_SHA256)"; \
-		fail=1; \
-	else \
-		actual="$$(sha256sum "$$webui_cache" | cut -d" " -f1)"; \
-		if [ "$$actual" != "$(CANOE_WEBUI_SHA256)" ]; then \
-			printf 'Web UI cache sha256 mismatch: %s expected %s actual %s\n' \
-				"$$webui_cache" "$(CANOE_WEBUI_SHA256)" "$$actual"; \
-			fail=1; \
-		fi; \
-	fi; \
-	webui_asset="$${webui_url##*/}"; \
-	expected_asset="canoe-boot-manager-$$webui_version.tar.gz"; \
-	if [ "$$webui_asset" != "$$expected_asset" ]; then \
-		printf 'Web UI URL version mismatch: %s expected asset %s\n' \
-			"$$webui_url" "$$expected_asset"; \
-		fail=1; \
-	fi; \
 	if [ -f submodules/uefi/build/BDS.efi ]; then \
 		if ! command -v strings >/dev/null 2>&1; then \
 			printf 'version check unavailable: strings is required to inspect %s\n' \
@@ -392,6 +392,7 @@ test:
 	$(MAKE) -C tools/canoe-ext4 test
 	sh targets/magisk_module/tests/test_flows.sh
 	sh targets/toolkit_android/tests/test_build_script.sh
+	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 # Fetch a pinned package asset without ever exposing a partial archive to
 # subsequent builds. Package Makefiles invoke this target with absolute

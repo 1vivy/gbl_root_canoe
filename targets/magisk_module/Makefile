@@ -1,5 +1,6 @@
 CANOE_ROOT_DIR := $(abspath ../..)
 include ../../version.mk
+include ../../imports.mk
 
 .PHONY: clean copy_resources webui_dist webui-pin submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \

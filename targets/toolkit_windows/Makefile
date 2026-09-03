@@ -1,4 +1,5 @@
 include ../../version.mk
+include ../../imports.mk
 
 .PHONY: clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
@@ -8,10 +9,8 @@ include ../../version.mk
 ROOT_DIR := $(abspath ../..)
 
 
-PLATFORM_TOOLS_URL ?= https://dl.google.com/android/repository/platform-tools_r37.0.0-win.zip
-PLATFORM_TOOLS_SHA256 ?= 4fe305812db074cea32903a489d061eb4454cbc90a49e8fea677f4b7af764918
 PLATFORM_TOOLS_CACHE ?= $(ROOT_DIR)/.cache/platform-tools
-PLATFORM_TOOLS_ARCHIVE = $(PLATFORM_TOOLS_CACHE)/platform-tools_r37.0.0-win.zip
+PLATFORM_TOOLS_ARCHIVE = $(PLATFORM_TOOLS_CACHE)/platform-tools_$(PLATFORM_TOOLS_VERSION)-win.zip
 
 CANOE_EXT4_WINDOWS ?= $(ROOT_DIR)/tools/canoe-ext4/canoe-ext4.exe
 CANOE_APP_WINDOWS_BIN ?= $(ROOT_DIR)/../canoe-boot-manager/src-tauri/target/x86_64-pc-windows-gnu/release/canoe-boot-manager.exe

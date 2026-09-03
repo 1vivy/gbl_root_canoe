@@ -22,8 +22,3 @@ CANOE_NONRELEASE := 1
 endif
 endif
 endif
-# Web UI release pin; the archive is a checked-in last-known-good fallback
-# until canoe-boot-manager publishes release assets.
-CANOE_WEBUI_VERSION = 0.1.0
-CANOE_WEBUI_SHA256 = bc8014d5cca35bc28b197fd34c2a136ec246930e9f05bd1ef87dbdd26251a401
-CANOE_WEBUI_URL = file://$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz
