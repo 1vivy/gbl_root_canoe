@@ -6,5 +6,5 @@ CANOE_VERSION_CODE = 15
 # Web UI release pin; the archive is a checked-in last-known-good fallback
 # until canoe-boot-manager publishes release assets.
 CANOE_WEBUI_VERSION = 0.1.0
-CANOE_WEBUI_SHA256 = ebc631e5fa91f0011bcdf7fcf5afa512aa50db0881a210b93b9bb326550445a0
+CANOE_WEBUI_SHA256 = a31f5b3c0490eb9260407719fbab903f377dac8417b4c3a6e0ced3c8829356e0
 CANOE_WEBUI_URL = file://$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz

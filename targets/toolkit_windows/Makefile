@@ -51,7 +51,7 @@ submodule_patcher: copy_resources
 	cd ../../submodules/patcher && make build_windows
 	cp ../../submodules/patcher/build/patch_abl.exe ./build/toolkit/bin/patch_abl.exe
 submodule_mode2_profile: copy_resources
-	test -d "$$(rustc --print target-libdir --target x86_64-pc-windows-gnu 2>/dev/null)" || { echo "Rust target x86_64-pc-windows-gnu is missing; use a rustup toolchain with that target installed and put its cargo first on PATH." >&2; exit 1; }
+	test -d "$$(rustc --print target-libdir --target x86_64-pc-windows-gnu 2>/dev/null)" || { echo "Rust target x86_64-pc-windows-gnu is missing; use rustup cargo first on PATH (for example: PATH=\"\$$HOME/.cargo/bin:\$$PATH\" make target_toolkit_windows) with that target installed." >&2; exit 1; }
 	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/mode2-profile/Cargo.toml
 	test -f ../../tools/mode2-profile/target/x86_64-pc-windows-gnu/release/mode2_profile.exe
 	cp ../../tools/mode2-profile/target/x86_64-pc-windows-gnu/release/mode2_profile.exe ./build/toolkit/bin/mode2_profile.exe
@@ -113,7 +113,7 @@ ext4_tools: copy_resources
 	cp "$(CANOE_EXT4_WINDOWS)" ./build/toolkit/bin/canoe-ext4.exe
 canoe_app: copy_resources
 	@test -f "$(CANOE_APP_WINDOWS_BIN)" || { \
-		echo "canoe-boot-manager Windows binary is required; run 'cd ../canoe-boot-manager && bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci' or set CANOE_APP_WINDOWS_BIN" >&2; \
+		echo "canoe-boot-manager Windows binary is required; run 'cd ../canoe-boot-manager && bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci' or set CANOE_APP_WINDOWS_BIN=/absolute/path/to/canoe-boot-manager.exe (required from a git worktree)" >&2; \
 		exit 1; \
 	}
 	mkdir -p build/toolkit/bin

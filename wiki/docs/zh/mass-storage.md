@@ -1,112 +1,105 @@
-# USB Mass Storage 指南
+# USB Mass Storage
 
-Super Fastboot 可以将一个物理分区作为 USB 磁盘导出。`persist` 分区的
-`/efisp` 下包含启动根目录；如果存在 `logfs`，也可以用它收集日志。
+Canoe 可以把一个物理分区导出为一个 USB 磁盘。`persist` 分区的 `/efisp` 下包含
+启动根目录；如果存在 `logfs`，它可用于收集日志。应用和 `canoe-bootmgr` 负责导出
+流程。不要用第二个工具挂载或编辑正在使用的文件系统。
+
+## 导出前
+
+实时 `persist` 导出是独占的。主机操作导出内容前，请停止 Android，或确认 Android
+没有使用 `persist`。主机不得与 Android 并发使用实时 `persist` 导出，以免两个写入者
+同时操作同一 ext4 日志与启动根目录文件。
 
 ## 开始导出
 
-在 BDS 菜单选择 **USB Mass Storage**，选择 `persist`，并确认正在使用中的
-文件系统警告。也可以在 fastboot 中启动相同操作：
+BDS 菜单仍有 **USB Mass Storage** 操作。从应用的 Guided flow 进入 Commit 阶段时，
+应用会请求导出，并且只在安装事务期间保持导出。CLI 也提供相同操作：
 
 ```bash
-fastboot oem mass-storage             # persist（默认）
-fastboot oem mass-storage:persist     # persist
-fastboot oem mass-storage:logfs       # logfs
+canoe-bootmgr fastboot export --target persist
+canoe-bootmgr fastboot export --target logfs
 ```
 
-无论是设备菜单路径还是 `fastboot oem mass-storage:persist` 路径，都会显示
-导出界面。每次会话只作为一个 USB LUN 导出一个分区。
+响应会给出原始块设备节点。每次会话只导出一个分区。如果已有 Canoe 导出的未挂载
+设备，`fastboot.export` 会接管它，不会再启动第二个导出。
 
-**两条路径都必须在设备上按音量下结束会话，包括 fastboot oem 路径。**断开或
-失去 USB 连接不会取消会话；重新连接并完成操作后，再在设备上按音量下。
+**应用和 CLI 路径都必须在设备上按音量下结束会话。**断开或失去 USB 连接不会取消
+会话；重新连接并完成操作后，再在设备上按音量下。导出进行时 USB 链路是 mass-storage
+gadget，不提供 fastboot 通道，因此主机命令无法到达 BDS。操作完成后 CLI 也提供
+`fastboot.end-export --node <RAW_NODE>`，但设备上的音量下仍是契约规定的唯一取消控制。
 
-较旧的 BDS 构建会在没有界面的情况下启动 oem 导出，并静默吞掉按键。如果
-界面没有变化，正在运行的 BDS 就早于此修复。
+较旧的 BDS 构建会在没有界面的情况下启动导出并静默吞掉按键。如果界面没有变化，
+正在运行的 BDS 就早于该修复。
 
-**导出的身份。** BDS 自带大容量存储驱动，按需启动：设备枚举为
-**`1209:ca0e`**（产品名 `efisp boot root`，固定磁盘），而不是平台的
-`05c6:f000`。没有任何系统规则认领这一身份，因此自带驱动的导出不会再遇到
-下面的 modeswitch 问题；当自带驱动无法启动时，由平台自身的驱动以原始呈现
-接管，两种身份工具都会识别。
+## Linux 上的导出身份
 
-**Linux：usb_modeswitch，仅在回退身份上。** 没有任何规则认领
-`1209:ca0e`，因此自带驱动的导出不会被干扰。当会话回退到平台驱动的
-`05c6:f000` 时，发行版自带的 udev 规则会把它当作需要模式切换的 4G 网卡：
-`usb-storage` 在内核扫描前被卸载。一次性禁用该切换：
+Canoe 自带的大容量存储驱动通常枚举为 **`1209:ca0e`**（产品名 `efisp boot root`，
+固定磁盘），而非平台的 `05c6:f000`。如果自带驱动无法启动，平台驱动可能回退到
+原始身份；源探测器接受两种身份。
+
+没有系统规则认领 `1209:ca0e`，所以自带导出不会被模式切换。在 Linux 上，回退的
+`05c6:f000` 可能匹配发行版将其当作 4G 网卡的 `usb_modeswitch` 规则，并在磁盘扫描
+前弹出设备。使用这种回退身份时，一次性禁用该切换：
 
 ```bash
 printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 ```
 
-`canoe install` 会请求 `canoe-bootmgr source detect --json`，选择第一个身份为
-`1209:ca0e` 或兼容身份 `05c6:f000`、可读且未挂载的 block 行。这是唯一的
-USB 源探测实现；原生主机不再遍历 sysfs 或查询 PowerShell。超时或中断后，
-再次运行会接管 `source detect` 已报告的同一磁盘，而不是在 BDS 导出循环中再次
-请求导出。
+应用和 CLI 都使用唯一的 `source.detect` 探测器。它报告候选类型（`block`、`image` 或
+`dir`）、路径、身份、型号、大小、启动根目录是否存在、读写能力、权限需求、挂载点和
+原因。未挂载且可读的 Canoe 导出会标记为 `export_candidate`。操作超时后可以安全重试：
+后续运行会接管 `source.detect` 已报告的磁盘，而不是要求 BDS 再次导出。
 
-## 通过导出执行电脑端安装
+```bash
+canoe source detect --json
+canoe-bootmgr --json source detect
+```
 
-主机不会挂载导出的文件系统，而是把选定的原始块设备直接交给
-`canoe-bootmgr`。其基于 libext2fs 的 `canoe-ext4` 后端负责独占锁、日志恢复、
-有界写入、刷新和关闭：
+原生主机不会自行遍历 sysfs 或查询 PowerShell。访问被拒绝时，应用会在 Linux 提供
+明确的提权重试，或在 Windows 提供管理员重启；它不会静默提权。
+
+## 通过导出安装
+
+主机不得挂载导出的文件系统。`canoe-bootmgr` 把选定的原始块源交给基于 libext2fs
+的 `canoe-ext4` 后端，由该后端负责锁定、日志恢复、有界写入、刷新和关闭：
 
 ```bash
 canoe install --slot a --mode 1
 ```
 
-如果缺少 `/efisp`，helper 会创建它，然后 boot manager 通过同一后端提交启动
-根目录文件、附属文件、配置和回滚。电脑端安装器不会刷写分区；漏洞 ABL 与
-`BDS.efi` 的 fastboot 命令仍由操作员按 [`install.md`](./install.md) 的说明
-自行完成。
-
-对于非实时导出的 ext4 镜像或原始块源，显式选择直接后端：
+`canoe` wrapper 会请求 `source.detect`，然后接管可读且未挂载的导出。需要明确选择
+源时，使用全局源选项：
 
 ```bash
+canoe-bootmgr --source <RAW_NODE> install \
+  --staged /path/to/staged --slot a --mode 1
 canoe-bootmgr --source /path/to/persist.ext4 install \
   --staged /path/to/staged --slot a --mode 1
 canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
   --staged /path/to/staged --slot a --mode 1
 ```
 
-测试或操作员自行管理的本地目录可以使用显式 local 后端：
+后端在缺少 `/efisp` 时创建它，并以一个事务提交启动根目录文件、附属文件、配置与
+回滚。主机安装器不会刷写分区；带漏洞的 ABL 与 `BDS.efi` 操作仍是安装指南中分开
+且需明确执行的 fastboot 操作。
+
+事务完成后结束导出，并在设备上按音量下：
 
 ```bash
-canoe install --boot-root /path/to/persist/efisp --slot a --mode 1
+canoe-bootmgr fastboot end-export --node <RAW_NODE>
 ```
 
-## Windows 原始磁盘安装
+如果应用报告导出仍被保持，请完成当前应用流程，不要从另一个终端启动第二次导出。
 
-Windows 压缩包附带原生 `canoe.exe`、`canoe-bootmgr.exe`、
-`canoe-ext4.exe` 和 `fastboot.exe`。选择新枚举的 USB 物理磁盘后，boot manager
-将其 `\\.\PhysicalDrive<N>` 原始路径直接交给 helper：
+## Windows 原始磁盘操作
 
-```text
-canoe.exe install --slot a --mode 1
-```
+Windows 工具包包含原生 `canoe-bootmgr.exe` 与 `canoe-ext4.exe`。检测到导出的物理磁盘
+后，boot manager 会把 `\\.\PhysicalDrive<N>` 源直接交给 helper。不需要安装 Python，
+也不需要盘符挂载或第三方文件系统驱动。
 
-不需要安装 Python，也不再捆绑解释器或使用启动脚本。不使用盘符挂载或第三方
-文件系统驱动。打包时必须提供 `canoe-ext4.exe`；如果当前主机无法原生构建，
-可运行 `tools/canoe-ext4/build-windows.sh` 后将输出传给打包输入覆盖参数。
-缺少该输入会使构建失败，不会静默删除 Windows 支持。
+Windows 支持显式脏日志恢复：使用 `canoe-ext4.exe --recover`；退出码 4 表示文件系统
+脏，恢复从不隐式执行。如果 helper 无法访问磁盘，使用应用明确提供的
+**Restart as Administrator** 后重试；不要让 Android 继续使用实时导出。
 
-操作完成后在**设备上按音量下**，这是唯一的会话取消控制。
-
-配置格式见规范版 [`canoe.cfg 契约`](./canoe-cfg.md)。
-## 探测与连接源
-`canoe-bootmgr source detect --json` 是只读的，枚举候选源不需要提权。每行会
-报告源类型（`block`、`image` 或 `dir`）、路径、身份、型号、大小、启动根目录
-是否存在、读写能力、`needs_privilege`、挂载点和原因。原生主机不遍历 sysfs
-或查询 PowerShell；USB 源探测只有这一份实现。示例空结果为：
-
-```json
-{"ok":true,"kind":"source.detect","sources":[]}
-```
-
-图形 Connect 界面使用相同结果，支持一键连接、Refresh 以及手动目录/镜像/设备
-选择。目录和镜像不需要提权。访问被拒绝时，Linux 提供 **Retry with pkexec**
-和可复制的 `sudo` 命令，Windows 提供 **Restart as Administrator**，不会静默
-提权。
-
-Windows 支持显式脏日志恢复：使用 `canoe-ext4.exe --recover`；退出码 4 表示
-文件系统脏，恢复从不隐式执行。Windows helper 链接了日志回放所需的
-e2fsprogs journal/revoke/recovery 对象。
+配置格式见规范版[`canoe.cfg 契约`](./canoe-cfg.md)。OTA 与模式变更请使用应用的
+Guided flow，让导出、证据、确认、写入和结束步骤保持在一个经过审核的序列中。

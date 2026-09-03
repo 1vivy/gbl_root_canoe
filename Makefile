@@ -139,6 +139,28 @@ version-check:
 			'targets/magisk_module/module/module.prop (versionCode)' "$$version_code" "$$actual"; \
 		fail=1; \
 	fi; \
+	webui_version='$(CANOE_WEBUI_VERSION)'; \
+	webui_url='$(CANOE_WEBUI_URL)'; \
+	webui_cache="$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-$$webui_version.tar.gz"; \
+	if [ ! -f "$$webui_cache" ]; then \
+		printf 'Web UI cache sha256 mismatch: %s expected %s actual <missing>\n' \
+			"$$webui_cache" "$(CANOE_WEBUI_SHA256)"; \
+		fail=1; \
+	else \
+		actual="$$(sha256sum "$$webui_cache" | cut -d" " -f1)"; \
+		if [ "$$actual" != "$(CANOE_WEBUI_SHA256)" ]; then \
+			printf 'Web UI cache sha256 mismatch: %s expected %s actual %s\n' \
+				"$$webui_cache" "$(CANOE_WEBUI_SHA256)" "$$actual"; \
+			fail=1; \
+		fi; \
+	fi; \
+	webui_asset="$${webui_url##*/}"; \
+	expected_asset="canoe-boot-manager-$$webui_version.tar.gz"; \
+	if [ "$$webui_asset" != "$$expected_asset" ]; then \
+		printf 'Web UI URL version mismatch: %s expected asset %s\n' \
+			"$$webui_url" "$$expected_asset"; \
+		fail=1; \
+	fi; \
 	if [ -f submodules/uefi/build/BDS.efi ] && command -v strings >/dev/null 2>&1; then \
 		if ! strings -a -e s submodules/uefi/build/BDS.efi | grep -Fq -- "$$version"; then \
 			printf 'version mismatch: %s publishes a stale canoe-bds fastboot variable, expected %s (run: make -C submodules/uefi build)\n' \

@@ -1,11 +1,10 @@
 # `canoe.cfg` — the boot-root contract
 
 `canoe.cfg` is the BDS menu state for 7.x. In 7.0.0-b2 the boot policy is
-explicit: fresh installs default to Silent mode, while the writer and BDS
-share the grammar below. The BDS only reads this file; the host
-`canoe-bootmgr` transaction and the device-side module are the writers. The
-file lives under `persist/efisp`, while the raw `efisp` partition contains only
-`BDS.efi`.
+explicit: fresh installs default to Silent mode, while the writer and BDS share
+the grammar below. The BDS only reads this file; `canoe-bootmgr` transactions
+and the device-side module are the writers. The file lives under `persist/efisp`,
+while the raw `efisp` partition contains only `BDS.efi`.
 
 ## Location and syntax
 
@@ -42,35 +41,35 @@ Global keys must appear before the first `entry`:
 
 `key-window` is inclusive at both bounds. `key-window 0` means no sampling:
 Silent mode launches the default immediately, while Menu mode still opens the
-menu. In Silent mode, Volume Up during the key window opens the menu and then waits
-indefinitely for input; Volume Down takes the existing Super Fastboot path; no
-key launches the configured default immediately. In Menu mode, Volume Down
-during the key window takes Super Fastboot, then the menu always opens. The menu
-counts down for `menu-timeout` seconds and launches the default; any key cancels
-the countdown and leaves the menu waiting indefinitely. `menu-timeout 0`
-disables automatic launch.
+menu. In Silent mode, VOL UP during the key window opens the menu and then waits
+indefinitely for input; VOL DOWN takes the existing Super Fastboot path; no key
+launches the configured default immediately. In Menu mode, VOL DOWN during the
+key window takes Super Fastboot, then the menu always opens. The menu counts down
+for `menu-timeout` seconds and launches the default; any key cancels the
+countdown and leaves the menu waiting indefinitely. `menu-timeout 0` disables
+automatic launch.
 
 Here, Super Fastboot means the BDS's own fastboot session, which waives ABL's
 critical-partition status so flashing works from it; partitions inside `super`
 remain the exception. Stock userspace `fastbootd` is reserved for the
 fresh-install path.
 
-The writer never emits `timeout`. The BDS accepts a pre-b2 `timeout N` line only
-as a compatibility alias for `menu-mode menu` plus `menu-timeout N`; it is not a
+The writer never emits `timeout`. BDS accepts a pre-b2 `timeout N` line only as
+a compatibility alias for `menu-mode menu` plus `menu-timeout N`; it is not a
 rejected line and is never written by current tools.
 
 `default` may name any resolvable `canoe.cfg` entry or a discovered BLS Type #1
 row as `bls:<stem>`. The stem is the case-folded lowercase `.conf` basename and
 must match `^[a-z0-9._-]{1,63}$` (for example, `loader/entries/pmOS.conf`
 becomes `bls:pmos`). A BLS default remains passthrough: it has no managed
-sidecars, mode hooks, or slot semantics.
-USB-hosted BLS rows are not eligible as
-unattended defaults. If the configured default cannot be resolved, BDS opens
-the menu, shows the existing rejected/notice surface, and waits; it never
-falls through to another row.
-Inside an entry block, `title`, `image`, `options`, `mode`, and `role` are
-valid. A per-entry `mode` overrides the global fallback. File-global keys
-appearing in an entry are rejected rather than retroactively applied.
+sidecars, mode hooks, or slot semantics. USB-hosted BLS rows are not eligible as
+unattended defaults. If the configured default cannot be resolved, BDS opens the
+menu, shows the existing rejected/notice surface, and waits; it never falls
+through to another row.
+
+Inside an entry block, `title`, `image`, `options`, `mode`, and `role` are valid.
+A per-entry `mode` overrides the global fallback. File-global keys appearing in
+an entry are rejected rather than retroactively applied.
 
 The complete writer grammar is:
 
@@ -85,15 +84,15 @@ mode 0|1|2
 devinfo-repair asneeded|never
 ```
 
-`options` is the command line handed to the image as UEFI LoadOptions. It is
-at most 383 characters and is passed through byte for byte: unlike `image` it
-is not a path, so `/` is never folded to `\` and a value that looks like a
-path is left exactly as written. An empty `options` is a rejected line rather
-than a silent no-op.
+`options` is the command line handed to the image as UEFI LoadOptions. It is at
+most 383 characters and is passed through byte for byte: unlike `image` it is
+not a path, so `/` is never folded to `\` and a value that looks like a path is
+left exactly as written. An empty `options` is a rejected line rather than a
+silent no-op.
 
 This is what lets a row hold a payload the BDS does not itself parse. BDS is a
-chainloader selector: it starts a PE and hands over `options` byte for byte,
-and the image on the other end owns its argument grammar entirely.
+chainloader selector: it starts a PE and hands over `options` byte for byte, and
+the image on the other end owns its argument grammar entirely.
 
 ```text
 entry mu
@@ -121,14 +120,14 @@ and mixing them up is the one mistake that makes a correct entry fail.
 ext4 `persist` partition that boot root is the `\efisp` directory, so
 `image mu/place.efi` loads `\efisp\mu\place.efi`. On a FAT volume the boot root
 is the volume root, so the same value loads `\mu\place.efi`. FAT of any width
-counts: this device ships no FAT32 partition at all, and a stick formatted
-FAT16 is an ordinary boot volume.
+counts: this device ships no FAT32 partition at all, and a stick formatted FAT16
+is an ordinary boot volume.
 
 `options` is handed over untouched, and the launched image opens any path in it
 against the raw filesystem root of the volume it was itself loaded from. It
 knows nothing about the boot root. A payload staged in `persist/efisp/mu` must
-therefore be written `\efisp\mu\...`; the same payload on a FAT stick is
-written `\mu\...`.
+therefore be written `\efisp\mu\...`; the same payload on a FAT stick is written
+`\mu\...`.
 
 This was confirmed on hardware: a row whose `options` named the FAT-style
 `\mu\Mu-infiniti.fd` reported `Not Found`, while `image mu/…` resolved through
@@ -156,12 +155,12 @@ each sidecar must belong to the loader beside it. The backup triplet has the
 same sidecar sizes.
 
 The writer emits `android-a` and `android-b` only for slots that have a valid
-installed triplet. It never creates an empty placeholder row for the other
-slot. The installed active slot is marked `role active`; another installed
-slot is `role inactive`. `android-backup` exists only while
-`boot_backup.efi` and both matching sidecars form a valid previous generation.
-The installer refreshes managed rows and does not invent a `default`; set a
-desired default explicitly with the boot-manager default command.
+installed triplet. It never creates an empty placeholder row for the other slot.
+The installed active slot is marked `role active`; another installed slot is
+`role inactive`. `android-backup` exists only while `boot_backup.efi` and both
+matching sidecars form a valid previous generation. The installer refreshes
+managed rows and does not invent a `default`; set one explicitly with
+`canoe-bootmgr default set <entry-id>` or the protocol `default.set` operation.
 
 Hand-added rows are preserved verbatim. A row whose image is absent is not
 invented or compacted by the writer; BDS simply skips it until the image exists.
@@ -169,38 +168,38 @@ Managed row IDs are reserved for the writer, so a hand-written row using
 `android-a`, `android-b`, or `android-backup` is replaced on the next managed
 install.
 
-The `active` role is functional metadata, not presentation. BDS compares a
-slot claim in an active row with the GPT active slot. If they disagree it
-marks the row `SlotMismatch`, and withholds unattended launch when that row is
-the configured default. Re-run an install with the correct explicit slot to
-repair the label. An install with an unknown slot is refused: use `--slot a`
-or `--slot b`; `--inactive` additionally requires known active-slot metadata
-and its explicit safety acknowledgement.
+The `active` role is functional metadata, not presentation. BDS compares a slot
+claim in an active row with the GPT active slot. If they disagree it marks the
+row `SlotMismatch`, and withholds unattended launch when that row is the
+configured default. Re-run an install with the correct explicit slot to repair
+the label. An install with an unknown slot is refused: use `--slot a` or
+`--slot b`; `--inactive` additionally requires known active-slot metadata and its
+explicit safety acknowledgement.
 
 ## A/B generation lifecycle and legacy migration
 
 An install updates the selected slot in place. Before committing the new
-triplet, `canoe-bootmgr` copies that slot's existing triplet to
-`boot_backup.efi` with its matching sidecars. Thus `boot_backup.efi` is the
-previous generation of the last-updated slot, not a permanent third slot. If
-the selected slot had no valid triplet, the backup triplet is removed. A
-`--both` install updates both slots in a defined transaction; the final
-backup is still the previous generation of the last slot updated.
+triplet, `canoe-bootmgr` copies that slot's existing triplet to `boot_backup.efi`
+with its matching sidecars. Thus `boot_backup.efi` is the previous generation of
+the last-updated slot, not a permanent third slot. If the selected slot had no
+valid triplet, the backup triplet is removed. A `--both` install updates both
+slots in a defined transaction; the final backup is still the previous
+generation of the last slot updated.
 
-The singular `boot.efi` name is retired from new installs. For migration,
-the writer accepts a complete legacy `boot.efi` triplet and copies it to the
-explicit target slot when that slot has no valid triplet, then removes the
-legacy files. A valid legacy triplet is removed without copying when the target
-already has a valid triplet; an incomplete legacy set is quarantined. After
-migration, only the per-slot names and (when present) `boot_backup.efi` remain.
-The old `boot.efi` name is retained only as a BDS compatibility probe for
-pre-b2 roots; it is not a current managed install destination.
+The singular `boot.efi` name is retired from new installs. For migration, the
+writer accepts a complete legacy `boot.efi` triplet and copies it to the explicit
+target slot when that slot has no valid triplet, then removes the legacy files. A
+valid legacy triplet is removed without copying when the target already has a
+valid triplet; an incomplete legacy set is quarantined. After migration, only the
+per-slot names and (when present) `boot_backup.efi` remain. The old `boot.efi`
+name is retained only as a BDS compatibility probe for pre-b2 roots; it is not a
+current managed install destination.
 
 After an OTA, keep the device in the running system and use the module's
-**Install to inactive slot** action before rebooting. It must receive target
-slot metadata, installs only that inactive slot, and refuses to relabel or
-fall back to the running slot. If it is skipped, the new slot has no managed
-loader and boots stock; no configuration row can make a stock ABL load BDS.
+**Install to Inactive Slot / OTA** action before rebooting. It must receive target
+slot metadata, install only that inactive slot, and refuse to relabel or fall
+back to the running slot. If it is skipped, the new slot has no managed loader
+and boots stock; no configuration row can make a stock ABL load BDS.
 
 ## Sidecars and modes
 
@@ -217,10 +216,10 @@ entry, with global `mode` as the fallback.
 
 A successful Mode 2 derivation means only that `vbmeta` parsed and carries a
 signature and public-key blob. It does not prove that the key is the OEM's; no
-tool here can prove that. The only automatic protection is detecting whether
-the public-key digest changed since the last installed generation. A changed
-signer is expected when moving to or from a custom ROM and requires the
-operator's explicit allowance for that supplied firmware.
+tool here can prove that. The only automatic protection is detecting whether the
+public-key digest changed since the last installed generation. A changed signer
+is expected when moving to or from a custom ROM and requires the operator's
+explicit allowance for that supplied firmware.
 
 ## DeviceInfo repair
 
@@ -232,9 +231,9 @@ the chosen action before the decision.
 
 ## Example
 
-This hand-authored example has two valid slot triplets and a previous
-generation. The managed installer may choose different rows based on which
-triplets exist; it does not create a default automatically.
+This hand-authored example has two valid slot triplets and a previous generation.
+The managed installer may choose different rows based on which triplets exist; it
+does not create a default automatically.
 
 ```text
 version 1
@@ -271,6 +270,8 @@ No file, an invalid `version`, or a file with no usable entry is not itself an
 error. BDS probes the known managed paths `boot.efi` (pre-b2 compatibility),
 `boot_a.efi`, `boot_b.efi`, and `boot_backup.efi`, then shows the menu rather
 than launching unattended when configuration is missing. An empty or
-unreachable boot root with none of those paths is first run: BDS shows its
-first-run screen, whose timeout/default is **Enter Super Fastboot**; Volume Up is the
-only key that opts into the normal menu so discovered rows can be inspected.
+unreachable boot root with none of those paths is first run: BDS shows the
+first-run screen with **Enter Super Fastboot** and **Enter Super Fastboot
+(default)**. Press **VOL UP during boot** to reach the menu and inspect
+discovered rows; timeout, VOL DOWN, and Power preserve the
+**Enter Super Fastboot (default)** path.

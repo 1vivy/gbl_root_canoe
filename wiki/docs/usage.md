@@ -1,191 +1,143 @@
-# Super Fastboot Usage Guide
+# Using Canoe
+
+Canoe has one operator application on three surfaces: the Linux and Windows
+Tauri desktop shells and the KernelSU Android WebUI. The application speaks the
+JSON wire protocol to `canoe-bootmgr`; it does not edit boot-root files itself.
+The native `canoe` CLI forwards supported operator commands to the same writer.
+
+## Start and the named routes
+
+The **Start** (landing) page is deliberately conservative:
+
+- On **Linux or Windows**, choose **Enter Super Fastboot**. The desktop app
+  waits for a `fastboot.identify` response. A BDS response opens **GENERAL**;
+  a fastboot response without BDS offers the guided **Provision** flow.
+- In **KernelSU Android**, the app reads the local boot root with `config.show`.
+  It never waits for fastboot. A readable root opens **GENERAL**; an absent or
+  unreadable root offers first-install **Provision**.
+
+Every route has the same status strip. It shows connection/transport, slot, BDS
+version, and expandable details such as boot root and staged set. Unanswered
+facts say **Unknown**. Canoe never guesses a slot or a BDS version.
+
+The routes are:
+
+- **GENERAL** — update BDS and EFI tools, regenerate managed entries, and on a
+  device begin the inactive-slot OTA flow.
+- **Boot entries** — review managed entries and discovered BLS rows, including
+  requested/effective mode, default status, and sidecar health. Removing a
+  persisted row uses `entry.remove`; discovered BLS files are read-only here.
+- **Settings** — write only the `canoe.cfg` policy keys with
+  `config.set-policy`, and choose the global mode seeded into new entries.
+- **Guided flow** — the staged first-install or mode-change flow: Provision,
+  Prepare, Commit, and Finish. It reviews evidence before writing and keeps
+  reboot as an explicit final step.
+- **Graft** — inspect images and headers, extract or graft vbmeta, check a
+  selected public key, and offer a separately confirmed flash only after the
+  output is verified. It is principally a Mode 1 preparation flow.
+
+Abandoning the guided flow before Commit sends no protocol write. A partition
+write or a reboot always requires the applicable confirmation in the app.
 
 ## Entering Super Fastboot
 
-- Temporarily boot BDS in RAM without writing flash:
-
-  ```bash
-  fastboot stage <BDS.efi>
-  fastboot oem boot-efi
-  ```
-
-- When the OEM-unlocking warning appears during boot, press **Volume Up** to
-  enter Super Fastboot.
-
-### Both RAM-boot routes work, for different reasons
+Super Fastboot is the BDS's own fastboot session. Press **VOL UP during boot**
+to open the BDS menu, then choose **Enter Super Fastboot**. To RAM-boot BDS
+without writing flash:
 
 ```bash
 fastboot stage <BDS.efi>
 fastboot oem boot-efi
 ```
 
+The host tool also accepts the one-command route:
+
 ```bash
 fastboot boot <BDS.efi>
 ```
 
-The second one surprises people because `BDS.efi` is a PE image, not an Android
-boot image. It works because the *host* `fastboot` tool wraps whatever file it
-is given into a synthetic boot image before sending it — the transcript says so:
+`fastboot boot` works here because the host tool wraps the PE into a synthetic
+boot image before sending it. `fastboot stage` plus `fastboot oem boot-efi` is
+the explicit route and does not depend on that wrapping behavior. Both routes
+are temporary.
 
-```text
-creating boot image...
-creating boot image - 440320 bytes
-Sending 'boot.img' (430 KB)                        OKAY
-Booting                                            OKAY
-```
+Super Fastboot waives ABL's critical-partition status, so flashing works from
+this BDS session; partitions inside `super` remain the exception. Stock
+userspace `fastbootd` is used only by the fresh-install Provision flow.
 
-438272 bytes of `BDS.efi` in, a 440320-byte boot image out. The bootloader's
-boot handler then finds the `MZ` signature at the start of that image's kernel
-section and launches the EFI payload rather than treating it as a kernel; that
-is exactly what `IsEfiInBootImg` in `QcomModulePkg/Library/FastbootLib` is for.
-Measured on the OnePlus 15.
+## First run and BDS menu
 
-Use whichever is convenient. `fastboot stage` + `fastboot oem boot-efi` is the
-explicit form and does not depend on the host tool's wrapping behaviour;
-`fastboot boot` is one command.
-`Super Fastboot` is the BDS's own fastboot session, not stock userspace
-`fastbootd`. It waives ABL's critical-partition status, so flashing works from
-Super Fastboot; partitions inside `super` remain the exception. `fastbootd` is
-reserved for the fresh-install path described in [install.md](./install.md).
+When the boot root is missing or unreachable, has no launchable image, or has a
+configuration whose images are all absent, BDS treats it as first run. The
+first-run screen has these rows:
 
-## First run and menu
-
-`SfbBootRootIsEmpty` treats a missing or unreachable volume, a root with no
-launchable image, and a config whose images are all absent as first run. BDS
-shows a first-run screen with two rows:
-
-- **Enter boot menu (Volume Up)**
+- **Enter Super Fastboot**
 - **Enter Super Fastboot (default)**
 
-The cursor starts on **Enter Super Fastboot** and that screen waits two seconds.
-Volume Up is the only key that opts into the normal menu; timeout, Volume Down,
-and Power preserve the Super Fastboot default. This is the safe path for a freshly
-flashed BDS: the host can install the chain without any menu configuration.
+Press **VOL UP during boot** to reach that menu. The cursor starts on **Enter
+Super Fastboot**, and the default row is **Enter Super Fastboot (default)**.
+The timeout, VOL DOWN, and Power preserve the safe Super Fastboot path; choosing
+the menu row lets an operator inspect the available entries.
 
-For a populated root, BDS reads `menu-mode` and samples keys for
-`key-window` milliseconds at startup:
+For a populated root, BDS reads `menu-mode` and samples keys for `key-window`
+milliseconds:
 
-- **Silent mode** (fresh-install default): Volume Up opens the menu and then
-  waits indefinitely; Volume Down takes the existing Super Fastboot path; no key
-  launches the configured default immediately.
-- **Menu mode**: Volume Down during the key window takes Super Fastboot, then the
-  menu always opens. It counts down for `menu-timeout` seconds and launches the
+- **Silent** (fresh-install default): VOL UP opens the menu and then waits
+  indefinitely; VOL DOWN takes the existing Super Fastboot path; no key launches
+  the configured default after the key window.
+- **Menu**: VOL DOWN during the key window takes Super Fastboot, then the menu
+  always opens. It counts down for `menu-timeout` seconds and launches the
   default; any key cancels the countdown and makes the menu wait indefinitely.
 
 `key-window` is `0..=10000` milliseconds and defaults to `1200`; zero disables
-sampling. `menu-timeout` is `0..=300` seconds and defaults to `5`; it is honored
+sampling. `menu-timeout` is `0..=300` seconds and defaults to `5`; it is used
 only in Menu mode, and zero means never auto-launch. An unresolved default,
 including an undiscovered `bls:<stem>`, opens the menu with the existing notice
-and waits rather than falling through to another row.
+and waits instead of falling through to another row.
 
-The default may select an Android row or a discovered BLS Type #1 row:
-`default bls:pmos` selects the lowercased `pmos.conf` stem. A BLS default is
-passthrough (no sidecars, hooks, or slot semantics), and USB-hosted BLS rows
-cannot be unattended defaults.
-`canoe-bootmgr --json config show` reports `menu_mode`, `key_window_ms`, and
-`menu_timeout_s`; the old `timeout_seconds` field is not present.
-
+A default may name an Android row or a discovered non-removable BLS Type #1 row,
+for example `default bls:pmos`. A USB-hosted BLS row cannot be an unattended
+default. The writer emits `menu-mode`, `key-window`, and `menu-timeout`; the
+legacy `timeout` line is accepted by BDS only as a pre-b2 compatibility alias
+and is never written.
 
 The menu is built in this order:
 
-1. **Session boot mode** (a next-launch override; it is never saved).
+1. A session-only boot-mode override, never saved.
 2. Existing `canoe.cfg` rows whose `image` exists.
-3. If the config is absent or invalid, discovered boot-root compatibility rows
-   for `boot.efi`, per-slot `boot_a.efi` and `boot_b.efi`, and
-   `boot_backup.efi`. The current installer writes only the per-slot names and
-   backup; `boot.efi` is a pre-b2 compatibility probe.
-4. Per-volume `\EFI\BOOT\BOOTAA64.EFI` rows. `\EFI\DESC` supplies a label when
-   present; otherwise the row is named `NONAME<n>`.
-5. Usable BLS Type #1 rows from `\loader\entries\*.conf` on the persist ext4
-   boot root or removable media. See
-   [Chainloading and BLS entries](./chainload.md).
+3. If configuration is absent or invalid, compatibility rows for `boot.efi`,
+   `boot_a.efi`, `boot_b.efi`, and `boot_backup.efi` when present. New installs
+   use the per-slot names and backup; `boot.efi` is only a pre-b2 probe.
+4. Per-volume `\EFI\BOOT\BOOTAA64.EFI` rows, labelled from `\EFI\DESC` or
+   `NONAME<n>`.
+5. Valid BLS Type #1 rows from `\loader\entries\*.conf` on the persist boot
+   root or removable media.
 6. Built-in actions: **Enter Super Fastboot**, **Enter EFI Program Selector**,
    **EFI Tools**, **USB Mass Storage**, **Reboot to Recovery**, **Power Off**,
    and **Restart**.
 
-Configured rows are shown only when their image exists; a missing image is
-skipped. A BLS row is also skipped when its referenced image is missing or its
-entry is invalid. Discovered BLS rows are eligible for an unattended default
-only when they are on the device boot root and `default bls:<stem>` names the
-discovered stem. Such a BLS default remains passthrough, without sidecars,
-hooks, or slot semantics. USB-hosted BLS rows remain ineligible. To boot a BLS
-row interactively, hold Volume Up, navigate to it, and press Power.
+Missing configured images and invalid BLS rows are skipped. To launch a BLS
+row interactively, hold VOL UP during startup, select it, and press Power.
+BLS rows are passthrough launches; Mode 1/2 policy hooks and managed sidecars do
+not apply.
 
-The menu includes the following session tools and actions in the same screen:
+The **EFI Tools** action lists the boot-root `tools/` directory. The bundled
+`SurfaceTools.efi` passive inventory and read-only policy probe behavior is
+unchanged: the passive dump replaces only its explicitly named logfs file, and
+the policy probe requires its separate VOL UP confirmation. See the BDS logs
+for its bounded `key=value` report and remember that an `authorized` readback
+does not prove physical debugging effectiveness.
 
-- **EFI Tools** lists files in the boot root's `tools/` directory.
-- **USB Mass Storage** exports one partition as one USB disk. `persist` contains
-  `/efisp`; `logfs` is offered only when it exists. BDS warns before exporting
-  the live `persist` filesystem. See [`mass-storage.md`](./mass-storage.md).
-- **Reboot to Recovery** resets directly to recovery. It is a built-in reset
-  action, not a custom-image parser.
+## The Super Fastboot screen
 
-The shipped `SurfaceTools.efi` inventory opens from **EFI Tools**. Its default
-views only enumerate UEFI protocol GUIDs, configuration-table GUIDs, loaded
-image classes, memory descriptors, and known Qualcomm policy protocol presence;
-they do not print raw addresses or call vendor methods. **Dump Passive Inventory
-to logfs** explicitly overwrites `\SurfaceTools.log` on the already-mounted
-`logfs` volume, flushes it, and closes every file handle before returning to
-BDS; this passive dump is unchanged. **Run Read-only Policy Probe** requires a
-separate Volume Up confirmation (Power cancels, so a held menu-select key
-cannot authorize the calls) before issuing up to seven read-only calls from a
-fixed allowlist: the existing getters for the maximum CPU index, TrustZone
-version, verified-boot state, and Keymaster status, plus a TrustZone secure-state
-read and an applied-debug-policy readback. The active report is built exactly
-once, written exactly once to the dedicated `\SurfacePolicy.log` on `logfs`,
-and the same in-memory report is then shown; the dump and the UI never re-run
-the calls. The file is bounded ASCII `key=value` rows under `[Policy.v1]`,
-introduced by `SurfaceTools policy probe`, `format=1`, `encoding=ASCII`,
-`policy_payload=complete_hex`, and `physical_effectiveness=not_observed`.
+While BDS waits for a host it shows:
 
-The policy readback supports only SCM protocol revisions `0x40001` (the
-960-byte revision-2 layout) and `0x50002` (the 1220-byte revision-5 layout),
-reached through the same verified `ScmSipSysCall` prefix with no tail access.
-Any other reported size or revision — and any canary corruption or parse
-failure — is reported with deterministic status rows and no semantic decoding.
-Whenever the policy SCM call returns successfully, the complete 960- or
-1220-byte response is also emitted in 32-byte hexadecimal chunks named
-`policy.raw.<offset>`, including its root hashes and serial-number array. The
-log additionally carries the raw secure-state common/status words, validated
-policy fields, and separately named vendor predicates (`production`,
-`debug-disabled`, `image-cert-debug-disabled`, `secure-device`) alongside the
-named basic and extended flag bits. Unknown and OEM bits remain raw only. A
-successful call is reported as `authorized`; it proves only that the firmware
-authorized the
-readback, never that EUD, SWD, or JTAG debugging is physically effective. The
-probe calls do not alter firmware or debug state; the active flow only replaces
-the explicitly named `\SurfacePolicy.log`.
+- **Stay in Fastboot** — inert; it only repaints and is the initial cursor row;
+- **Reboot to Recovery**;
+- **Power Off**; and
+- **Restart**.
 
-USB Mass Storage exports one partition as one USB disk. The same export is
-available from fastboot:
-
-```bash
-fastboot oem mass-storage             # persist (default)
-fastboot oem mass-storage:persist     # persist
-fastboot oem mass-storage:logfs       # logfs
-```
-
-Only one partition is exported per session. **Volume Down on the device is the
-only way to end a mass-storage session.** Disconnecting the cable does not end
-it.
-
-## Fastboot mode screen
-
-While Super Fastboot waits for a host it shows its own rows, moved with Volume
-Up/Down and chosen with Power:
-
-- **Stay in Fastboot** - inert; it only repaints, and it is where the cursor
-  starts so a stray keypress cannot do anything;
-- **Reboot to Recovery**
-- **Power Off**
-- **Restart**
-
-Recovery is here because the boot menu runs before the fastboot loop and cannot be
-re-entered after **Enter Super Fastboot**. First-run also defaults directly to this
-screen, so its **Reboot to Recovery** row is the recovery path after a host
-install or export session.
-
-From the host, the reboot target is honoured:
+From a host, the supported reboot targets are:
 
 ```bash
 fastboot reboot              # Android
@@ -193,48 +145,89 @@ fastboot reboot recovery     # recovery
 fastboot reboot bootloader   # back into Super Fastboot
 ```
 
-Any other target fails rather than rebooting somewhere it was not asked to.
-The BDS session is not fastbootd and has no userspace session beneath it, so
-`fastboot reboot fastboot` is refused instead of being answered with a
-bootloader reboot. This is about the BDS session only: the device itself does
-provide fastbootd when it is fresh and unlocked — reach that one from Android
-with `adb reboot fastboot`, or from the bootloader's own fastboot with
-`fastboot reboot fastboot`. ABL and other critical partitions can only be
-flashed there, which is why the first install happens from stock fastbootd.
+Other targets fail. This BDS session is not a stock userspace session, so
+`fastboot reboot fastboot` is refused here rather than being treated as a
+bootloader reboot. The fresh-install Provision flow is the only workflow in
+this guide that asks for stock userspace `fastbootd`.
 
-Ending the export itself is still Volume Down on the device. While the export
-runs, the USB link is a mass-storage gadget and carries no fastboot channel, so
-no host command can reach BDS. A host SCSI eject does end the session on this
-hardware, but it is the vendor stack's side effect rather than a contract, and
-canoe does not rely on it.
+## USB export and the host/device boundary
+
+The app and the CLI drive USB Mass Storage exports; see
+[`mass-storage.md`](./mass-storage.md). Only one partition is exported per
+session. **VOL DOWN on the device is the only contractual way to end an
+export.** While an export is active, the USB link is a mass-storage gadget and
+has no fastboot channel, so a host command cannot reach BDS. Do not use a live
+`persist` export from a host while Android is using that same filesystem.
 
 ## Modes and DeviceInfo
 
-The menu's mode selector is a session-only override for the next launch. It is
-never saved. An entry's configured mode takes precedence, with file-global
-`mode` as the fallback; see [`canoe-cfg.md`](./canoe-cfg.md).
+The mode selector in the BDS menu is a session-only override for the next
+launch. It is never saved. An entry's mode takes precedence, with file-global
+`mode` as fallback; see [`canoe.cfg`](./canoe-cfg.md).
 
-- **Mode 0** is a hook-free passthrough and neither reads nor writes
-  `DeviceInfo`.
-- **Mode 1** projects the locked DeviceInfo view and applies the managed hooks.
+- **Mode 0** is hook-free passthrough and neither reads nor writes `DeviceInfo`.
+- **Mode 1** projects the locked `DeviceInfo` view and applies managed hooks.
 - **Mode 2** additionally uses the matching 120-byte `.gm2p` profile for the
-  managed `boot_a.efi`, `boot_b.efi`, or `boot_backup.efi` loader and the
-  generated map. Its kernel cmdline blacklist handles
-  `oplus_secure_guard_new` without repacking a boot image.
+  managed `boot_a.efi`, `boot_b.efi`, or `boot_backup.efi` loader and its map.
+  Its kernel command-line blacklist handles `oplus_secure_guard_new` without
+  repacking a boot image.
 
-A Mode 1 or Mode 2 launch may repair `DeviceInfo` when its observed state does
-not satisfy the requested policy. `devinfo-repair never` refuses that repair
-and continues honestly in Mode 0; `asneeded` permits it. The boot log records
-the observed state and action.
+Mode 1 or Mode 2 may repair `DeviceInfo` when observed state does not satisfy the
+requested policy. `devinfo-repair never` refuses repair and continues honestly
+in Mode 0; `asneeded` permits it. The boot log records the observed state and
+action. A successful Mode 2 derivation proves only that vbmeta parsed and has a
+signature and public-key blob; it does not identify the OEM key.
 
-Mode 2's profile proves only that `vbmeta` parsed and carries a signature and
-public-key blob. No tool here can prove which key is the OEM's. Automatic
-protection detects a changed public-key digest relative to the installed
-generation.
+## CLI and wire operations
+
+`canoe` is the friendly native CLI. `canoe-bootmgr` is the writer and can emit
+one JSON response with `--json`, or accept a JSONL request session. The app's
+Tauri sidecar uses the same wire contract. Examples of supported CLI forms:
+
+```bash
+canoe config set-policy --menu-mode silent --key-window-ms 1200 --menu-timeout-s 5
+canoe entry list
+canoe entry remove --id android-backup
+canoe default set android-a
+canoe bls list
+canoe source detect --json
+
+canoe-bootmgr --json config show
+canoe-bootmgr --json entry list
+canoe-bootmgr --json slot status
+canoe-bootmgr ota-apply --staged <DIR> --target-slot b --mode 1
+canoe-bootmgr install --staged <DIR> --slot a --mode 1
+canoe-bootmgr fastboot identify
+canoe-bootmgr fastboot export --target persist
+canoe-bootmgr fastboot end-export --node <RAW_NODE>
+canoe-bootmgr tools-update --source <TOOLS_DIR>
+canoe-bootmgr vbmeta-inspect --vbmeta <VBMETA>
+canoe-bootmgr vbmeta-header --vbmeta <VBMETA>
+canoe-bootmgr vbmeta-extract --image <IMAGE> --output <VBMETA>
+canoe-bootmgr vbmeta-check --image <IMAGE> --vbmeta <VBMETA> --partition recovery
+canoe-bootmgr vbmeta-graft <OFFICIAL_VBMETA> <CUSTOM_RECOVERY> <OUTPUT>
+canoe-bootmgr fastboot reboot --target recovery
+```
+
+The protocol operation names exposed by this release are:
+
+```text
+protocol.version  build  abl.verify  tools.update  block.write
+config.show  config.set-policy  entry.list  entry.set  entry.remove  entry.mode
+mode.plan  default.get  default.set  source.detect  bls.list  bls.show  bls.stage
+slot.status  install  ota-apply  vbmeta.graft  vbmeta.extract  vbmeta.check
+vbmeta.inspect  vbmeta.header  vendorboot.patch
+fastboot.identify  fastboot.export  fastboot.end-export  fastboot.fetch
+fastboot.abl-coverage  fastboot.flash  fastboot.reboot
+```
+
+Use `protocol.version` before relying on a capability. The app and writer
+ignore unknown response fields, but clients must not derive or mutate boot-root
+state outside these operations.
 
 ## Bootloader commands
 
-Locking the bootloader triggers the platform's data-wipe behavior:
+Locking triggers the platform's data-wipe behavior:
 
 ```bash
 fastboot flashing lock
@@ -247,42 +240,22 @@ fastboot flashing unlock
 fastboot flashing unlock_critical
 ```
 
-An inconsistent TEE state can cause the device to refuse the data key.
+An inconsistent TEE state can make the device refuse the data key.
 
-## Flashing and erasing
+## Flashing, erasing, and rebooting outside the app
+
+When a procedure explicitly calls for a partition operation, the operator owns
+that external fastboot command:
 
 ```bash
 fastboot flash <partition> <file.img>
 fastboot erase <partition>
-```
-
-The operator flashes a vulnerable ABL to `abl` and `BDS.efi` to `efisp` as
-separate prerequisite operations; the host installer never writes a partition.
-
-## Rebooting
-
-```bash
-fastboot reboot bootloader
 fastboot reboot
+fastboot reboot bootloader
 ```
 
-This BDS implements the fastboot `reboot` handler for **Normal** mode only.
-`fastboot reboot recovery` is not a recovery navigation command here. To enter
-recovery, select **Reboot to Recovery** in the BDS menu or open the recovery
-entry through **EFI Tools**.
-## Boot policy and source detection
-
-The native `canoe` CLI exposes the same policy writer as every other Canoe
-surface:
-
-```bash
-canoe config set-policy [--menu-mode silent|menu] \
-  [--key-window-ms N] [--menu-timeout-s N]
-canoe default set android-a
-canoe default set bls:pmos
-canoe source detect --json
-```
-
-These commands delegate to `canoe-bootmgr`; the native host never edits
-`canoe.cfg`. `default set bls:<stem>` is accepted only when that BLS Type #1
-row is discovered by the same detector used by `bls list`.
+The app's `fastboot.flash` operation records and executes an explicit image
+flash; it is not an erase operation. The first-install Provision flow writes
+the vulnerable ABL to both ABL slots and `BDS.efi` to `efisp`, then performs a
+plain reboot only after its confirmation. The host installer itself does not
+silently flash a partition.

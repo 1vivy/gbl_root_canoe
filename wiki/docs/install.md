@@ -1,9 +1,43 @@
 # Installation Guide
 
+Canoe has two host-facing programs in every desktop toolkit:
+
+- `bin/canoe-boot-manager` is the GUI-first desktop application. Launch it with
+  `canoe-boot-manager.sh` on Linux or `canoe-boot-manager.bat` on Windows.
+- `canoe` (`canoe.exe` on Windows) is the command-line client. It remains
+  available for scripts and for systems where the GUI runtime is unavailable.
+
+The desktop application is a Svelte 5 + Vite app. It speaks the JSON wire
+protocol and delegates boot-root changes to `canoe-bootmgr`; it is not a second
+writer. The Android module serves the same app build through KernelSU. It is not
+a separate Android-only page.
+
+## Host requirements
+
+The GUI uses the platform WebView runtime:
+
+- **Linux:** install `webkit2gtk-4.1`, `javascriptcoregtk-4.1`, and
+  `libsoup-3.0` before running `./canoe-boot-manager.sh`. The GUI will not
+  start without these libraries.
+- **Windows:** install the Microsoft WebView2 runtime. It is present by
+  default on current Windows 11; install it separately on Windows systems that
+  do not include it. The GUI will not start without WebView2.
+
+The CLI has none of these GUI dependencies. A host that has neither the Linux
+WebKit libraries nor WebView2 can still use `./canoe` or `canoe.exe` and the
+`canoe-bootmgr` command-line interface.
+
+The toolkit also includes `bin/canoe-bootmgr`, the single boot-root writer, and
+the helper binaries used by its build and install commands. The desktop binary
+is kept beside that sidecar because the Tauri application resolves its sidecar
+next to the application executable. Do not move either file out of `bin/`.
+
+## Boot-root layout
+
 GBL Root Canoe keeps a signed, vulnerable ABL in `abl`, a raw `BDS.efi` in
 `efisp`, and one or two current patched loader triplets in `persist/efisp`.
-The BDS reads `canoe.cfg` from that boot root and chainloads the selected entry.
-It never writes storage.
+The BDS reads `canoe.cfg` from that boot root and chainloads the selected entry;
+it never writes storage.
 
 The boot root contains:
 
@@ -25,7 +59,7 @@ The `persist` filesystem is normally exposed at `/mnt/vendor/persist` by
 Android and at `/persist` by recovery. Its `efisp/` directory is the boot root.
 Do not flash `persist`: it is a live filesystem that also holds vendor data.
 
-## Prerequisites
+## Prerequisites before the first install
 
 The ABL in the active `abl` partition must contain the GBL vulnerability. If it
 does not, the operator must first flash an older vulnerable stock ABL. The
@@ -46,59 +80,63 @@ bounded transaction, and closes it cleanly. No host filesystem layer is used,
 and the helper refuses a source that another writer already owns. The only
 host permission required is permission to open the source device.
 
-
 ## The five supported scenarios
 
-### 1. Host install
+### 1. Host first install
 
 This is the first installation from a Linux or Windows computer. It has two
-halves with different fastboot sessions. The first half uses **stock fastbootd** —
-the userspace fastboot a fresh unlocked device provides, entered from Android
-with `adb reboot fastboot` (or from the bootloader's own fastboot with
-`fastboot reboot fastboot`). This is fastbootd's only role: flash the vulnerable
-ABL and `BDS.efi` to `abl_a`/`abl_b` and `efisp` for the fresh install. ABL and
-other critical partitions are not flashable from the bootloader's fastboot, so
-there is no alternative session for this half; `fastboot getvar is-userspace`
-answers `yes` in the right one.
+halves with different fastboot sessions.
 
-The device then boots into the BDS, which presents **Super Fastboot**. Super
-Fastboot is BDS's own fastboot session: it waives ABL's critical-partition
-status, so flashing works from here; partitions inside `super` remain the
-exception.
+#### Half one: stock fastbootd
 
-The second half installs the boot root and is what this section describes. The
-device must already be in Super Fastboot before the native host surface runs:
+The first half uses **stock fastbootd** — the userspace fastboot a fresh
+unlocked device provides, entered from Android with `adb reboot fastboot` (or
+from the bootloader's own fastboot with `fastboot reboot fastboot`). This is
+fastbootd's only role here: flash the vulnerable ABL and `BDS.efi` to `abl_a`/
+`abl_b` and `efisp` for the fresh install. ABL and other critical partitions
+are not flashable from the bootloader's fastboot, so there is no alternative
+session for this half; `fastboot getvar is-userspace` answers `yes` in the right
+one.
+
+The device then boots into the BDS, which presents **Super Fastboot**.
+
+#### Half two: Super Fastboot and the host
+
+Super Fastboot is BDS's own fastboot session. It waives ABL's
+critical-partition status, so flashing works from here; partitions inside
+`super` remain the exception. The device must already be in Super Fastboot
+before the native host surface runs.
+
+Launch the GUI from the toolkit directory:
+
+```text
+Linux:   ./canoe-boot-manager.sh
+Windows: canoe-boot-manager.bat
+```
+
+The command-line equivalent remains available:
 
 ```text
 Linux:   ./canoe
 Windows: canoe.exe
 ```
 
-The Windows archive needs no Python installation or bundled interpreter; the
-native `canoe.exe` is shipped at the archive root and no launcher script is
-required.
-
-`canoe` detects Super Fastboot by reading the `canoe-bds` fastboot variable. If
-that variable is absent, it warns that `fastboot oem mass-storage:persist` does
-not exist outside the BDS and asks for confirmation before continuing.
-
-The interactive flow waits for `images/abl.img` and `images/vbmeta.img`, reads
-the active slot from `current-slot` when the BDS publishes it, and asks which
-slot is active only with an older BDS that does not publish that variable. It
-then requests:
+The interactive GUI and CLI wait for `images/abl.img` and `images/vbmeta.img`,
+read the active slot from `current-slot` when the BDS publishes it, and ask
+which slot is active only with an older BDS that does not publish that variable.
+They then request:
 
 ```text
 fastboot oem mass-storage:persist
 ```
 
-After `fastboot oem mass-storage:persist`, the host asks
-`canoe-bootmgr source detect --json` for candidates and selects the first
-readable, unmounted block row with identity `1209:ca0e` (or compatibility
-identity `05c6:f000`). No drive letter or host filesystem directory is created.
-`canoe-bootmgr` routes all boot-root reads and writes through `canoe-ext4`;
-the helper creates `/efisp` when it is missing and the boot manager commits
-the selected slot triplet, configuration, sidecars, and rollback as one
-transaction:
+After the export, the host asks `canoe-bootmgr source detect --json` for
+candidates and selects the first readable, unmounted block row with identity
+`1209:ca0e` (or compatibility identity `05c6:f000`). No drive letter or host
+filesystem directory is created. `canoe-bootmgr` routes all boot-root reads and
+writes through `canoe-ext4`; the helper creates `/efisp` when it is missing and
+the boot manager commits the selected slot triplet, configuration, sidecars,
+and rollback as one transaction:
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
@@ -142,18 +180,21 @@ canoe install --slot b --mode 1
 ```
 
 The selected slot's existing triplet is copied to `boot_backup.efi` with
-matching sidecars before the new triplet is committed. The
-`android-backup` row exists while that previous generation is valid.
-`android-a` and `android-b` rows are written only for slots with valid
-installed triplets; hand-added rows remain verbatim. A managed install does
-not invent a `default`; use `canoe-bootmgr default set` when one is wanted.
+matching sidecars before the new triplet is committed. The `android-backup` row
+exists while that previous generation is valid. `android-a` and `android-b`
+rows are written only for slots with valid installed triplets; hand-added rows
+remain verbatim. A managed install does not invent a `default`; use
+`canoe-bootmgr default set` when one is wanted.
 
 ### 3. KernelSU module install
 
 Install the module on a rooted device and follow its bilingual first-install
-questionnaire. It uses the same `canoe-bootmgr build` orchestrator and the same
-four worker binaries as the host path, then commits the boot root through
-`canoe-bootmgr` and performs any required device partition writes.
+questionnaire. Its static WebUI is the same Svelte app shipped for the desktop
+surface, built from the same `dist/` output; it is not a second presentation
+implementation. The module uses the same `canoe-bootmgr build` orchestrator and
+the same four worker binaries as the host path, then commits the boot root
+through `canoe-bootmgr` and performs any required device partition writes.
+`canoe-bootmgr` remains the only writer.
 
 ### 4. KernelSU update or post-OTA install
 
@@ -178,9 +219,11 @@ only by the explicit action; the system updater does not refresh it. There is
 no OTA watcher in this release.
 
 If the WebUI offers supplied derivation images, they must be exact, non-empty
-files matching the installed firmware generation; they are never flash payloads.
+files matching the installed firmware generation; they are never flash
+payloads.
 
 ### 5. Locked-bootloader temporary root
+
 For a temporary root on a locked device, use the Android toolkit's
 `resources/build.sh`. It invokes the same `canoe-bootmgr build` orchestrator
 for the active slot and then the bundled local-directory backend:
@@ -202,11 +245,9 @@ canoe-bootmgr --boot-root /mnt/vendor/persist/efisp install \
 ```
 
 The `--boot-root` form is the local-directory backend; use `--source` or
-`--ext4-image` for a direct ext4 image or block source instead. The old
-`canoe_device_install.sh`, `canoe_boot_entry.sh`, and host `boottree.py` /
-`bootsnap.py` writers are retired; `canoe-bootmgr` owns the transaction and
-configuration rows. The operator owns the `dd` of the vulnerable ABL and
-`BDS.efi` to `efisp`.
+`--ext4-image` for a direct ext4 image or block source instead. The boot
+manager owns the transaction and configuration rows. The operator owns the raw
+fastboot operation that put the vulnerable ABL and `BDS.efi` in place.
 
 ## Matching images and signer changes
 
@@ -222,10 +263,13 @@ explicitly supplied `vbmeta` path and otherwise keeps the safe mode selection.
 
 ## Windows host tools
 
-The Windows archive bundles the native `canoe.exe` at its root, plus
-`canoe-bootmgr.exe`, `canoe-ext4.exe`, and the platform-tools fastboot
-executable. No Python installation or bundled interpreter is needed. The helper
-operates on the raw source selected by export discovery:
+The Windows archive bundles the GUI launcher and `bin/canoe-boot-manager.exe`,
+the CLI `canoe.exe`, `canoe-bootmgr.exe`, `canoe-ext4.exe`, and the
+platform-tools fastboot executable. No Python installation or bundled
+interpreter is needed. The GUI additionally requires WebView2 as described
+above; `canoe.exe` and the helper tools do not.
+
+The helper operates on the raw source selected by export discovery:
 
 ```text
 canoe-ext4.exe inspect \\.\PhysicalDrive<N>
@@ -233,9 +277,8 @@ canoe-ext4.exe inspect \\.\PhysicalDrive<N>
 
 No drive letter or third-party filesystem driver is used. If the package cannot
 provide `canoe-ext4.exe`, packaging fails; there is no placeholder or silent
-fallback. The native helper may be built with
-`tools/canoe-ext4/build-windows.sh` on a host with MinGW and an e2fsprogs
-source tree, then supplied to the package build.
+fallback. The helper may be built with `tools/canoe-ext4/build-windows.sh` on a
+host with MinGW, e2fsprogs sources, and zlib, then supplied to the package build.
 
 This is deliberate, not a Windows limitation to work around: no Canoe operation
 on any host mounts persist. Writes go through the userspace ext4 helper against
@@ -251,10 +294,9 @@ never at a mounted letter.
 ### First-run behavior
 
 An empty, absent, unreachable, or unusable boot root counts as first run. BDS
-shows a first-run screen with **Enter boot menu (Volume Up)** and
-**Enter Super Fastboot (default)**. The cursor starts on Super Fastboot and the
-screen waits two seconds; timeout, Volume Down, and Power keep the Super Fastboot
-default.
+shows a first-run screen with **Enter boot menu (Volume Up)** and **Enter Super
+Fastboot (default)**. The cursor starts on Super Fastboot and the screen waits
+two seconds; timeout, Volume Down, and Power keep the Super Fastboot default.
 Volume Up explicitly opens the normal menu, where per-slot and other discovered
 rows can be inspected before installation.
 

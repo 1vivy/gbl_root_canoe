@@ -1,68 +1,83 @@
 # OTA 更新流程
 
-OTA 通常会把下一代系统安装到 A/B 的另一个槽位。设备启动该槽位前，必须
-先准备好其中的加载器。
+OTA 通常会把下一代系统安装到另一个 A/B 槽位。设备启动该槽位前，必须先准备好
+其中的 Canoe 加载器。OTA 后操作由应用或 CLI 明确执行，不存在后台 OTA watcher。
 
 ## 重启前的必要流程
 
-1. 启动系统更新器，安装 OTA，等待它完成对另一个 A/B 槽位的写入。
-2. 继续在当前槽位运行，**不要重启**。
-3. 打开 KernelSU 模块 WebUI，按下 **Install to inactive slot**。
-4. 该操作要求已知的目标槽位元数据。它会派生并验证目标加载器三件套、
-   匹配的 profile 与 TrustZone 映射；未知元数据会被拒绝，绝不会重新标记运行中
-   的槽位，也不会静默使用运行中的槽位作为回退。目标槽位此前的有效世代会
-   连同附属文件保留为 `boot_backup.efi`。
-5. 操作成功后再重启。
+1. 启动 Android 系统更新器，安装 OTA，等待它完成对另一个 A/B 槽位的写入。
+2. 继续在当前槽位运行。**此时不要重启。**
+3. 在 KernelSU 界面打开 Canoe Boot Manager。Start 会直接读取本地启动根目录，
+   不会等待 fastboot。根目录可读时进入 **GENERAL**。
+4. 在 GENERAL 选择 **Install to Inactive Slot / OTA**，完成 Guided flow。应用用
+   `slot.status` 获取槽位元数据，检查变更与证据；仅在目标槽位已知时用 `ota-apply`
+   应用准备好的目标。它不会重新标记运行中的槽位，也不会静默回退到运行槽位。槽位
+   缺失或未知时会拒绝操作，而不是猜测。
+5. 只有应用报告成功后才重启。
 
-该操作安装目标槽位的 `boot_a.efi` 或 `boot_b.efi` 三件套及其匹配的附属文件。
-受管理的 Mode 2 profile 属于安装世代，只能由此明确操作刷新，系统更新器不会
-刷新它。
+等价的写入器命令会明确指定目标槽位：
 
-如果忘记执行该操作，新槽位仍带有原厂 ABL。该处没有 GBL 漏洞，因此 BDS
-不会加载，设备会以原厂状态启动且没有挂钩。不会变砖。请执行
-**Install to inactive slot**，然后再次重启；此恢复流程无需切换槽位。另一个
-槽位就是操作员刚才运行的槽位，因此在本场景中其状态已知良好。Canoe 不提供
-切换活动槽位的操作；如果仍要返回另一个槽位启动，必须在 Canoe 之外手动切换
-活动槽位（例如使用 `fastboot set_active`）。
+```bash
+canoe-bootmgr ota-apply --staged /path/to/staged \
+  --target-slot b --mode 1
+```
 
-此版本不包含 OTA watcher。模块只会在操作员于重启前按下 WebUI 操作时执行
-这些工作。
+如果操作针对特定本地启动根目录源，另加全局 `--boot-root`、`--source` 或
+`--ext4-image` 选项。只有在审核并明确接受计划报告的签名变化后，才使用
+`--allow-new-signer`。`ota-apply` 会安装目标槽位的 `boot_a.efi` 或 `boot_b.efi`
+三件套及匹配附属文件；事务允许时，目标原有的有效世代会保留为 `boot_backup.efi`。
 
-## Custom ROM 的镜像与签名限制
+首次安装是另一条流程：它使用 Guided **Provision**，并在应用确认系统用户空间
+`fastbootd` 前置条件后使用 `install`。不要用首次安装的 `install` 代替 OTA 后的
+非活动槽位操作。
 
-默认派生输入始终是设备分区。如果 WebUI 提供 ABL 或 vbmeta 镜像选择，
-该文件必须是精确且非空的文件，只能作为派生输入，绝不能作为刷写载荷。
-生成的镜像对必须匹配正在安装的固件世代。
+如果忘记该操作，新槽位会带有原厂 ABL。那里没有 GBL 漏洞，因此 BDS 不会加载，设备
+会以原厂状态启动且没有 hook。遗漏本身不会导致变砖。仍在已知良好的槽位运行时，
+重新执行非活动槽位流程，再重启即可。Canoe 不提供切换槽位操作；如需启动另一个槽位，
+请在 Canoe 之外用平台 fastboot 工具切换，例如：
 
-成功的 Mode 2 派生只能说明 `vbmeta` 已解析并带有签名和公钥 blob，不能说明
-该密钥属于 OEM；本工具无法证明这一点。唯一的自动保护是检测公钥摘要是否
-相对于上一安装世代发生变化。从 Custom ROM 切换过去或切换回来时，变化是
-预期情况；请遵循 WebUI 的明确签名变化确认。
+```bash
+fastboot set_active b
+```
+
+应用状态条在已获得答案时显示活动槽位和 BDS 版本；否则显示 **Unknown**，OTA 操作
+必须等待可靠的元数据。
+
+## 证据与签名限制
+
+Guided flow 会在提交前审核 `mode.plan`。Mode 2 变更可能使用 `vbmeta.inspect`、
+`vbmeta.header` 与 `vbmeta.check`；这些操作只检查证据，不会自行刷写镜像。若选择
+提供 ABL 或 vbmeta 镜像，该文件必须精确且非空，只能作为**派生输入**，绝不是隐式
+刷写载荷。`abl.verify` 可以检查所提供 ABL 的摘要。
+
+成功的 Mode 2 派生只能说明 vbmeta 已解析并带有签名和公钥 blob，不能证明密钥属于
+OEM；任何工具都无法证明这一点。自动保护是检测公钥摘要相对于已安装世代是否变化。
+从 Custom ROM 切换过去或切换回来时，变化是预期情况；请遵循应用明确的签名变化确认，
+只有在确定该变化有意时才传入 `--allow-new-signer`。
 
 ## 通用 SCM 保护
 
-Mode 0、1、2 在启动与刷新期间会尽力抑制 TrustZone 熔断和 anti-rollback SCM
-请求，但这只能阻止进一步推进，不能复原已熔断的 fuse 或降低已有的 rollback
-floor。如果 SCM 协议不可用，启动仍会继续并记录 `hooks-armed ... scm=0`。
+Mode 0、1、2 在启动和刷新期间会尽力抑制 TrustZone fuse 与 anti-rollback SCM 请求。
+这只能阻止继续推进，不能复原已熔断的 fuse 或降低已有 rollback floor。如果 SCM 协议
+不可用，启动仍会继续，并记录 `hooks-armed ... scm=0`。
 
 ## 小米
 
-小米在 **300** 修复了 GBL 漏洞；截至 **306**，XBL 仍可启动旧版 ABL 来间接
-加载 `efisp`。更新前检查 ABL anti-rollback 版本，并在非关键设备上测试 OTA。
-不兼容设备的 ABL 仍可能造成黑砖；重启前操作不会让不兼容的厂商 ABL 变得安全。
+小米在 **300** 修复了 GBL 漏洞；截至 **306**，XBL 仍可启动旧版 ABL 来间接加载
+`efisp`。更新前检查 ABL anti-rollback 版本，并在非关键设备上测试 OTA。不兼容设备
+的 ABL 仍可能造成黑砖；重启前操作不会使不兼容的厂商 ABL 变得安全。
 
-在适合时使用 Hail 等冻结更新的工具。未确认漏洞 ABL 与目标固件兼容前，不要
-安装 OTA。
+适合时使用 Hail 等冻结更新的工具。未确认漏洞 ABL 与目标固件兼容前，不要安装 OTA。
 
 ## 一加
 
-较新的 OnePlus 构建已修复加载器路径。应让较旧的漏洞 ABL 留在分区中，并在每次
-OTA 后、重启前按 **Install to inactive slot**，让已修补加载器跟随固件世代。
-`16.0.5.7xx` 及更低版本带漏洞；更新版本可能已经修复。更新主力设备前，检查
-anti-rollback 版本并等待经过测试的结果。
+较新的 OnePlus 构建修复了加载器路径。应让较旧的漏洞 ABL 留在分区中，并在每次 OTA
+后、重启前使用 **Install to Inactive Slot / OTA**，让修补后的加载器跟随固件世代。
+`16.0.5.7xx` 及更低版本带漏洞；更新版本可能已修复。请检查设备并等待经过测试的
+结果。
 
 ## Anti-rollback 注意事项
 
-如果未来固件开始熔断 ABL anti-rollback 版本，应考虑放弃 OTA，或只更新 HLOS。
-要识别 HLOS 镜像，可先解压 `payload.bin`，再检查每个镜像是否包含 `AVB0` 头，
-然后再选择要刷写的分区。
+如果未来固件开始熔断 ABL anti-rollback 版本，应考虑放弃 OTA，或只更新 HLOS。要识别
+HLOS 镜像，可先解压 `payload.bin`，再检查每个镜像是否包含 `AVB0` 头，然后选择要
+刷写的分区。

@@ -1,32 +1,67 @@
 # 安装指南
 
-GBL Root Canoe 会将带 GBL 漏洞的原厂 ABL 保留在 `abl`，将原始
-`BDS.efi` 写入 `efisp`，并把一个或两个当前已修补加载器三件套放在
-`persist/efisp`。BDS 从启动根目录读取 `canoe.cfg`，再链式启动所选启动项；
-BDS 从不写入存储。
+每个 Canoe 电脑端工具包都提供两个主机程序：
 
-每个有效的受管理槽位三件套包含：
+- `bin/canoe-boot-manager` 是以 GUI 为首选的桌面应用。在 Linux 上使用
+  `canoe-boot-manager.sh` 启动，在 Windows 上使用
+  `canoe-boot-manager.bat` 启动。
+- `canoe`（Windows 上为 `canoe.exe`）是命令行客户端，仍然随包提供，供
+  脚本使用，也供无法使用 GUI 运行时的系统使用。
+
+桌面应用是 Svelte 5 + Vite 应用。它只说 JSON wire protocol，并将启动根
+目录修改委托给 `canoe-bootmgr`；它不是第二个写入器。Android 模块通过
+KernelSU 提供同一份应用构建结果，不是另一个仅面向 Android 的页面。
+
+## 主机要求
+
+GUI 使用平台的 WebView 运行时：
+
+- **Linux：** 在运行 `./canoe-boot-manager.sh` 前安装
+  `webkit2gtk-4.1`、`javascriptcoregtk-4.1` 和 `libsoup-3.0`。缺少这些
+  库时 GUI 不会启动。
+- **Windows：** 安装 Microsoft WebView2 运行时。当前 Windows 11 默认
+  提供它；不包含它的 Windows 系统必须另行安装。缺少 WebView2 时 GUI
+  不会启动。
+
+命令行客户端不依赖上述 GUI 运行时。既没有 Linux WebKit 库也没有 WebView2
+的主机仍可使用 `./canoe` 或 `canoe.exe`，以及
+`canoe-bootmgr` 命令行接口。
+
+工具包还包含唯一的启动根目录写入器 `bin/canoe-bootmgr`，以及构建和安装
+命令所需的 helper 二进制。由于 Tauri 应用会在应用程序可执行文件旁解析
+sidecar，桌面二进制必须与该 sidecar 保持在同一个 `bin/` 目录；不要把
+任一文件移走。
+
+## 启动根目录布局
+
+GBL Root Canoe 将带有 GBL 漏洞的 ABL 保留在 `abl`，将原始 `BDS.efi` 写入
+`efisp`，并把一个或两个当前已修补加载器三件套放在
+`persist/efisp`。BDS 从该启动根目录读取 `canoe.cfg`，再链式启动所选启动
+项；BDS 从不写入存储。
+
+启动根目录包含：
 
 | 文件 | 用途 |
 | --- | --- |
-| `boot_a.efi`、`boot_a.efi.gm2p`、`boot_a.efi.tzmap` | 槽位 A 当前已修补加载器与匹配的 120 字节 profile、256 字节映射 |
-| `boot_b.efi`、`boot_b.efi.gm2p`、`boot_b.efi.tzmap` | 槽位 B 当前已修补加载器与匹配的 120 字节 profile、256 字节映射 |
-| `boot_backup.efi` 及其附属文件 | 最近一次被更新槽位的上一代有效三件套 |
+| `canoe.cfg` | 启动策略、受管理启动项和代数编号 |
+| `boot_a.efi` 及附属文件 | 已安装槽位 A 的已修补 ABL |
+| `boot_b.efi` 及附属文件 | 已安装槽位 B 的已修补 ABL |
+| `boot_backup.efi` 及附属文件 | 最近更新槽位的上一代版本（如果存在） |
 | `tools/` | BDS 菜单提供的 EFI 工具 |
 
-受管理行只为完整且有效的三件套生成：加载器必须非空，
-`.gm2p` 必须恰好 120 字节，`.tzmap` 必须恰好 256 字节。新安装不会再写
-已退役的 `boot.efi`；完整的旧式三件套会迁移到明确槽位，不完整的旧式文件
-会被隔离。
+每个受管理的加载器都有一个 `.gm2p` profile（恰好 120 字节）和一个
+`.tzmap` 映射（恰好 256 字节）。新安装不会写入已退役的 `boot.efi` 名称。
+完整的旧式 `boot.efi` 三件套会迁移到明确的目标槽位；不完整的旧式文件会
+被隔离。详见 [`canoe.cfg`](./canoe-cfg.md)。
 
 `persist` 文件系统通常在 Android 中暴露为 `/mnt/vendor/persist`，在
-Recovery 中暴露为 `/persist`，其 `efisp/` 目录就是启动根目录。不要刷写
-`persist`：这是同时保存厂商数据的 live 文件系统。
+Recovery 中暴露为 `/persist`；其中的 `efisp/` 就是启动根目录。不要刷写
+`persist`：它是同时保存厂商数据的 live 文件系统。
 
-## 前置条件
+## 首次安装前置条件
 
-当前 `abl` 分区中的 ABL 必须带有 GBL 漏洞。如果没有，操作员必须先刷入
-较旧的、易受攻击的原厂 ABL，然后将 `BDS.efi` 原始刷入 `efisp`：
+当前 `abl` 分区中的 ABL 必须带有 GBL 漏洞。如果没有，操作员必须先刷入较旧
+的易受攻击原厂 ABL，然后将 `BDS.efi` 原始刷入 `efisp`：
 
 ```bash
 fastboot flash abl <vulnerable>.img       # 仅当当前 ABL 已修复时执行
@@ -44,44 +79,52 @@ fastboot flash efisp BDS.efi
 
 ### 1. 电脑端首次安装
 
-首次安装分为两个不同的 fastboot 会话。第一阶段只在**原厂 fastbootd**（新解锁
-设备提供的用户空间 fastboot）中完成，通过 Android 的 `adb reboot fastboot`（或
-bootloader fastboot 的 `fastboot reboot fastboot`）进入；这一阶段是 `fastbootd`
-的唯一用途，用于将易受攻击的 ABL 与 `BDS.efi` 分别刷入 `abl_a`/`abl_b` 和
-`efisp`。ABL 及其他关键分区无法在 bootloader fastboot 中刷写，所以这一阶段
-没有替代会话；正确会话中 `fastboot getvar is-userspace` 会返回 `yes`。
+这是从 Linux 或 Windows 电脑进行的首次安装，分为两个不同 fastboot 会话。
 
-随后设备启动 BDS，进入 **Super Fastboot**。这是 BDS 自带的 fastboot 会话，会
-放宽 ABL 的关键分区保护状态，因此可以从这里刷写；但 `super` 内部的分区仍是例外。
+#### 第一阶段：原厂 fastbootd
 
-这是从 Linux 或 Windows 电脑执行首次安装的流程。运行原生主机界面前，设备
-必须已经处于 Super Fastboot：
+第一阶段只在**原厂 fastbootd**（新解锁设备提供的用户空间 fastboot）中完成，
+通过 Android 的 `adb reboot fastboot`（或 bootloader 自带 fastboot 的
+`fastboot reboot fastboot`）进入。此处 fastbootd 的唯一作用，是为全新安装
+将易受攻击的 ABL 与 `BDS.efi` 刷入 `abl_a`/`abl_b` 和 `efisp`。ABL 及其他
+关键分区不能在 bootloader fastboot 中刷写，所以这一阶段没有替代会话；在
+正确会话中，`fastboot getvar is-userspace` 会回答 `yes`。
+
+设备随后启动 BDS，并提供 **Super Fastboot**。
+
+#### 第二阶段：Super Fastboot 与主机
+
+Super Fastboot 是 BDS 自带的 fastboot 会话。它放宽 ABL 的关键分区保护状态，
+所以可以从这里刷写；但 `super` 内部的分区仍是例外。在运行原生主机界面
+前，设备必须已经处于 Super Fastboot。
+
+从工具包目录启动 GUI：
+
+```text
+Linux：   ./canoe-boot-manager.sh
+Windows： canoe-boot-manager.bat
+```
+
+命令行等价入口仍然可用：
 
 ```text
 Linux：   ./canoe
 Windows： canoe.exe
 ```
 
-Windows 压缩包不需要安装 Python，也不再捆绑解释器或使用启动脚本；原生
-`canoe.exe` 位于归档根目录。
-
-`canoe` 通过读取 `canoe-bds` fastboot 变量检测 Super Fastboot。如果该变量
-缺失，程序会警告 `fastboot oem mass-storage:persist` 在 BDS 之外不存在，
-并在继续前请求确认。
-
-交互流程等待 `images/abl.img` 与 `images/vbmeta.img`；BDS 发布
-`current-slot` 时，程序从设备读取活动槽位。只有较旧、未发布该变量的 BDS
-才会询问当前活动槽位，然后请求：
+交互式 GUI 和命令行客户端会等待 `images/abl.img` 与
+`images/vbmeta.img`；当 BDS 发布 `current-slot` 时读取活动槽位，只有较旧
+且不发布该变量的 BDS 才会询问当前活动槽位。随后它们请求：
 
 ```text
 fastboot oem mass-storage:persist
 ```
 
-主机会请求 `canoe-bootmgr source detect --json`，选择身份为 `1209:ca0e`（旧固件
-也可能为 `05c6:f000`）且可读、未挂载的第一个 block 行，然后把原始源直接交给
-`canoe-bootmgr`。不会创建盘符或主机文件系统目录。`canoe-bootmgr` 通过
-`canoe-ext4` 路由所有启动根目录读写；helper 在缺少 `/efisp` 时创建它，并以同一
-事务提交选定槽位的三件套、配置、附属文件并保留回滚：
+导出后，主机会请求 `canoe-bootmgr source detect --json` 获取候选项，并选择
+身份为 `1209:ca0e`（或兼容身份 `05c6:f000`）且可读、未挂载的第一个 block
+行。不会创建盘符或主机文件系统目录。`canoe-bootmgr` 通过 `canoe-ext4`
+路由所有启动根目录读写；helper 在缺少 `/efisp` 时创建它，启动管理器以
+同一事务提交选定槽位三件套、配置、附属文件和回滚：
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
@@ -89,8 +132,8 @@ canoe install --slot a --mode 1
 ```
 
 只有在测试或操作员明确提供目录时，才使用
-`--boot-root <persist>/efisp` 的本地目录后端。对于镜像或原始块源，直接
-使用 boot manager 后端：
+`--boot-root <persist>/efisp` 的本地目录后端。对于镜像或原始块源，应使用
+启动管理器的直接后端：
 
 ```bash
 canoe-bootmgr --boot-root /path/to/efisp install \
@@ -103,17 +146,19 @@ canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
 
 `--ext4-image` 是 `--source` 的别名；两种直接源形式都接受 ext4 镜像或块
 设备，且不能与 `--boot-root` 合用。直接安装必须指定 `--slot a|b`，除非
-明确使用带有已知活动元数据及 `--i-know-inactive-status` 的 inactive 形式。
-未知槽位会被拒绝。
+调用者明确使用带有已知活动元数据及 `--i-know-inactive-status` 的 inactive
+形式。未知槽位会被拒绝。
 
-### Super Fastboot fastboot 变量
+Super Fastboot 发布以下 fastboot 变量：
+
 | 变量 | 值及含义 |
+| --- | --- |
 | `canoe-bds` | 项目版本。该变量存在即是设备运行 Super Fastboot 的确定信号。 |
 | `current-slot` | `a` 或 `b`。当 GPT 未标记任何槽位或同时标记两个槽位时，不发布该变量。 |
 
 ### 2. 电脑端更新
 
-为新的匹配固件世代再次运行相同的电脑端命令，并选择要安装加载器的槽位：
+为新的匹配固件世代再次运行相同的主机命令，并选择要安装加载器的槽位：
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
@@ -121,16 +166,19 @@ canoe install --slot b --mode 1
 ```
 
 提交新三件套前，目标槽位原有三件套会连同附属文件复制为
-`boot_backup.efi`。只要该上一代加载器有效，`android-backup` 行就会保留。
+`boot_backup.efi`。只要上一代加载器有效，`android-backup` 行就会保留。
 只有带有效三件套的槽位才会写入 `android-a` 与 `android-b` 行；手动添加的
 启动项原样保留。受管理安装不会自动创建 `default`；需要时使用
 `canoe-bootmgr default set`。
 
 ### 3. KernelSU 模块安装
 
-在已 Root 的设备上安装模块，按中英文首次安装问卷操作，选择 Mode 0、1 或 2。
-它与电脑端使用同一个 `canoe-bootmgr build` 编排器和同四个 worker 二进制，然后
-通过 `canoe-bootmgr` 提交启动根目录并执行所需的设备分区写入。
+在已 Root 的设备上安装模块，并按中英文首次安装问卷操作。模块中的静态
+WebUI 与桌面端使用同一份 Svelte 应用构建结果，来自相同的 `dist/` 输出；
+它不是第二套界面实现。模块与电脑端使用同一个
+`canoe-bootmgr build` 编排器和同四个 worker 二进制，然后通过
+`canoe-bootmgr` 提交启动根目录并执行所需的设备分区写入。
+`canoe-bootmgr` 始终是唯一写入器。
 
 ### 4. KernelSU 更新或 OTA 后安装
 
@@ -144,14 +192,14 @@ WebUI，按下 **Install to inactive slot**。该操作要求目标槽位元数�
 不会加载，设备会以原厂状态启动且没有挂钩。不会变砖。请执行
 **Install to inactive slot**，然后再次重启；此恢复流程无需切换槽位。另一个
 槽位就是操作员刚才运行的槽位，因此在本场景中其状态已知良好。Canoe 不提供
-切换活动槽位的操作；如果仍要返回另一个槽位启动，必须在 Canoe 之外手动切换
-活动槽位（例如使用 `fastboot set_active`）。
+切换活动槽位的操作；如果仍要返回另一个槽位启动，必须在 Canoe 之外手动
+切换活动槽位（例如使用 `fastboot set_active`）。
 
 受管理的 Mode 2 profile 属于已安装的固件世代。它只会在明确执行该操作时
 刷新，系统更新器不会刷新。此版本不包含 OTA watcher。
 
-如果 WebUI 提供派生镜像选择，文件必须精确、非空并匹配安装的固件世代；
-它们绝不会作为刷写载荷。
+如果 WebUI 提供派生镜像选择，文件必须精确、非空并匹配安装的固件世代；它们
+绝不会作为刷写载荷。
 
 ### 5. 锁定 Bootloader 的临时 root
 
@@ -164,6 +212,7 @@ su -c sh ./build.sh --mode 0
 su -c sh ./build.sh --mode 1
 su -c sh ./build.sh --mode 1 --abl /path/abl.img --vbmeta /path/vbmeta.img
 ```
+
 该包装器只接受 Mode 0 和 Mode 1；它只改变启动根目录树，验证所有生成文件，
 失败时删除完整暂存集，并且不写入分区。对于已准备好的暂存目录，等价的
 设备端命令是：
@@ -174,10 +223,8 @@ canoe-bootmgr --boot-root /mnt/vendor/persist/efisp install \
 ```
 
 `--boot-root` 是本地目录后端；对于 ext4 镜像或块源，改用 `--source` 或
-`--ext4-image`。旧的 `canoe_device_install.sh`、`canoe_boot_entry.sh` 以及
-主机端 `boottree.py` / `bootsnap.py` 写入器均已退役；事务和配置行由
-`canoe-bootmgr` 统一负责。易受攻击的 ABL 和 `BDS.efi` 到 `efisp` 的
-`dd` 由操作员自行完成。
+`--ext4-image`。启动管理器拥有事务和配置行；操作员负责将易受攻击的 ABL
+与 `BDS.efi` 放置到位的原始 fastboot 操作。
 
 ## 匹配镜像与签名变化
 
@@ -190,20 +237,33 @@ canoe-bootmgr --boot-root /mnt/vendor/persist/efisp install \
 `--allow-new-signer` 确认；设备模块对明确提供的 `vbmeta` 路径允许该变化，
 其他情况则保持所选的安全模式。
 
-## Windows 电脑端工具
+## Windows 工具包与 ext4 helper
 
-Windows 压缩包在根目录附带原生 `canoe.exe`，以及
-`canoe-bootmgr.exe`、`canoe-ext4.exe` 和 `fastboot.exe`。不需要安装 Python，
-也不再捆绑解释器或使用启动脚本。选择导出的 USB 物理磁盘后，boot manager
-将 `\\\\.\\PhysicalDrive<N>` 原始源直接交给 helper：
+Windows 压缩包附带 GUI 启动器、`bin/canoe-boot-manager.exe`、原生
+`canoe.exe`、`canoe-bootmgr.exe`、`canoe-ext4.exe` 和 fastboot。无需安装
+Python，也不再捆绑解释器。GUI 还需要上文所述的 WebView2；
+`canoe.exe` 和 helper 工具不需要它。
+
+helper 直接操作导出发现选出的原始源：
 
 ```text
-canoe-ext4.exe inspect \\\\.\\PhysicalDrive<N>
+canoe-ext4.exe inspect \\.\PhysicalDrive<N>
 ```
 
-不使用盘符或第三方文件系统驱动。打包时必须提供 `canoe-ext4.exe`；如果当前
-主机无法原生构建，可运行 `tools/canoe-ext4/build-windows.sh` 后将输出传给
-打包输入覆盖参数。缺少该输入会使构建失败，不会静默回退。
+不使用盘符或第三方文件系统驱动。如果打包无法提供 `canoe-ext4.exe`，构建
+会失败；不会提供占位文件或静默回退。主机具备 MinGW、e2fsprogs 源码和 zlib
+时，可以运行 `tools/canoe-ext4/build-windows.sh` 构建 helper，再将其提供给
+打包构建。
+
+这是有意的设计，而非需要绕过的 Windows 限制：Canoe 的任何主机操作都不会
+挂载 persist。写入通过用户态 ext4 helper 对导出的原始源完成，因此 Windows
+没有挂载能力也不会损失功能。首次安装前 persist 分区可能没有 `efisp` 目录；
+安装事务会创建它及暂存路径所需的全部父目录，而不是假设它已经存在。
+如需脱离应用手动检查或修复，请让同一 helper 指向原始磁盘，而不是挂载盘符：
+
+```text
+canoe-ext4.exe inspect \\.\PhysicalDrive<N>
+```
 
 ## 首次运行与 Super Fastboot
 
@@ -211,12 +271,12 @@ canoe-ext4.exe inspect \\\\.\\PhysicalDrive<N>
 
 启动根目录为空、缺失、无法访问或不可用时，都会计为首次运行。BDS 会显示
 首次运行界面，其中有 **Enter boot menu (Volume Up)** 与
-**Enter Super Fastboot (default)**。光标默认位于 Super Fastboot，界面等待两秒；超时、
-Volume Down 和 Power 都保持 Super Fastboot 默认值。明确按 Volume Up 才会打开普通
-菜单，随后可在安装前检查槽位及其他发现的启动项。
+**Enter Super Fastboot (default)**。光标默认位于 Super Fastboot，界面等待
+两秒；超时、Volume Down 和 Power 都保持 Super Fastboot 默认值。明确按
+Volume Up 才会打开普通菜单，随后可在安装前检查槽位及其他发现的启动项。
 
-BDS 菜单还提供 **USB Mass Storage** 与 **Reboot to Recovery**，以及已发现或
-已配置的启动项。USB Mass Storage 每次只导出一个分区；`persist` 是包含
+BDS 菜单还提供 **USB Mass Storage** 与 **Reboot to Recovery**，以及已发现
+或已配置的启动项。USB Mass Storage 每次只导出一个分区；`persist` 是包含
 `efisp` 的分区。
 
 菜单与 fastboot 控制见 [`usage.md`](./usage.md)，直接源主机流程见
@@ -225,7 +285,7 @@ BDS 菜单还提供 **USB Mass Storage** 与 **Reboot to Recovery**，以及已�
 首次安装 Mode 1 后，从设备菜单格式化数据：
 
 ```text
-主菜单 -> Reboot to Recovery -> FORMAT DATA
+Main menu -> Reboot to Recovery -> FORMAT DATA
 ```
 
 Mode 1 会向系统投射锁定的 DeviceInfo 视图。TEE 可能拒绝为此前状态下写入
@@ -244,6 +304,6 @@ canoe default set bls:pmos
 canoe source detect --json
 ```
 
-`default set bls:<stem>` 会使用与 `bls list` 相同的发现结果，找不到目标时拒绝
-写入。`source detect` 只读且枚举时不需要提权；需要访问权限时报告
+`default set bls:<stem>` 会拒绝 `bls list` 无法发现的 stem。
+`source detect` 只读且枚举时不需要提权；需要访问权限时报告
 `needs_privilege`。
