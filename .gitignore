@@ -42,8 +42,12 @@ extracted/
 # Session scratch: device dumps, pulled UefiLogs, one-off host tools
 .work/
 
-# Local agent guidance, deliberately not published.
+# Local agent guidance and harness state, deliberately not published.
+# .omo/ holds plans, per-task evidence and a task DAG; .pi/ holds memory
+# cursors and receipts. Both are session state, and .omo/ reaches tens of MB.
 AGENTS.md
+.omo/
+.pi/
 
 submodules/uefi/edk2/build_modulepkg.log
 # Locally built ext4 helper binary
