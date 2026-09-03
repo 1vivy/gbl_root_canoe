@@ -9,10 +9,9 @@ Qualcomm ABL images. It provides a Fake Locked Bootloader state on Snapdragon
 8 Gen 5 / 8 Elite devices: the hardware remains unlocked while the patched
 loader presents the locked state required by software checks.
 
-The 7.0.0-b2 release surface adds the `canoe-bootmgr` single-writer core,
-the bilingual `canoe-gui` host adapter, and the `canoe-ext4` direct ext4
-backend. Managed boot artifacts are per-slot triplets rather than one
-singular `boot.efi`.
+The 7.0.0-b2 release surface adds the `canoe-bootmgr` single-writer core
+and the `canoe-ext4` direct ext4 backend. Managed boot artifacts are per-slot
+triplets rather than one singular `boot.efi`.
 
 ## Boot chain
 
@@ -148,12 +147,6 @@ canoe-bootmgr ... bls list
 the direct ext4 backend and are mutually exclusive with it. The host `canoe`
 surface uses the BDS export as its direct source when `--boot-root` is omitted.
 
-The bilingual graphical surface uses the same protocol:
-
-```text
-canoe-gui [--boot-root DIR | --source IMAGE] [--zh]
-```
-
 For Mode 1 recovery preparation, use the standalone graft tool:
 
 ```text
@@ -188,7 +181,6 @@ The Linux and Android toolkits contain `extractfv`, `patch_abl`,
 toolkit contains their `.exe` forms and pinned `fastboot.exe`. Windows
 installation passes the exported `\\.\PhysicalDrive<N>` source directly to
 `canoe-ext4`; no third-party filesystem driver or drive letter is required.
-The graphical `canoe-gui` host adapter uses the same boot-manager protocol.
 
 See the [installation guide](wiki/docs/install.md),
 [configuration contract](wiki/docs/canoe-cfg.md), and

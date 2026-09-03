@@ -277,13 +277,3 @@ canoe source detect --json
 These commands delegate to `canoe-bootmgr`; the native host never edits
 `canoe.cfg`. `default set bls:<stem>` is accepted only when that BLS Type #1
 row is discovered by the same detector used by `bls list`.
-
-For a graphical host workflow, double-click `./canoe-gui` from the Linux
-toolkit (it works from any current directory), or double-click the root
-`canoe-gui.exe` in the Windows toolkit. The Connect screen runs source
-detection, shows path, identity, model, size, boot-root presence, explanation,
-and privilege need, and offers attach, Refresh, and manual directory/image/
-device selection. Directory and image sources never need elevation. If a
-device operation is denied, Linux offers **Retry with pkexec** and a copyable
-`sudo` command; Windows offers **Restart as Administrator**. Elevation is
-explicit and is never silent.

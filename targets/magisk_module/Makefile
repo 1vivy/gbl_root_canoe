@@ -1,8 +1,11 @@
+CANOE_ROOT_DIR := $(abspath ../..)
 include ../../version.mk
 
-.PHONY: clean copy_resources submodule_uefi submodule_patcher \
+.PHONY: clean copy_resources webui_dist webui-pin submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_ablfvextractor build
+
+CANOE_WEBUI_ARCHIVE := $(CANOE_ROOT_DIR)/.cache/canoe-boot-manager/canoe-boot-manager-$(CANOE_WEBUI_VERSION).tar.gz
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -14,6 +17,40 @@ copy_resources:
 	mkdir -p build/module
 	cp -r module/* build/module/
 	[ -d ../../ablrepo ] && cp -r ../../ablrepo ./build/module/ablrepo || true
+# Fetch the pinned static app into the root cache, then replace webroot
+# wholesale. The source archive is a checked-in last-known-good artifact
+# until the canoe-boot-manager repository publishes release assets.
+webui_dist: copy_resources
+	$(MAKE) -C "$(CANOE_ROOT_DIR)" fetch-verified \
+		FETCH_URL="$(CANOE_WEBUI_URL)" \
+		FETCH_SHA256="$(CANOE_WEBUI_SHA256)" \
+		FETCH_DEST="$(CANOE_WEBUI_ARCHIVE)"
+	@set -eu; \
+	tmp="$$(mktemp -d "$(CURDIR)/build/.webroot.XXXXXX")"; \
+	trap 'rm -rf "$$tmp"' EXIT HUP INT TERM; \
+	tar --extract --gzip --file "$(CANOE_WEBUI_ARCHIVE)" \
+		--directory "$$tmp" --no-same-owner; \
+	test -f "$$tmp/index.html"; \
+	rm -rf build/module/webroot; \
+	mv "$$tmp" build/module/webroot; \
+	trap - EXIT HUP INT TERM; \
+	rm -rf "$$tmp"
+# Refresh the checked-in last-known-good archive from a local checkout of the
+# app, and print the digest to paste into version.mk. The tar flags are what
+# make the digest stable: without them every regeneration embeds a new mtime
+# and owner, and a pin that changes on every run pins nothing.
+#
+#   make -C targets/magisk_module webui-pin CANOE_WEBUI_SRC=/path/to/canoe-boot-manager
+CANOE_WEBUI_SRC ?= ../../../canoe-boot-manager
+webui-pin:
+	@set -eu; \
+	test -f "$(CANOE_WEBUI_SRC)/dist/index.html" || \
+		{ echo "run 'bun run build' in $(CANOE_WEBUI_SRC) first" >&2; exit 1; }; \
+	out="webui-cache/canoe-boot-manager-$(CANOE_WEBUI_VERSION).tar.gz"; \
+	tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
+		--format=gnu -C "$(CANOE_WEBUI_SRC)/dist" -cf - . \
+		| gzip -n -9 > "$$out"; \
+	echo "CANOE_WEBUI_SHA256 = $$(sha256sum "$$out" | cut -d' ' -f1)"
 submodule_uefi: copy_resources
 	# Build the EDK2 tree at most once per workspace, and at most once per
 	# invocation. `make build` in submodules/uefi relinks LinuxLoader with
@@ -62,6 +99,6 @@ submodule_canoe_bootmgr: copy_resources
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/module/bin/extractfv
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor
+build: webui_dist submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor
 	# zip
 	cd build/module && zip -r ../module_android.zip ./

@@ -6,9 +6,9 @@ GBL Root Canoe 是一个基于 EDK2 的工作区，用于修补高通 ABL 镜像
 程序。它在骁龙 8 Gen 5 / 8 Elite 设备上实现假回锁状态：硬件仍处于解锁，
 但已修补的加载器向软件呈现所需的锁定状态。
 
-7.0.0-b2 的发布界面加入 `canoe-bootmgr` 单一写入核心、双语
-`canoe-gui` 主机适配器和 `canoe-ext4` 直接 ext4 后端。受管理的启动产物
-按槽位组织为三件套，不再使用单一的 `boot.efi`。
+7.0.0-b2 的发布界面加入 `canoe-bootmgr` 单一写入核心和
+`canoe-ext4` 直接 ext4 后端。受管理的启动产物按槽位组织为三件套，
+不再使用单一的 `boot.efi`。
 
 ## 启动链
 ```mermaid
@@ -129,12 +129,6 @@ canoe-bootmgr ... bls list
 `--boot-root` 选择本地目录；`--source` 与 `--ext4-image` 选择直接 ext4 后端，
 并与其互斥。省略 `--boot-root` 时，电脑端 `canoe` 使用 BDS 导出的直接源。
 
-双语图形界面使用同一协议：
-
-```text
-canoe-gui [--boot-root DIR | --source IMAGE] [--zh]
-```
-
 Mode 1 的 Recovery 准备使用独立 graft 工具：
 
 ```text
@@ -166,7 +160,6 @@ Linux 与 Android 工具包包含 `extractfv`、`patch_abl`、`mode2_profile`、
 `abl_tzmap`、`canoe-bootmgr` 和 `canoe-ext4`；Windows 工具包包含对应
 `.exe` 以及固定版本的 `fastboot.exe`。Windows 安装会将导出的
 `\\\\.\\PhysicalDrive<N>` 原始源直接交给 `canoe-ext4`；不需要第三方文件
-系统驱动或盘符。双语 `canoe-gui` 主机适配器使用同一个 boot manager 协议。
 
 详见[安装指南](wiki/docs/zh/install.md)、[`canoe.cfg` 契约](wiki/docs/zh/canoe-cfg.md)
 和 [USB Mass Storage 指南](wiki/docs/zh/mass-storage.md)。

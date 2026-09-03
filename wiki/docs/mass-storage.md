@@ -78,10 +78,6 @@ canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
   --staged /path/to/staged --slot a --mode 1
 ```
 
-The bilingual `canoe-gui` exposes the same choices with
-`--source`/`--ext4-image` or `--boot-root`; see [`install.md`](./install.md)
-for the backend comparison.
-
 For tests or an operator-managed local directory, use the explicit local
 backend:
 

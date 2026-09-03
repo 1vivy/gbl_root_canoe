@@ -77,13 +77,10 @@ jobs:
         test -x artifacts/toolkit_linux/bin/mode2_profile
         test -x artifacts/toolkit_linux/bin/abl_tzmap
         test -x artifacts/toolkit_linux/bin/canoe-bootmgr
-        test -x artifacts/toolkit_linux/bin/canoe-gui
-        test -x artifacts/toolkit_linux/canoe-gui
         test -f artifacts/toolkit_windows/bin/patch_abl.exe
         test -f artifacts/toolkit_windows/bin/mode2_profile.exe
         test -f artifacts/toolkit_windows/bin/abl_tzmap.exe
         test -f artifacts/toolkit_windows/bin/canoe-bootmgr.exe
-        test -f artifacts/toolkit_windows/canoe-gui.exe
         test -f artifacts/toolkit_windows/Platform-Tools/fastboot.exe
         test ! -e artifacts/toolkit_windows/Platform-Tools/adb.exe
         test -f artifacts/toolkit_windows/bin/canoe-ext4.exe
@@ -204,11 +201,6 @@ jobs:
           *"ELF 64-bit"*"x86-64"*) ;;
           *) echo "unexpected Linux canoe: $linux_canoe_type"; exit 1 ;;
         esac
-        linux_gui_type="$(file -b artifacts/toolkit_linux/bin/canoe-gui)"
-        case "$linux_gui_type" in
-          *"ELF 64-bit"*"x86-64"*) ;;
-          *) echo "unexpected Linux canoe-gui: $linux_gui_type"; exit 1 ;;
-        esac
         windows_bootmgr_type="$(file -b artifacts/toolkit_windows/bin/canoe-bootmgr.exe)"
         case "$windows_bootmgr_type" in
           *"PE32+ executable"*"x86-64"*) ;;
@@ -218,11 +210,6 @@ jobs:
         case "$windows_canoe_type" in
           *"PE32+ executable"*"x86-64"*) ;;
           *) echo "unexpected Windows canoe: $windows_canoe_type"; exit 1 ;;
-        esac
-        windows_gui_type="$(file -b artifacts/toolkit_windows/canoe-gui.exe)"
-        case "$windows_gui_type" in
-          *"PE32+ executable"*"GUI"*"x86-64"*) ;;
-          *) echo "unexpected Windows canoe-gui (expected GUI PE32+): $windows_gui_type"; exit 1 ;;
         esac
         android_bootmgr_type="$(file -b artifacts/toolkit_android/bin/canoe-bootmgr)"
         case "$android_bootmgr_type" in
@@ -296,16 +283,16 @@ jobs:
         # The archive is the deliverable, so assert the modes inside the archive
         # rather than in the build tree they came from.
         rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
-        for exe in canoe canoe-gui \
+        for exe in canoe \
                    bin/patch_abl bin/mode2_profile bin/abl_tzmap \
-                   bin/canoe-bootmgr bin/canoe-gui bin/extractfv \
+                   bin/canoe-bootmgr bin/extractfv \
                    bin/vbmetaport bin/vbmetabackup; do
           test -x "modecheck/$exe" || { echo "not executable in archive: $exe"; exit 1; }
         done
         rm -rf modecheck
         rm -rf winmodecheck && unzip -q -o release/toolkit_windows.zip -d winmodecheck
         test -x winmodecheck/canoe.exe || { echo "not executable in archive: canoe.exe"; exit 1; }
-        for exe in winmodecheck/canoe.exe winmodecheck/canoe-gui.exe winmodecheck/bin/*.exe; do
+        for exe in winmodecheck/canoe.exe winmodecheck/bin/*.exe; do
           test -f "$exe" || { echo "missing Windows executable: $exe"; exit 1; }
           dlls="$(x86_64-w64-mingw32-objdump -p "$exe" | grep -i 'DLL Name' || true)"
           printf '%s DLL imports:\n%s\n' "$exe" "$dlls"
