@@ -6,6 +6,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
+// The release version has one source, `version.mk`, from which `make bump`
+// regenerates `src/version.rs`. Asserting a literal here made every bump fail
+// this test, so the test read as a version pin while `make version-check` -
+// the actual gate - was already checking the generated file. Read the source
+// instead, so the test proves the binary reports what the tree declares.
+fn declared_version() -> String {
+    let manifest = concat!(env!("CARGO_MANIFEST_DIR"), "/../../version.mk");
+    let text = fs::read_to_string(manifest).expect("read version.mk");
+    text.lines()
+        .find_map(|line| line.strip_prefix("CANOE_VERSION = "))
+        .expect("version.mk declares CANOE_VERSION")
+        .trim()
+        .to_owned()
+}
+
 fn fixture() -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -45,7 +60,7 @@ fn usage_and_version_succeed() {
     assert!(text(&help.stdout).starts_with("canoe - the Canoe host tool."));
     let version = run(&root, &["--version"]);
     assert_eq!(version.status.code(), Some(0));
-    assert_eq!(text(&version.stdout).trim(), "7.0.0-b2");
+    assert_eq!(text(&version.stdout).trim(), declared_version());
     fs::remove_dir_all(root).expect("cleanup");
 }
 

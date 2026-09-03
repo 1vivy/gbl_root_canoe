@@ -29,6 +29,10 @@ ENV/
 *.bin
 *.img
 !tools/mode2-profile/tests/fixtures/*.img
+# Hand-built AVB blobs the bootmgr protocol goldens read by path; without the
+# exception they are ignored, and the vbmeta suite only passes on the machine
+# that happened to generate them.
+!tools/canoe-bootmgr/tests/fixtures/*.img
 *.efi
 !submodules/uefi/blobs/*.efi
 extracted/

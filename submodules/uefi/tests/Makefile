@@ -1,9 +1,14 @@
 include ../../../version.mk
 
+# SuperFbMenu.h refuses to compile without an injected version, and it arrives
+# through the hook headers rather than only where a test names it. Appending to
+# CFLAGS stamps every host test, so a new recipe cannot omit it and fail only on
+# a clean tree, where nothing is left over from a previous build to hide it.
 SFB_VERSION_CFLAGS := -DSFB_BDS_VERSION='"$(CANOE_VERSION)"'
 
 CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
+CFLAGS += $(SFB_VERSION_CFLAGS)
 
 .PHONY: test test_gpt_slot_reset clean
 
@@ -106,7 +111,7 @@ test_launch: test_launch.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbProfile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbManagedPath.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c
-	$(CC) $(CFLAGS) $(SFB_VERSION_CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
+	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
 # Initrd and DTB publication. Links the real SuperFbLinuxBoot.c against a fake
 # gBS so the GUIDs, the device-path shape and the LoadFile2 size contract are
