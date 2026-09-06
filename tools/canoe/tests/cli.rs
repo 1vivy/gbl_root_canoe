@@ -184,7 +184,7 @@ fn signer_gate_override_controls_second_install() {
 }
 
 #[test]
-fn mode_change_without_evidence_is_refused_and_writes_nothing() {
+fn known_mode_change_without_acknowledgement_is_refused() {
     let root = fixture();
     let destination = root.join("persist");
     fs::create_dir(&destination).expect("persist root");
@@ -199,6 +199,8 @@ fn mode_change_without_evidence_is_refused_and_writes_nothing() {
             "a",
             "--mode",
             "2",
+            "--from-mode",
+            "0",
         ],
     );
     assert_eq!(
