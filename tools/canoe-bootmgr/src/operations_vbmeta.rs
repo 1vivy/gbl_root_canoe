@@ -1,5 +1,7 @@
-use crate::cli::{Success, VbmetaCheckArgs, VbmetaExtractArgs, VbmetaHeaderArgs, VbmetaInspectArgs};
 use super::AppError;
+use crate::cli::{
+    Success, VbmetaCheckArgs, VbmetaExtractArgs, VbmetaHeaderArgs, VbmetaInspectArgs,
+};
 
 pub(super) fn inspect(args: &VbmetaInspectArgs) -> Result<Success, AppError> {
     let receipt = crate::vbmeta_inspect::inspect(&args.vbmeta, args.tools.as_deref())?;
@@ -19,6 +21,8 @@ pub(super) fn header(args: &VbmetaHeaderArgs) -> Result<Success, AppError> {
         rollback_index: header.rollback_index,
         flags: header.flags,
         release_string: header.release_string,
+        public_key_sha256: header.public_key_sha256,
+        build_properties: header.build_properties,
     })
 }
 

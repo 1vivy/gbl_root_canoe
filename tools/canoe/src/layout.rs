@@ -16,7 +16,11 @@ pub fn platform_names(name: &str) -> [String; 2] {
 
 pub fn size_of(path: &Path) -> u64 {
     path.metadata().map_or(0, |metadata| {
-        if metadata.is_file() { metadata.len() } else { 0 }
+        if metadata.is_file() {
+            metadata.len()
+        } else {
+            0
+        }
     })
 }
 
@@ -81,7 +85,6 @@ impl Toolkit {
     pub fn efisp_tools(&self) -> PathBuf {
         self.efisp().join("tools")
     }
-
 
     pub fn images(&self) -> PathBuf {
         self.root.join("images")

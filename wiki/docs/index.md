@@ -23,10 +23,10 @@ features:
     details: One Svelte application, one JSON protocol, and one writer across Linux, Windows, and KernelSU Android
     link: /intro
   - title: Desktop (Linux and Windows)
-    details: Start the app, wait for a Super Fastboot answer, then use GENERAL, Boot entries, Settings, the guided flow, or Graft
+    details: Start the app in Overview, then use Deploy's Provision, Prepare, and Action stages alongside Entries, Settings, and Diagnostics
     link: /usage
   - title: KernelSU Android
-    details: The same app reads the local boot root directly; a readable root opens GENERAL and an unavailable root opens first-install Provision
+    details: The same app reads the local boot root directly; Overview reports its state and Deploy offers the appropriate lane
     link: /usage
   - title: CLI
     details: canoe is the operator CLI and canoe-bootmgr is the JSON-protocol writer; both expose the same boot-root operations

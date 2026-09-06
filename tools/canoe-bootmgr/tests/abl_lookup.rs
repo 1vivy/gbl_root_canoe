@@ -1,8 +1,8 @@
 use std::fs;
-use std::process::{Command, Stdio};
 use std::io::Write;
+use std::process::{Command, Stdio};
 
-use canoe_bootmgr::abl_lookup::{lookup, AblLookupError, AblLookupRequest};
+use canoe_bootmgr::abl_lookup::{AblLookupError, AblLookupRequest, lookup};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
@@ -14,8 +14,11 @@ fn write_repository(root: &std::path::Path, product: &str, image: &[u8], digest:
     let product_dir = root.join(product);
     fs::create_dir_all(&product_dir).expect("create repository product directory");
     fs::write(product_dir.join("abl.img"), image).expect("write ABL image");
-    fs::write(product_dir.join("abl.sha256"), format!("{digest}  abl.img\n"))
-        .expect("write ABL digest");
+    fs::write(
+        product_dir.join("abl.sha256"),
+        format!("{digest}  abl.img\n"),
+    )
+    .expect("write ABL digest");
     fs::write(
         product_dir.join("abl.meta"),
         format!(
@@ -91,7 +94,8 @@ fn env_selected_repository_uses_the_remote_provider_without_network() {
         .expect("write request");
     let response = child.wait_with_output().expect("wait for lookup");
     assert!(response.status.success());
-    let response: serde_json::Value = serde_json::from_slice(&response.stdout).expect("JSON response");
+    let response: serde_json::Value =
+        serde_json::from_slice(&response.stdout).expect("JSON response");
     assert_eq!(response["ok"], true);
     assert_eq!(response["operation"], "abl.lookup");
     assert_eq!(response["source"], "remote");

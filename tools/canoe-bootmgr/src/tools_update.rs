@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
+use crate::file_identity::FileIdentity;
 use crate::slot_tools;
 
 #[derive(Debug, Error)]
@@ -38,10 +39,73 @@ impl ToolsUpdateError {
         }
     }
 }
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ToolsUpdateReceipt {
+    pub files: Vec<String>,
+    pub inventory: Vec<FileIdentity>,
+}
 
-pub(crate) fn update(root: &Path, source: &Path) -> Result<Vec<String>, ToolsUpdateError> {
-    let sources = source_files(source)?;
-    let files = sources
+pub(crate) fn update_with_inventory(
+    root: &Path,
+    source: &Path,
+    expected_inventory: &[FileIdentity],
+) -> Result<ToolsUpdateReceipt, ToolsUpdateError> {
+    let sources = crate::tools_inventory::source_files(source)?;
+    let mut inventory = Vec::with_capacity(sources.len());
+    let staged =
+        crate::build_tools::WorkDir::new().map_err(|error| ToolsUpdateError::Snapshot {
+            path: source.to_owned(),
+            message: error.to_string(),
+        })?;
+    let staged_tools = staged.path().join("tools");
+    fs::create_dir_all(&staged_tools).map_err(|error| ToolsUpdateError::Snapshot {
+        path: staged_tools.clone(),
+        message: error.to_string(),
+    })?;
+    for path in &sources {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| ToolsUpdateError::SourceName { path: path.clone() })?;
+        let expected = crate::tools_inventory::expected_for_name(
+            expected_inventory,
+            std::ffi::OsStr::new(name),
+        )
+        .map_err(|message| ToolsUpdateError::Write { message })?;
+        let expected = match (expected_inventory.is_empty(), expected) {
+            (true, _) => None,
+            (false, Some(expected)) => Some(expected),
+            (false, None) => {
+                return Err(ToolsUpdateError::Write {
+                    message: format!("tools inventory is missing {}", path.display()),
+                });
+            }
+        };
+        let destination = staged_tools.join(name);
+        let staged_identity = crate::file_identity::stage(
+            path,
+            &destination,
+            expected.map(|entry| entry.bytes),
+            expected.map(|entry| entry.sha256.as_str()),
+        )
+        .map_err(|error| ToolsUpdateError::Write {
+            message: format!("tools inventory changed {}: {error}", path.display()),
+        })?;
+        inventory.push(FileIdentity {
+            path: path.clone(),
+            ..staged_identity
+        });
+    }
+    if !expected_inventory.is_empty() && expected_inventory.len() != inventory.len() {
+        return Err(ToolsUpdateError::Write {
+            message: "tools inventory contains an unexpected file".to_owned(),
+        });
+    }
+    let staged_sources =
+        slot_tools::staged(staged.path()).map_err(|error| ToolsUpdateError::Write {
+            message: error.to_string(),
+        })?;
+    let files = staged_sources
         .iter()
         .map(|path| {
             path.file_name()
@@ -50,61 +114,19 @@ pub(crate) fn update(root: &Path, source: &Path) -> Result<Vec<String>, ToolsUpd
                 .ok_or_else(|| ToolsUpdateError::SourceName { path: path.clone() })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let destination_paths = slot_tools::destinations(root, &sources);
+    let destination_paths = slot_tools::destinations(root, &staged_sources);
     let snapshot = snapshot_files(&destination_paths)?;
     let tools_directory = root.join("tools");
     let had_tools_directory = tools_directory.is_dir();
-    let result = slot_tools::commit(root, &sources).map_err(|error| ToolsUpdateError::Write {
-        message: error.to_string(),
-    });
+    let result =
+        slot_tools::commit(root, &staged_sources).map_err(|error| ToolsUpdateError::Write {
+            message: error.to_string(),
+        });
     if let Err(error) = result {
-        if let Err(rollback) = restore_snapshot(&snapshot, &tools_directory, had_tools_directory) {
-            return Err(rollback);
-        }
+        restore_snapshot(&snapshot, &tools_directory, had_tools_directory)?;
         return Err(error);
     }
-    Ok(files)
-}
-
-fn source_files(source: &Path) -> Result<Vec<PathBuf>, ToolsUpdateError> {
-    let metadata = fs::metadata(source).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            ToolsUpdateError::SourceMissing {
-                source_path: source.to_owned(),
-            }
-        } else {
-            ToolsUpdateError::Snapshot {
-                path: source.to_owned(),
-                message: error.to_string(),
-            }
-        }
-    })?;
-    if !metadata.is_dir() {
-        return Err(ToolsUpdateError::SourceNotDirectory {
-            source_path: source.to_owned(),
-        });
-    }
-    let entries = fs::read_dir(source).map_err(|error| ToolsUpdateError::Snapshot {
-        path: source.to_owned(),
-        message: error.to_string(),
-    })?;
-    let mut files = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|error| ToolsUpdateError::Snapshot {
-            path: source.to_owned(),
-            message: error.to_string(),
-        })?;
-        if entry.path().is_file() {
-            files.push(entry.path());
-        }
-    }
-    files.sort();
-    if files.is_empty() {
-        return Err(ToolsUpdateError::SourceEmpty {
-            source_path: source.to_owned(),
-        });
-    }
-    Ok(files)
+    Ok(ToolsUpdateReceipt { files, inventory })
 }
 
 fn snapshot_files(
@@ -113,8 +135,16 @@ fn snapshot_files(
     destinations
         .iter()
         .map(|path| {
-            let value = match fs::read(path) {
-                Ok(bytes) => Some(bytes),
+            let value = match crate::file_identity::open_readonly(path) {
+                Ok(mut file) => {
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes)
+                        .map_err(|error| ToolsUpdateError::Snapshot {
+                            path: path.clone(),
+                            message: error.to_string(),
+                        })?;
+                    Some(bytes)
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => {
                     return Err(ToolsUpdateError::Snapshot {
@@ -127,7 +157,6 @@ fn snapshot_files(
         })
         .collect()
 }
-
 fn restore_snapshot(
     snapshot: &HashMap<PathBuf, Option<Vec<u8>>>,
     tools_directory: &Path,
@@ -135,13 +164,7 @@ fn restore_snapshot(
 ) -> Result<(), ToolsUpdateError> {
     for (path, value) in snapshot {
         match value {
-            Some(bytes) => {
-                let current = fs::read(path);
-                if current.as_ref().is_ok_and(|current| current == bytes) {
-                    continue;
-                }
-                restore_file(path, bytes)?;
-            }
+            Some(bytes) => restore_file(path, bytes)?,
             None => match fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -172,20 +195,7 @@ fn restore_snapshot(
 }
 
 fn restore_file(path: &Path, bytes: &[u8]) -> Result<(), ToolsUpdateError> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
-        .map_err(|error| ToolsUpdateError::Rollback {
-            path: path.to_owned(),
-            message: error.to_string(),
-        })?;
-    file.write_all(bytes).map_err(|error| ToolsUpdateError::Rollback {
-        path: path.to_owned(),
-        message: error.to_string(),
-    })?;
-    file.sync_all().map_err(|error| ToolsUpdateError::Rollback {
+    crate::slot_storage::write_regular(path, bytes).map_err(|error| ToolsUpdateError::Rollback {
         path: path.to_owned(),
         message: error.to_string(),
     })

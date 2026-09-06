@@ -155,8 +155,8 @@ fn lookup_inner(request: &AblLookupRequest) -> Result<AblLookupReceipt, AblLooku
 }
 
 fn fetch_remote(product: &str) -> Result<RepositoryFiles, AblLookupError> {
-    let base = std::env::var("CANOE_ABLREPO_URL")
-        .unwrap_or_else(|_| DEFAULT_REPOSITORY_URL.to_owned());
+    let base =
+        std::env::var("CANOE_ABLREPO_URL").unwrap_or_else(|_| DEFAULT_REPOSITORY_URL.to_owned());
     if let Some(directory) = local_directory(&base) {
         return Ok(RepositoryFiles {
             image: directory.join(product).join("abl.img"),
@@ -258,7 +258,10 @@ fn copy_atomically(source: &Path, destination: &Path) -> Result<(), AblLookupErr
         return Err(io_error(
             "create output",
             destination,
-            io::Error::new(io::ErrorKind::NotFound, "destination parent directory does not exist"),
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "destination parent directory does not exist",
+            ),
         ));
     }
     let temporary = destination.with_extension("canoe-abl.tmp");

@@ -1,1 +1,1 @@
-{"operation":"vbmeta.header","ok":true,"algorithm_type":1,"rollback_index":1234605616436508552,"flags":0,"release_string":""}
+{"operation":"vbmeta.header","ok":true,"algorithm_type":1,"rollback_index":1234605616436508552,"flags":0,"release_string":"","public_key_sha256":"630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd","build_properties":{"system_os_version":"16","system_security_patch":"2026-05-01","vendor_security_patch":"2026-04-05","boot_security_patch":"2026-03-01"}}

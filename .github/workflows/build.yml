@@ -68,24 +68,71 @@ jobs:
       run: |
         set -eu
         app="$GITHUB_WORKSPACE/canoe-boot-manager"
+        mkdir -p "$app/src-tauri/binaries"
 
         # The app checkout is intentionally sidecar-less: src-tauri/binaries
-        # only contains .gitkeep. Tauri externalBin requires a target-triple
-        # sidecar before it will build, so staging is a prerequisite rather
-        # than an optimisation.
+        # only contains .gitkeep. Tauri externalBin requires every
+        # target-triple sidecar before it will build, so stage each helper from
+        # the backend toolkit's explicitly named output.
         make -C targets/toolkit_linux submodule_canoe_bootmgr
         cp targets/toolkit_linux/build/toolkit/bin/canoe-bootmgr \
           "$app/src-tauri/binaries/canoe-bootmgr-x86_64-unknown-linux-gnu"
-        (cd "$app" && bunx tauri build --no-bundle --ci)
-        test -x "$app/src-tauri/target/release/canoe-boot-manager"
+        make -C targets/toolkit_linux submodule_canoe_ext4
+        cp targets/toolkit_linux/build/toolkit/bin/canoe-ext4 \
+          "$app/src-tauri/binaries/canoe-ext4-x86_64-unknown-linux-gnu"
+        make -C targets/toolkit_linux submodule_ablfvextractor
+        cp targets/toolkit_linux/build/toolkit/bin/extractfv \
+          "$app/src-tauri/binaries/extractfv-x86_64-unknown-linux-gnu"
+        make -C targets/toolkit_linux submodule_patcher
+        cp targets/toolkit_linux/build/toolkit/bin/patch_abl \
+          "$app/src-tauri/binaries/patch_abl-x86_64-unknown-linux-gnu"
+        make -C targets/toolkit_linux submodule_mode2_profile
+        cp targets/toolkit_linux/build/toolkit/bin/mode2_profile \
+          "$app/src-tauri/binaries/mode2_profile-x86_64-unknown-linux-gnu"
+        make -C targets/toolkit_linux submodule_abl_tzmap
+        cp targets/toolkit_linux/build/toolkit/bin/abl_tzmap \
+          "$app/src-tauri/binaries/abl_tzmap-x86_64-unknown-linux-gnu"
 
-        # The Windows Tauri build specifically needs bin/canoe-bootmgr.exe
-        # staged under its GNU target triple. Build that firmware sidecar
-        # first; the complete Windows toolkit is built after the app so its
-        # canoe_app prerequisite can consume the finished desktop binary.
+        # Build the Windows ext4 helper before staging the Windows set. This
+        # generated helper is an app-build input, not a release artifact yet.
+        git clone --depth 1 --branch v1.47.3 https://github.com/tytso/e2fsprogs.git /tmp/e2fsprogs
+        git clone --depth 1 https://github.com/madler/zlib.git /tmp/zlib
+        make -C /tmp/zlib -f win32/Makefile.gcc PREFIX=x86_64-w64-mingw32- libz.a
+        mkdir -p /tmp/zlib-mingw/include /tmp/zlib-mingw/lib
+        cp /tmp/zlib/zlib.h /tmp/zlib/zconf.h /tmp/zlib-mingw/include/
+        cp /tmp/zlib/libz.a /tmp/zlib-mingw/lib/
+        E2FSPROGS_SRC=/tmp/e2fsprogs ZLIB_PREFIX=/tmp/zlib-mingw bash tools/canoe-ext4/build-windows.sh
+
         make -C targets/toolkit_windows submodule_canoe_bootmgr
         cp targets/toolkit_windows/build/toolkit/bin/canoe-bootmgr.exe \
           "$app/src-tauri/binaries/canoe-bootmgr-x86_64-pc-windows-gnu.exe"
+        make -C targets/toolkit_windows ext4_tools \
+          CANOE_EXT4_WINDOWS="$GITHUB_WORKSPACE/tools/canoe-ext4/canoe-ext4.exe"
+        cp targets/toolkit_windows/build/toolkit/bin/canoe-ext4.exe \
+          "$app/src-tauri/binaries/canoe-ext4-x86_64-pc-windows-gnu.exe"
+        make -C targets/toolkit_windows submodule_ablfvextractor
+        cp targets/toolkit_windows/build/toolkit/bin/extractfv.exe \
+          "$app/src-tauri/binaries/extractfv-x86_64-pc-windows-gnu.exe"
+        make -C targets/toolkit_windows submodule_patcher
+        cp targets/toolkit_windows/build/toolkit/bin/patch_abl.exe \
+          "$app/src-tauri/binaries/patch_abl-x86_64-pc-windows-gnu.exe"
+        make -C targets/toolkit_windows submodule_mode2_profile
+        cp targets/toolkit_windows/build/toolkit/bin/mode2_profile.exe \
+          "$app/src-tauri/binaries/mode2_profile-x86_64-pc-windows-gnu.exe"
+        make -C targets/toolkit_windows submodule_abl_tzmap
+        cp targets/toolkit_windows/build/toolkit/bin/abl_tzmap.exe \
+          "$app/src-tauri/binaries/abl_tzmap-x86_64-pc-windows-gnu.exe"
+        make -C targets/toolkit_windows platform_tools
+        cp targets/toolkit_windows/build/toolkit/Platform-Tools/fastboot.exe \
+          "$app/src-tauri/binaries/fastboot-x86_64-pc-windows-gnu.exe"
+        cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinApi.dll \
+          "$app/src-tauri/binaries/AdbWinApi-x86_64-pc-windows-gnu.dll"
+        cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinUsbApi.dll \
+          "$app/src-tauri/binaries/AdbWinUsbApi-x86_64-pc-windows-gnu.dll"
+
+        (cd "$app" && bunx tauri build --no-bundle --ci)
+        test -x "$app/src-tauri/target/release/canoe-boot-manager"
+
         (cd "$app" && bunx tauri build \
           --target x86_64-pc-windows-gnu --no-bundle --ci)
         test -f \
@@ -94,14 +141,6 @@ jobs:
     - name: Build Toolkits
       run: |
         set -eu
-        git clone --depth 1 --branch v1.47.3 https://github.com/tytso/e2fsprogs.git /tmp/e2fsprogs
-        git clone --depth 1 https://github.com/madler/zlib.git /tmp/zlib
-        make -C /tmp/zlib -f win32/Makefile.gcc PREFIX=x86_64-w64-mingw32- libz.a
-        mkdir -p /tmp/zlib-mingw/include /tmp/zlib-mingw/lib
-        cp /tmp/zlib/zlib.h /tmp/zlib/zconf.h /tmp/zlib-mingw/include/
-        cp /tmp/zlib/libz.a /tmp/zlib-mingw/lib/
-        E2FSPROGS_SRC=/tmp/e2fsprogs ZLIB_PREFIX=/tmp/zlib-mingw bash tools/canoe-ext4/build-windows.sh
-        test -f tools/canoe-ext4/canoe-ext4.exe
         make target_toolkit_linux \
           CANOE_APP_LINUX_BIN="$GITHUB_WORKSPACE/canoe-boot-manager/src-tauri/target/release/canoe-boot-manager"
         make target_toolkit_windows \

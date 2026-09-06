@@ -5,8 +5,11 @@ use canoe_bootmgr::wire::parse_json;
 use serde_json::Value;
 
 fn default_get(root: &std::path::Path) -> Value {
-    let response = execute_request(root, parse_json(br#"{"verb":"default.get"}"#).expect("request"))
-        .expect("default.get response");
+    let response = execute_request(
+        root,
+        parse_json(br#"{"verb":"default.get"}"#).expect("request"),
+    )
+    .expect("default.get response");
     serde_json::to_value(response).expect("response JSON")
 }
 
@@ -56,7 +59,7 @@ fn default_get_reports_unknown_when_bls_discovery_is_incomplete() {
     .expect("config");
     let directory = root.path().join("loader/entries");
     fs::create_dir_all(&directory).expect("BLS directory");
-    fs::set_permissions(&directory, fs::Permissions::from_mode(0))
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o0))
         .expect("make BLS discovery unreadable");
     let response = default_get(root.path());
     assert_eq!(response["resolution"], "unknown");

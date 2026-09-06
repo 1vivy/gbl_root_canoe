@@ -65,7 +65,6 @@ static UINTN mStallCount;
 static UINTN mStallTotalUs;
 static UINTN mReserveSwallowMarkerCount;
 static UINTN mReserveAbsentMarkerCount;
-static UINTN mEfispHideMarkerCount;
 static UINTN mLockstateNoneMarkerCount;
 static UINTN mLockstateRepairMarkerCount;
 static UINTN mLockstateRefusedMarkerCount;
@@ -90,7 +89,6 @@ ResetMarkerCounters(void)
   mTokenNoticeCount = 0;
   mReserveSwallowMarkerCount = 0;
   mReserveAbsentMarkerCount = 0;
-  mEfispHideMarkerCount = 0;
   mLockstateNoneMarkerCount = 0;
   mLockstateRepairMarkerCount = 0;
   mLockstateRefusedMarkerCount = 0;
@@ -329,9 +327,6 @@ DebugPrint(IN UINTN ErrorLevel, IN CONST CHAR8 *Format, ...)
   if (strstr(Format, "component=reserve universal=1 present=0") != NULL) {
     ++mReserveAbsentMarkerCount;
   }
-  if (strstr(Format, "SFB: MARK efisp-hide status=") != NULL) {
-    ++mEfispHideMarkerCount;
-  }
   if (strstr(Format, "SFB: MARK devinfo-repair") != NULL) {
     va_list Args;
     UINT32 ObservedUnlocked;
@@ -387,17 +382,15 @@ FakeLocateProtocol(IN EFI_GUID *Protocol, IN VOID *Registration,
   return EFI_NOT_FOUND;
 }
 
-/* A minimal three-entry GPT: one vendor reserve partition, one ordinary
- * partition that must stay untouched, and the efisp image partition. */
-#define FAKE_PART_COUNT  3u
+/* A minimal two-entry GPT: one vendor reserve partition and one ordinary
+ * partition that must stay untouched. */
+#define FAKE_PART_COUNT  2u
 
 static EFI_PARTITION_ENTRY mPartEntries[FAKE_PART_COUNT];
 static EFI_BLOCK_IO_PROTOCOL mPartBlockIo[FAKE_PART_COUNT];
 static EFI_BLOCK_IO_MEDIA mPartMedia[FAKE_PART_COUNT];
 static EFI_HANDLE mPartHandles[FAKE_PART_COUNT];
 static UINTN mPartWriteCount[FAKE_PART_COUNT];
-static UINTN mPartReadCount[FAKE_PART_COUNT];
-static UINTN mPartFlushCount[FAKE_PART_COUNT];
 static CONST CHAR16 *mReserveName = L"oplusreserve1";
 
 static EFI_STATUS EFIAPI
@@ -416,35 +409,6 @@ FakePartWriteBlocks(IN EFI_BLOCK_IO_PROTOCOL *This, IN UINT32 MediaId,
   return EFI_INVALID_PARAMETER;
 }
 
-static EFI_STATUS EFIAPI
-FakePartReadBlocks(IN EFI_BLOCK_IO_PROTOCOL *This, IN UINT32 MediaId,
-                   IN EFI_LBA Lba, IN UINTN BufferSize, OUT VOID *Buffer)
-{
-  UINTN Index;
-
-  (void)MediaId; (void)Lba; (void)BufferSize; (void)Buffer;
-  for (Index = 0; Index < FAKE_PART_COUNT; ++Index) {
-    if (&mPartBlockIo[Index] == This) {
-      ++mPartReadCount[Index];
-      return EFI_SUCCESS;
-    }
-  }
-  return EFI_INVALID_PARAMETER;
-}
-
-static EFI_STATUS EFIAPI
-FakePartFlushBlocks(IN EFI_BLOCK_IO_PROTOCOL *This)
-{
-  UINTN Index;
-
-  for (Index = 0; Index < FAKE_PART_COUNT; ++Index) {
-    if (&mPartBlockIo[Index] == This) {
-      ++mPartFlushCount[Index];
-      return EFI_SUCCESS;
-    }
-  }
-  return EFI_INVALID_PARAMETER;
-}
 
 static void
 SetPartitionName(UINTN Index, CONST CHAR16 *Name)
@@ -471,18 +435,11 @@ InitializePartitions(void)
     memset(&mPartBlockIo[Index], 0, sizeof(mPartBlockIo[Index]));
     mPartBlockIo[Index].Media = &mPartMedia[Index];
     mPartBlockIo[Index].WriteBlocks = FakePartWriteBlocks;
-    if (Index == 2) {
-      mPartBlockIo[Index].ReadBlocks = FakePartReadBlocks;
-      mPartBlockIo[Index].FlushBlocks = FakePartFlushBlocks;
-    }
     mPartHandles[Index] = (EFI_HANDLE)&mPartBlockIo[Index];
     mPartWriteCount[Index] = 0;
-    mPartReadCount[Index] = 0;
-    mPartFlushCount[Index] = 0;
   }
   SetPartitionName(0, mReserveName);
   SetPartitionName(1, L"userdata");
-  SetPartitionName(2, L"efisp");
 }
 
 static EFI_STATUS EFIAPI
@@ -831,9 +788,7 @@ TestPreflightAndVerifiedBoot(void)
 {
   QCOM_VB_RW_DEVICE_STATE OriginalRw = mVerifiedBoot.VBRwDeviceState;
   QCOM_VB_DEVICE_INIT OriginalInit = mVerifiedBoot.VBDeviceInit;
-  EFI_BLOCK_READ OriginalEfispRead = mPartBlockIo[2].ReadBlocks;
-  EFI_BLOCK_WRITE OriginalEfispWrite = mPartBlockIo[2].WriteBlocks;
-  EFI_BLOCK_FLUSH OriginalEfispFlush = mPartBlockIo[2].FlushBlocks;
+  EFI_BLOCK_WRITE OriginalReserveWrite = mPartBlockIo[0].WriteBlocks;
   UINTN BeforeWrites;
   UINTN BeforeReads;
   UINTN PriorVbRead;
@@ -970,10 +925,7 @@ TestPreflightAndVerifiedBoot(void)
   assert(mScm.ScmSipSysCall == FakeScmSipSysCall);
   assert(mScm.ScmQseeSysCall == FakeScmQseeSysCall);
   assert(mSpss.SPSSDxe_ShareKeyMintInfo == FakeShareKeyMintInfo);
-  assert(mPartBlockIo[2].ReadBlocks != OriginalEfispRead);
-  assert(mPartBlockIo[2].WriteBlocks != OriginalEfispWrite);
-  assert(mPartBlockIo[2].FlushBlocks != OriginalEfispFlush);
-  assert(mPartMedia[2].MediaPresent == FALSE);
+  assert(mPartBlockIo[0].WriteBlocks == OriginalReserveWrite);
   memset(&View, 0, sizeof(View));
   assert(mVerifiedBoot.VBRwDeviceState(&mVerifiedBoot, READ_CONFIG,
                                        (UINT8 *)&View, sizeof(View)) == EFI_SUCCESS);
@@ -1056,7 +1008,6 @@ TestLockstatePolicy(void)
   assert(mQseecom.QseecomSendCmd == FakeSendCmd);
   assert(mScm.ScmSipSysCall == FakeScmSipSysCall);
   assert(mScm.ScmQseeSysCall == FakeScmQseeSysCall);
-  assert(mPartMedia[2].MediaPresent == TRUE);
 
   SfbDisarmManagedAblHooks();
   InitializePartitions();
@@ -1073,47 +1024,6 @@ TestLockstatePolicy(void)
   SfbDisarmManagedAblHooks();
 }
 
-static void
-TestEfispHide(void)
-{
-  EFI_BLOCK_READ OriginalRead;
-  EFI_BLOCK_WRITE OriginalWrite;
-  EFI_BLOCK_FLUSH OriginalFlush;
-  UINT8 Buffer[4096];
-  UINTN Before;
-
-  SfbDisarmManagedAblHooks();
-  InitializePartitions();
-  MakeValidStoredInfo(TRUE, TRUE);
-  ResetMarkerCounters();
-  OriginalRead = mPartBlockIo[2].ReadBlocks;
-  OriginalWrite = mPartBlockIo[2].WriteBlocks;
-  OriginalFlush = mPartBlockIo[2].FlushBlocks;
-  memset(Buffer, 0, sizeof(Buffer));
-
-  assert(SfbPrepareManagedAblHooks(SfbBootModeHonestUnlocked, NULL, NULL,
-                                   SfbConfigLockAsNeeded) == EFI_SUCCESS);
-  assert(mEfispHideMarkerCount == 1);
-  assert(mPartMedia[2].MediaPresent == FALSE);
-  assert(mPartBlockIo[2].ReadBlocks(&mPartBlockIo[2], 0, 0,
-                                    sizeof(Buffer), Buffer) == EFI_NO_MEDIA);
-  assert(mPartBlockIo[2].WriteBlocks(&mPartBlockIo[2], 0, 0,
-                                     sizeof(Buffer), Buffer) == EFI_NO_MEDIA);
-  assert(mPartBlockIo[2].FlushBlocks(&mPartBlockIo[2]) == EFI_NO_MEDIA);
-  assert(mPartReadCount[2] == 0);
-  assert(mPartWriteCount[2] == 0);
-  assert(mPartFlushCount[2] == 0);
-
-  SfbDisarmManagedAblHooks();
-  assert(mPartBlockIo[2].ReadBlocks == OriginalRead);
-  assert(mPartBlockIo[2].WriteBlocks == OriginalWrite);
-  assert(mPartBlockIo[2].FlushBlocks == OriginalFlush);
-  assert(mPartMedia[2].MediaPresent == TRUE);
-  Before = mPartWriteCount[2];
-  assert(mPartBlockIo[2].WriteBlocks(&mPartBlockIo[2], 0, 0,
-                                     sizeof(Buffer), Buffer) == EFI_SUCCESS);
-  assert(mPartWriteCount[2] == Before + 1);
-}
 
 static void
 TestQseecomAndSpss(void)
@@ -2001,7 +1911,6 @@ main(void)
   InitializeProtocols();
   TestPreflightAndVerifiedBoot();
   TestLockstatePolicy();
-  TestEfispHide();
   TestQseecomAndSpss();
   TestManifestDrivenKeymasterPolicy();
   TestRewriteLayouts();

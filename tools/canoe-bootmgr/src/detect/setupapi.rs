@@ -38,7 +38,7 @@ pub(super) fn setupapi_identities() -> HashMap<u32, String> {
     let mut member = 0_u32;
     loop {
         let mut interface = SP_DEVICE_INTERFACE_DATA {
-            cbSize: u32::try_from(size_of::<SP_DEVICE_INTERFACE_DATA>()).map_or(0, |value| value),
+            cbSize: u32::try_from(size_of::<SP_DEVICE_INTERFACE_DATA>()).unwrap_or(0),
             ..SP_DEVICE_INTERFACE_DATA::default()
         };
         // SAFETY: interface points to a writable structure with the required cbSize.
@@ -68,7 +68,7 @@ pub(super) fn setupapi_identities() -> HashMap<u32, String> {
         };
         if required != 0 {
             let words = usize::try_from(required)
-                .map_or(0, |value| value)
+                .unwrap_or(0)
                 .div_ceil(size_of::<u32>());
             let mut storage = vec![0_u32; words];
             let detail = storage
@@ -83,7 +83,7 @@ pub(super) fn setupapi_identities() -> HashMap<u32, String> {
                 };
             }
             let mut info = SP_DEVINFO_DATA {
-                cbSize: u32::try_from(size_of::<SP_DEVINFO_DATA>()).map_or(0, |value| value),
+                cbSize: u32::try_from(size_of::<SP_DEVINFO_DATA>()).unwrap_or(0),
                 ..SP_DEVINFO_DATA::default()
             };
             // SAFETY: detail/info point to writable buffers sized for this API call.
@@ -161,7 +161,7 @@ fn devnode_identity(mut devinst: u32) -> Option<String> {
             let end = buffer
                 .iter()
                 .position(|value| *value == 0)
-                .map_or(buffer.len(), |value| value);
+                .unwrap_or(buffer.len());
             let id = String::from_utf16_lossy(&buffer[..end]);
             if let Some(identity) = parse_usb_identity(&id) {
                 return Some(identity);

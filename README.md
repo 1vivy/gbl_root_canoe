@@ -54,15 +54,18 @@ fastboot flash efisp BDS.efi
 # Windows: canoe.exe
 ```
 
-The questionnaire waits for matching stock `images/abl.img` and
-`images/vbmeta.img`, asks for slot and mode, and passes the exported raw source
-directly to `canoe-bootmgr` through `canoe-ext4`. No host filesystem directory
-or drive letter is needed:
+The Deploy stages collect matching stock `images/abl.img` and
+`images/vbmeta.img`, then resolve the target slot and mode. When the persisted
+mode should be inherited, omit `--mode`:
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --slot a --mode 1
+canoe install --slot a
 ```
+
+An explicit mode change is a separate reviewed operation; use the Deploy
+plan's evidence and acknowledgements rather than treating `--mode` as
+sufficient.
 
 For a deliberately supplied local directory, pass `--boot-root`; for an ext4
 image or raw block source, use the boot manager's `--source` or `--ext4-image`
@@ -77,10 +80,11 @@ rows exist only for valid installed triplets; hand-added rows are preserved.
 
 ### 3. KernelSU module install
 
-Install the module on a rooted device and follow its bilingual first-install
-questionnaire. Select Mode 0, 1, or 2. The module's device-side flow derives
-the selected per-slot triplet, commits the boot root through `canoe-bootmgr`,
-and performs any required device partition writes.
+Install the module on a rooted device and open its five-route WebUI. Overview
+shows the next action; Deploy owns **Provision → Prepare → Action**. Select a
+target mode there only when changing the persisted mode. The module's device
+side flow derives the selected per-slot triplet, commits the boot root through
+`canoe-bootmgr`, and performs any required device partition writes.
 
 ### 4. KernelSU update or post-OTA install
 
@@ -109,9 +113,13 @@ su -c sh ./build.sh --mode 1
 ```
 
 It accepts only Mode 0 and Mode 1, changes the boot-root tree, validates the
-generated files, and performs no partition write. The operator owns the `dd`
-of the vulnerable ABL and `BDS.efi` to `efisp`; the retired device-side
-writers are not part of the release surface.
+generated files, and performs no partition write. `P-FORMAT` acknowledgement is
+required only for an observed transition crossing Mode 0 (`R1`); unknown source
+mode and KeyMint or signing evidence surface `may` risk instead and never create
+a mandatory format blocker. The selected VBMETA is read as target evidence but
+is never written. The operator owns the `dd` of the vulnerable ABL and
+`BDS.efi` to `efisp`; the retired device-side writers are not part of the
+release surface.
 
 ## Command surface
 
@@ -122,14 +130,15 @@ bundled interpreter is needed.
 ```text
 canoe
 canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] \
+canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] [--from-mode 0|1|2] \
+              [--acknowledge CODE]... \
               [--vendor-boot IMG] [--allow-new-signer]
 canoe entry|config|default|bls|slot|source ...
 canoe -h | --help | --version
 canoe --non-interactive <command> ...
 ```
 
-With no arguments, `canoe` starts the interactive five-scenario questionnaire.
+With no arguments, `canoe` starts the interactive five-route operator surface.
 `--non-interactive` is accepted and discarded for compatibility. The
 `entry|config|default|bls|slot|source` verbs are forwarded verbatim to
 `canoe-bootmgr`.
@@ -138,7 +147,12 @@ The canonical single-writer API is `canoe-bootmgr`:
 
 ```text
 canoe-bootmgr [--boot-root DIR | --source SOURCE | --ext4-image IMAGE] <command>
-canoe-bootmgr ... install --staged DIR --slot a|b --mode 0|1|2
+canoe-bootmgr ... install --staged DIR --slot a|b [--mode 0|1|2] [--from-mode 0|1|2] \
+             [--id ID] [--acknowledge CODE]... \
+             [--current-vbmeta PATH] [--target-vbmeta PATH] [--target-image PATH]
+canoe-bootmgr ... ota-apply --staged DIR --target-slot a|b [--mode 0|1|2] [--from-mode 0|1|2] \
+             [--id ID] [--acknowledge CODE]... \
+             [--current-vbmeta PATH] [--target-vbmeta PATH] [--target-image PATH]
 canoe-bootmgr ... slot status
 canoe-bootmgr ... bls list
 ```
@@ -146,12 +160,34 @@ canoe-bootmgr ... bls list
 `--boot-root` selects a local directory; `--source` and `--ext4-image` select
 the direct ext4 backend and are mutually exclusive with it. The host `canoe`
 surface uses the BDS export as its direct source when `--boot-root` is omitted.
+Omit `--mode` to inherit the persisted mode. For an existing managed entry,
+`--id <ENTRY_ID>` supplies the current-mode evidence; for a new row, supply
+`--from-mode 0|1|2` explicitly. A mode change must also repeat
+`--acknowledge <CODE>` for every acknowledgement required by `mode.plan`.
+When the plan needs image evidence, pass `--current-vbmeta`, `--target-vbmeta`,
+and `--target-image`; these paths are evidence inputs, not implicit flash
+payloads. The writer evaluates `mode.plan` before mutating the boot root, so a
+refusal or missing acknowledgement leaves it untouched.
 
-For Mode 1 recovery preparation, use the standalone graft tool:
+For example, an existing row can request a reviewed mode change:
 
 ```text
-vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>
+canoe-bootmgr ... install --staged DIR --slot a --mode 1 --id android-a \
+  --current-vbmeta CURRENT_VBMETA --target-vbmeta TARGET_VBMETA \
+  --target-image TARGET_IMAGE \
+  --acknowledge CODE_1 --acknowledge CODE_2
 ```
+
+For a new row, provide the prior mode explicitly instead of `--id`:
+
+```text
+canoe-bootmgr ... install --staged DIR --slot a --mode 1 --from-mode 0 \
+  --acknowledge CODE_1 --acknowledge CODE_2
+```
+
+Mode 1 graft preparation is an optional task inside Deploy → Prepare. It
+enumerates the selected VBMETA's chain descriptors, verifies any generated
+image, and only then offers its partition write.
 
 The output must not grow. The `vendor_boot` feature is a fixed-offset cmdline
 amendment; no boot-image binary is bundled.

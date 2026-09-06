@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::error::CanoeError;
-use crate::layout::{require_exact, require_nonempty, Toolkit, GM2P_BYTES, TZMAP_BYTES};
-use crate::local::{local_boot_root, TempDir};
+use crate::layout::{GM2P_BYTES, TZMAP_BYTES, Toolkit, require_exact, require_nonempty};
+use crate::local::{TempDir, local_boot_root};
+use crate::stage_mode;
 use crate::stage_report::stage_report;
 use crate::ui::{emit, note, step, warn};
 
@@ -12,11 +13,10 @@ use crate::ui::{emit, note, step, warn};
 pub struct InstallOptions {
     pub boot_root: Option<PathBuf>,
     pub slot: String,
-    pub mode: u8,
+    pub mode: Option<canoe_bootmgr::InstallMode>,
     pub vendor_boot: Option<PathBuf>,
     pub allow_new_signer: bool,
 }
-
 
 fn parse_value(args: &[String], index: &mut usize, flag: &str) -> Result<String, CanoeError> {
     *index += 1;
@@ -28,39 +28,77 @@ fn parse_value(args: &[String], index: &mut usize, flag: &str) -> Result<String,
 pub fn parse(args: &[String]) -> Result<InstallOptions, CanoeError> {
     let mut boot_root = None;
     let mut slot = None;
-    let mut mode = 1;
+    let mut mode = None;
+    let mut from_mode = None;
+    let mut acknowledge = Vec::new();
     let mut vendor_boot = None;
     let mut allow_new_signer = false;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
-            "--boot-root" => boot_root = Some(PathBuf::from(parse_value(args, &mut index, "--boot-root")?)),
-            "--slot" => slot = Some(parse_value(args, &mut index, "--slot")?),
-            "--mode" => {
-                let raw = parse_value(args, &mut index, "--mode")?;
-                mode = raw.parse::<u8>().map_err(|_| CanoeError::message("mode must be 0, 1 or 2"))?;
+            "--boot-root" => {
+                boot_root = Some(PathBuf::from(parse_value(args, &mut index, "--boot-root")?))
             }
-            "--vendor-boot" => vendor_boot = Some(PathBuf::from(parse_value(args, &mut index, "--vendor-boot")?)),
+            "--slot" => slot = Some(parse_value(args, &mut index, "--slot")?),
+            "--mode" => mode = Some(parse_mode(args, &mut index, "--mode")?),
+            "--from-mode" => from_mode = Some(parse_mode(args, &mut index, "--from-mode")?),
+            "--acknowledge" => acknowledge.push(parse_value(args, &mut index, "--acknowledge")?),
+            "--vendor-boot" => {
+                vendor_boot = Some(PathBuf::from(parse_value(
+                    args,
+                    &mut index,
+                    "--vendor-boot",
+                )?))
+            }
             "--allow-new-signer" => allow_new_signer = true,
-            "-h" | "--help" => return Err(CanoeError::message("install help is provided by canoe --help")),
+            "-h" | "--help" => {
+                return Err(CanoeError::message(
+                    "install help is provided by canoe --help",
+                ));
+            }
             flag => return Err(CanoeError::message(format!("unexpected argument: {flag}"))),
         }
         index += 1;
     }
-    let slot = slot.ok_or_else(|| CanoeError::message("the following arguments are required: --slot"))?;
+    let slot =
+        slot.ok_or_else(|| CanoeError::message("the following arguments are required: --slot"))?;
     if slot != "a" && slot != "b" {
         return Err(CanoeError::message("slot must be a or b"));
     }
-    if mode > 2 {
-        return Err(CanoeError::message("mode must be 0, 1 or 2"));
+    if mode.is_none() && (from_mode.is_some() || !acknowledge.is_empty()) {
+        return Err(CanoeError::message(
+            "--from-mode and --acknowledge describe a mode change; pass --mode 0|1|2",
+        ));
     }
-    Ok(InstallOptions { boot_root, slot, mode, vendor_boot, allow_new_signer })
+    let mode = mode.map(|target| canoe_bootmgr::InstallMode {
+        target,
+        from: from_mode,
+        prior_canoe: false,
+        acknowledge,
+    });
+    Ok(InstallOptions {
+        boot_root,
+        slot,
+        mode,
+        vendor_boot,
+        allow_new_signer,
+    })
 }
 
+fn parse_mode(args: &[String], index: &mut usize, flag: &str) -> Result<u8, CanoeError> {
+    let raw = parse_value(args, index, flag)?;
+    match raw.parse::<u8>() {
+        Ok(mode) if mode <= 2 => Ok(mode),
+        Ok(_) | Err(_) => Err(CanoeError::message(format!("{flag} must be 0, 1 or 2"))),
+    }
+}
 
 fn stage_files(toolkit: &Toolkit, staging: &Path) -> Result<(), CanoeError> {
     let files = toolkit.triplet();
-    for (source, name) in files.into_iter().zip(["boot.efi", "boot.efi.gm2p", "boot.efi.tzmap"]) {
+    for (source, name) in files
+        .into_iter()
+        .zip(["boot.efi", "boot.efi.gm2p", "boot.efi.tzmap"])
+    {
         copy_staged(&source, &staging.join(name), name)?;
     }
     let tools = toolkit.efisp_tools();
@@ -83,9 +121,8 @@ fn copy_staged(source: &Path, destination: &Path, name: &str) -> Result<(), Cano
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(source, destination).map_err(|error| {
-        CanoeError::message(format!("could not stage {name}: {error}"))
-    })?;
+    fs::copy(source, destination)
+        .map_err(|error| CanoeError::message(format!("could not stage {name}: {error}")))?;
     note(name);
     Ok(())
 }
@@ -123,8 +160,8 @@ fn detect_export() -> Result<Option<PathBuf>, canoe_bootmgr::fastboot::FastbootE
         .iter()
         .find(|candidate| canoe_bootmgr::detect::is_export_candidate(candidate))
         .map(|candidate| candidate.path.clone()))
-
 }
+
 fn install_to_backend(
     toolkit: &Toolkit,
     staging: &Path,
@@ -135,16 +172,18 @@ fn install_to_backend(
         "b" => canoe_bootmgr::Slot::B,
         _ => return Err(CanoeError::message("slot must be a or b")),
     };
-    let request = canoe_bootmgr::InstallRequest {
-        staged: staging.to_path_buf(),
-        slot,
-        mode: options.mode,
-        allow_new_signer: options.allow_new_signer,
-};
     if let Some(path) = options.boot_root.as_deref() {
         let root = local_boot_root(path)?;
         let backend = canoe_bootmgr::Backend::local(&root)
             .map_err(|error| CanoeError::message(error.to_string()))?;
+        let context = stage_mode::InstallContext {
+            toolkit,
+            staging,
+            options,
+            backend: &backend,
+            slot,
+        };
+        let request = stage_mode::install_request(&context)?;
         step("Installing the staged boot root");
         let receipt = canoe_bootmgr::install(&backend, &request)
             .map_err(|error| CanoeError::message(error.to_string()))?;
@@ -164,15 +203,22 @@ fn install_to_backend(
             "Adopting the mass-storage export already live at {}",
             exported.node.display()
         ));
-}
+    }
     let helper = toolkit.tool("canoe-ext4")?;
     let backend = canoe_bootmgr::Backend::ext4_with_helper(&exported.node, &helper)
         .map_err(|error| CanoeError::message(error.to_string()))?;
+    let context = stage_mode::InstallContext {
+        toolkit,
+        staging,
+        options,
+        backend: &backend,
+        slot,
+    };
+    let request = stage_mode::install_request(&context)?;
     step("Installing the staged boot root");
     let receipt = canoe_bootmgr::install(&backend, &request)
         .map_err(|error| CanoeError::message(error.to_string()))?;
     Ok((exported.node.display().to_string(), receipt))
-
 }
 pub fn run(args: &[String]) -> Result<(), CanoeError> {
     let options = parse(args)?;
@@ -192,26 +238,41 @@ pub fn run(args: &[String]) -> Result<(), CanoeError> {
     };
     if options.boot_root.is_none() {
         match canoe_bootmgr::fastboot::binary(Some(&toolkit.root)) {
-            Ok(fastboot) => match canoe_bootmgr::fastboot::identify_checked(
-                &fastboot,
-                Duration::from_secs(10),
-            ) {
-                Ok(identity) => {
-                    if identity.bds_version.is_none() {
-                        warn("The device does not look like Super Fastboot; fastboot oem mass-storage:persist does not exist outside the BDS.");
+            Ok(fastboot) => {
+                match canoe_bootmgr::fastboot::identify_checked(&fastboot, Duration::from_secs(10))
+                {
+                    Ok(identity) => {
+                        if identity.bds_version.is_none() {
+                            warn(
+                                "The device does not look like Super Fastboot; fastboot oem mass-storage:persist does not exist outside the BDS.",
+                            );
+                        }
                     }
+                    Err(error @ canoe_bootmgr::fastboot::FastbootError::DeviceBusy { .. })
+                    | Err(error @ canoe_bootmgr::fastboot::FastbootError::ExportActive { .. }) => {
+                        return Err(CanoeError::message(error.to_string()));
+                    }
+                    Err(error) => warn(&format!(
+                        "Could not identify the device with fastboot: {error}"
+                    )),
                 }
-                Err(error @ canoe_bootmgr::fastboot::FastbootError::DeviceBusy { .. })
-                | Err(error @ canoe_bootmgr::fastboot::FastbootError::ExportActive { .. }) => {
-                    return Err(CanoeError::message(error.to_string()));
-                }
-                Err(error) => warn(&format!("Could not identify the device with fastboot: {error}")),
-            },
-            Err(error) => warn(&format!("Could not identify the device with fastboot: {error}")),
+            }
+            Err(error) => warn(&format!(
+                "Could not identify the device with fastboot: {error}"
+            )),
         }
         step("Exporting persist over USB Mass Storage");
     }
     let (destination, receipt) = install_to_backend(&toolkit, staging.path(), &options)?;
-    emit(&stage_report(&destination, options.mode, !receipt.backup_present, vendor_output.as_deref()));
+    for warning in &receipt.warnings {
+        warn(&format!("Install policy warning: {warning}"));
+    }
+    emit(&stage_report(&crate::stage_report::StageReportInput {
+        destination: &destination,
+        mode: options.mode.as_ref().map(|mode| mode.target),
+        first_install: !receipt.backup_present,
+        vendor_boot: vendor_output.as_deref(),
+        receipt: &receipt,
+    }));
     Ok(())
 }

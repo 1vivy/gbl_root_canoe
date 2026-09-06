@@ -1,8 +1,11 @@
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt;
 use std::fs::{File, OpenOptions};
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,6 +17,8 @@ pub(crate) const LOCK_WAIT: Duration = Duration::from_secs(180);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const LOCK_FILE_NAME: &str = "canoe-bootmgr-device.lock";
 
+static TEST_LOCK_PATH: OnceLock<PathBuf> = OnceLock::new();
+
 /// Proof that this process owns the inter-process device lease.
 #[derive(Debug)]
 pub(crate) struct DeviceGuard {
@@ -23,6 +28,15 @@ pub(crate) struct DeviceGuard {
 impl DeviceGuard {
     pub(crate) fn fastboot() -> Result<Self, FastbootError> {
         let guard = Self::acquire()?;
+        if let Some(node) = live_export_node()? {
+            return Err(FastbootError::ExportActive { node });
+        }
+        Ok(guard)
+    }
+
+    /// Acquire the device lease for a bounded, read-only fastboot probe.
+    pub(crate) fn fastboot_read(wait: Duration) -> Result<Self, FastbootError> {
+        let guard = Self::acquire_with_wait(wait)?;
         if let Some(node) = live_export_node()? {
             return Err(FastbootError::ExportActive { node });
         }
@@ -47,8 +61,12 @@ impl DeviceGuard {
     }
 
     fn acquire() -> Result<Self, FastbootError> {
+        Self::acquire_with_wait(LOCK_WAIT)
+    }
+
+    fn acquire_with_wait(wait: Duration) -> Result<Self, FastbootError> {
         let path = lock_path();
-        AdvisoryLock::acquire_at(&path, LOCK_WAIT)
+        AdvisoryLock::acquire_at(&path, wait)
             .map(|lock| Self { _lock: lock })
             .map_err(|error| match error {
                 LockError::Busy { wait } => FastbootError::DeviceBusy { path, wait },
@@ -67,10 +85,29 @@ pub(crate) fn require_export(operation: &'static str) -> Result<DeviceGuard, Fas
     DeviceGuard::exported(operation)
 }
 
+#[doc(hidden)]
+pub(crate) fn set_test_lock_path(path: &Path) -> Result<(), FastbootError> {
+    if TEST_LOCK_PATH.set(path.to_owned()).is_ok() {
+        return Ok(());
+    }
+    if TEST_LOCK_PATH.get().is_some_and(|current| current == path) {
+        return Ok(());
+    }
+    Err(FastbootError::DeviceLock {
+        path: path.to_owned(),
+        source: io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "test device lock path is already configured",
+        ),
+    })
+}
+
 fn lock_path() -> PathBuf {
-    std::env::var_os("CANOE_DEVICE_LOCK_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(LOCK_FILE_NAME))
+    TEST_LOCK_PATH.get().cloned().unwrap_or_else(|| {
+        std::env::var_os("CANOE_DEVICE_LOCK_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| std::env::temp_dir().join(LOCK_FILE_NAME))
+    })
 }
 
 fn live_export_node() -> Result<Option<PathBuf>, FastbootError> {
@@ -107,12 +144,7 @@ impl AdvisoryLock {
     fn acquire_at(path: &Path, wait: Duration) -> Result<Self, LockError> {
         #[cfg(unix)]
         {
-            let file = OpenOptions::new()
-                .create(true)
-                .read(true)
-                .write(true)
-                .open(path)
-                .map_err(LockError::Io)?;
+            let file = open_unix_lock_file(path).map_err(LockError::Io)?;
             let mut file = Some(file);
             let deadline = Instant::now().checked_add(wait);
             loop {
@@ -138,6 +170,7 @@ impl AdvisoryLock {
             loop {
                 match OpenOptions::new()
                     .create(true)
+                    .truncate(false)
                     .read(true)
                     .write(true)
                     .share_mode(0)
@@ -160,10 +193,48 @@ impl AdvisoryLock {
     }
 }
 
-fn sleep_until_available(
-    deadline: Option<Instant>,
-    wait: Duration,
-) -> Result<(), LockError> {
+#[cfg(unix)]
+fn open_unix_lock_file(path: &Path) -> io::Result<File> {
+    let open_existing = || {
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+    };
+    match open_existing() {
+        Ok(file) => regular_lock_file(file),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let created = OpenOptions::new()
+                .create_new(true)
+                .read(true)
+                .write(true)
+                .mode(0o644)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(path);
+            match created {
+                Ok(file) => regular_lock_file(file),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    open_existing().and_then(regular_lock_file)
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(unix)]
+fn regular_lock_file(file: File) -> io::Result<File> {
+    if file.metadata()?.is_file() {
+        return Ok(file);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "device lock path is not a regular file",
+    ))
+}
+
+fn sleep_until_available(deadline: Option<Instant>, wait: Duration) -> Result<(), LockError> {
     let Some(deadline) = deadline else {
         return Err(LockError::Busy { wait });
     };
@@ -181,35 +252,4 @@ fn is_sharing_violation(error: &io::Error) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{DeviceGuard, LockError};
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
-
-    #[test]
-    fn second_guard_is_busy_while_first_guard_is_live() {
-        let directory = tempfile::tempdir().expect("lock directory");
-        let path = directory.path().join("device.lock");
-        let first = DeviceGuard::acquire_at(&path, Duration::from_secs(1)).expect("first lock");
-        let (ready_tx, ready_rx) = mpsc::sync_channel(0);
-        let path_for_thread = path.clone();
-        let worker = thread::spawn(move || {
-            ready_tx.send(()).expect("ready");
-            DeviceGuard::acquire_at(&path_for_thread, Duration::from_millis(5))
-        });
-        ready_rx.recv().expect("worker started");
-        let result = worker.join().expect("worker joined");
-        assert!(matches!(result, Err(LockError::Busy { .. })));
-        drop(first);
-    }
-
-    #[test]
-    fn dropped_guard_releases_lock_for_next_run() {
-        let directory = tempfile::tempdir().expect("lock directory");
-        let path = directory.path().join("device.lock");
-        let first = DeviceGuard::acquire_at(&path, Duration::from_secs(1)).expect("first lock");
-        drop(first);
-        let _next = DeviceGuard::acquire_at(&path, Duration::ZERO).expect("released lock");
-    }
-}
+mod tests;

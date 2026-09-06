@@ -29,12 +29,82 @@ bun test
 `dist/` 必须既能从 Tauri WebView 加载，也能从 KernelSU 的 `file://` WebUI
 加载。
 
-在编译 Tauri 之前，必须将真实且匹配目标的 `canoe-bootmgr` sidecar 放入应用
-仓库的 `src-tauri/binaries/` 目录。所需名称分别为 Linux 的
-`canoe-bootmgr-x86_64-unknown-linux-gnu`、已测试 Windows GNU 路线的
-`canoe-bootmgr-x86_64-pc-windows-gnu.exe`，以及 MSVC 构建的
-`canoe-bootmgr-x86_64-pc-windows-msvc.exe`。不要使用占位 sidecar：Tauri
-会在编译前验证它。
+在编译 Tauri 之前，必须将所有与目标匹配的 sidecar 和 helper 放入应用仓库
+的 `src-tauri/binaries/` 目录。`src-tauri/build.rs` 会为每个暂存文件计算
+SHA-256 并嵌入构建结果；缺少文件、文件不是普通文件、不可执行或目标不匹配
+都会使 Tauri 构建失败。Linux 所需名称为：
+
+```text
+canoe-bootmgr-x86_64-unknown-linux-gnu
+canoe-ext4-x86_64-unknown-linux-gnu
+extractfv-x86_64-unknown-linux-gnu
+patch_abl-x86_64-unknown-linux-gnu
+mode2_profile-x86_64-unknown-linux-gnu
+abl_tzmap-x86_64-unknown-linux-gnu
+```
+
+构建 Linux 工具包 helper 后，使用目标 triple 名称暂存：
+
+```bash
+APP=/absolute/path/to/canoe-boot-manager
+for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+  cp "targets/toolkit_linux/build/toolkit/bin/$name" \
+    "$APP/src-tauri/binaries/${name}-x86_64-unknown-linux-gnu"
+done
+```
+
+Linux 的 `fastboot` 不会暂存到 `src-tauri/binaries`：运行时从继承的
+`PATH` 中选择可执行的 `fastboot`（或 `fastboot.exe`），然后为本次会话打开并
+封存这个外部输入。
+
+Windows GNU 所需名称为：
+
+```text
+canoe-bootmgr-x86_64-pc-windows-gnu.exe
+canoe-ext4-x86_64-pc-windows-gnu.exe
+extractfv-x86_64-pc-windows-gnu.exe
+patch_abl-x86_64-pc-windows-gnu.exe
+mode2_profile-x86_64-pc-windows-gnu.exe
+abl_tzmap-x86_64-pc-windows-gnu.exe
+fastboot-x86_64-pc-windows-gnu.exe
+AdbWinApi-x86_64-pc-windows-gnu.dll
+AdbWinUsbApi-x86_64-pc-windows-gnu.dll
+```
+
+从工具包的私有运行时相邻目录暂存 Windows GNU 输入：
+
+```bash
+APP=/absolute/path/to/canoe-boot-manager
+for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+  cp "targets/toolkit_windows/build/toolkit/bin/$name.exe" \
+    "$APP/src-tauri/binaries/${name}-x86_64-pc-windows-gnu.exe"
+done
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/fastboot.exe \
+  "$APP/src-tauri/binaries/fastboot-x86_64-pc-windows-gnu.exe"
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinApi.dll \
+  "$APP/src-tauri/binaries/AdbWinApi-x86_64-pc-windows-gnu.dll"
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinUsbApi.dll \
+  "$APP/src-tauri/binaries/AdbWinUsbApi-x86_64-pc-windows-gnu.dll"
+```
+
+Windows MSVC app CI 的编译 fixture 使用同样的九个 stem，只将
+`x86_64-pc-windows-gnu` 换成 `x86_64-pc-windows-msvc`（并保留 `.exe`/`.dll`
+扩展名）。这些 fixture 仅用于编译，不是发布构件。发布时不要使用占位
+sidecar：Tauri 会在编译前验证每个必需输入。
+
+九个 MSVC fixture 名称如下：
+
+```text
+canoe-bootmgr-x86_64-pc-windows-msvc.exe
+canoe-ext4-x86_64-pc-windows-msvc.exe
+extractfv-x86_64-pc-windows-msvc.exe
+patch_abl-x86_64-pc-windows-msvc.exe
+mode2_profile-x86_64-pc-windows-msvc.exe
+abl_tzmap-x86_64-pc-windows-msvc.exe
+fastboot-x86_64-pc-windows-msvc.exe
+AdbWinApi-x86_64-pc-windows-msvc.dll
+AdbWinUsbApi-x86_64-pc-windows-msvc.dll
+```
 
 在应用仓库中构建桌面程序：
 
@@ -111,6 +181,11 @@ CANOE_APP_WINDOWS_BIN=/absolute/path/to/canoe-boot-manager/src-tauri/target/x86_
 应用二进制会被复制到 `bin/canoe-boot-manager`（Windows 为 `.exe`），并与
 `bin/canoe-bootmgr` 放在一起。工具包根目录的启动器依赖这一相邻布局：
 Linux 使用 `canoe-boot-manager.sh`，Windows 使用 `canoe-boot-manager.bat`。
+
+GNU target 的 Tauri 构建还会在 Windows 应用旁生成
+`WebView2Loader.dll`。Windows 打包配方要求该文件存在，并将其复制到
+`bin/`。覆盖 `CANOE_APP_WINDOWS_BIN` 时，配方默认从同一目录取 loader；
+也可显式设置 `CANOE_WEBVIEW2_LOADER_WINDOWS`。
 
 独立的 WebUI 归档与桌面二进制分别固定版本。模块打包配方调用根
 `fetch-verified` 目标，在下载前后验证 SHA-256，并直接解开应用的 `dist/`
@@ -213,14 +288,15 @@ bin/canoe-bootmgr           # 启动根目录写入器 sidecar
 ```text
 canoe
 canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] \
+canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] [--from-mode 0|1|2] \
+              [--acknowledge CODE]... \
               [--vendor-boot IMG] [--allow-new-signer]
 canoe entry|config|default|bls|slot|source ...
 canoe -h | --help | --version
 canoe --non-interactive <command> ...
 ```
 
-不带参数时，`canoe` 启动交互式五种场景问卷。`--non-interactive` 会被接受
+不带参数时，`canoe` 启动交互式五路由操作界面。`--non-interactive` 会被接受
 并丢弃，以保持兼容；`entry|config|default|bls|slot|source` 子命令会原样
 转发给 `canoe-bootmgr`。
 
@@ -281,11 +357,16 @@ canoe-bootmgr build --abl <ABL_IMAGE> --probe [--tools <DIR>]
 `--vbmeta` 会先将提供文件复制到这些规范路径，再开始派生。镜像必须与正在
 启动的固件匹配。
 
-`canoe install` 会校验并为必需的活动槽位提交启动根目录。省略
-`--boot-root` 时，主机通过 BDS 的 `fastboot oem mass-storage:persist`
-导出访问启动根目录；提供 `--boot-root` 时，它应指向已挂载的
-`persist/efisp`。`--vendor-boot IMG` 为选定槽位创建已修补副本，并报告对应
-fastboot 刷写命令；不会修改源文件。`--allow-new-signer` 允许在切换到或
+`canoe install` 会校验并为必需的活动槽位提交启动根目录。省略 `--mode` 时会继承
+已保存的模式。通过 `canoe install` 明确变更模式时，必须同时提供
+`--mode 0|1|2`、`--from-mode 0|1|2`，并对 `mode.plan` 要求的每个确认重复传入
+`--acknowledge <CODE>`。直接使用 `canoe-bootmgr` 时，已有受管理行还可用
+`--id <ENTRY_ID>`；新行仍使用 `--from-mode`。如果计划需要镜像证据，还要提供
+`--current-vbmeta`、`--target-vbmeta` 和 `--target-image`；这些是证据输入，不是
+隐式刷写载荷。省略 `--boot-root` 时，主机通过 BDS 的
+`fastboot oem mass-storage:persist` 导出访问启动根目录；提供 `--boot-root` 时，
+它应指向已挂载的 `persist/efisp`。`--vendor-boot IMG` 为选定槽位创建已修补副本，
+并报告对应 fastboot 刷写命令；不会修改源文件。`--allow-new-signer` 允许在切换到或
 切换回 Custom ROM 时出现预期的签名变化。
 
 ## 主机派生工具
@@ -295,9 +376,9 @@ Windows 包含对应的 `.exe`。`mode2_profile` 提供 120 字节 KeyMint profi
 的 `derive` 与 `validate`。`abl_tzmap` 从未修补 ABL 派生并验证 256 字节
 `GTZM` 映射，也接受不完整的逆向证据。
 
-Mode 1 问卷所需的 Recovery vbmeta graft 工具仍以独立的 `vbmetaport` 提供。
-本项目不附带 boot-image 二进制：电脑端 `vendor_boot` 功能是固定偏移的原地
-命令行修改。
+Mode 1 graft 准备是 Deploy → Prepare 中的可选任务。它枚举所选 VBMETA 的链描述符，
+并在提供分区写入前验证生成的镜像；应用没有独立页面。`vendor_boot` 功能是固定偏移
+的原地命令行修改，本项目不附带 boot-image 二进制。
 
 ## 生成匹配的配对
 

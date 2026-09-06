@@ -1,39 +1,4 @@
 #[test]
-fn fastboot_identify_protocol_round_trip_has_operation() {
-    let request = serde_json::json!({"verb":"fastboot.identify"});
-    let command =
-        canoe_bootmgr::wire::parse_json(&serde_json::to_vec(&request).expect("request JSON"))
-            .expect("fastboot identify wire request")
-            .into_command();
-    let canoe_bootmgr::cli::Command::Fastboot {
-        command:
-            canoe_bootmgr::cli::FastbootCommand::Identify(canoe_bootmgr::cli::FastbootIdentifyArgs {
-                timeout_seconds,
-            }),
-    } = command
-    else {
-        panic!("fastboot identify command");
-    };
-    assert_eq!(timeout_seconds, 30);
-
-    let response = canoe_bootmgr::cli::Success::FastbootIdentify {
-        ok: true,
-        bds_version: Some("7.0.0".to_owned()),
-        current_slot: Some("a".to_owned()),
-        devinfo: None,
-        last_launch: None,
-        is_userspace: Some(true),
-    };
-    let document: serde_json::Value = serde_json::from_slice(
-        &canoe_bootmgr::output::json_success(&response).expect("response JSON"),
-    )
-    .expect("JSON response");
-    assert_eq!(document["operation"], "fastboot.identify");
-    assert_eq!(document["bds_version"], "7.0.0");
-    assert_eq!(document["current_slot"], "a");
-}
-
-#[test]
 fn fastboot_abl_coverage_protocol_round_trip_has_per_slot_verdicts() {
     let request = serde_json::json!({
         "verb":"fastboot.abl-coverage",
@@ -103,6 +68,7 @@ fn fastboot_flash_protocol_round_trip_has_receipt() {
             canoe_bootmgr::cli::FastbootCommand::Flash(canoe_bootmgr::cli::FastbootFlashArgs {
                 partition,
                 image,
+                ..
             }),
     } = command
     else {
@@ -116,6 +82,8 @@ fn fastboot_flash_protocol_round_trip_has_receipt() {
         receipt: canoe_bootmgr::cli::FastbootFlashReceipt {
             partition,
             image: image.display().to_string(),
+            bytes: 0,
+            sha256: String::new(),
         },
     };
     let document: serde_json::Value = serde_json::from_slice(

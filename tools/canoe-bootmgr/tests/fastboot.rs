@@ -3,7 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use canoe_bootmgr::detect::{SourceCandidate, SourceKind, is_export_candidate};
@@ -27,11 +27,24 @@ fn system_tool(name: &str) -> PathBuf {
 /// which surfaces as a spawn error, not as the behaviour under test.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
+static DEVICE_LOCK_INIT: OnceLock<()> = OnceLock::new();
+
+fn initialize_test_device_lock() {
+    DEVICE_LOCK_INIT.get_or_init(|| {
+        let path = std::env::temp_dir().join(format!(
+            "canoe-bootmgr-fastboot-test-{}.lock",
+            std::process::id()
+        ));
+        fastboot::set_device_lock_path_for_tests(&path).expect("configure test device lock");
+    });
+}
+
 /// Write an executable `sh` script, holding the guard until the caller drops it.
 ///
 /// The guard is part of the return value so no test can forget to take it: the
 /// write and the `exec` that follows must not straddle a sibling thread's fork.
 fn script(directory: &Path, body: &str) -> (MutexGuard<'static, ()>, PathBuf) {
+    initialize_test_device_lock();
     let guard = SPAWN_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     let path = directory.join("fake-fastboot");
     fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("script");
@@ -47,6 +60,7 @@ fn protocol_json(root: &Path, request: &str) -> std::process::Output {
         .current_dir(root)
         .env_clear()
         .env("PATH", root)
+        .env("CANOE_DEVICE_LOCK_PATH", root.join("device.lock"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .spawn()
@@ -72,6 +86,7 @@ fn protocol_json_with_tools(root: &Path, request: &str, tools: &Path) -> std::pr
         .current_dir(root)
         .env_clear()
         .env("PATH", root)
+        .env("CANOE_DEVICE_LOCK_PATH", root.join("device.lock"))
         .env("CANOE_TOOLS_DIR", tools)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -100,6 +115,7 @@ fn protocol_json_with_args(
         .current_dir(root)
         .env_clear()
         .env("PATH", root)
+        .env("CANOE_DEVICE_LOCK_PATH", root.join("device.lock"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped());
     if let Some(helper) = ext4_helper {
@@ -261,6 +277,7 @@ fn fastboot_identify_protocol_reports_fake_values() {
     canoe-bds) echo "canoe-bds: 7.0.0" >&2 ;;
     canoe-devinfo) echo "canoe-devinfo: unlocked=0 critical=0 waiver=unknown retry_a=3 retry_b=unknown" >&2 ;;
     canoe-last-launch) echo "canoe-last-launch: requested=2 effective=0 reason=lockstate-refused" >&2 ;;
+    canoe-boot-root) echo "canoe-boot-root: empty-root" >&2 ;;
     is-userspace) echo "is-userspace: yes" >&2 ;;
   esac"#,
     );
@@ -281,25 +298,24 @@ fn fastboot_identify_protocol_reports_fake_values() {
         document["last_launch"],
         "requested=2 effective=0 reason=lockstate-refused"
     );
+    assert_eq!(document["boot_root"], "empty-root");
     assert_eq!(document["current_slot"], "b");
     assert_eq!(document["is_userspace"], true);
 }
 
 #[test]
-fn fastboot_identify_protocol_keeps_silent_values_null() {
+fn fastboot_identify_protocol_reports_no_response_for_a_silent_device() {
     let root = TempDir::new().expect("fixture");
     let (guard, fastboot) = script(root.path(), "exit 0");
     install_path_fastboot(root.path(), &fastboot);
     let output = protocol_json(root.path(), "{\"verb\":\"fastboot.identify\"}\n");
     drop(guard);
 
-    assert!(output.status.success());
+    assert!(!output.status.success());
     let document: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("JSON response");
-    assert_eq!(document["operation"], "fastboot.identify");
-    assert!(document["bds_version"].is_null());
-    assert!(document["is_userspace"].is_null());
-    assert!(document["current_slot"].is_null());
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "no-response");
 }
 
 #[test]
@@ -381,6 +397,34 @@ fn fastboot_flash_protocol_refuses_missing_image_before_spawning() {
 }
 
 #[test]
+fn fastboot_flash_protocol_refuses_empty_image_before_spawning() {
+    let root = TempDir::new().expect("fixture");
+    let argv = root.path().join("argv");
+    let image = root.path().join("boot.img");
+    fs::write(&argv, b"").expect("argv log");
+    fs::write(&image, b"").expect("empty image");
+    let (guard, fastboot) = script(
+        root.path(),
+        &format!("printf '%s\\n' \"$@\" > {}", argv.display()),
+    );
+    install_path_fastboot(root.path(), &fastboot);
+    let output = protocol_json(
+        root.path(),
+        &format!(
+            "{{\"verb\":\"fastboot.flash\",\"partition\":\"boot\",\"image\":\"{}\"}}\n",
+            image.display()
+        ),
+    );
+    drop(guard);
+
+    assert!(!output.status.success());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+    assert_eq!(document["error"]["code"], "image-too-large");
+    assert!(fs::read(&argv).expect("argv log").is_empty());
+}
+
+#[test]
 fn fastboot_reboot_protocol_refuses_unsupported_target_before_spawning() {
     let root = TempDir::new().expect("fixture");
     let argv = root.path().join("argv");
@@ -418,8 +462,7 @@ fn getvar_matches_exact_prefix_and_filters_failed_or_empty_values() {
   esac
   exit 0"#,
     );
-    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(1))
-        .expect("identity");
+    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(1)).expect("identity");
     assert_eq!(identity.current_slot.as_deref(), Some("a"));
     assert_eq!(identity.bds_version, None);
     assert_eq!(identity.is_userspace, Some(false));
@@ -436,39 +479,62 @@ fn getvar_filters_empty_value() {
   esac
   exit 0"#,
     );
-    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(1))
-        .expect("identity");
+    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(1)).expect("identity");
     assert_eq!(identity.current_slot.as_deref(), Some("a"));
     assert_eq!(identity.bds_version, None);
 }
 
 #[test]
-fn getvar_retries_one_missed_command() {
+fn all_null_identity_is_no_response() {
+    let root = TempDir::new().expect("fixture");
+    let (_guard, fastboot) = script(root.path(), "exit 0");
+
+    let error = fastboot::identify_checked(&fastboot, Duration::from_secs(1))
+        .expect_err("all-null identity must not be reported as an answered device");
+
+    assert!(matches!(error, FastbootError::NoResponse { .. }));
+}
+
+#[test]
+fn getvar_timeout_stops_queued_probes_and_reaps_the_owned_child() {
     let root = TempDir::new().expect("fixture");
     let state = root.path().join("attempts");
+    let pid = root.path().join("pid");
     let (_guard, fastboot) = script(
         root.path(),
         &format!(
             r#"case "$2" in
     current-slot)
+      echo "$$" > "{pid}"
       count=0
       if [ -f "{state}" ]; then read count < "{state}"; fi
       count=$((count + 1)); echo "$count" > "{state}"
-      if [ "$count" -eq 1 ]; then exit 1; fi
-      echo "current-slot: b" >&2
+      while :; do :; done
       ;;
-    canoe-bds) echo "canoe-bds: 7.0.0" >&2 ;;
-  esac
-  exit 0"#,
-            state = state.display()
+    *) echo "unexpected queued probe: $2" >&2; exit 1 ;;
+  esac"#,
+            pid = pid.display(),
+            state = state.display(),
         ),
     );
-    // Generous per-command budget: the assertion is that one miss is retried,
-    // not that a loaded machine answers within a second.
-    let identity = fastboot::identify_checked(&fastboot, Duration::from_secs(30))
-        .expect("identity");
-    assert_eq!(identity.current_slot.as_deref(), Some("b"));
-    assert_eq!(fs::read_to_string(state).expect("attempt count"), "2\n");
+
+    let started = Instant::now();
+    let error = fastboot::identify_checked(&fastboot, Duration::from_millis(100))
+        .expect_err("a timed-out identity probe must not report an answered device");
+
+    assert!(matches!(error, FastbootError::NoResponse { .. }));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(fs::read_to_string(state).expect("attempt count"), "1\n");
+    let child_pid = fs::read_to_string(pid)
+        .expect("fake child pid")
+        .trim()
+        .parse::<i32>()
+        .expect("numeric fake child pid");
+    let status = std::process::Command::new(system_tool("kill"))
+        .args(["-0", &child_pid.to_string()])
+        .status()
+        .expect("inspect fake child");
+    assert!(!status.success());
 }
 
 #[test]
@@ -516,6 +582,26 @@ fn binary_falls_back_to_search_path_and_names_both_bundled_candidates_on_error()
     assert!(text.contains("fastboot.exe") && text.contains("Platform-Tools/fastboot"));
     let error = fastboot::binary_in(Some(root.path()), None).expect_err("no search path");
     assert!(matches!(error, FastbootError::NotFound { .. }));
+}
+
+#[test]
+fn cli_without_an_authenticated_root_does_not_search_the_cwd() {
+    let root = TempDir::new().expect("fixture");
+    let platform_tools = root.path().join("Platform-Tools");
+    fs::create_dir(&platform_tools).expect("platform tools");
+    let (guard, fake) = script(&platform_tools, "exit 0");
+    fs::hard_link(fake, platform_tools.join("fastboot")).expect("cwd fastboot");
+
+    let output = protocol_json(
+        root.path(),
+        "{\"verb\":\"fastboot.identify\",\"timeout_seconds\":1}\n",
+    );
+    drop(guard);
+    let response: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON response");
+
+    assert_eq!(response["ok"], false);
+    assert_eq!(response["error"]["code"], "fastboot-unavailable");
 }
 
 #[test]
@@ -731,6 +817,7 @@ fn reboot_accepts_known_targets_and_rejects_unknown_target_without_spawning() {
 
 #[test]
 fn end_export_reports_a_missing_node() {
+    initialize_test_device_lock();
     let root = TempDir::new().expect("fixture");
     assert!(fastboot::end_export(&root.path().join("missing-node")).is_err());
 }
@@ -831,12 +918,7 @@ fn export_candidate_predicate_accepts_supported_unmounted_readable_block() {
 }
 fn taxonomy_json_fastboot_unavailable() -> serde_json::Value {
     let root = TempDir::new().expect("fixture");
-    protocol_json_with_args(
-        root.path(),
-        &[],
-        None,
-        "{\"verb\":\"fastboot.identify\"}\n",
-    )
+    protocol_json_with_args(root.path(), &[], None, "{\"verb\":\"fastboot.identify\"}\n")
 }
 
 fn taxonomy_json_boot_root_missing() -> serde_json::Value {
@@ -891,9 +973,11 @@ fn taxonomy_json_timeout() -> serde_json::Value {
     result
 }
 
+type TaxonomyCase = (&'static str, fn() -> serde_json::Value);
+
 #[test]
 fn protocol_error_taxonomy_distinguishes_source_known_failures() {
-    let cases: &[(&str, fn() -> serde_json::Value)] = &[
+    let cases: &[TaxonomyCase] = &[
         ("fastboot-unavailable", taxonomy_json_fastboot_unavailable),
         ("boot-root-missing", taxonomy_json_boot_root_missing),
         ("ext4-missing", || taxonomy_json_ext4_helper(7)),

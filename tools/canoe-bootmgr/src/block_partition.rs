@@ -3,11 +3,14 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+#[cfg(not(windows))]
 pub(crate) const BY_NAME_ROOT: &str = "/dev/block/by-name";
 
 #[derive(Debug, Error)]
 pub enum BlockError {
-    #[error("partition name `{partition}` must contain only ASCII letters, digits, or `_` and be 1..=36 bytes")]
+    #[error(
+        "partition name `{partition}` must contain only ASCII letters, digits, or `_` and be 1..=36 bytes"
+    )]
     PartitionNameInvalid { partition: String },
     #[error("block operation slot must be `a`, `b`, or null (got `{slot}`)")]
     InvalidSlot { slot: String },
@@ -21,7 +24,24 @@ pub enum BlockError {
         source: io::Error,
     },
     #[error("image size {source_bytes} bytes is invalid for target size {target_bytes} bytes")]
-    ImageTooLarge { source_bytes: u64, target_bytes: u64 },
+    ImageTooLarge {
+        source_bytes: u64,
+        target_bytes: u64,
+    },
+    #[error(
+        "whole-partition write source is {source_bytes} bytes, expected {expected_partition_bytes} bytes"
+    )]
+    ExpectedPartitionSourceSize {
+        expected_partition_bytes: u64,
+        source_bytes: u64,
+    },
+    #[error(
+        "whole-partition write target is {target_bytes} bytes, expected {expected_partition_bytes} bytes"
+    )]
+    ExpectedPartitionTargetSize {
+        expected_partition_bytes: u64,
+        target_bytes: u64,
+    },
     #[error("target `{node}` could not be made writable: {message}")]
     BlockNotWritable { node: PathBuf, message: String },
     #[error("snapshot `{snapshot}` failed: {message}")]
@@ -49,6 +69,9 @@ impl BlockError {
             Self::InvalidSlot { .. } => "request",
             Self::PartitionMissing { .. } => "partition-missing",
             Self::ImageTooLarge { .. } => "image-too-large",
+            Self::ExpectedPartitionSourceSize { .. } | Self::ExpectedPartitionTargetSize { .. } => {
+                "operation"
+            }
             Self::BlockNotWritable { .. } => "block-not-writable",
             Self::SnapshotFailed { .. } => "snapshot-failed",
             Self::ReadbackMismatch { .. } => "readback-mismatch",

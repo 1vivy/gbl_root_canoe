@@ -1,40 +1,37 @@
 # Canoe 使用说明
 
-Canoe 在三个界面上使用同一个应用：Linux 与 Windows 的 Tauri 桌面壳，以及
-KernelSU Android WebUI。应用通过 JSON wire protocol 与 `canoe-bootmgr` 通信，
-不会自行编辑启动根目录。原生 `canoe` CLI 会把支持的操作转交给同一个写入器。
+Canoe 在三个宿主表面上使用同一个、包含五个路由的应用：Linux 与 Windows 的 Tauri
+桌面壳，以及 KernelSU Android WebUI。应用通过 JSON wire protocol 与
+`canoe-bootmgr` 通信，不会自行编辑启动根目录。原生 `canoe` CLI 会把支持的操作
+转交给同一个写入器。
 
-## Start 与命名路由
+## Overview 与命名路由
 
-**Start**（landing）页面有意保持保守：
+**Overview** 是保守的安全入口。它报告已观测的连接、槽位、BDS 和启动根目录事实，
+然后展示可用 lane，不会猜测。
 
-- **Linux 或 Windows：** 在 Start 选择 **Enter Super Fastboot**。桌面应用等待
-  `fastboot.identify` 应答。BDS 应答后进入 **GENERAL**；fastboot 应答但没有
-  BDS 时提供引导式 **Provision** 流程。
+- **Linux 或 Windows：** 设备就绪后进入 **Super Fastboot**。桌面应用等待
+  `fastboot.identify` 应答。BDS 应答后 Overview 保留已测量事实；设备应答但没有
+  BDS 时，Deploy 显示首次安装 lane。
 - **KernelSU Android：** 应用用 `config.show` 直接读取本地启动根目录，绝不会等待
-  fastboot。根目录可读时进入 **GENERAL**；根目录不存在或不可读时提供首次安装
-  **Provision**。
+  fastboot。根目录可读时 Overview 保留其派生 lane；根目录缺失时，Deploy 显示首次
+  安装 lane；其他读取失败保持可见并提供修复 lane。
 
-所有路由使用同一状态条。它显示连接/传输、槽位、BDS 版本，以及可展开的启动根目录、
-暂存集合等详细信息。尚未应答的事实显示为 **Unknown**。Canoe 不会猜测槽位或 BDS
-版本。
+所有路由使用同一操作员状态条。它显示连接/传输、槽位、BDS 版本，以及可展开的启动根目录、
+暂存集合等详细信息。尚未应答的事实显示为 **Unknown**。应用不会猜测槽位或 BDS 版本。
 
-应用路由如下：
+应用的五个路由如下：
 
-- **GENERAL**——更新 BDS 与 EFI 工具、重新生成受管理启动项，并在设备上开始非活动
-  槽位 OTA 流程。
-- **Boot entries**——查看受管理启动项和发现的 BLS 行，包括请求/生效模式、默认状态
-  与附属文件健康状态。删除已保存启动项时使用 `entry.remove`；这里不能删除发现的
-  BLS 文件。
-- **Settings**——通过 `config.set-policy` 只写入 `canoe.cfg` 策略键，并选择新启动
-  项继承的全局模式。
-- **Guided flow**——分阶段的首次安装或模式变更：Provision、Prepare、Commit、Finish。
-  它先审核证据再写入，并把重启保留为明确的最后一步。
-- **Graft**——检查镜像和头部、提取或 graft vbmeta、核对选定公钥；只有输出经过验证后，
-  才提供需要单独确认的刷写操作。它主要用于 Mode 1 镜像准备。
+- **Overview**——连接、下一步操作、已观测事实、最新回执和可用 Deploy lane。
+- **Deploy**——唯一的操作页面，包含 **Provision → Prepare → Action**。Mode 1
+  graft 是 Prepare 中的可选任务，不再单独占用路由。
+- **Entries**——受管理行显示只读模式徽章和受管理操作；发现的 BLS 行不提供操作控件。
+- **Settings**——通过 `config.set-policy` 编辑 `canoe.cfg` 策略键。
+- **Diagnostics**——展示协议活动、队列/缓存阶段、原始路径与摘要、AVB 证据、槽位探测
+  和导出恢复。
 
-在 Commit 前放弃 Guided flow 不会发送任何协议写入。分区写入或重启始终需要应用中
-相应的确认。
+在 Deploy 的 **Apply** 之前离开不会发送协议写入。分区写入或重启始终需要应用中的
+相应确认。
 
 ## 进入 Super Fastboot
 
@@ -57,8 +54,8 @@ fastboot boot <BDS.efi>
 路径都只是临时启动。
 
 Super Fastboot 会放宽 ABL 的关键分区保护状态，因此可以在此 BDS 会话中刷写；但
-`super` 内部的分区仍是例外。系统用户空间 `fastbootd` 只在首次安装 Provision 流程
-中使用。
+`super` 内部的分区仍是例外。系统用户空间 `fastbootd` 只在 Deploy 的首次安装
+Provision 阶段中使用。
 
 ## 首次运行与 BDS 菜单
 
@@ -132,8 +129,8 @@ fastboot reboot bootloader   # 回到 Super Fastboot
 ```
 
 其他目标会失败。该 BDS 会话不是系统用户空间会话，因此这里会拒绝
-`fastboot reboot fastboot`，而不是把它当作重启到 bootloader。本文只有首次安装
-Provision 流程会要求进入系统用户空间的 `fastbootd`。
+`fastboot reboot fastboot`，而不是把它当作重启到 bootloader。本文只有 Deploy 的首次
+安装 Provision 阶段会要求进入系统用户空间的 `fastbootd`。
 
 ## USB 导出与主机/设备边界
 
@@ -186,8 +183,8 @@ canoe source detect --json
 canoe-bootmgr --json config show
 canoe-bootmgr --json entry list
 canoe-bootmgr --json slot status
-canoe-bootmgr ota-apply --staged <DIR> --target-slot b --mode 1
-canoe-bootmgr install --staged <DIR> --slot a --mode 1
+canoe-bootmgr ota-apply --staged <DIR> --target-slot b
+canoe-bootmgr install --staged <DIR> --slot a
 canoe-bootmgr fastboot identify
 canoe-bootmgr fastboot export --target persist
 canoe-bootmgr fastboot end-export --node <RAW_NODE>
@@ -196,9 +193,33 @@ canoe-bootmgr vbmeta-inspect --vbmeta <VBMETA>
 canoe-bootmgr vbmeta-header --vbmeta <VBMETA>
 canoe-bootmgr vbmeta-extract --image <IMAGE> --output <VBMETA>
 canoe-bootmgr vbmeta-check --image <IMAGE> --vbmeta <VBMETA> --partition recovery
-canoe-bootmgr vbmeta-graft <OFFICIAL_VBMETA> <CUSTOM_RECOVERY> <OUTPUT>
 canoe-bootmgr fastboot reboot --target recovery
 ```
+
+`install` 或 `ota-apply` 省略 `--mode` 时会继承已保存的模式。已有受管理行使用
+`--id <ENTRY_ID>` 提供当前模式证据；新行则必须明确提供 `--from-mode 0|1|2`。
+变更模式时，还要对 `mode.plan` 要求的每个确认重复传入
+`--acknowledge <CODE>`。如果计划需要镜像证据，再传入
+`--current-vbmeta <PATH>`、`--target-vbmeta <PATH>` 和
+`--target-image <PATH>`；这些是证据输入，不是隐式刷写载荷。写入器会在修改启动根目录
+前评估 `mode.plan`；拒绝或缺少确认时会保持启动根目录不变。例如：
+
+```bash
+canoe-bootmgr install --staged <DIR> --slot a --mode 1 --id android-a \
+  --current-vbmeta <CURRENT_VBMETA> --target-vbmeta <TARGET_VBMETA> \
+  --target-image <TARGET_IMAGE> \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
+```
+
+新行可用 `--from-mode` 替代 `--id`：
+
+```bash
+canoe-bootmgr install --staged <DIR> --slot a --mode 1 --from-mode 0 \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
+```
+
+应用的 Deploy → Prepare 可选 graft 任务负责枚举描述符、提取、graft 和验证；底层
+`vbmeta.graft` 协议操作仍可供协议客户端使用，应用统一在该阶段承载这项工作。
 
 本版本公开的协议 operation 名称如下：
 
@@ -243,6 +264,6 @@ fastboot reboot
 fastboot reboot bootloader
 ```
 
-应用的 `fastboot.flash` 操作会记录并执行指定镜像的刷写，不是擦除操作。首次安装
-Provision 流程在确认后把带漏洞的 ABL 写入两个 ABL 槽位、把 `BDS.efi` 写入
+应用的 `fastboot.flash` 操作会记录并执行指定镜像的刷写，不是擦除操作。Deploy 的
+Provision 阶段在确认后把带漏洞的 ABL 写入两个 ABL 槽位、把 `BDS.efi` 写入
 `efisp`，然后执行普通重启。电脑端安装器不会静默刷写分区。

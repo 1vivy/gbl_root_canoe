@@ -10,6 +10,7 @@
 
 #include "SuperFbMenu.h"
 #include "SuperFbLog.h"
+#include "SuperFbBootRoot.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -182,8 +183,8 @@ SfbRootHasUsableConfig (IN EFI_FILE_PROTOCOL *Root,
  * when it contains a launchable managed loader or a valid config naming an
  * existing image.
  */
-BOOLEAN
-SfbBootRootIsEmpty (VOID)
+SFB_BOOT_ROOT_STATE
+SfbBootRootObserve (VOID)
 {
   STATIC CONST CHAR16 *ManagedNames[] = {
     SFB_MANAGED_BOOT_NAME,
@@ -202,7 +203,7 @@ SfbBootRootIsEmpty (VOID)
   if (EFI_ERROR (Status) || Volumes == NULL || VolumeCount == 0) {
     DEBUG ((EFI_D_WARN,
             "SFB: MARK boot-root reason=no-volumes status=%r\n", Status));
-    return TRUE;
+    return SfbBootRootNoVolumes;
   }
 
   for (Index = 0; Index < VolumeCount; Index++) {
@@ -223,7 +224,7 @@ SfbBootRootIsEmpty (VOID)
       DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=populated-config\n"));
       Root->Close (Root);
       FreePool (Volumes);
-      return FALSE;
+      return SfbBootRootPopulatedConfig;
     }
 
     for (Which = 0; Which < ARRAY_SIZE (ManagedNames); Which++) {
@@ -238,7 +239,7 @@ SfbBootRootIsEmpty (VOID)
                 ManagedPath));
         Root->Close (Root);
         FreePool (Volumes);
-        return FALSE;
+        return SfbBootRootPopulatedManaged;
       }
     }
     Root->Close (Root);
@@ -247,10 +248,10 @@ SfbBootRootIsEmpty (VOID)
   FreePool (Volumes);
   if (!FoundRoot) {
     DEBUG ((EFI_D_WARN, "SFB: MARK boot-root reason=no-root\n"));
-    return TRUE;
+    return SfbBootRootNoRoot;
   }
   DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=empty-root\n"));
-  return TRUE;
+  return SfbBootRootEmptyRoot;
 }
 
 VOID

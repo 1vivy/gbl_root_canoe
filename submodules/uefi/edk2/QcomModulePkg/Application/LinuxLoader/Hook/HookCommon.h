@@ -37,10 +37,7 @@ SfbHookLeave (IN OUT SFB_HOOK_GUARD *Guard)
  * Arm the managed-ABL policy for one launch.
  *
  * Mode 0 installs no managed wrapper and neither reads nor writes the backing
- * DeviceInfo. It is not wrapper-free, though: the efisp Block I/O clause is
- * armed for every managed launch whatever the mode, because the chainloaded
- * ABL carries the same efisp load path this BDS was started through and would
- * otherwise re-enter it.
+ * DeviceInfo.
  *
  * LockPolicy decides whether a Mode 1 / Mode 2 launch may repair the backing
  * DeviceInfo when the observed state is not what the mode needs. The observed
@@ -98,16 +95,5 @@ VOID SfbRestoreScm (VOID);
 EFI_STATUS SfbInstallReserveBlockIo (VOID);
 VOID SfbRestoreReserveBlockIo (VOID);
 
-/*
- * Hide the efisp partition from the image about to be launched.
- *
- * The vulnerable ABL in the `abl` partition reaches this BDS by loading the
- * raw efisp partition as an EFI image. The patched loader we chainload carries
- * that same path, so left visible it would load efisp again and recurse until
- * the stack gave out. Reporting no media on that one handle is the whole
- * guard, and it costs nothing now that no record lives there.
- */
-EFI_STATUS SfbInstallEfispBlockIo (VOID);
-VOID SfbRestoreEfispBlockIo (VOID);
 
 #endif

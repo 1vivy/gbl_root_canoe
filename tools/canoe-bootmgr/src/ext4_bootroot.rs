@@ -29,6 +29,8 @@ impl BootRoot for Ext4Dir {
             .to_str()
             .ok_or_else(|| BackendError::Ext4("source path is not UTF-8".to_owned()))?;
         let entries_dir = self.remote("/loader/entries");
+        self.ensure_remote_components(&entries_dir)
+            .map_err(BackendError::Ext4Typed)?;
         let output = Command::new(&self.helper)
             .args(["list", source, entries_dir.as_str()])
             .output()

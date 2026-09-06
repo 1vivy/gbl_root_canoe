@@ -90,8 +90,8 @@ fn read_blocks(probe: &LinuxProbe, mounts: &[Mount]) -> Vec<SourceCandidate> {
         let mounted_at = find_mount(name, mounts);
         let boot_root_present = mounted_at
             .as_ref()
-            .map_or(false, |mount| boot_root_exists(mount));
-        let model = read_model(&path).map_or_else(|| "Canoe persist".to_owned(), |value| value);
+            .is_some_and(|mount| boot_root_exists(mount));
+        let model = read_model(&path).unwrap_or_else(|| "Canoe persist".to_owned());
         let size_bytes = read_sectors(&path).saturating_mul(512);
         candidates.push(SourceCandidate {
             kind: SourceKind::Block,
@@ -152,7 +152,7 @@ fn read_model(block: &Path) -> Option<String> {
 fn read_sectors(block: &Path) -> u64 {
     read_trimmed(&block.join("size"))
         .and_then(|value| value.parse::<u64>().ok())
-        .map_or(0, |value| value)
+        .unwrap_or(0)
 }
 
 fn read_mounts(path: &Path) -> Vec<Mount> {
@@ -261,7 +261,7 @@ fn access(path: &Path) -> (bool, bool) {
         use nix::fcntl::AtFlags;
         use nix::unistd::{AccessFlags, faccessat};
         let reachable = |mode| faccessat(None, path, mode, AtFlags::AT_EACCESS).is_ok();
-        return (reachable(AccessFlags::R_OK), reachable(AccessFlags::W_OK));
+        (reachable(AccessFlags::R_OK), reachable(AccessFlags::W_OK))
     }
     #[cfg(not(unix))]
     {

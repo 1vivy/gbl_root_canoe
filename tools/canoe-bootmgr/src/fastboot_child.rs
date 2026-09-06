@@ -77,7 +77,9 @@ impl ReapedChild {
     }
 
     pub(crate) fn terminate(&mut self) {
-        if !self.reaped && let Some(child) = self.child.as_mut() {
+        if !self.reaped
+            && let Some(child) = self.child.as_mut()
+        {
             let _ = child.kill();
             if child.wait().is_ok() {
                 self.reaped = true;
@@ -92,7 +94,7 @@ impl ReapedChild {
             .as_ref()
             .and_then(|child| i32::try_from(child.id()).ok())
         {
-            use nix::sys::signal::{kill, Signal};
+            use nix::sys::signal::{Signal, kill};
             use nix::unistd::Pid;
             let _ = kill(Pid::from_raw(pid), Signal::SIGTERM);
         }

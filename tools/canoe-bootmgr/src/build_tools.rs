@@ -1,5 +1,5 @@
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -50,49 +50,66 @@ pub struct ToolOutput {
     pub success: bool,
 }
 
-fn resolution_directories() -> (Option<PathBuf>, Option<PathBuf>) {
+fn resolution_directories() -> (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>) {
     let environment = env::var_os("CANOE_TOOLS_DIR").map(PathBuf::from);
-    let executable_dir = env::current_exe()
+    let working = crate::trusted_runtime::sealed_sidecar_working_bin();
+    let executable = env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(Path::to_path_buf));
-    (environment, executable_dir)
+    (environment, working, executable)
 }
 
 pub fn resolve_mode2_profile(preferred: Option<&Path>) -> Result<PathBuf, ToolError> {
-    let (environment, executable_dir) = resolution_directories();
-    resolve_one(
+    if let Some(path) = crate::trusted_runtime::reviewed_runtime_bin_helper("mode2_profile") {
+        return resolve_pinned("mode2_profile", &path);
+    }
+    let (environment, working, executable) = resolution_directories();
+    resolve_one_with_environment(
         "mode2_profile",
         preferred,
         environment.as_deref(),
-        executable_dir.as_deref(),
+        working.as_deref(),
+        executable.as_deref(),
     )
 }
 
 pub fn resolve_tools(preferred: Option<&Path>) -> Result<ToolPaths, ToolError> {
-    let (environment, executable_dir) = resolution_directories();
-    let extractfv = resolve_one(
+    if let Some(extractfv) = crate::trusted_runtime::reviewed_runtime_bin_helper("extractfv") {
+        return Ok(ToolPaths {
+            extractfv: resolve_pinned("extractfv", &extractfv)?,
+            patch_abl: resolve_reviewed_tool("patch_abl")?,
+            mode2_profile: resolve_reviewed_tool("mode2_profile")?,
+            abl_tzmap: resolve_reviewed_tool("abl_tzmap")?,
+        });
+    }
+    let (environment, working, executable) = resolution_directories();
+    let extractfv = resolve_one_with_environment(
         "extractfv",
         preferred,
         environment.as_deref(),
-        executable_dir.as_deref(),
+        working.as_deref(),
+        executable.as_deref(),
     )?;
-    let patch_abl = resolve_one(
+    let patch_abl = resolve_one_with_environment(
         "patch_abl",
         preferred,
         environment.as_deref(),
-        executable_dir.as_deref(),
+        working.as_deref(),
+        executable.as_deref(),
     )?;
-    let mode2_profile = resolve_one(
+    let mode2_profile = resolve_one_with_environment(
         "mode2_profile",
         preferred,
         environment.as_deref(),
-        executable_dir.as_deref(),
+        working.as_deref(),
+        executable.as_deref(),
     )?;
-    let abl_tzmap = resolve_one(
+    let abl_tzmap = resolve_one_with_environment(
         "abl_tzmap",
         preferred,
         environment.as_deref(),
-        executable_dir.as_deref(),
+        working.as_deref(),
+        executable.as_deref(),
     )?;
     Ok(ToolPaths {
         extractfv,
@@ -102,33 +119,133 @@ pub fn resolve_tools(preferred: Option<&Path>) -> Result<ToolPaths, ToolError> {
     })
 }
 
+fn resolve_reviewed_tool(name: &str) -> Result<PathBuf, ToolError> {
+    let Some(path) = crate::trusted_runtime::reviewed_runtime_bin_helper(name) else {
+        return Err(ToolError::Unavailable {
+            tool: name.to_owned(),
+        });
+    };
+    resolve_pinned(name, &path)
+}
+
+fn exact_environment_name(name: &str) -> Option<&'static str> {
+    match name {
+        "extractfv" => Some("CANOE_EXTRACTFV"),
+        "patch_abl" => Some("CANOE_PATCH_ABL"),
+        "mode2_profile" => Some("CANOE_MODE2_PROFILE"),
+        "abl_tzmap" => Some("CANOE_ABL_TZMAP"),
+        _ => None,
+    }
+}
+
+fn resolve_one_with_environment(
+    name: &str,
+    preferred: Option<&Path>,
+    environment: Option<&Path>,
+    working: Option<&Path>,
+    executable: Option<&Path>,
+) -> Result<PathBuf, ToolError> {
+    let pinned = exact_environment_name(name)
+        .and_then(env::var_os)
+        .map(PathBuf::from);
+    resolve_pinned_or(name, pinned.as_deref(), || {
+        resolve_one(name, preferred, environment, working, executable)
+    })
+}
+
+fn resolve_pinned_or<F>(
+    name: &str,
+    pinned: Option<&Path>,
+    fallback: F,
+) -> Result<PathBuf, ToolError>
+where
+    F: FnOnce() -> Result<PathBuf, ToolError>,
+{
+    if let Some(path) = pinned {
+        return resolve_pinned(name, path);
+    }
+    fallback()
+}
+
+fn resolve_pinned(name: &str, path: &Path) -> Result<PathBuf, ToolError> {
+    if is_executable(path) {
+        Ok(path.to_owned())
+    } else {
+        Err(ToolError::Unavailable {
+            tool: name.to_owned(),
+        })
+    }
+}
+
 fn resolve_one(
     name: &str,
     preferred: Option<&Path>,
     environment: Option<&Path>,
-    executable_dir: Option<&Path>,
+    working: Option<&Path>,
+    executable: Option<&Path>,
 ) -> Result<PathBuf, ToolError> {
-    let mut candidates = Vec::new();
-    for directory in [preferred, environment, executable_dir] {
-        if let Some(directory) = directory {
-            candidates.push(directory.join(name));
-            #[cfg(windows)]
-            candidates.push(directory.join(format!("{name}.exe")));
-        }
+    let search_path = env::var_os("PATH");
+    resolve_one_in(
+        name,
+        preferred,
+        environment,
+        working,
+        executable,
+        search_path.as_deref(),
+    )
+}
+
+fn resolve_one_in(
+    name: &str,
+    preferred: Option<&Path>,
+    environment: Option<&Path>,
+    working: Option<&Path>,
+    executable: Option<&Path>,
+    search_path: Option<&OsStr>,
+) -> Result<PathBuf, ToolError> {
+    if let Some(candidate) = preferred.and_then(|directory| resolve_in_directory(directory, name)) {
+        return Ok(candidate);
     }
-    if let Some(path_value) = env::var_os("PATH") {
-        for directory in env::split_paths(&path_value) {
-            candidates.push(directory.join(name));
-            #[cfg(windows)]
-            candidates.push(directory.join(format!("{name}.exe")));
-        }
-    }
-    candidates
-        .into_iter()
-        .find(|candidate| is_executable(candidate))
-        .ok_or_else(|| ToolError::Unavailable {
+    if let Some(directory) = environment {
+        return resolve_in_directory(directory, name).ok_or_else(|| ToolError::Unavailable {
             tool: name.to_owned(),
-        })
+        });
+    }
+    if let Some(directory) = working {
+        return resolve_in_directory(directory, name).ok_or_else(|| ToolError::Unavailable {
+            tool: name.to_owned(),
+        });
+    }
+    if let Some(directory) = executable
+        && let Some(candidate) = resolve_in_directory(directory, name)
+    {
+        return Ok(candidate);
+    }
+    if let Some(path_value) = search_path {
+        for directory in env::split_paths(path_value) {
+            if let Some(candidate) = resolve_in_directory(&directory, name) {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(ToolError::Unavailable {
+        tool: name.to_owned(),
+    })
+}
+
+fn resolve_in_directory(directory: &Path, name: &str) -> Option<PathBuf> {
+    let candidate = directory.join(name);
+    if is_executable(&candidate) {
+        return Some(candidate);
+    }
+    #[cfg(windows)]
+    {
+        let candidate = directory.join(format!("{name}.exe"));
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -175,8 +292,14 @@ pub fn run_with_timeout(
             tool: tool_name.clone(),
             source,
         })?;
-    let stdout = child.stdout.take().expect("piped child stdout");
-    let stderr = child.stderr.take().expect("piped child stderr");
+    let stdout = child.stdout.take().ok_or_else(|| ToolError::Spawn {
+        tool: tool_name.clone(),
+        source: io::Error::other("piped child stdout was not available"),
+    })?;
+    let stderr = child.stderr.take().ok_or_else(|| ToolError::Spawn {
+        tool: tool_name.clone(),
+        source: io::Error::other("piped child stderr was not available"),
+    })?;
     let stdout_reader = thread::spawn(move || {
         let mut bytes = Vec::new();
         let mut reader = stdout;
@@ -188,10 +311,12 @@ pub fn run_with_timeout(
         reader.read_to_end(&mut bytes).map(|_| bytes)
     });
 
-    let status = match child.wait_timeout(timeout).map_err(|source| ToolError::Spawn {
-        tool: tool_name.clone(),
-        source,
-    })? {
+    let status = match child
+        .wait_timeout(timeout)
+        .map_err(|source| ToolError::Spawn {
+            tool: tool_name.clone(),
+            source,
+        })? {
         Some(status) => status,
         None => {
             let _ = child.kill();
@@ -274,35 +399,25 @@ pub fn combined_output(output: &ToolOutput) -> String {
 }
 
 pub struct WorkDir {
-    path: PathBuf,
+    directory: tempfile::TempDir,
 }
 
 impl WorkDir {
     pub fn new() -> io::Result<Self> {
-        let base = env::temp_dir();
-        let pid = std::process::id();
-        for attempt in 0..100_u32 {
-            let path = base.join(format!("canoe-bootmgr-build-{pid}-{attempt}"));
-            match fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path }),
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
+        let directory = tempfile::Builder::new()
+            .prefix("canoe-bootmgr-build-")
+            .tempdir()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
         }
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "temporary workdir names exhausted",
-        ))
+        Ok(Self { directory })
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for WorkDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+        self.directory.path()
     }
 }
 
@@ -335,3 +450,7 @@ pub fn sha256_prefix(path: &Path, mut bytes: u64) -> io::Result<String> {
     }
     Ok(format!("{:x}", digest.finalize()))
 }
+
+#[cfg(test)]
+#[path = "build_tools_test.rs"]
+mod tests;

@@ -16,6 +16,7 @@ clean:
 copy_resources:
 	rm -rf build/module build/module_android.zip
 	mkdir -p build/module
+	mkdir -p build/module/bin
 	cp -r module/* build/module/
 	[ -d ../../ablrepo ] && cp -r ../../ablrepo ./build/module/ablrepo || true
 # Fetch the pinned static app into the root cache, then replace webroot

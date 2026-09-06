@@ -7,19 +7,34 @@ OTA 通常会把下一代系统安装到另一个 A/B 槽位。设备启动该�
 
 1. 启动 Android 系统更新器，安装 OTA，等待它完成对另一个 A/B 槽位的写入。
 2. 继续在当前槽位运行。**此时不要重启。**
-3. 在 KernelSU 界面打开 Canoe Boot Manager。Start 会直接读取本地启动根目录，
-   不会等待 fastboot。根目录可读时进入 **GENERAL**。
-4. 在 GENERAL 选择 **Install to Inactive Slot / OTA**，完成 Guided flow。应用用
-   `slot.status` 获取槽位元数据，检查变更与证据；仅在目标槽位已知时用 `ota-apply`
-   应用准备好的目标。它不会重新标记运行中的槽位，也不会静默回退到运行槽位。槽位
-   缺失或未知时会拒绝操作，而不是猜测。
+3. 在 KernelSU 界面打开 Canoe Boot Manager。Overview 会直接读取本地启动根目录，
+   不会等待 fastboot。
+4. 从 Overview 打开 Deploy，选择 **refresh** lane，并把非活动槽位作为明确目标。
+   **Provision → Prepare → Action** 三阶段会获取槽位元数据、检查变更与证据；仅在
+   目标槽位已知时用 `ota-apply` 应用准备好的目标。它不会重新标记运行中的槽位，也
+   不会静默回退到运行槽位。槽位缺失或未知时会拒绝操作，而不是猜测。
 5. 只有应用报告成功后才重启。
 
 等价的写入器命令会明确指定目标槽位：
 
 ```bash
 canoe-bootmgr ota-apply --staged /path/to/staged \
-  --target-slot b --mode 1
+  --target-slot b
+```
+
+`ota-apply` 省略 `--mode` 时会继承已保存的模式。要明确变更模式，已有受管理行使用
+`--id <ENTRY_ID>`，新行使用 `--from-mode 0|1|2`，并对 `mode.plan` 要求的每个确认
+重复传入 `--acknowledge <CODE>`。如果计划需要镜像证据，还要传入
+`--current-vbmeta <PATH>`、`--target-vbmeta <PATH>` 和
+`--target-image <PATH>`；这些是证据输入，不是隐式刷写载荷。写入器会在修改启动根目录
+前评估 `mode.plan`；拒绝或缺少确认时会保持启动根目录不变。例如：
+
+```bash
+canoe-bootmgr ota-apply --staged /path/to/staged \
+  --target-slot b --mode 1 --id android-b \
+  --current-vbmeta <CURRENT_VBMETA> --target-vbmeta <TARGET_VBMETA> \
+  --target-image <TARGET_IMAGE> \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
 ```
 
 如果操作针对特定本地启动根目录源，另加全局 `--boot-root`、`--source` 或
@@ -27,9 +42,12 @@ canoe-bootmgr ota-apply --staged /path/to/staged \
 `--allow-new-signer`。`ota-apply` 会安装目标槽位的 `boot_a.efi` 或 `boot_b.efi`
 三件套及匹配附属文件；事务允许时，目标原有的有效世代会保留为 `boot_backup.efi`。
 
-首次安装是另一条流程：它使用 Guided **Provision**，并在应用确认系统用户空间
-`fastbootd` 前置条件后使用 `install`。不要用首次安装的 `install` 代替 OTA 后的
-非活动槽位操作。
+应用的 Mode 1 graft 工作是 Deploy → Prepare 中的可选任务。它枚举所选 VBMETA 的链
+描述符，并在可写入前验证生成的镜像。
+
+首次安装是另一条流程：它使用 Deploy 的 **fresh-install** lane 和 **Provision**
+阶段，并在应用确认系统用户空间 `fastbootd` 前置条件后使用 `install`。不要用首次
+安装的 `install` 代替 OTA 后的非活动槽位操作。
 
 如果忘记该操作，新槽位会带有原厂 ABL。那里没有 GBL 漏洞，因此 BDS 不会加载，设备
 会以原厂状态启动且没有 hook。遗漏本身不会导致变砖。仍在已知良好的槽位运行时，
@@ -45,10 +63,10 @@ fastboot set_active b
 
 ## 证据与签名限制
 
-Guided flow 会在提交前审核 `mode.plan`。Mode 2 变更可能使用 `vbmeta.inspect`、
-`vbmeta.header` 与 `vbmeta.check`；这些操作只检查证据，不会自行刷写镜像。若选择
-提供 ABL 或 vbmeta 镜像，该文件必须精确且非空，只能作为**派生输入**，绝不是隐式
-刷写载荷。`abl.verify` 可以检查所提供 ABL 的摘要。
+Deploy 的 Review/Action 阶段会在提交前审核 `mode.plan`。Mode 2 变更可能使用
+`vbmeta.inspect`、`vbmeta.header` 与 `vbmeta.check`；这些操作只检查证据，不会自行
+刷写镜像。若选择提供 ABL 或 vbmeta 镜像，该文件必须精确且非空，只能作为**派生输入**，
+绝不是隐式刷写载荷。`abl.verify` 可以检查所提供 ABL 的摘要。
 
 成功的 Mode 2 派生只能说明 vbmeta 已解析并带有签名和公钥 blob，不能证明密钥属于
 OEM；任何工具都无法证明这一点。自动保护是检测公钥摘要相对于已安装世代是否变化。

@@ -62,7 +62,18 @@ fn config_mutations_bump_and_repoint_default() {
     assert_eq!(config.remove("a").expect("remove"), 1);
     assert_eq!(config.default.as_deref(), Some("b"));
     assert_eq!(config.entry("b").expect("entry").mode, 2);
-    assert_eq!(config.set_mode("b", 0).expect("mode"), 2);
+    assert_eq!(config.set_mode_planned("b", 0).expect("mode"), 2);
+}
+
+#[test]
+fn malformed_global_and_entry_mode_fall_back_to_mode_one() {
+    let config = ConfigDocument::parse(
+        b"version 1\nmode 0\nmode malformed\n\nentry android-a\n title Android\n image boot_a.efi\n mode malformed\n role active\n",
+    )
+    .expect("parse config");
+
+    assert_eq!(config.mode, 1);
+    assert_eq!(config.entry("android-a").expect("entry").mode, 1);
 }
 
 #[test]
@@ -206,6 +217,31 @@ fn fastboot_end_export_protocol_round_trip_has_operation() {
 }
 
 #[test]
+fn entry_mode_protocol_forwards_the_tools_directory() {
+    let request = serde_json::json!({
+        "verb": "entry.mode",
+        "id": "android-a",
+        "mode": 1,
+        "tools": "/toolkit/bin"
+    });
+    let command =
+        canoe_bootmgr::wire::parse_json(&serde_json::to_vec(&request).expect("request JSON"))
+            .expect("wire request")
+            .into_command();
+    let canoe_bootmgr::cli::Command::Entry {
+        command: canoe_bootmgr::cli::EntryCommand::Mode(args),
+    } = command
+    else {
+        panic!("entry mode command");
+    };
+
+    assert_eq!(
+        args.tools.as_deref(),
+        Some(std::path::Path::new("/toolkit/bin"))
+    );
+}
+
+#[test]
 fn jsonl_fastboot_end_export_missing_node_returns_error_envelope() {
     let node = tempfile::tempdir()
         .expect("node directory")
@@ -256,6 +292,8 @@ fn staged_root(parent: &tempfile::TempDir, payload: &[u8], signer: u8) -> std::p
     fs::create_dir_all(&staged).expect("staged directory");
     fs::write(staged.join("boot.efi"), payload).expect("loader");
     let mut gm2p = vec![0_u8; 120];
+    gm2p[0..4].copy_from_slice(b"GM2P");
+    gm2p[4..6].copy_from_slice(&1_u16.to_le_bytes());
     gm2p[0x38..0x58].fill(signer);
     fs::write(staged.join("boot.efi.gm2p"), gm2p).expect("gm2p");
     fs::write(staged.join("boot.efi.tzmap"), vec![signer; 256]).expect("tzmap");
@@ -271,6 +309,15 @@ fn request_json(
         canoe_bootmgr::wire::parse_json(&serde_json::to_vec(&request).expect("request"))
             .expect("wire"),
     )
+}
+
+fn staged_tools_inventory(root: &std::path::Path, staged: &std::path::Path) -> serde_json::Value {
+    let response = request_json(
+        root,
+        serde_json::json!({"verb":"tools.inventory","source":staged.join("tools")}),
+    )
+    .expect("tools inventory");
+    serde_json::to_value(response).expect("serialize tools inventory")["inventory"].clone()
 }
 
 #[test]
@@ -296,6 +343,8 @@ fn fresh_install_sets_active_row_as_default() {
     println!("FRESH_INSTALL_CANOE_CFG_BEGIN\n{rendered}\nFRESH_INSTALL_CANOE_CFG_END");
     let config = ConfigDocument::parse(rendered.as_bytes()).expect("parse written config");
     assert_eq!(config.default.as_deref(), Some("android-b"));
+    assert_eq!(config.mode, 0);
+    assert_eq!(config.entry("android-b").expect("active row").mode, 0);
 }
 
 #[test]
@@ -325,6 +374,27 @@ fn ota_apply_prefers_target_slot_as_default() {
     let rendered = fs::read_to_string(root.path().join("canoe.cfg")).expect("written config");
     let config = ConfigDocument::parse(rendered.as_bytes()).expect("parse written config");
     assert_eq!(config.default.as_deref(), Some("android-b"));
+}
+
+#[test]
+fn ota_apply_with_explicit_target_refuses_unknown_active_slot() {
+    let root = tempfile::tempdir().expect("fresh boot root");
+    let staging = tempfile::tempdir().expect("staging root");
+    let staged = staged_root(&staging, b"ota", 6);
+
+    let error = request_json(
+        root.path(),
+        serde_json::json!({
+            "verb":"ota-apply",
+            "staged":staged,
+            "target_slot":"b",
+            "bootctl_output":"slot-index: 1"
+        }),
+    )
+    .expect_err("explicit target without an authoritative active slot must refuse");
+
+    assert_eq!(error.protocol_code(), "ota-active-slot-unknown");
+    assert!(!root.path().join("boot_b.efi").exists());
 }
 
 #[test]
@@ -415,9 +485,15 @@ fn install_carries_staged_efi_tools_into_the_boot_root() {
     fs::create_dir_all(staged.join("tools")).expect("staged tools");
     fs::write(staged.join("tools/UsbTools.efi"), b"usb").expect("usb tool");
     fs::write(staged.join("tools/RebootTools.efi"), b"reboot").expect("reboot tool");
+    let inventory = staged_tools_inventory(root.path(), &staged);
     request_json(
         root.path(),
-        serde_json::json!({"verb":"install","staged":staged,"slot":"a"}),
+        serde_json::json!({
+            "verb":"install",
+            "staged":staged,
+            "slot":"a",
+            "staged_tools":inventory
+        }),
     )
     .expect("install");
     assert_eq!(
@@ -428,6 +504,24 @@ fn install_carries_staged_efi_tools_into_the_boot_root() {
         fs::read(root.path().join("tools/RebootTools.efi")).expect("installed reboot tool"),
         b"reboot"
     );
+}
+
+#[test]
+fn install_requires_inventory_when_staged_tools_exist() {
+    let root = tempfile::tempdir().expect("root");
+    let staged = staged_root(&root, b"new", 3);
+    fs::create_dir_all(staged.join("tools")).expect("staged tools");
+    fs::write(staged.join("tools/UsbTools.efi"), b"usb").expect("usb tool");
+
+    let error = request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"slot":"a"}),
+    )
+    .expect_err("staged tools require their reviewed inventory");
+
+    assert_eq!(error.protocol_code(), "tools-inventory-required");
+    assert!(!root.path().join("boot_a.efi").exists());
+    assert!(!root.path().join("tools").exists());
 }
 
 #[test]
@@ -448,30 +542,54 @@ fn install_without_staged_tools_leaves_the_boot_root_tools_untouched() {
 }
 
 #[test]
-fn failed_install_restores_the_previous_tool_generation() {
+fn install_refuses_a_staged_tool_inserted_after_inventory() {
     let root = tempfile::tempdir().expect("root");
-    fs::create_dir_all(root.path().join("tools")).expect("existing tools");
-    fs::write(root.path().join("tools/UsbTools.efi"), b"resident").expect("resident tool");
     let staged = staged_root(&root, b"new", 5);
     fs::create_dir_all(staged.join("tools")).expect("staged tools");
-    fs::write(staged.join("tools/UsbTools.efi"), b"replacement").expect("replacement tool");
-    // A signer change with no override refuses after the tools are committed,
-    // so this exercises rollback rather than an early argument rejection.
-    fs::write(root.path().join("boot_a.efi"), b"old").expect("old loader");
-    let mut resident = vec![0_u8; 120];
-    resident[0x38..0x58].fill(9);
-    fs::write(root.path().join("boot_a.efi.gm2p"), resident).expect("old gm2p");
-    fs::write(root.path().join("boot_a.efi.tzmap"), vec![9_u8; 256]).expect("old tzmap");
+    fs::write(staged.join("tools/UsbTools.efi"), b"usb").expect("usb tool");
+    let inventory = staged_tools_inventory(root.path(), &staged);
+    fs::write(staged.join("tools/RebootTools.efi"), b"reboot").expect("inserted tool");
+
     let error = request_json(
         root.path(),
-        serde_json::json!({"verb":"install","staged":staged,"slot":"a"}),
+        serde_json::json!({
+            "verb":"install",
+            "staged":staged,
+            "slot":"a",
+            "staged_tools":inventory
+        }),
     )
-    .expect_err("signer change must refuse");
-    assert!(error.to_string().contains("signer"));
-    assert_eq!(
-        fs::read(root.path().join("tools/UsbTools.efi")).expect("resident tool"),
-        b"resident"
-    );
+    .expect_err("inserted staged tool must invalidate the inventory");
+
+    assert_eq!(error.protocol_code(), "tools-inventory-mismatch");
+    assert!(!root.path().join("boot_a.efi").exists());
+    assert!(!root.path().join("tools").exists());
+}
+
+#[test]
+fn install_refuses_a_staged_tool_removed_after_inventory() {
+    let root = tempfile::tempdir().expect("root");
+    let staged = staged_root(&root, b"new", 5);
+    fs::create_dir_all(staged.join("tools")).expect("staged tools");
+    fs::write(staged.join("tools/UsbTools.efi"), b"usb").expect("usb tool");
+    fs::write(staged.join("tools/RebootTools.efi"), b"reboot").expect("reboot tool");
+    let inventory = staged_tools_inventory(root.path(), &staged);
+    fs::remove_file(staged.join("tools/RebootTools.efi")).expect("remove staged tool");
+
+    let error = request_json(
+        root.path(),
+        serde_json::json!({
+            "verb":"install",
+            "staged":staged,
+            "slot":"a",
+            "staged_tools":inventory
+        }),
+    )
+    .expect_err("removed staged tool must invalidate the inventory");
+
+    assert_eq!(error.protocol_code(), "tools-inventory-mismatch");
+    assert!(!root.path().join("boot_a.efi").exists());
+    assert!(!root.path().join("tools").exists());
 }
 
 #[test]
@@ -612,4 +730,95 @@ fn vendorboot_patch_is_fixed_size_and_idempotent() {
         false
     );
     assert_eq!(fs::metadata(second).expect("second output").len(), 4096);
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_install_with_unwritable_destination_reports_rollback_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Given an installed slot whose loader cannot be restored after a failed update.
+    let root = tempfile::tempdir().expect("boot root");
+    let initial_staging = tempfile::tempdir().expect("initial staging");
+    let initial = staged_root(&initial_staging, b"initial", 1);
+    request_json(
+        root.path(),
+        serde_json::json!({"verb":"install","staged":initial,"slot":"a"}),
+    )
+    .expect("initial install");
+    fs::write(root.path().join("boot_b.efi"), b"orphaned loader").expect("orphaned loader");
+    let destination = root.path().join("boot_a.efi");
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o400))
+        .expect("make destination read-only");
+    let replacement_staging = tempfile::tempdir().expect("replacement staging");
+    let replacement = staged_root(&replacement_staging, b"replacement", 2);
+
+    // When the update cannot write the destination and rollback cannot rewrite it either.
+    let error = request_json(
+        root.path(),
+        serde_json::json!({
+            "verb":"install",
+            "staged":replacement,
+            "slot":"a",
+            "allow_new_signer":true
+        }),
+    )
+    .expect_err("read-only destination must fail");
+
+    // Then the public error identifies the failed rollback rather than the initial commit error.
+    assert_eq!(error.protocol_code(), "slot-rollback");
+    assert!(matches!(
+        error,
+        canoe_bootmgr::AppError::Slot(canoe_bootmgr::SlotError::Rollback { .. })
+    ));
+    assert_eq!(
+        fs::read(root.path().join("boot_b.efi")).expect("restored orphan"),
+        b"orphaned loader"
+    );
+    assert!(
+        !root.path().join(".canoe-quarantine").exists(),
+        "rollback removes the directory created to quarantine the orphan"
+    );
+}
+
+#[test]
+fn config_replacement_preserves_a_stale_legacy_temporary_for_backend_and_install() {
+    // Given an unrelated stale legacy temporary beside a local backend config.
+    let local_root = tempfile::tempdir().expect("local boot root");
+    let local_temp = local_root.path().join("canoe.tmp.canoe");
+    fs::write(&local_temp, b"legacy local temporary").expect("local temporary");
+    let local = LocalDir::new(local_root.path()).expect("local backend");
+    let mut config = ConfigDocument::empty();
+    config
+        .upsert(request("android-a", "boot_a.efi"))
+        .expect("add config entry");
+
+    // When the backend writes its config.
+    local.write_config(&config).expect("write local config");
+
+    // Then the stale file remains unrelated to the config replacement.
+    assert_eq!(
+        fs::read(&local_temp).expect("preserved local temporary"),
+        b"legacy local temporary"
+    );
+
+    // Given the same stale temporary before the installer reaches its config write.
+    let install_root = tempfile::tempdir().expect("install boot root");
+    let install_temp = install_root.path().join("canoe.tmp.canoe");
+    fs::write(&install_temp, b"legacy install temporary").expect("install temporary");
+    let staging = tempfile::tempdir().expect("staging");
+    let staged = staged_root(&staging, b"loader", 1);
+
+    // When the installation writes its managed config.
+    request_json(
+        install_root.path(),
+        serde_json::json!({"verb":"install","staged":staged,"slot":"a"}),
+    )
+    .expect("install");
+
+    // Then it obeys the same collision-free replacement contract.
+    assert_eq!(
+        fs::read(&install_temp).expect("preserved install temporary"),
+        b"legacy install temporary"
+    );
 }

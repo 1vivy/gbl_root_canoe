@@ -117,9 +117,9 @@ Linux：   ./canoe
 Windows： canoe.exe
 ```
 
-交互式 GUI 和命令行客户端会等待 `images/abl.img` 与
-`images/vbmeta.img`；当 BDS 发布 `current-slot` 时读取活动槽位，只有较旧
-且不发布该变量的 BDS 才会询问当前活动槽位。随后它们请求：
+交互式 GUI 和命令行客户端会等待 `images/abl.img` 与 `images/vbmeta.img`；当 BDS
+发布 `current-slot` 时读取活动槽位，只有较旧且不发布该变量的 BDS 才会询问当前
+活动槽位。随后它们请求：
 
 ```text
 fastboot oem mass-storage:persist
@@ -133,8 +133,16 @@ fastboot oem mass-storage:persist
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --slot a --mode 1
+canoe install --slot a
 ```
+
+`canoe install` 省略 `--mode` 时会继承已保存的模式。通过该包装器明确变更模式时，
+必须同时提供 `--mode 0|1|2`、`--from-mode 0|1|2`，并对 `mode.plan` 要求的每个
+确认重复传入 `--acknowledge <CODE>`。直接使用 `canoe-bootmgr` 时，已有受管理行
+还可用 `--id <ENTRY_ID>`；新行使用 `--from-mode`。如果计划需要镜像证据，还要传入
+`--current-vbmeta <PATH>`、`--target-vbmeta <PATH>` 和
+`--target-image <PATH>`；这些是证据输入，不是隐式刷写载荷。
+写入器会在修改启动根目录前评估 `mode.plan`；拒绝或缺少确认时会保持启动根目录不变。
 
 只有在测试或操作员明确提供目录时，才使用
 `--boot-root <persist>/efisp` 的本地目录后端。对于镜像或原始块源，应使用
@@ -142,17 +150,32 @@ canoe install --slot a --mode 1
 
 ```bash
 canoe-bootmgr --boot-root /path/to/efisp install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 canoe-bootmgr --source /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
+```
+
+已有行的模式变更示例：
+
+```bash
+canoe-bootmgr --boot-root /path/to/efisp install \
+  --staged /path/to/staged --slot a --mode 1 --id android-a \
+  --current-vbmeta <CURRENT_VBMETA> --target-vbmeta <TARGET_VBMETA> \
+  --target-image <TARGET_IMAGE> \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
 ```
 
 `--ext4-image` 是 `--source` 的别名；两种直接源形式都接受 ext4 镜像或块
 设备，且不能与 `--boot-root` 合用。直接安装必须指定 `--slot a|b`，除非
 调用者明确使用带有已知活动元数据及 `--i-know-inactive-status` 的 inactive
 形式。未知槽位会被拒绝。
+
+两种直接源形式始终使用 persist 卷内的 `/efisp`，绝不使用文件系统根目录。
+安装时会创建缺失的 `/efisp`，已有目录则直接复用。仅检查时不会创建目录，
+也不会接管、移动或删除误放在卷根目录的文件。`--boot-root` 仍直接指定
+启动根目录本身。
 
 Super Fastboot 发布以下 fastboot 变量：
 
@@ -167,7 +190,7 @@ Super Fastboot 发布以下 fastboot 变量：
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --slot b --mode 1
+canoe install --slot b
 ```
 
 提交新三件套前，目标槽位原有三件套会连同附属文件复制为
@@ -222,17 +245,18 @@ WebUI，按下 **Install to inactive slot**。该操作要求目标槽位元数�
 
 ```sh
 su -c sh ./build.sh --mode 0
-su -c sh ./build.sh --mode 1
-su -c sh ./build.sh --mode 1 --abl /path/abl.img --vbmeta /path/vbmeta.img
+su -c sh ./build.sh --mode 1 --acknowledge P-FORMAT
+su -c sh ./build.sh --mode 1 --acknowledge P-FORMAT --abl /path/abl.img --vbmeta /path/vbmeta.img
 ```
 
-该包装器只接受 Mode 0 和 Mode 1；它只改变启动根目录树，验证所有生成文件，
-失败时删除完整暂存集，并且不写入分区。对于已准备好的暂存目录，等价的
-设备端命令是：
+该包装器只接受 Mode 0 和 Mode 1；Mode 1 必须显式确认 `P-FORMAT`。选中的
+VBMETA 只作为只读目标证据传给策略门禁，绝不会成为隐式刷写载荷。该包装器只
+改变启动根目录树，验证所有生成文件，失败时删除完整暂存集，并且不写入分区。
+对于已准备好的暂存目录，等价的设备端命令是：
 
 ```sh
 canoe-bootmgr --boot-root /mnt/vendor/persist/efisp install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 ```
 
 `--boot-root` 是本地目录后端；对于 ext4 镜像或块源，改用 `--source` 或

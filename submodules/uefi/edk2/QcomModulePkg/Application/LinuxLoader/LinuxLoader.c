@@ -78,6 +78,7 @@
 #include <Protocol/EFICardInfo.h>
 #include <Protocol/SimpleTextIn.h>
 #include "SuperFbMenu.h"
+#include "SuperFbBootRoot.h"
 #include "SuperFbOemWatchdog.h"
 #include "SuperFbLog.h"
 
@@ -171,6 +172,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     EFI_HANDLE          ConfigVolume = NULL;
     SFB_KEY             PowerOnKey;
     SFB_BOOT_DECISION   Decision;
+    SFB_BOOT_ROOT_STATE BootRootState;
 
     ZeroMem (&Config, sizeof (Config));
     Config.MenuMode = SfbConfigMenuSilent;
@@ -252,7 +254,10 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
      * opt-in to the normal menu, which can enumerate anything discovered in
      * the meantime.
      */
-    if (SfbBootRootIsEmpty ()) {
+    BootRootState = SfbBootRootObserve ();
+    SfbRecordBootRootState (BootRootState);
+    SfbPublishBootRootTable ();
+    if (SfbBootRootIsEmptyState (BootRootState)) {
       DEBUG ((EFI_D_INFO, "SFB: MARK bootflow first-run=1\n"));
       if (SfbShowFirstRunScreen ()) {
         SfbShowEnteringMenu ();

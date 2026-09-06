@@ -12,13 +12,14 @@ CFLAGS += $(SFB_VERSION_CFLAGS)
 
 .PHONY: test test_gpt_slot_reset clean
 
-test: test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_gpt_slot_reset test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface
+test: test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_gpt_slot_reset test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface
 	./test_profile
 	./test_deviceinfo
 	./test_devinfo
 	./test_slot_attributes
 	./test_slot_retries
 	./test_last_launch
+	./test_boot_root
 	./test_tzmap
 	./test_fat
 	./test_hooks
@@ -60,6 +61,11 @@ test_gpt_slot_reset:
 test_last_launch: \
 	../edk2/QcomModulePkg/Application/LinuxLoader/TestLastLaunch.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLastLaunch.c
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -I../edk2/QcomModulePkg/Application/LinuxLoader -o $@ $^
+
+test_boot_root: \
+	../edk2/QcomModulePkg/Application/LinuxLoader/TestBootRoot.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBootRoot.c
 	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -I../edk2/QcomModulePkg/Application/LinuxLoader -o $@ $^
 
 # Pure canoe.cfg parser: no EDK2 types at all, so it builds against stdint.

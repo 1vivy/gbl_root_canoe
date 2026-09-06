@@ -1,11 +1,9 @@
 use std::env;
-#[cfg(unix)]
-use std::os::unix::fs::FileTypeExt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::backend::{BackendActionError, BackendError};
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -13,18 +11,19 @@ use thiserror::Error;
 mod ext4_bootroot;
 #[path = "ext4_cmd.rs"]
 mod ext4_cmd;
+#[path = "ext4_source.rs"]
+mod ext4_source;
+use ext4_source::{
+    locate_helper, probe_boot_root, source_file_is_block_device, source_is_block_device,
+};
 #[path = "ext4_sync.rs"]
 mod ext4_sync;
+#[path = "ext4_transaction.rs"]
+mod ext4_transaction;
 
-/// The boot root inside an exported volume.
-///
-/// `fastboot oem mass-storage:persist` exports the whole persist partition, and
-/// the boot root on it is the `efisp` directory the BDS opens as `\efisp\...`.
-/// A bare image handed to `--ext4-image` is usually the boot root itself. Which
-/// one this source is gets resolved by looking, never assumed: writing a boot
-/// root to a persist volume's root leaves the BDS reading an untouched `efisp`
-/// and scatters Canoe files through a vendor partition, and the install reports
-/// success either way.
+/// Every direct ext4 source is a persist volume. The BDS reads only `/efisp`.
+/// A missing boot directory stays missing during reads and is created by writes;
+/// filesystem-root files never become an implicit alternate boot root.
 const BOOT_ROOT_DIR: &str = "/efisp";
 
 const KNOWN_FILES: [&str; 17] = [
@@ -61,6 +60,11 @@ pub enum Ext4Error {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("canoe-ext4 sync failed: {sync}; rollback failed: {rollback}")]
+    Rollback {
+        sync: Box<Ext4Error>,
+        rollback: Box<Ext4Error>,
+    },
     #[error("canoe-ext4 output is invalid: {0}")]
     Output(String),
 }
@@ -68,6 +72,7 @@ pub enum Ext4Error {
 impl Ext4Error {
     pub fn protocol_code(&self) -> &str {
         match self {
+            Self::Rollback { .. } => "ext4-rollback-failed",
             Self::Missing { .. } => "ext4-missing",
             Self::Helper { .. } => "helper-failed",
             Self::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -77,7 +82,6 @@ impl Ext4Error {
         }
     }
 }
-
 #[derive(Debug, Deserialize)]
 struct Listed {
     name: String,
@@ -89,7 +93,6 @@ struct Listed {
 pub struct Ext4Dir {
     source: PathBuf,
     helper: PathBuf,
-    prefix: String,
 }
 
 impl Ext4Dir {
@@ -117,34 +120,19 @@ impl Ext4Dir {
                 helper.display()
             )));
         }
-        let prefix = resolve_prefix(&source, &helper)?;
-        Ok(Self {
-            source,
-            helper,
-            prefix,
-        })
-    }
-
-    /// The boot root this source resolved to, empty when it is the volume root.
-    pub fn boot_root_prefix(&self) -> &str {
-        &self.prefix
+        let backend = Self { source, helper };
+        backend.ensure_remote_components(BOOT_ROOT_DIR)?;
+        probe_boot_root(&backend.source, &backend.helper)?;
+        Ok(backend)
     }
 
     pub(crate) fn source_is_block_device(&self) -> bool {
-        source_is_block_device(
-            &self.source,
-            source_file_is_block_device(&self.source),
-        )
+        source_is_block_device(&self.source, source_file_is_block_device(&self.source))
     }
-
 
     /// Map a boot-root-relative path onto the volume.
     pub(super) fn remote(&self, path: &str) -> String {
-        if self.prefix.is_empty() {
-            path.to_owned()
-        } else {
-            format!("{}{path}", self.prefix)
-        }
+        format!("{BOOT_ROOT_DIR}{path}")
     }
 
     pub fn with_temp_root<T, F>(&self, action: F) -> Result<T, Ext4Error>
@@ -152,6 +140,74 @@ impl Ext4Dir {
         F: FnOnce(&Path) -> Result<T, String>,
     {
         self.with_temp_root_inner(action, true)
+    }
+
+    /// Run an operation against the extracted boot root while preserving its error.
+    pub(crate) fn with_temp_root_action<T, E, F>(
+        &self,
+        action: F,
+    ) -> Result<T, BackendActionError<E>>
+    where
+        F: FnOnce(&Path) -> Result<T, E>,
+    {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| BackendActionError::Backend(BackendError::Clock))?
+            .as_nanos();
+        let root =
+            env::temp_dir().join(format!("canoe-bootmgr-ext4-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).map_err(|source| {
+            BackendActionError::Backend(BackendError::Ext4Typed(io(
+                "create temporary root",
+                &root,
+                source,
+            )))
+        })?;
+        let expected_root = root.with_extension("before");
+        let result = self
+            .populate_temp(&root)
+            .map_err(|error| BackendActionError::Backend(BackendError::Ext4Typed(error)))
+            .and_then(|()| {
+                Self::snapshot_temp_root(&root, &expected_root)
+                    .map_err(|error| BackendActionError::Backend(BackendError::Ext4Typed(error)))
+            })
+            .and_then(|()| action(&root).map_err(BackendActionError::Action))
+            .and_then(|value| {
+                self.sync_temp(&root, &expected_root)
+                    .map(|()| value)
+                    .map_err(|error| BackendActionError::Backend(BackendError::Ext4Typed(error)))
+            });
+        let _ = fs::remove_dir_all(&expected_root);
+        let _ = fs::remove_dir_all(&root);
+        result
+    }
+
+    pub(crate) fn with_temp_root_readonly_action<T, E, F>(
+        &self,
+        action: F,
+    ) -> Result<T, BackendActionError<E>>
+    where
+        F: FnOnce(&Path) -> Result<T, E>,
+    {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| BackendActionError::Backend(BackendError::Clock))?
+            .as_nanos();
+        let root =
+            env::temp_dir().join(format!("canoe-bootmgr-ext4-{}-{stamp}", std::process::id()));
+        fs::create_dir_all(&root).map_err(|source| {
+            BackendActionError::Backend(BackendError::Ext4Typed(io(
+                "create temporary root",
+                &root,
+                source,
+            )))
+        })?;
+        let result = self
+            .populate_temp(&root)
+            .map_err(|error| BackendActionError::Backend(BackendError::Ext4Typed(error)))
+            .and_then(|()| action(&root).map_err(BackendActionError::Action));
+        let _ = fs::remove_dir_all(&root);
+        result
     }
 
     pub fn with_temp_root_readonly<T, F>(&self, action: F) -> Result<T, Ext4Error>
@@ -172,142 +228,28 @@ impl Ext4Dir {
         let root =
             env::temp_dir().join(format!("canoe-bootmgr-ext4-{}-{stamp}", std::process::id()));
         fs::create_dir_all(&root).map_err(|source| io("create temporary root", &root, source))?;
+        let expected_root = root.with_extension("before");
         let result = self
             .populate_temp(&root)
+            .and_then(|()| {
+                if sync {
+                    Self::snapshot_temp_root(&root, &expected_root)
+                } else {
+                    Ok(())
+                }
+            })
             .and_then(|()| action(&root).map_err(Ext4Error::Operation))
             .and_then(|value| {
                 if sync {
-                    self.sync_temp(&root).map(|()| value)
+                    self.sync_temp(&root, &expected_root).map(|()| value)
                 } else {
                     Ok(value)
                 }
             });
+        let _ = fs::remove_dir_all(&expected_root);
         let _ = fs::remove_dir_all(&root);
         result
     }
-}
-fn source_file_is_block_device(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        fs::metadata(path).is_ok_and(|metadata| metadata.file_type().is_block_device())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        false
-    }
-}
-
-fn source_is_block_device(path: &Path, file_type_is_block: bool) -> bool {
-    #[cfg(unix)]
-    {
-        let _ = path;
-        return file_type_is_block;
-    }
-    #[cfg(windows)]
-    {
-        let _ = file_type_is_block;
-        return path
-            .to_string_lossy()
-            .starts_with(r"\\.\PhysicalDrive")
-            || path.to_string_lossy().starts_with(r"\\?\Device\");
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = (path, file_type_is_block);
-        false
-    }
-}
-
-#[cfg(test)]
-mod source_classifier_tests {
-    use super::source_is_block_device;
-    use std::path::Path;
-
-    #[test]
-    fn regular_image_is_not_a_raw_source() {
-        assert!(!source_is_block_device(Path::new("persist.img"), false));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn unix_block_path_uses_file_type() {
-        assert!(source_is_block_device(Path::new("/dev/sda"), true));
-        assert!(!source_is_block_device(Path::new("/dev/sda"), false));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_device_namespace_is_raw() {
-        assert!(source_is_block_device(
-            Path::new(r"\\.\PhysicalDrive0"),
-            false
-        ));
-        assert!(source_is_block_device(
-            Path::new(r"\\?\Device\Harddisk0"),
-            false
-        ));
-    }
-}
-
-fn locate_helper() -> Result<PathBuf, Ext4Error> {
-    if let Some(path) = env::var_os("CANOE_EXT4") {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return Ok(path);
-        }
-        return Err(Ext4Error::Operation(format!(
-            "CANOE_EXT4 is not a file: {}",
-            path.display()
-        )));
-    }
-    if let Ok(executable) = env::current_exe() {
-        if let Some(parent) = executable.parent() {
-            let sibling = parent.join("canoe-ext4");
-            if sibling.is_file() {
-                return Ok(sibling);
-            }
-        }
-    }
-    let path = env::var_os("PATH").unwrap_or_default();
-    for directory in env::split_paths(&path) {
-        let candidate = directory.join("canoe-ext4");
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-    Err(Ext4Error::Operation(
-        "canoe-ext4 helper not found; set CANOE_EXT4 or place it beside canoe-bootmgr".to_owned(),
-    ))
-}
-
-/// Decide whether this source carries its boot root under [`BOOT_ROOT_DIR`] or is
-/// the boot root itself.
-///
-/// A probe that cannot answer is an error, not an assumption: a dirty or mounted
-/// volume must not silently resolve to the volume root and be written there.
-fn resolve_prefix(source: &Path, helper: &Path) -> Result<String, Ext4Error> {
-    let source_arg = source
-        .to_str()
-        .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
-    let output = Command::new(helper)
-        .args(["list", source_arg, BOOT_ROOT_DIR])
-        .output()
-        .map_err(|error| io("probe boot root", Path::new(BOOT_ROOT_DIR), error))?;
-    if output.status.success() {
-        return Ok(BOOT_ROOT_DIR.to_owned());
-    }
-    if output.status.code() == Some(7) {
-        return Ok(String::new());
-    }
-    let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(Ext4Error::Helper {
-        message: if detail.is_empty() {
-            format!("cannot probe {BOOT_ROOT_DIR} on {source_arg}")
-        } else {
-            detail
-        },
-    })
 }
 
 fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Ext4Error {

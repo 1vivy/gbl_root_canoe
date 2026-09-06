@@ -19,10 +19,16 @@ impl TempDir {
             match fs::create_dir(&path) {
                 Ok(()) => return Ok(Self(path)),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(CanoeError::message(format!("could not create staging directory: {error}"))),
+                Err(error) => {
+                    return Err(CanoeError::message(format!(
+                        "could not create staging directory: {error}"
+                    )));
+                }
             }
         }
-        Err(CanoeError::message("could not create unique staging directory"))
+        Err(CanoeError::message(
+            "could not create unique staging directory",
+        ))
     }
 
     pub fn path(&self) -> &Path {
@@ -53,10 +59,16 @@ fn write_probe(directory: &Path, description: &str) -> Result<(), CanoeError> {
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(CanoeError::message(format!("{description} is not writable: {error}"))),
+            Err(error) => {
+                return Err(CanoeError::message(format!(
+                    "{description} is not writable: {error}"
+                )));
+            }
         }
     }
-    Err(CanoeError::message(format!("{description} is not writable: could not create temporary probe")))
+    Err(CanoeError::message(format!(
+        "{description} is not writable: could not create temporary probe"
+    )))
 }
 
 pub fn local_boot_root(path: &Path) -> Result<PathBuf, CanoeError> {

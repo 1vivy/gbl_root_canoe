@@ -13,7 +13,7 @@ pub struct VbmetaChainPartition {
     pub public_key: Vec<u8>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct VbmetaBuildProperties {
     pub system_os_version: Option<String>,
     pub system_security_patch: Option<String>,
@@ -33,6 +33,10 @@ pub struct VbmetaHeaderReceipt {
     pub rollback_index: u64,
     pub flags: u32,
     pub release_string: String,
+    #[serde(default)]
+    pub public_key_sha256: Option<String>,
+    #[serde(default)]
+    pub build_properties: VbmetaBuildProperties,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -124,7 +128,11 @@ pub fn inspect_header(
             ToolError::Timeout { timeout, .. } => VbmetaInspectError::Timeout(timeout),
         })?;
     match serde_json::from_str::<HeaderWorkerEnvelope>(&output.stdout) {
-        Ok(HeaderWorkerEnvelope::Ok { header }) => Ok(header),
+        Ok(HeaderWorkerEnvelope::Ok { header }) if output.success => Ok(header),
+        Ok(HeaderWorkerEnvelope::Ok { .. }) => Err(VbmetaInspectError::HeaderWorker {
+            code: "vbmeta-worker-failed".to_owned(),
+            message: build_tools::diagnostic(&output),
+        }),
         Ok(HeaderWorkerEnvelope::Err { error }) => Err(VbmetaInspectError::HeaderWorker {
             code: error.code,
             message: error.message,
@@ -153,7 +161,11 @@ pub fn inspect(
             ToolError::Timeout { timeout, .. } => VbmetaInspectError::Timeout(timeout),
         })?;
     match serde_json::from_str::<WorkerEnvelope>(&output.stdout) {
-        Ok(WorkerEnvelope::Ok { inspection }) => Ok(inspection),
+        Ok(WorkerEnvelope::Ok { inspection }) if output.success => Ok(inspection),
+        Ok(WorkerEnvelope::Ok { .. }) => Err(VbmetaInspectError::Worker {
+            code: "vbmeta-worker-failed".to_owned(),
+            message: build_tools::diagnostic(&output),
+        }),
         Ok(WorkerEnvelope::Err { error }) => Err(VbmetaInspectError::Worker {
             code: error.code,
             message: error.message,
@@ -192,7 +204,11 @@ pub fn check(
             ToolError::Timeout { timeout, .. } => VbmetaInspectError::Timeout(timeout),
         })?;
     match serde_json::from_str::<CheckWorkerEnvelope>(&output.stdout) {
-        Ok(CheckWorkerEnvelope::Ok { check }) => Ok(check),
+        Ok(CheckWorkerEnvelope::Ok { check }) if output.success => Ok(check),
+        Ok(CheckWorkerEnvelope::Ok { .. }) => Err(VbmetaInspectError::CheckWorker {
+            code: "vbmeta-worker-failed".to_owned(),
+            message: build_tools::diagnostic(&output),
+        }),
         Ok(CheckWorkerEnvelope::Err { error }) => Err(VbmetaInspectError::CheckWorker {
             code: error.code,
             message: error.message,

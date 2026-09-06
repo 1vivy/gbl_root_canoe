@@ -5,12 +5,24 @@ use thiserror::Error;
 
 use crate::build_tools::ToolError;
 
-pub const PROFILE_BYTES: u64 = 120;
+/// The four AVB image properties relevant to a prospective KeyMint transition.
+///
+/// These image values are distinct from the device's live KeyMint authorization and rollback
+/// floor, neither of which a host-side header inspection can observe.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HeaderBuildProperties {
+    pub system_os_version: Option<String>,
+    pub system_security_patch: Option<String>,
+    pub vendor_security_patch: Option<String>,
+    pub boot_security_patch: Option<String>,
+}
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HeaderEvidence {
     pub algorithm_type: u32,
     pub rollback_index: u64,
+    pub public_key_sha256: Option<String>,
+    pub build_properties: HeaderBuildProperties,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -19,6 +31,10 @@ pub struct HeaderReceipt {
     pub rollback_index: u64,
     pub flags: u32,
     pub release_string: String,
+    #[serde(default)]
+    pub public_key_sha256: Option<String>,
+    #[serde(default)]
+    pub build_properties: HeaderBuildProperties,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -36,10 +52,12 @@ pub struct HeaderInspection {
 
 impl HeaderInspection {
     #[must_use]
-    pub const fn evidence(&self) -> HeaderEvidence {
+    pub fn evidence(&self) -> HeaderEvidence {
         HeaderEvidence {
             algorithm_type: self.header.algorithm_type,
             rollback_index: self.header.rollback_index,
+            public_key_sha256: self.header.public_key_sha256.clone(),
+            build_properties: self.header.build_properties.clone(),
         }
     }
 }
@@ -78,15 +96,36 @@ pub struct VbmetaEvidence {
     pub relationship: Option<&'static str>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum UserdataRequirement {
+    Must,
+    May,
+    NotRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct UserdataReason {
+    pub rule: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct UserdataAssessment {
+    pub requirement: UserdataRequirement,
+    pub reasons: Vec<UserdataReason>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ModePlan {
-    pub from_mode: u8,
+    pub from_mode: Option<u8>,
     pub target_mode: u8,
     pub preconditions: Vec<ModePrecondition>,
     pub post_actions: Vec<ModePostAction>,
     pub outcome: ModeOutcome,
     pub refusal: Option<ModeRefusal>,
     pub vbmeta: VbmetaEvidence,
+    pub userdata: UserdataAssessment,
 }
 
 #[derive(Debug, Error)]
@@ -132,7 +171,9 @@ pub(crate) enum WorkerEnvelope {
         header: HeaderReceipt,
         classification: GraftReceipt,
     },
-    Err { error: WorkerError },
+    Err {
+        error: WorkerError,
+    },
 }
 
 #[derive(Debug, Deserialize)]

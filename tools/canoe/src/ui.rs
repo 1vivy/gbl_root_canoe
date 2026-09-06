@@ -43,7 +43,6 @@ fn read_answer<R: BufRead + ?Sized, W: Write + ?Sized>(
     Ok(answer.trim().to_ascii_lowercase())
 }
 
-
 pub fn ask_choice<R: BufRead + ?Sized, W: Write + ?Sized>(
     reader: &mut R,
     writer: &mut W,

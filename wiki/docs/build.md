@@ -30,13 +30,85 @@ Bun tests. A successful build produces `dist/index.html` and the bundled
 assets. The relative asset paths are intentional: the same `dist/` must load
 from both a Tauri WebView and a KernelSU `file://` WebUI.
 
-The desktop binary is built separately with Tauri. Before that compile, stage a
-real target-compatible `canoe-bootmgr` sidecar in the app checkout's
-`src-tauri/binaries/` directory. The required names are
-`canoe-bootmgr-x86_64-unknown-linux-gnu` for Linux,
-`canoe-bootmgr-x86_64-pc-windows-gnu.exe` for the tested Windows GNU route,
-and `canoe-bootmgr-x86_64-pc-windows-msvc.exe` for an MSVC build. Do not use a
-placeholder sidecar: Tauri validates it before compiling.
+The desktop binary is built separately with Tauri. Before that compile, stage
+every target-compatible sidecar and helper in the app checkout's
+`src-tauri/binaries/` directory. `src-tauri/build.rs` hashes each staged file
+and embeds its SHA-256; a missing, non-regular, non-executable, or mismatched
+target input fails the Tauri build. The Linux names are:
+
+```text
+canoe-bootmgr-x86_64-unknown-linux-gnu
+canoe-ext4-x86_64-unknown-linux-gnu
+extractfv-x86_64-unknown-linux-gnu
+patch_abl-x86_64-unknown-linux-gnu
+mode2_profile-x86_64-unknown-linux-gnu
+abl_tzmap-x86_64-unknown-linux-gnu
+```
+
+After building the Linux toolkit helpers, stage them with their target-triple
+names:
+
+```bash
+APP=/absolute/path/to/canoe-boot-manager
+for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+  cp "targets/toolkit_linux/build/toolkit/bin/$name" \
+    "$APP/src-tauri/binaries/${name}-x86_64-unknown-linux-gnu"
+done
+```
+
+Linux `fastboot` is deliberately not staged in `src-tauri/binaries`: runtime
+selects an executable `fastboot` (or `fastboot.exe`) from the inherited `PATH`,
+then opens and seals that selected external input for the session.
+
+The Windows GNU names are:
+
+```text
+canoe-bootmgr-x86_64-pc-windows-gnu.exe
+canoe-ext4-x86_64-pc-windows-gnu.exe
+extractfv-x86_64-pc-windows-gnu.exe
+patch_abl-x86_64-pc-windows-gnu.exe
+mode2_profile-x86_64-pc-windows-gnu.exe
+abl_tzmap-x86_64-pc-windows-gnu.exe
+fastboot-x86_64-pc-windows-gnu.exe
+AdbWinApi-x86_64-pc-windows-gnu.dll
+AdbWinUsbApi-x86_64-pc-windows-gnu.dll
+```
+
+Stage the Windows GNU inputs from the toolkit's private runtime adjacency:
+
+```bash
+APP=/absolute/path/to/canoe-boot-manager
+for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+  cp "targets/toolkit_windows/build/toolkit/bin/$name.exe" \
+    "$APP/src-tauri/binaries/${name}-x86_64-pc-windows-gnu.exe"
+done
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/fastboot.exe \
+  "$APP/src-tauri/binaries/fastboot-x86_64-pc-windows-gnu.exe"
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinApi.dll \
+  "$APP/src-tauri/binaries/AdbWinApi-x86_64-pc-windows-gnu.dll"
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinUsbApi.dll \
+  "$APP/src-tauri/binaries/AdbWinUsbApi-x86_64-pc-windows-gnu.dll"
+```
+
+The Windows MSVC app CI compile fixture uses the same nine stems with
+`x86_64-pc-windows-msvc` in place of `x86_64-pc-windows-gnu` (and keeps
+`.exe`/`.dll` extensions). Those fixture files are compile-only inputs, not
+release artifacts. Do not use a placeholder for a release sidecar: Tauri
+validates every required input before compiling.
+
+For reference, the nine MSVC fixture names are:
+
+```text
+canoe-bootmgr-x86_64-pc-windows-msvc.exe
+canoe-ext4-x86_64-pc-windows-msvc.exe
+extractfv-x86_64-pc-windows-msvc.exe
+patch_abl-x86_64-pc-windows-msvc.exe
+mode2_profile-x86_64-pc-windows-msvc.exe
+abl_tzmap-x86_64-pc-windows-msvc.exe
+fastboot-x86_64-pc-windows-msvc.exe
+AdbWinApi-x86_64-pc-windows-msvc.dll
+AdbWinUsbApi-x86_64-pc-windows-msvc.dll
+```
 
 Build the desktop application from the app checkout:
 
@@ -117,6 +189,11 @@ absolute `CANOE_APP_LINUX_BIN` or `CANOE_APP_WINDOWS_BIN` path.
 The app binary is copied to `bin/canoe-boot-manager` (or `.exe`) next to
 `bin/canoe-bootmgr`. The launchers in the toolkit root resolve that adjacency:
 `canoe-boot-manager.sh` on Linux and `canoe-boot-manager.bat` on Windows.
+
+The GNU-target Tauri build also emits `WebView2Loader.dll` beside the Windows
+application. The Windows package requires and copies that loader into `bin/`.
+When `CANOE_APP_WINDOWS_BIN` is overridden, the loader is taken from the same
+directory unless `CANOE_WEBVIEW2_LOADER_WINDOWS` is set explicitly.
 
 The standalone WebUI archive is pinned independently of the desktop binary.
 The module's package recipe invokes the root `fetch-verified` target, verifies
@@ -225,7 +302,7 @@ the module. Do not force a separate rebuild for each package.
 ## Host command surface
 
 The host toolkit is GUI-first. Its root contains the launcher and CLI; `bin/`
-contains the desktop app and its sidecar:
+contains the desktop app, sidecar, and five derivation helpers:
 
 ```text
 canoe-boot-manager.sh       # Linux GUI launcher
@@ -243,14 +320,15 @@ WebView2:
 ```text
 canoe
 canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] \
+canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] [--from-mode 0|1|2] \
+              [--acknowledge CODE]... \
               [--vendor-boot IMG] [--allow-new-signer]
 canoe entry|config|default|bls|slot|source ...
 canoe -h | --help | --version
 canoe --non-interactive <command> ...
 ```
 
-With no arguments, `canoe` starts the interactive five-scenario questionnaire.
+With no arguments, `canoe` starts the interactive five-route operator surface.
 `--non-interactive` is accepted and discarded for compatibility. The
 `entry|config|default|bls|slot|source` verbs are forwarded verbatim to
 `canoe-bootmgr`.
@@ -316,12 +394,20 @@ files into those canonical locations before deriving. The images must match
 the firmware being booted.
 
 `canoe install` validates and commits the staged boot root for the required
-active slot. Without `--boot-root`, the host reaches the boot root through the
-BDS `fastboot oem mass-storage:persist` export. A provided `--boot-root` points
-to an already mounted `persist/efisp` directory. `--vendor-boot IMG` creates a
-patched copy for the selected slot and reports the corresponding fastboot
-flash; the source image is never modified. `--allow-new-signer` permits an
-expected signer change when moving to or from a custom ROM.
+active slot. Omit `--mode` to inherit the persisted mode. An explicit mode
+change through `canoe install` must include `--mode 0|1|2`,
+`--from-mode 0|1|2`, and a repeated `--acknowledge <CODE>` for each
+acknowledgement required by `mode.plan`. The direct `canoe-bootmgr` interface
+also accepts `--id <ENTRY_ID>` for an existing managed row; a new row still
+uses `--from-mode`. If the plan needs image evidence, provide
+`--current-vbmeta`, `--target-vbmeta`, and `--target-image`; these are evidence
+inputs, not implicit flash payloads. Without `--boot-root`, the host reaches
+the boot root through the BDS `fastboot oem mass-storage:persist` export. A
+provided `--boot-root` points to an already mounted `persist/efisp` directory.
+`--vendor-boot IMG` creates a patched copy for the selected slot and reports
+the corresponding fastboot flash; the source image is never modified.
+`--allow-new-signer` permits an expected signer change when moving to or from a
+custom ROM.
 
 ## Host derivation tools
 
@@ -331,10 +417,11 @@ and `abl_tzmap`. The Windows package contains their `.exe` forms.
 profile. `abl_tzmap` derives and validates the 256-byte `GTZM` map from the
 unpatched ABL and accepts incomplete reverse-engineering evidence.
 
-The `vbmetaport` utility remains available as the standalone recovery-vbmeta
-graft tool referenced by the Mode 1 questionnaire. No boot-image binary is
-bundled: the host `vendor_boot` feature is a fixed-offset, in-place cmdline
-amendment.
+Mode 1 graft preparation is an optional task inside Deploy → Prepare. It
+enumerates the selected VBMETA's chain descriptors and verifies generated
+images before a partition write is offered. No separate app route is used.
+The `vendor_boot` feature is a fixed-offset, in-place cmdline amendment; no
+boot-image binary is bundled.
 
 ## Build a matching pair
 

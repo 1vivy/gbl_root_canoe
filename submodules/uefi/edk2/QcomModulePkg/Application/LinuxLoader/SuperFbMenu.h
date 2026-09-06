@@ -504,14 +504,6 @@ SfbGetVolumeLabel (IN EFI_FILE_PROTOCOL *Root,
 EFI_STATUS
 SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume);
 
-/*
- * TRUE when no boot volumes can be located, no located volume can be opened as
- * a root, or every opened root holds neither a canoe.cfg nor a boot.efi. Any
- * of those first-run states has no launchable destination, so use fastboot.
- * FALSE only when an opened root contains a canoe.cfg or boot.efi.
- */
-BOOLEAN
-SfbBootRootIsEmpty (VOID);
 
 VOID
 SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode);

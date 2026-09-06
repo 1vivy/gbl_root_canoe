@@ -4,8 +4,8 @@ use thiserror::Error;
 
 use crate::profile::Profile;
 
-const HEADER_SIZE: usize = 256;
-const FOOTER_SIZE: usize = 64;
+pub(crate) const HEADER_SIZE: usize = 256;
+pub(crate) const FOOTER_SIZE: usize = 64;
 const RELEASE_STRING_OFFSET: usize = 128;
 const RELEASE_STRING_SIZE: usize = 48;
 const PROPERTY_TAG: u64 = 0;
@@ -138,12 +138,12 @@ fn be_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_be_bytes(raw.try_into().ok()?))
 }
 
-fn be_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+pub(crate) fn be_u64(bytes: &[u8], offset: usize) -> Option<u64> {
     let raw = bytes.get(offset..offset.checked_add(8)?)?;
     Some(u64::from_be_bytes(raw.try_into().ok()?))
 }
 
-fn parse_header(header: &[u8]) -> Result<VbmetaHeader, DeriveError> {
+pub(crate) fn parse_header(header: &[u8]) -> Result<VbmetaHeader, DeriveError> {
     if header.len() < HEADER_SIZE {
         return Err(DeriveError::TooSmall);
     }
@@ -172,35 +172,6 @@ fn parse_header(header: &[u8]) -> Result<VbmetaHeader, DeriveError> {
         flags,
         release_string,
     })
-}
-
-/// Read only the AVB header from either raw vbmeta or a footer-bearing partition image.
-///
-/// This deliberately does not walk descriptors, so descriptor-level refusals such as C9 do not
-/// prevent callers from reporting header evidence.
-pub fn inspect_vbmeta_header(image: &[u8]) -> Result<VbmetaHeader, DeriveError> {
-    if image.starts_with(b"AVB0") {
-        return parse_header(image);
-    }
-    if image.len() < FOOTER_SIZE {
-        return Err(DeriveError::TooSmall);
-    }
-    let footer_start = image.len() - FOOTER_SIZE;
-    let footer = &image[footer_start..];
-    if footer.get(0..4) != Some(b"AVBf") {
-        return Err(DeriveError::BadFooter);
-    }
-    let vbmeta_offset = usize::try_from(be_u64(footer, 20).ok_or(DeriveError::BadFooter)?)
-        .map_err(|_| DeriveError::VbmetaPastImage)?;
-    let vbmeta_size = usize::try_from(be_u64(footer, 28).ok_or(DeriveError::BadFooter)?)
-        .map_err(|_| DeriveError::VbmetaPastImage)?;
-    let vbmeta_end = vbmeta_offset
-        .checked_add(vbmeta_size)
-        .ok_or(DeriveError::VbmetaPastImage)?;
-    if vbmeta_size < HEADER_SIZE || vbmeta_end > footer_start {
-        return Err(DeriveError::VbmetaPastImage);
-    }
-    parse_header(&image[vbmeta_offset..vbmeta_end])
 }
 
 /// Classify a header conservatively using the differentiator measured from real images.
@@ -288,10 +259,10 @@ fn encode_security_patch(value: &str) -> Result<u32, DeriveError> {
 }
 
 #[derive(Default)]
-struct ParsedProperties {
+pub(crate) struct ParsedProperties {
     profile_os_version: Option<String>,
     profile_security_patch: Option<String>,
-    build: BuildProperties,
+    pub(crate) build: BuildProperties,
 }
 
 fn set_named_property(
@@ -299,7 +270,10 @@ fn set_named_property(
     key: &'static [u8],
     value: &str,
 ) -> Result<(), DeriveError> {
-    if slot.is_some() {
+    if let Some(existing) = slot {
+        if existing == value {
+            return Ok(());
+        }
         return Err(DeriveError::DuplicateProperty(
             std::str::from_utf8(key)
                 .expect("AVB property constants are UTF-8")
@@ -416,6 +390,72 @@ fn inspect_chain_partition(body: &[u8]) -> Result<Option<ChainPartition>, Derive
     Ok(Some(chain))
 }
 
+fn walk_descriptors(
+    descriptors: &[u8],
+    mut visit: impl FnMut(u64, &[u8]) -> Result<(), DeriveError>,
+) -> Result<(), DeriveError> {
+    let mut cursor = 0;
+    while cursor < descriptors.len() {
+        let remaining = descriptors.len() - cursor;
+        if remaining < 16 {
+            return Err(DeriveError::MalformedDescriptor);
+        }
+        let tag = be_u64(descriptors, cursor).ok_or(DeriveError::MalformedDescriptor)?;
+        let body_len = usize::try_from(
+            be_u64(descriptors, cursor + 8).ok_or(DeriveError::MalformedDescriptor)?,
+        )
+        .map_err(|_| DeriveError::MalformedDescriptor)?;
+        let padded_body_len = body_len
+            .checked_add(7)
+            .map(|length| length & !7)
+            .ok_or(DeriveError::MalformedDescriptor)?;
+        let total_len = 16usize
+            .checked_add(padded_body_len)
+            .ok_or(DeriveError::MalformedDescriptor)?;
+        if total_len > remaining {
+            return Err(DeriveError::MalformedDescriptor);
+        }
+        let body_start = cursor + 16;
+        let body_end = body_start
+            .checked_add(body_len)
+            .ok_or(DeriveError::MalformedDescriptor)?;
+        visit(tag, &descriptors[body_start..body_end])?;
+        cursor += total_len;
+    }
+    Ok(())
+}
+
+pub(crate) fn inspect_header_properties(
+    descriptors: &[u8],
+    properties: &mut ParsedProperties,
+) -> Result<(), DeriveError> {
+    walk_descriptors(descriptors, |tag, body| {
+        if tag == PROPERTY_TAG {
+            inspect_property(body, properties)?;
+        }
+        Ok(())
+    })
+}
+
+fn inspect_profile_descriptors(
+    descriptors: &[u8],
+    properties: &mut ParsedProperties,
+    chain_partitions: &mut Vec<ChainPartition>,
+) -> Result<(), DeriveError> {
+    walk_descriptors(descriptors, |tag, body| {
+        match tag {
+            PROPERTY_TAG => inspect_property(body, properties)?,
+            CHAIN_PARTITION_TAG => {
+                if let Some(chain) = inspect_chain_partition(body)? {
+                    chain_partitions.push(chain);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    })
+}
+
 fn expected_auth_sizes(algorithm_type: u32) -> Option<(u64, u64)> {
     match algorithm_type {
         1 => Some((32, 256)),
@@ -427,12 +467,12 @@ fn expected_auth_sizes(algorithm_type: u32) -> Option<(u64, u64)> {
         _ => None,
     }
 }
-struct CheckVbmeta<'a> {
-    public_key: &'a [u8],
-    descriptors: &'a [u8],
+pub(crate) struct CheckVbmeta<'a> {
+    pub(crate) public_key: &'a [u8],
+    pub(crate) descriptors: &'a [u8],
 }
 
-fn check_vbmeta_layout(vbmeta: &[u8]) -> Result<CheckVbmeta<'_>, DeriveError> {
+pub(crate) fn check_vbmeta_layout(vbmeta: &[u8]) -> Result<CheckVbmeta<'_>, DeriveError> {
     let header = parse_header(vbmeta)?;
     let auth_size = usize::try_from(be_u64(vbmeta, 12).ok_or(DeriveError::MalformedHeader)?)
         .map_err(|_| DeriveError::MalformedHeader)?;
@@ -448,18 +488,14 @@ fn check_vbmeta_layout(vbmeta: &[u8]) -> Result<CheckVbmeta<'_>, DeriveError> {
     if let Some((expected_hash_size, expected_signature_size)) =
         expected_auth_sizes(header.algorithm_type)
     {
-        let hash_size =
-            be_u64(vbmeta, 40).ok_or(DeriveError::MalformedHeader)?;
-        let signature_size =
-            be_u64(vbmeta, 56).ok_or(DeriveError::MalformedHeader)?;
+        let hash_size = be_u64(vbmeta, 40).ok_or(DeriveError::MalformedHeader)?;
+        let signature_size = be_u64(vbmeta, 56).ok_or(DeriveError::MalformedHeader)?;
         if hash_size != expected_hash_size || signature_size != expected_signature_size {
             return Err(DeriveError::MalformedHeader);
         }
-        let hash_offset =
-            usize::try_from(be_u64(vbmeta, 32).ok_or(DeriveError::MalformedHeader)?)
-                .map_err(|_| DeriveError::MalformedHeader)?;
-        let hash_size =
-            usize::try_from(hash_size).map_err(|_| DeriveError::MalformedHeader)?;
+        let hash_offset = usize::try_from(be_u64(vbmeta, 32).ok_or(DeriveError::MalformedHeader)?)
+            .map_err(|_| DeriveError::MalformedHeader)?;
+        let hash_size = usize::try_from(hash_size).map_err(|_| DeriveError::MalformedHeader)?;
         let signature_offset =
             usize::try_from(be_u64(vbmeta, 48).ok_or(DeriveError::MalformedHeader)?)
                 .map_err(|_| DeriveError::MalformedHeader)?;
@@ -483,9 +519,8 @@ fn check_vbmeta_layout(vbmeta: &[u8]) -> Result<CheckVbmeta<'_>, DeriveError> {
     let public_key_offset =
         usize::try_from(be_u64(vbmeta, 64).ok_or(DeriveError::MalformedHeader)?)
             .map_err(|_| DeriveError::PublicKeyPastAux)?;
-    let public_key_size =
-        usize::try_from(be_u64(vbmeta, 72).ok_or(DeriveError::MalformedHeader)?)
-            .map_err(|_| DeriveError::PublicKeyPastAux)?;
+    let public_key_size = usize::try_from(be_u64(vbmeta, 72).ok_or(DeriveError::MalformedHeader)?)
+        .map_err(|_| DeriveError::PublicKeyPastAux)?;
     if public_key_offset > aux_size || public_key_size > aux_size - public_key_offset {
         return Err(DeriveError::PublicKeyPastAux);
     }
@@ -523,7 +558,10 @@ fn resolve_check_image(image: &[u8]) -> Result<&[u8], DeriveError> {
     if image.starts_with(b"AVB0") {
         return Ok(image);
     }
-    let footer_start = image.len().checked_sub(FOOTER_SIZE).ok_or(DeriveError::NoFooter)?;
+    let footer_start = image
+        .len()
+        .checked_sub(FOOTER_SIZE)
+        .ok_or(DeriveError::NoFooter)?;
     let footer = image.get(footer_start..).ok_or(DeriveError::NoFooter)?;
     if footer.get(0..4) != Some(b"AVBf") {
         return Err(DeriveError::NoFooter);
@@ -700,44 +738,18 @@ pub fn inspect_vbmeta(vbmeta: &[u8]) -> Result<VbmetaInspection, DeriveError> {
     let pubkey_digest: [u8; 32] = Sha256::digest(public_key).into();
     let vbh: [u8; 32] = Sha256::digest(&vbmeta[..total]).into();
 
-    let desc_end = descriptors_offset + descriptors_size;
-    let mut cursor = descriptors_offset;
+    let descriptor_start = aux_start
+        .checked_add(descriptors_offset)
+        .ok_or(DeriveError::DescriptorsPastAux)?;
+    let descriptor_end = descriptor_start
+        .checked_add(descriptors_size)
+        .ok_or(DeriveError::DescriptorsPastAux)?;
+    let descriptors = vbmeta
+        .get(descriptor_start..descriptor_end)
+        .ok_or(DeriveError::DescriptorsPastAux)?;
     let mut properties = ParsedProperties::default();
     let mut chain_partitions = Vec::new();
-    while cursor < desc_end {
-        let remaining = desc_end - cursor;
-        if remaining < 16 {
-            return Err(DeriveError::MalformedDescriptor);
-        }
-        let descriptor_start = aux_start + cursor;
-        let tag = be_u64(vbmeta, descriptor_start).ok_or(DeriveError::MalformedDescriptor)?;
-        let body_len = usize::try_from(
-            be_u64(vbmeta, descriptor_start + 8).ok_or(DeriveError::MalformedDescriptor)?,
-        )
-        .map_err(|_| DeriveError::MalformedDescriptor)?;
-        let padded_body_len = body_len
-            .checked_add(7)
-            .map(|length| length & !7)
-            .ok_or(DeriveError::MalformedDescriptor)?;
-        let total_len = 16usize
-            .checked_add(padded_body_len)
-            .ok_or(DeriveError::MalformedDescriptor)?;
-        if total_len > remaining {
-            return Err(DeriveError::MalformedDescriptor);
-        }
-        let body_start = descriptor_start + 16;
-        let body = &vbmeta[body_start..body_start + body_len];
-        match tag {
-            PROPERTY_TAG => inspect_property(body, &mut properties)?,
-            CHAIN_PARTITION_TAG => {
-                if let Some(chain) = inspect_chain_partition(body)? {
-                    chain_partitions.push(chain);
-                }
-            }
-            _ => {}
-        }
-        cursor += total_len;
-    }
+    inspect_profile_descriptors(descriptors, &mut properties, &mut chain_partitions)?;
     let os_version = properties
         .profile_os_version
         .ok_or(DeriveError::NoOsVersionProperty)?;

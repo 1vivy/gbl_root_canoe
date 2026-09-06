@@ -14,7 +14,6 @@ STATIC BOOLEAN gManagedTzMapInitialized = FALSE;
 #define SFB_HOOK_MASK_SPSS      (1u << 2)
 #define SFB_HOOK_MASK_SCM       (1u << 3)
 #define SFB_HOOK_MASK_RESERVE   (1u << 4)
-#define SFB_HOOK_MASK_EFISP     (1u << 5)
 STATIC UINT32 gManagedInstallMask = 0;
 
 STATIC UINT32
@@ -74,9 +73,7 @@ SfbPrepareManagedAblHooks (
   SFB_TZ_MAP ValidatedTzMap;
   QCOM_SCM_PROTOCOL *Scm = NULL;
   EFI_STATUS ScmStatus;
-  BOOLEAN EfispInstalled = FALSE;
   EFI_STATUS ReserveStatus;
-  EFI_STATUS EfispStatus;
   UINT32 InstallCount = 0;
   UINT32 FailureCount = 0;
   UINT32 UnavailableCount = 0;
@@ -133,9 +130,8 @@ SfbPrepareManagedAblHooks (
 
   /*
    * Mode 0 is deliberately not a managed protocol launch. Restore any slots
-   * left by a prior managed attempt before arming only the efisp recursion
-   * guard; this also makes a direct mode switch safe for the menu and
-   * superfastboot.
+   * left by a prior managed attempt; this also makes a direct mode switch safe
+   * for the menu and superfastboot.
    */
   if (EffectiveMode == SfbBootModeHonestUnlocked) {
     RestoredCount = SfbHookMaskCount (gManagedInstallMask);
@@ -144,23 +140,11 @@ SfbPrepareManagedAblHooks (
     SfbRestoreSpss ();
     SfbRestoreQseecom ();
     SfbRestoreVerifiedBoot ();
-    SfbRestoreEfispBlockIo ();
     gManagedInstallMask = 0;
     DEBUG ((EFI_D_INFO,
             "SFB: MARK hooks-restore mode=%u restored=%u status=%r\n",
             (UINT32)EffectiveMode, RestoredCount, EFI_SUCCESS));
 
-    EfispStatus = SfbInstallEfispBlockIo ();
-    EfispInstalled = (BOOLEAN)!EFI_ERROR (EfispStatus);
-    if (EfispInstalled) {
-      gManagedInstallMask |= SFB_HOOK_MASK_EFISP;
-      InstallCount++;
-    }
-    DEBUG ((EFI_D_INFO,
-            "SFB: MARK hooks-install mode=%u installed=%u failed=0 "
-            "unavailable=%u armed=0 status=%r\n",
-            (UINT32)EffectiveMode, InstallCount,
-            (UINT32)!EfispInstalled, EfispStatus));
     gManagedMode = EffectiveMode;
     gManagedProfileValid = FALSE;
     ZeroMem (&gManagedProfile, sizeof (gManagedProfile));
@@ -263,16 +247,6 @@ SfbPrepareManagedAblHooks (
     gManagedInstallMask |= SFB_HOOK_MASK_RESERVE;
   }
 
-  /* Hide efisp for this launch, but leave failure soft: platforms without the
-   * partition are still valid superfastboot targets. */
-  EfispStatus = SfbInstallEfispBlockIo ();
-  if (EFI_ERROR (EfispStatus)) {
-    UnavailableCount++;
-  } else {
-    EfispInstalled = TRUE;
-    InstallCount++;
-    gManagedInstallMask |= SFB_HOOK_MASK_EFISP;
-  }
 
   if ((UINT32)EffectiveMode == 2u) {
     BOOLEAN SpssRequired;
@@ -331,7 +305,7 @@ SfbPrepareManagedAblHooks (
   DEBUG ((EFI_D_INFO,
           "SFB: MARK hooks-armed mode=%u installed=%u failed=%u "
           "unavailable=%u verified=%u qsee=%u spss=%u scm=%u reserve=%u "
-          "efisp=%u armed=1 status=%r\n",
+          "armed=1 status=%r\n",
           (UINT32)gManagedMode, InstallCount, FailureCount,
           UnavailableCount,
           (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_VERIFIED) != 0),
@@ -339,7 +313,6 @@ SfbPrepareManagedAblHooks (
           (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_SPSS) != 0),
           (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_SCM) != 0),
           (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_RESERVE) != 0),
-          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_EFISP) != 0),
           EFI_SUCCESS));
   return EFI_SUCCESS;
 
@@ -347,7 +320,7 @@ Rollback:
   DEBUG ((EFI_D_ERROR,
           "SFB: MARK hooks-install mode=%u installed=%u failed=%u "
           "unavailable=%u verified=%u qsee=%u spss=%u scm=%u reserve=%u "
-          "efisp=%u armed=0 status=%r\n",
+          "armed=0 status=%r\n",
           (UINT32)EffectiveMode, InstallCount, FailureCount,
           UnavailableCount,
           (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_VERIFIED) != 0),
@@ -355,10 +328,8 @@ Rollback:
           (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_SPSS) != 0),
           (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_SCM) != 0),
           (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_RESERVE) != 0),
-          (UINT32)((gManagedInstallMask & SFB_HOOK_MASK_EFISP) != 0),
           Status));
   RestoredCount = SfbHookMaskCount (gManagedInstallMask);
-  SfbRestoreEfispBlockIo ();
   SfbRestoreReserveBlockIo ();
   SfbRestoreScm ();
   SfbRestoreSpss ();
@@ -388,7 +359,6 @@ SfbDisarmManagedAblHooks (VOID)
   SfbRestoreSpss ();
   SfbRestoreQseecom ();
   SfbRestoreVerifiedBoot ();
-  SfbRestoreEfispBlockIo ();
   gManagedInstallMask = 0;
   DEBUG ((EFI_D_INFO,
           "SFB: MARK hooks-restore restored=%u status=%r\n",

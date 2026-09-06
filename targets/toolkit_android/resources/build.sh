@@ -40,11 +40,22 @@ ABL_SOURCE="$BY_NAME_DIR/abl$SLOT"
 VBMETA_SOURCE="$BY_NAME_DIR/vbmeta$SLOT"
 ABL_KIND=partition
 VBMETA_KIND=partition
+ACK_GRAFT=0
+ACK_FORMAT=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --mode)
       [ "$#" -ge 2 ] || die "--mode requires 0 or 1"
       MODE=$2
+      shift 2
+      ;;
+    --acknowledge)
+      [ "$#" -ge 2 ] || die "--acknowledge requires P-GRAFT or P-FORMAT"
+      case "$2" in
+        P-GRAFT) ACK_GRAFT=1 ;;
+        P-FORMAT) ACK_FORMAT=1 ;;
+        *) die "unsupported acknowledgement: $2" ;;
+      esac
       shift 2
       ;;
     --abl)
@@ -126,16 +137,14 @@ case "$build_output" in
 esac
 
 # The boot manager's local-dir backend is the package format here: Android
-# already mounted persist before invoking this temporary-root builder.
-if [ "$VBMETA_KIND" = supplied ]; then
-  "$BOOTMGR" --boot-root "$BOOT_ROOT" install --staged "$STAGE" \
-    --slot "${SLOT#_}" --mode "$MODE" --allow-new-signer ||
-    die "canoe-bootmgr install failed"
-else
-  "$BOOTMGR" --boot-root "$BOOT_ROOT" install --staged "$STAGE" \
-    --slot "${SLOT#_}" --mode "$MODE" ||
-    die "canoe-bootmgr install failed"
-fi
+# already mounted persist before invoking this temporary-root builder. The
+# vbmeta used for derivation is also the target evidence; it is never written.
+set -- "$BOOTMGR" --boot-root "$BOOT_ROOT" install --staged "$STAGE" \
+  --slot "${SLOT#_}" --mode "$MODE" --target-vbmeta "$VBMETA_SOURCE"
+[ "$ACK_GRAFT" = 0 ] || set -- "$@" --acknowledge P-GRAFT
+[ "$ACK_FORMAT" = 0 ] || set -- "$@" --acknowledge P-FORMAT
+[ "$VBMETA_KIND" != supplied ] || set -- "$@" --allow-new-signer
+"$@" || die "canoe-bootmgr install failed"
 
 cat <<'EOF'
 Temporary-root files were installed in the persist boot root.

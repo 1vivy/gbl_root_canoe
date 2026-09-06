@@ -12,8 +12,8 @@ Canoe 可以把一个物理分区导出为一个 USB 磁盘。`persist` 分区�
 
 ## 开始导出
 
-BDS 菜单仍有 **USB Mass Storage** 操作。从应用的 Guided flow 进入 Commit 阶段时，
-应用会请求导出，并且只在安装事务期间保持导出。CLI 也提供相同操作：
+BDS 菜单仍有 **USB Mass Storage** 操作。应用通过 Deploy 的统一导出协调器请求导出、
+挂接经过验证的源，并在启动根目录事务完成前保持导出。CLI 也提供相同的导出操作：
 
 ```bash
 canoe-bootmgr fastboot export --target persist
@@ -67,19 +67,34 @@ canoe-bootmgr --json source detect
 的 `canoe-ext4` 后端，由该后端负责锁定、日志恢复、有界写入、刷新和关闭：
 
 ```bash
-canoe install --slot a --mode 1
+canoe install --slot a
 ```
 
-`canoe` wrapper 会请求 `source.detect`，然后接管可读且未挂载的导出。需要明确选择
-源时，使用全局源选项：
+`canoe install` 省略 `--mode` 时会继承已保存的模式。通过该包装器明确变更模式时，
+必须同时提供 `--mode 0|1|2`、`--from-mode 0|1|2`，并对 `mode.plan` 要求的每个确认
+重复传入 `--acknowledge <CODE>`。直接使用 `canoe-bootmgr` 时，已有受管理行可用
+`--id <ENTRY_ID>`；新行使用 `--from-mode`。如果计划需要镜像证据，还要传入
+`--current-vbmeta <PATH>`、`--target-vbmeta <PATH>` 和
+`--target-image <PATH>`；这些是证据输入，不是隐式刷写载荷。
+写入器会在修改启动根目录前评估 `mode.plan`；拒绝或缺少确认时会保持启动根目录不变。
 
 ```bash
 canoe-bootmgr --source <RAW_NODE> install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 canoe-bootmgr --source /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
+```
+
+已有行的模式变更示例：
+
+```bash
+canoe-bootmgr --source <RAW_NODE> install \
+  --staged /path/to/staged --slot a --mode 1 --id android-a \
+  --current-vbmeta <CURRENT_VBMETA> --target-vbmeta <TARGET_VBMETA> \
+  --target-image <TARGET_IMAGE> \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
 ```
 
 后端在缺少 `/efisp` 时创建它，并以一个事务提交启动根目录文件、附属文件、配置与
@@ -107,4 +122,5 @@ Windows 支持显式脏日志恢复：使用 `canoe-ext4.exe --recover`；退出
 **Restart as Administrator** 后重试；不要让 Android 继续使用实时导出。
 
 配置格式见规范版[`canoe.cfg 契约`](./canoe-cfg.md)。OTA 与模式变更请使用应用的
-Guided flow，让导出、证据、确认、写入和结束步骤保持在一个经过审核的序列中。
+Overview → Deploy 流程：Provision → Prepare → Action 将导出、证据、确认、写入和
+结束步骤保持在同一个经过审核的序列中。

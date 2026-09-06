@@ -2,9 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use canoe_bootmgr::abl_verify::{AblVerifyError, AblVerifyRequest};
-use canoe_bootmgr::block_write::{
-    BlockWriteError, BlockWriteRequest, BlockWriteTestFault,
-};
+use canoe_bootmgr::block_write::{BlockWriteError, BlockWriteRequest, BlockWriteTestFault};
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
 fn request(partition: &str, image: &Path, snapshot: &Path) -> BlockWriteRequest {
@@ -13,7 +12,15 @@ fn request(partition: &str, image: &Path, snapshot: &Path) -> BlockWriteRequest 
         image: image.to_owned(),
         snapshot: snapshot.to_owned(),
         slot: None,
+        expected_bytes: None,
+        expected_partition_bytes: None,
+        expected_sha256: None,
+        expected_snapshot_bytes: None,
+        expected_snapshot_sha256: None,
     }
+}
+fn digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 #[test]
@@ -83,7 +90,10 @@ fn readback_mismatch_restores_target_from_snapshot() {
 
     // Then mismatch is reported and the target exactly matches its snapshot.
     assert_eq!(error.protocol_code(), "readback-mismatch");
-    assert_eq!(fs::read(&target).expect("target bytes"), fs::read(&snapshot).expect("snapshot bytes"));
+    assert_eq!(
+        fs::read(&target).expect("target bytes"),
+        fs::read(&snapshot).expect("snapshot bytes")
+    );
 }
 
 #[test]
@@ -125,7 +135,10 @@ fn assert_write_fault_restores_snapshot(fault: BlockWriteTestFault) {
 
     assert_eq!(error.protocol_code(), "operation");
     assert_eq!(fs::read(&target).expect("target bytes"), b"original-target");
-    assert_eq!(fs::read(&snapshot).expect("snapshot bytes"), b"original-target");
+    assert_eq!(
+        fs::read(&snapshot).expect("snapshot bytes"),
+        b"original-target"
+    );
 }
 
 #[test]
@@ -148,7 +161,6 @@ fn readback_failure_restores_snapshot() {
     assert_write_fault_restores_snapshot(BlockWriteTestFault::Readback);
 }
 
-
 #[test]
 fn invalid_partition_is_rejected_before_filesystem_access() {
     // Given paths that do not exist and a traversal partition name.
@@ -160,12 +172,16 @@ fn invalid_partition_is_rejected_before_filesystem_access() {
     );
 
     // When the request is evaluated.
-    let error = canoe_bootmgr::block_write::write_at_root(&request, &fixture.path().join("missing-root"))
-        .expect_err("invalid partition must fail");
+    let error =
+        canoe_bootmgr::block_write::write_at_root(&request, &fixture.path().join("missing-root"))
+            .expect_err("invalid partition must fail");
 
     // Then validation wins before any target/image/snapshot lookup.
     assert_eq!(error.protocol_code(), "partition-name-invalid");
-    assert!(matches!(error, BlockWriteError::PartitionNameInvalid { .. }));
+    assert!(matches!(
+        error,
+        BlockWriteError::PartitionNameInvalid { .. }
+    ));
 }
 
 #[test]
@@ -209,4 +225,97 @@ fn wrong_abl_digest_returns_before_probe() {
     // Then the stable mismatch code proves no tool probe was attempted.
     assert_eq!(error.protocol_code(), "digest-mismatch");
     assert!(matches!(error, AblVerifyError::DigestMismatch { .. }));
+}
+#[test]
+fn reviewed_image_replacement_is_rejected_before_any_write() {
+    let fixture = TempDir::new().expect("temporary fixture");
+    let target = fixture.path().join("boot");
+    let image = fixture.path().join("image");
+    let snapshot = fixture.path().join("snapshot");
+    fs::write(&target, b"original-target").expect("target");
+    let reviewed = b"replacement";
+    fs::write(&image, reviewed).expect("image");
+    let mut request = request("boot", &image, &snapshot);
+    request.expected_bytes = Some(reviewed.len() as u64);
+    request.expected_sha256 = Some(digest(reviewed));
+    fs::write(&image, b"mutated-after-review").expect("mutated image");
+
+    let error = canoe_bootmgr::block_write::write_at_root(&request, fixture.path())
+        .expect_err("mutated reviewed image must fail");
+
+    assert_eq!(error.protocol_code(), "operation");
+    assert_eq!(fs::read(&target).expect("target bytes"), b"original-target");
+    assert!(!snapshot.exists());
+}
+
+#[test]
+fn reviewed_snapshot_replacement_is_rejected_before_any_write() {
+    let fixture = TempDir::new().expect("temporary fixture");
+    let target = fixture.path().join("boot");
+    let image = fixture.path().join("image");
+    let snapshot = fixture.path().join("snapshot");
+    fs::write(&target, b"original-target").expect("target");
+    fs::write(&image, b"replacement").expect("image");
+    let reviewed_snapshot = b"original-target";
+    fs::write(&snapshot, reviewed_snapshot).expect("snapshot");
+    let mut request = request("boot", &image, &snapshot);
+    request.expected_snapshot_bytes = Some(reviewed_snapshot.len() as u64);
+    request.expected_snapshot_sha256 = Some(digest(reviewed_snapshot));
+    fs::write(&snapshot, b"changed-snapshot").expect("mutated snapshot");
+
+    let error = canoe_bootmgr::block_write::write_at_root(&request, fixture.path())
+        .expect_err("mutated reviewed snapshot must fail");
+
+    assert_eq!(error.protocol_code(), "operation");
+    assert_eq!(fs::read(&target).expect("target bytes"), b"original-target");
+}
+
+#[test]
+fn full_partition_write_refuses_a_source_with_the_wrong_size_before_snapshot() {
+    // Given a target and source whose source length differs from the reviewed whole-partition size.
+    let fixture = TempDir::new().expect("temporary fixture");
+    let target = fixture.path().join("boot");
+    let image = fixture.path().join("image");
+    let snapshot = fixture.path().join("snapshot");
+    fs::write(&target, b"original-target").expect("target");
+    fs::write(&image, b"short-image").expect("image");
+    let mut request = request("boot", &image, &snapshot);
+    request.expected_partition_bytes = Some(14);
+
+    // When the whole-partition write is attempted.
+    let error = canoe_bootmgr::block_write::write_at_root(&request, fixture.path())
+        .expect_err("source-size mismatch must refuse the write");
+
+    // Then no snapshot or target mutation occurs.
+    assert!(matches!(
+        error,
+        BlockWriteError::ExpectedPartitionSourceSize { .. }
+    ));
+    assert_eq!(fs::read(&target).expect("target bytes"), b"original-target");
+    assert!(!snapshot.exists());
+}
+
+#[test]
+fn full_partition_write_refuses_a_target_with_the_wrong_size_before_snapshot() {
+    // Given a source matching the reviewed whole-partition size but a smaller target.
+    let fixture = TempDir::new().expect("temporary fixture");
+    let target = fixture.path().join("boot");
+    let image = fixture.path().join("image");
+    let snapshot = fixture.path().join("snapshot");
+    fs::write(&target, b"short-target").expect("target");
+    fs::write(&image, b"full-partition").expect("image");
+    let mut request = request("boot", &image, &snapshot);
+    request.expected_partition_bytes = Some(14);
+
+    // When the whole-partition write is attempted.
+    let error = canoe_bootmgr::block_write::write_at_root(&request, fixture.path())
+        .expect_err("target-size mismatch must refuse the write");
+
+    // Then no snapshot or target mutation occurs.
+    assert!(matches!(
+        error,
+        BlockWriteError::ExpectedPartitionTargetSize { .. }
+    ));
+    assert_eq!(fs::read(&target).expect("target bytes"), b"short-target");
+    assert!(!snapshot.exists());
 }

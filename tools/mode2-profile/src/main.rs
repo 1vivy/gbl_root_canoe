@@ -1,12 +1,14 @@
+mod header_output;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use header_output::header_envelope;
 use mode2_profile::{
-    DeriveError, GraftClassification, VbmetaHeader, VbmetaKeyCheck, ValidateFileError,
-    check_vbmeta, classify_graft, derive_to_file, inspect_vbmeta, inspect_vbmeta_header,
-    validate_file,
+    DeriveError, ValidateFileError, VbmetaKeyCheck, check_vbmeta, derive_to_file, inspect_vbmeta,
+    inspect_vbmeta_header_evidence, validate_file,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -74,12 +76,6 @@ struct InspectReceipt {
 }
 
 #[derive(Serialize)]
-struct HeaderEnvelope {
-    ok: bool,
-    header: VbmetaHeader,
-    classification: GraftClassification,
-}
-#[derive(Serialize)]
 struct CheckEnvelope {
     ok: bool,
     check: CheckReceipt,
@@ -93,7 +89,6 @@ struct CheckReceipt {
     rollback_index_location: u32,
 }
 
-
 #[derive(Serialize)]
 struct ChainPartition {
     rollback_index_location: u32,
@@ -102,11 +97,11 @@ struct ChainPartition {
 }
 
 #[derive(Serialize)]
-struct BuildProperties {
-    system_os_version: Option<String>,
-    system_security_patch: Option<String>,
-    vendor_security_patch: Option<String>,
-    boot_security_patch: Option<String>,
+pub(crate) struct BuildProperties {
+    pub(crate) system_os_version: Option<String>,
+    pub(crate) system_security_patch: Option<String>,
+    pub(crate) vendor_security_patch: Option<String>,
+    pub(crate) boot_security_patch: Option<String>,
 }
 
 fn inspect_error_code(error: &DeriveError) -> &'static str {
@@ -147,13 +142,12 @@ struct ErrorBody<'a> {
     message: String,
 }
 
-
 fn emit_json<T: Serialize>(value: &T) -> Result<(), serde_json::Error> {
     serde_json::to_writer(std::io::stdout().lock(), value)?;
     println!();
     Ok(())
 }
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
@@ -232,7 +226,6 @@ fn check(image_path: &Path, vbmeta_path: &Path, partition: &str) -> ExitCode {
         }
     }
 }
-
 
 fn inspect(path: &Path) -> ExitCode {
     let bytes = match fs::read(path) {
@@ -323,8 +316,8 @@ fn inspect_header(path: &Path) -> ExitCode {
             };
         }
     };
-    let header = match inspect_vbmeta_header(&bytes) {
-        Ok(header) => header,
+    let inspection = match inspect_vbmeta_header_evidence(&bytes) {
+        Ok(inspection) => inspection,
         Err(error) => {
             let envelope = ErrorEnvelope {
                 ok: false,
@@ -342,11 +335,7 @@ fn inspect_header(path: &Path) -> ExitCode {
             };
         }
     };
-    let envelope = HeaderEnvelope {
-        ok: true,
-        classification: classify_graft(&header),
-        header,
-    };
+    let envelope = header_envelope(inspection);
     match emit_json(&envelope) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -363,9 +352,7 @@ fn run(command: Command) -> Result<(), CliError> {
             validate_file(&input)?;
             Ok(())
         }
-        Command::Inspect { .. }
-        | Command::InspectHeader { .. }
-        | Command::Check { .. } => {
+        Command::Inspect { .. } | Command::InspectHeader { .. } | Command::Check { .. } => {
             unreachable!("inspection commands are dispatched by main")
         }
     }
