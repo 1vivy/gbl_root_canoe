@@ -7,8 +7,8 @@ why = "Checked-in Web UI archive from canoe-boot-manager; its digest currently m
 path = "targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz"
 version = "0.1.0"
 url = "file://$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz"
-sha256 = "ae0d34452a0fb301dce993aaca98665a88d14ccdc574d736215f2e35603e4efd"
-bytes = 191986
+sha256 = "eb933853b3bbcd4ef9fedfee6454ddf88985f50e4f19d5a2cbc37025493bc9e9"
+bytes = 192968
 make_prefix = "CANOE_WEBUI"
 [import.producer]
 repo = "canoe-boot-manager"
