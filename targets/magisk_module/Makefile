@@ -101,6 +101,8 @@ submodule_abl_tzmap: copy_resources
 submodule_canoe_bootmgr: copy_resources
 	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for canoe-bootmgr"; exit 1; }
 	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
+	CC_aarch64_linux_android="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" \
+	AR_aarch64_linux_android="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" \
 	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
 	test -f ../../tools/canoe-bootmgr/target/aarch64-linux-android/release/canoe-bootmgr
 	cp ../../tools/canoe-bootmgr/target/aarch64-linux-android/release/canoe-bootmgr ./build/module/bin/canoe-bootmgr

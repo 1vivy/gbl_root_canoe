@@ -338,7 +338,7 @@ pub struct FastbootRebootArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum VendorBootCommand {
-    /// Append Canoe's fixed-offset module blacklist to vendor_boot.
+    /// Block the guard in both the kernel and recovery's module loader.
     Patch(VendorBootPatchArgs),
 }
 

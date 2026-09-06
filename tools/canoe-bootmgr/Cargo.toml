@@ -39,6 +39,8 @@ sha2 = "0.10"
 wait-timeout = "0.2"
 tempfile = "3"
 mode2_profile = { path = "../mode2-profile" }
+lz4 = "1"
+flate2 = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

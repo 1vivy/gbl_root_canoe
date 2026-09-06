@@ -189,8 +189,11 @@ Mode 1 graft preparation is an optional task inside Deploy → Prepare. It
 enumerates the selected VBMETA's chain descriptors, verifies any generated
 image, and only then offers its partition write.
 
-The output must not grow. The `vendor_boot` feature is a fixed-offset cmdline
-amendment; no boot-image binary is bundled.
+The `vendor_boot` patch keeps the image size and section offsets fixed. It adds
+the kernel module blacklist and the vendor ramdisk's Android `modules.blocklist`
+entry together, so recovery skips the guard instead of failing a required load.
+Recompression may use existing zero page padding; unsupported ramdisks or a
+patch that cannot fit are refused. No external boot-image binary is bundled.
 
 ## Signer limitation
 

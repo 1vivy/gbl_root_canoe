@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use thiserror::Error;
 
+mod image;
+mod ramdisk;
+
 pub const MAGIC: &[u8; 8] = b"VNDRBOOT";
 pub const CMDLINE_OFFSET: usize = 28;
 pub const CMDLINE_BYTES: usize = 2048;
@@ -23,8 +26,8 @@ pub enum VendorBootError {
     InvalidHeader { message: String },
     #[error("vendor_boot cmdline field has no room for the blacklist")]
     CmdlineFull,
-    #[error("vendor_boot patch verification failed: {message}")]
-    VerificationFailed { message: String },
+    #[error("vendor_boot ramdisk is invalid: {message}")]
+    RamdiskInvalid { message: String },
     #[error("vendor_boot output is invalid: {message}")]
     OutputInvalid { message: String },
     #[error("vendor_boot {operation} {path}: {source}")]
@@ -40,13 +43,14 @@ impl VendorBootError {
         match self {
             Self::InvalidHeader { .. } => "vendorboot-header",
             Self::CmdlineFull => "vendorboot-cmdline-full",
-            Self::VerificationFailed { .. } => "vendorboot-verification",
+            Self::RamdiskInvalid { .. } => "vendorboot-ramdisk",
             Self::OutputInvalid { .. } => "vendorboot-output",
             Self::Io { .. } => "operation",
         }
     }
 }
 
+/// Block the guard in the kernel and Android's first-stage module loader.
 pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, VendorBootError> {
     let mut bytes = fs::read(source).map_err(|error| io("read source", source, error))?;
     let field_end = CMDLINE_OFFSET + CMDLINE_BYTES;
@@ -64,40 +68,113 @@ pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, Vendo
         .iter()
         .position(|byte| *byte == 0)
         .unwrap_or(CMDLINE_BYTES);
-    let current = bytes[CMDLINE_OFFSET..CMDLINE_OFFSET + current_end].to_vec();
-    let changed = !current
-        .windows(BLACKLIST.len())
-        .any(|window| window == BLACKLIST);
-    if changed {
-        let needed = current
-            .len()
-            .saturating_add(1)
-            .saturating_add(BLACKLIST.len());
-        if needed >= CMDLINE_BYTES {
-            return Err(VendorBootError::CmdlineFull);
-        }
+    let current = &bytes[CMDLINE_OFFSET..CMDLINE_OFFSET + current_end];
+    let amended = kernel_blacklist(current)?;
+    let mut changed = amended.is_some();
+    if let Some(cmdline) = amended {
         let field = &mut bytes[CMDLINE_OFFSET..field_end];
         field.fill(0);
-        field[..current.len()].copy_from_slice(&current);
-        field[current.len()] = b' ';
-        field[current.len() + 1..needed].copy_from_slice(BLACKLIST);
+        field[..cmdline.len()].copy_from_slice(&cmdline);
     }
-    write_atomic(output, &bytes)?;
-    let verified = fs::read(output).map_err(|error| io("verify output", output, error))?;
-    if verified.len() != bytes.len()
-        || !verified[CMDLINE_OFFSET..field_end]
-            .windows(BLACKLIST.len())
-            .any(|window| window == BLACKLIST)
-    {
-        return Err(VendorBootError::VerificationFailed {
-            message: "cmdline patch could not be verified".to_owned(),
+    let mut guard_found = false;
+    for fragment in image::ramdisks(&bytes)? {
+        let patched = ramdisk::patch(&bytes[fragment.range.clone()], fragment.capacity)?;
+        guard_found |= patched.guard_found;
+        if let Some(ramdisk) = patched.bytes {
+            fragment.replace(&mut bytes, &ramdisk)?;
+            changed = true;
+        }
+    }
+    if !guard_found {
+        return Err(VendorBootError::RamdiskInvalid {
+            message: "no oplus_secure_guard_new module metadata found".to_owned(),
         });
     }
+    write_atomic(output, &bytes)?;
     Ok(PatchReceipt {
         output: output.display().to_string(),
-        bytes: verified.len(),
+        bytes: bytes.len(),
         changed,
     })
+}
+
+fn kernel_blacklist(current: &[u8]) -> Result<Option<Vec<u8>>, VendorBootError> {
+    const KEY: &[u8] = b"module_blacklist=";
+    const MODULE: &[u8] = b"oplus_secure_guard_new";
+    let mut start = 0;
+    let mut quoted = false;
+    let mut value = None;
+    for end in 0..=current.len() {
+        if current.get(end) == Some(&b'"') {
+            quoted = !quoted;
+        }
+        if end == current.len() || (current[end].is_ascii_whitespace() && !quoted) {
+            let mut token = &current[start..end];
+            let mut token_start = start;
+            if token.starts_with(b"\"") && token.ends_with(b"\"") && token.len() >= 2 {
+                token = &token[1..token.len() - 1];
+                token_start += 1;
+            }
+            if let Some(argument) = token.strip_prefix(KEY) {
+                let begin = token_start + KEY.len();
+                let end = begin + argument.len();
+                value = Some(
+                    if argument.starts_with(b"\"")
+                        && argument.ends_with(b"\"")
+                        && argument.len() >= 2
+                    {
+                        begin + 1..end - 1
+                    } else {
+                        begin..end
+                    },
+                );
+            }
+            start = end + 1;
+        }
+    }
+    if quoted {
+        return Err(VendorBootError::InvalidHeader {
+            message: "unterminated cmdline quote".to_owned(),
+        });
+    }
+    let (insert, separator, suffix) = match value {
+        Some(range) => {
+            if current[range.clone()]
+                .split(|byte| *byte == b',')
+                .any(|name| name == MODULE)
+            {
+                return Ok(None);
+            }
+            (
+                range.end,
+                if range.is_empty() {
+                    b"".as_slice()
+                } else {
+                    b","
+                },
+                MODULE,
+            )
+        }
+        None => (
+            current.len(),
+            if current.is_empty() {
+                b"".as_slice()
+            } else {
+                b" "
+            },
+            BLACKLIST,
+        ),
+    };
+    let needed = current.len() + separator.len() + suffix.len();
+    if needed >= CMDLINE_BYTES {
+        return Err(VendorBootError::CmdlineFull);
+    }
+    let mut amended = Vec::with_capacity(needed);
+    amended.extend_from_slice(&current[..insert]);
+    amended.extend_from_slice(separator);
+    amended.extend_from_slice(suffix);
+    amended.extend_from_slice(&current[insert..]);
+    Ok(Some(amended))
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), VendorBootError> {

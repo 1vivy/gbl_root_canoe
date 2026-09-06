@@ -158,8 +158,14 @@ BDS 菜单中的模式选择只是下一次启动的会话覆盖，绝不保存�
 - **Mode 0** 是不启用 hook 的直通模式，不读取也不写入 `DeviceInfo`。
 - **Mode 1** 投射锁定的 `DeviceInfo` 视图并应用受管理 hook。
 - **Mode 2** 还使用受管理的 `boot_a.efi`、`boot_b.efi` 或 `boot_backup.efi` 对应的
-  120 字节 `.gm2p` profile 和映射。无需重新打包 boot 镜像，它会通过内核命令行黑名单
-  处理 `oplus_secure_guard_new`。
+  120 字节 `.gm2p` profile 和映射。
+
+可选的 `vendor_boot` 补丁同时在内核命令行和 vendor ramdisk 的 Android
+`modules.blocklist` 中禁用 `oplus_secure_guard_new`。仅修改内核黑名单会使
+`modules.load.recovery` 请求加载该模块时失败，导致 recovery 无法启动。
+补丁保留模块文件、已有黑名单条目、镜像总大小以及 DTB 和 bootconfig 的位置。
+对旧的仅修改命令行的镜像再次运行补丁工具，即可补齐 recovery 的模块策略。
+此操作不会重新生成 OEM AVB 签名，也不能让镜像用于真正锁定的启动链。
 
 Mode 1 或 Mode 2 在观测状态不符合请求策略时可能修复 `DeviceInfo`。
 `devinfo-repair never` 拒绝修复并如实以 Mode 0 继续；`asneeded` 允许修复。启动日志

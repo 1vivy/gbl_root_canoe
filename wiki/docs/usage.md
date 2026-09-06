@@ -185,8 +185,15 @@ launch. It is never saved. An entry's mode takes precedence, with file-global
 - **Mode 1** projects the locked `DeviceInfo` view and applies managed hooks.
 - **Mode 2** additionally uses the matching 120-byte `.gm2p` profile for the
   managed `boot_a.efi`, `boot_b.efi`, or `boot_backup.efi` loader and its map.
-  Its kernel command-line blacklist handles `oplus_secure_guard_new` without
-  repacking a boot image.
+
+The optional `vendor_boot` patch blocks `oplus_secure_guard_new` in both the
+kernel command line and the vendor ramdisk's Android `modules.blocklist`.
+Kernel-only blocking can prevent recovery from booting when
+`modules.load.recovery` requests the guard. The patch preserves module files,
+existing blocklist entries, image size, DTB and bootconfig positions. Run the
+patcher again on an older cmdline-only image to add the missing recovery policy.
+It does not regenerate OEM AVB signatures or make the image suitable for a
+genuinely locked boot chain.
 
 Mode 1 or Mode 2 may repair `DeviceInfo` when observed state does not satisfy the
 requested policy. `devinfo-repair never` refuses repair and continues honestly

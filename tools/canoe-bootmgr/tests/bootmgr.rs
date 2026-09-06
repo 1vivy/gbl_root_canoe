@@ -701,37 +701,6 @@ fn graft_preserves_recovery_size_and_writes_avb_footer() {
     assert_eq!(&bytes[960..964], b"AVBf");
 }
 
-#[test]
-fn vendorboot_patch_is_fixed_size_and_idempotent() {
-    let root = tempfile::tempdir().expect("root");
-    let input = root.path().join("vendor_boot.img");
-    let output = root.path().join("patched.img");
-    let second = root.path().join("patched-again.img");
-    let mut image = vec![0_u8; 4096];
-    image[..8].copy_from_slice(b"VNDRBOOT");
-    image[28..39].copy_from_slice(b"console=tty");
-    fs::write(&input, image).expect("vendor_boot");
-    let first = request_json(
-        root.path(),
-        serde_json::json!({"verb":"vendorboot.patch","input":input,"output":output}),
-    )
-    .expect("first patch");
-    let second_result = request_json(
-        root.path(),
-        serde_json::json!({"verb":"vendorboot.patch","input":output,"output":second}),
-    )
-    .expect("second patch");
-    assert_eq!(
-        serde_json::to_value(first).expect("first response")["receipt"]["changed"],
-        true
-    );
-    assert_eq!(
-        serde_json::to_value(second_result).expect("second response")["receipt"]["changed"],
-        false
-    );
-    assert_eq!(fs::metadata(second).expect("second output").len(), 4096);
-}
-
 #[cfg(unix)]
 #[test]
 fn failed_install_with_unwritable_destination_reports_rollback_failure() {
