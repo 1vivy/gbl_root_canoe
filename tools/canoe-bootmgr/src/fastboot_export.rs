@@ -131,16 +131,19 @@ pub(crate) fn end_export(_guard: &DeviceGuard, node: &Path) -> Result<(), Fastbo
     }
 }
 
+// Opening a removable disk can make the OS issue PREVENT MEDIUM REMOVAL.
+// Release that lock on the same handle before asking the device to eject.
+#[cfg(any(target_os = "linux", windows))]
+fn eject_sequence(
+    mut issue: impl FnMut([u8; 6]) -> Result<(), FastbootError>,
+) -> Result<(), FastbootError> {
+    issue([0x1e, 0, 0, 0, 0, 0])?;
+    issue(crate::fastboot::start_stop_unit_cdb(true, false))
+}
+
 #[cfg(target_os = "linux")]
 fn end_export_linux(node: &Path) -> Result<(), FastbootError> {
     use std::fs::OpenOptions;
-    use std::os::fd::AsRawFd;
-
-    use crate::fastboot::start_stop_unit_cdb;
-
-    const SG_IO: libc::c_ulong = 0x2285;
-    const SG_DXFER_NONE: libc::c_int = -1;
-    const TIMEOUT_MS: u32 = 3_000;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -155,7 +158,19 @@ fn end_export_linux(node: &Path) -> Result<(), FastbootError> {
                 command_error("end-export", format!("open {}: {error}", node.display()))
             }
         })?;
-    let mut cdb = start_stop_unit_cdb(true, false);
+    eject_sequence(|cdb| issue_scsi_linux(&file, node, cdb))
+}
+
+#[cfg(target_os = "linux")]
+fn issue_scsi_linux(
+    file: &std::fs::File,
+    node: &Path,
+    mut cdb: [u8; 6],
+) -> Result<(), FastbootError> {
+    use std::os::fd::AsRawFd;
+    const SG_IO: libc::c_ulong = 0x2285;
+    const SG_DXFER_NONE: libc::c_int = -1;
+    const TIMEOUT_MS: u32 = 3_000;
     let mut sense = [0_u8; 32];
     let mut header = SgIoHdr {
         interface_id: i32::from(b'S'),
@@ -203,8 +218,12 @@ fn end_export_linux(node: &Path) -> Result<(), FastbootError> {
         return Err(command_error(
             "end-export",
             format!(
-                "SG_IO status={} host_status={} driver_status={}",
-                header.status, header.host_status, header.driver_status
+                "SG_IO opcode=0x{:02x} status={} host_status={} driver_status={} sense={:02x?}",
+                cdb[0],
+                header.status,
+                header.host_status,
+                header.driver_status,
+                &sense[..usize::from(header.sb_len_wr).min(sense.len())]
             ),
         ));
     }
@@ -256,6 +275,27 @@ fn command_error(command: &str, detail: String) -> FastbootError {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn a_failed_medium_unlock_does_not_attempt_eject() {
+        let mut calls = 0;
+        let result = super::eject_sequence(|command| {
+            calls += 1;
+            assert_eq!(command[0], 0x1e);
+            Err(crate::fastboot::FastbootError::Command {
+                command: "end-export".into(),
+                detail: "medium is still locked".into(),
+            })
+        });
+        assert_eq!(calls, 1);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("medium is still locked")
+        );
+    }
+
     #[test]
     fn eject_command_is_scsi_start_stop_load_eject_without_start() {
         assert_eq!(

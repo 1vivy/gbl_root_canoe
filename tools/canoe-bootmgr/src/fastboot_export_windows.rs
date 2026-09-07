@@ -105,24 +105,27 @@ fn physical_drive_path(node: &Path) -> Result<Vec<u16>, FastbootError> {
         .collect())
 }
 
-fn end_export_with_issue<F>(node: &Path, issue: F) -> Result<(), FastbootError>
+fn end_export_with_issue<F>(node: &Path, mut issue: F) -> Result<(), FastbootError>
 where
-    F: FnOnce(&mut ScsiRequest) -> io::Result<()>,
+    F: FnMut(&mut ScsiRequest) -> io::Result<()>,
 {
-    let mut request = eject_request()?;
-    if let Err(error) = issue(&mut request) {
-        let detail = format!("issue SCSI eject {}", node.display());
-        let detail = if request.pass.scsi_status == 0 {
-            detail
-        } else {
-            format!("{detail}; {}", scsi_failure_detail(&request))
-        };
-        return Err(platform_error_detail(detail, error));
-    }
-    if request.pass.scsi_status != 0 {
-        return Err(command_error(scsi_failure_detail(&request)));
-    }
-    Ok(())
+    super::eject_sequence(|cdb| {
+        let mut request = eject_request()?;
+        request.pass.cdb[..cdb.len()].copy_from_slice(&cdb);
+        if let Err(error) = issue(&mut request) {
+            let detail = format!("issue SCSI eject {}", node.display());
+            let detail = if request.pass.scsi_status == 0 {
+                detail
+            } else {
+                format!("{detail}; {}", scsi_failure_detail(&request))
+            };
+            return Err(platform_error_detail(detail, error));
+        }
+        if request.pass.scsi_status != 0 {
+            return Err(command_error(scsi_failure_detail(&request)));
+        }
+        Ok(())
+    })
 }
 
 fn eject_request() -> Result<ScsiRequest, FastbootError> {
