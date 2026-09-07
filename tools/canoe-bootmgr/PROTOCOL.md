@@ -17,7 +17,7 @@ Every request is one UTF-8 JSON object. Its required discriminator is `verb` (a 
 A successful response is one UTF-8 JSON object, followed by `\n`:
 
 ```json
-{"operation":"protocol.version","ok":true,"app_version":"0.1.0","protocol_version":1,"capabilities":["reviewed-identity","tools.inventory","mode-userdata-assessment-v1","image-zero-v1","whole-partition-write-v1"]}
+{"operation":"protocol.version","ok":true,"app_version":"0.1.0","protocol_version":1,"capabilities":["reviewed-identity","tools.inventory","mode-userdata-assessment-v2","image-zero-v1","whole-partition-write-v1"]}
 ```
 
 All successful envelopes contain `ok: true` and `operation` (the response operation name). Successful serialized responses, including their terminating newline, are limited to **1,000,000 bytes (1 MB)**. Exceeding that limit returns `response-too-large` instead of the operation response.
@@ -36,7 +36,7 @@ A failed JSON response is one object, followed by `\n`:
 | `request` | The request is too large, malformed JSON, or malformed base64url. |
 | `input` | The JSONL input stream could not be read (including invalid UTF-8). |
 | `operation` | The selected operation refused or failed. |
-| `boot-root-missing` | The selected local boot root does not exist; no operation was attempted. |
+| `boot-root-missing` | The selected local boot root does not exist. Slot discovery and id-less mode planning can inspect an uncreated root with an existing parent without creating it; a validated explicit install can create it. |
 | `ext4-missing` | The `canoe-ext4` helper exited with status 7, whose contract means the requested file or directory is missing or empty. This one code intentionally covers both cases. |
 | `helper-unavailable` | A required build helper could not be resolved or is not executable. |
 | `helper-failed` | A required helper could not start or exited with a status other than 7; these failures are intentionally one code because the source does not distinguish them safely. |
@@ -138,19 +138,19 @@ Shared response records:
 - `bls_entry`: `{title:string?,kind:"linux"|"efi",image:string,initrd:string?,devicetree:string?,options:string,unknown:raw_line[],rejected_lines:usize}`.
 - `bls_file`: `{name:string,entry:bls_entry}`.
 - `file_identity`: `{path:path,bytes:u64,sha256:string}`. Paths identify the files whose bytes and SHA-256 were reviewed.
-- `mode_userdata`: `{requirement:"must"|"may"|"not-required",reasons:{rule:string,reason:string}[]}`. `must` is a mandatory userdata-format precondition; `may` is warning evidence and never creates a `P-FORMAT` blocker.
+- `mode_userdata`: `{requirement:"must"|"may"|"unknown"|"not-required",reasons:{rule:string,reason:string}[]}`. `must` is a mandatory userdata-format precondition; `may` is observed risk evidence; `unknown` means the supplied evidence cannot establish compatibility. Neither `may` nor `unknown` creates a `P-FORMAT` blocker.
 - `mode_header_evidence`: `{algorithm_type:u32,rollback_index:u64,public_key_sha256:string?,build_properties:{system_os_version:string?,system_security_patch:string?,vendor_security_patch:string?,boot_security_patch:string?}}`. A signer-key digest identifies a key only; it does not prove that the signer is OEM.
-- `install_receipt`: `{active_slot:"a"|"b",installed:("a"|"b")[],generation:u32,signer_changed:bool,backup_present:bool,staged:path,loader_bytes:u64,loader_sha256:string,gm2p_bytes:u64,gm2p_sha256:string,tzmap_bytes:u64,tzmap_sha256:string,tools:file_identity[],mode_request:{id:string?,from_mode:0|1|2|null,target_mode:0|1|2|null,current_vbmeta:path?,target_vbmeta:path?,target_image:path?,tools:path?,prior_canoe:bool,acknowledge:string[]}?,acknowledged:string[],warnings:string[]}`. The `mode_request` field is always serialized; it is `null` when the request omitted `mode`, and is the identity object when a mode was requested. The policy arrays are the preconditions acknowledged and warning codes emitted by the apply-time mode plan.
+- `install_receipt`: `{active_slot:"a"|"b",installed:("a"|"b")[],generation:u32,signer_changed:bool,backup_present:bool,staged:path,loader_bytes:u64,loader_sha256:string,gm2p_bytes:u64,gm2p_sha256:string,tzmap_bytes:u64,tzmap_sha256:string,tools:file_identity[],mode_request:{id:string?,from_mode:0|1|2|null,target_mode:0|1|2|null,current_vbmeta:path?,target_vbmeta:path?,target_image:path?,tools:path?,prior_canoe:bool,locked_bootstrap:bool,source_boot_record:string?,acknowledge:string[]}?,acknowledged:string[],warnings:string[]}`. The `mode_request` field is always serialized; it is `null` when the request omitted `mode`, and is the identity object when a mode was requested. The policy arrays are the preconditions acknowledged and warning codes emitted by the apply-time mode plan.
 
 Artifact replacements are assessed even when the requested mode is unchanged.
 Mutation warning arrays include unsatisfied `P-PROFILE` and distinct `R2`, `R3`,
-or `R4` reason codes when the userdata assessment is `may`. These advisory codes
+or `R4` reason codes when the userdata assessment is `may` or `unknown`. These advisory codes
 do not require a `P-FORMAT` acknowledgement; Mode 1 target-evidence refusals remain
 mandatory.
 
 | Verb | Request fields | Success response fields |
 | --- | --- | --- |
-| `protocol.version` | `verb` only | `operation:"protocol.version"`, `app_version:string`, `protocol_version:u32`, `capabilities:string[]?`. New servers advertise `reviewed-identity`, `tools.inventory`, `mode-userdata-assessment-v1`, `image-zero-v1`, and `whole-partition-write-v1`; an absent field means none of those advertised capabilities are supported. Clients must require `mode-userdata-assessment-v1` before relying on a mode plan to authorize an install or OTA write, must not issue `image.zero` without `image-zero-v1`, and must not issue a write carrying `expected_partition_bytes` without `whole-partition-write-v1`. |
+| `protocol.version` | `verb` only | `operation:"protocol.version"`, `app_version:string`, `protocol_version:u32`, `capabilities:string[]?`. New servers advertise `reviewed-identity`, `tools.inventory`, `mode-userdata-assessment-v2`, `image-zero-v1`, and `whole-partition-write-v1`; an absent field means none of those advertised capabilities are supported. Clients must require `mode-userdata-assessment-v2` before relying on a mode plan to authorize an install or OTA write, must not issue `image.zero` without `image-zero-v1`, and must not issue a write carrying `expected_partition_bytes` without `whole-partition-write-v1`. |
 | `build` | `abl:path` required; `vbmeta:path?`, `staged:path?`, `tools:path?`, `efisp_tools:path?`, `keep_unpatched:path?`, `patch_log:path?`, `probe:bool?`. | Full build: `operation:"build"`, `kind:"build"`, `receipt:{staged:path,loader_bytes:u64,gm2p_bytes:u64,tzmap_bytes:u64,tools_staged:usize,gbl_patched:bool,loader_sha256:string,gm2p_sha256:string,tzmap_sha256:string,unpatched_sha256:string}`. Probe build: `operation:"build.probe"`, `kind:"build.probe"`, `receipt:{gbl_patched:bool,unpatched_sha256:string}`. |
 | `abl.verify` | `image:path` required; `expected_sha256:string?`. If supplied, verification returns `digest-mismatch` before probing on a mismatch. | `operation:"abl.verify"`, `sha256:string`, `gbl_patched:bool`. The vulnerability result comes from the existing `build --probe` path. |
 | `image.digest` | `image:path`, `bytes:u64?`. Without `bytes`, hash the complete image; with it, hash exactly that prefix and refuse a range beyond the image length. | `operation:"image.digest"`, `path:string`, `sha256:string`, `bytes:u64`. |
@@ -166,7 +166,7 @@ mandatory.
 | `entry.set` | `id:string`, `title:string`, `image:string`, `role:"active"|"inactive"|"backup"|"other"` required; `options:string?`, `mode:u8?`, `global_mode:u8?`, `devinfo_repair:"asneeded"|"never"?`, `default:bool?`. | `operation:"entry.set"`, `generation:u32`, `entry:entry`, `mark:string`. |
 | `entry.remove` | `id:string` required. | `operation:"entry.remove"`, `generation:u32`, `mark:string`. |
 | `entry.mode` | `id:string`, `mode:u8` required; `acknowledge:string[]?` acknowledges operator-action preconditions (`P-GRAFT`, `P-FORMAT`); `current_vbmeta:path?`, `target_vbmeta:path?`, `target_image:path?` optionally provide evidence; when `target_image` is present, its embedded vbmeta takes precedence over `target_vbmeta`; the CLI-only `tools:path?` selects the worker. | `operation:"entry.mode"`, `generation:u32`, `acknowledged:string[]`, `warnings:string[]`, `mark:string`. `P-PROFILE` is reported as a warning and never blocks; operator-action preconditions must be acknowledged. |
-| `mode.plan` | `id:string?`, `target_mode:0|1|2` required; `from_mode:0|1|2|null?` supplies source-mode evidence when `id` is absent, and omitted or `null` evidence remains unknown; `prior_canoe:bool?` defaults to `false` and records whether the original state is recognized Canoe content. A persisted entry selected by `id` is recognized independently of the flag. `current_vbmeta:path?`, `target_vbmeta:path?`, `target_image:path?` optionally provide evidence; when `target_image` is present, its embedded vbmeta takes precedence over `target_vbmeta` and must carry an `AVBf` footer. | `operation:"mode.plan"`, `id:string?`, `plan:{from_mode:0|1|2|null,target_mode:0|1|2,preconditions:{code:"P-GRAFT"|"P-PROFILE"|"P-FORMAT",rule:string,blocking:bool,satisfied:bool?,reason:string}[],post_actions:{action:string,reason:string}[],outcome:{status:"ready"|"cannot-predict",reason:string?},refusal:{code:string,reason:string}?,vbmeta:{current:mode_header_evidence?,target:mode_header_evidence?,relationship:"lower"|"same-or-higher"?},userdata:mode_userdata}`. Known transitions crossing mode `0` are mandatory `R1`; the lower four-property compatibility boundary between modes 1 and 2 is `R3` `may` evidence with the unavailable KeyMint floor named; changed signing/provenance is `R4` `may` evidence naming the common soft-brick risk. Missing source evidence remains `may`. Non-Canoe original state is `may` evidence, suppressed only by an original BDS payload match or an original responding BDS with known modes. `may` never becomes a `P-FORMAT` blocker. |
+| `mode.plan` | `id:string?`, `target_mode:0|1|2` required; `from_mode:0|1|2|null?` supplies explicit source-mode evidence independently of destination `id`; omitted or `null` evidence remains unknown; `prior_canoe:bool?` defaults to `false` and records whether the original state is recognized Canoe content. A persisted entry selects the destination and never proves the source mode. `locked_bootstrap:bool?` and `source_boot_record:string?` carry scoped source evidence as described below. `current_vbmeta:path?`, `target_vbmeta:path?`, `target_image:path?` optionally provide evidence; when `target_image` is present, its embedded vbmeta takes precedence over `target_vbmeta` and must carry an `AVBf` footer. | `operation:"mode.plan"`, `id:string?`, `plan:{from_mode:0|1|2|null,target_mode:0|1|2,preconditions:{code:"P-GRAFT"|"P-PROFILE"|"P-FORMAT",rule:string,blocking:bool,satisfied:bool?,reason:string}[],post_actions:{action:string,reason:string}[],outcome:{status:"ready"|"cannot-predict",reason:string?},refusal:{code:string,reason:string}?,vbmeta:{current:mode_header_evidence?,target:mode_header_evidence?,relationship:"lower"|"same-or-higher"?},userdata:mode_userdata}`. Known transitions crossing mode `0` are mandatory `R1`; the lower four-property compatibility boundary between modes 1 and 2 is `R3` `may` evidence with the unavailable KeyMint floor named; a changed effective public-key identity is mandatory `R4` evidence. A signature algorithm or whole-vbmeta hash change alone is not a data-binding boundary. Missing source evidence remains `unknown` unless a separate known image risk establishes `may`. Unconfirmed Canoe provenance is uncertainty, suppressed only by an original BDS payload match or an original responding BDS with known modes. Neither `unknown` nor `may` becomes a `P-FORMAT` blocker. |
 | `default.get` | `verb` only | `operation:"default.get"`, `default:string?`, `resolution:"no-default"|"resolved"|"dangling"|"unknown"`. `no-default` means no configured target; `resolved` means an entry id exists or the BLS stem exists; `dangling` means lookup completed and the target is absent; `unknown` means boot-root reading or BLS discovery could not complete. |
 | `default.set` | `id:string` required. | `operation:"default.set"`, `generation:u32`, `default:string`. |
 | `source.detect` | `verb` only | `operation:"source.detect"`, `kind:"source.detect"`, `sources:source_candidate[]`, where `source_candidate` is `{kind:"block"|"image"|"dir",path:path,identity:string?,model:string,size_bytes:u64,boot_root:path,boot_root_present:bool,readable:bool,writable:bool,needs_privilege:bool,mounted_at:path?,why:string,export_candidate:"candidate"|"mounted"|"not_candidate"?}`. `export_candidate` is `"candidate"` for an unmounted recognized Canoe export, `"mounted"` for a recognized export that is mounted, and `"not_candidate"` otherwise. A mounted recognized export remains a candidate but is unavailable; `mounted_at` retains its mount path. |
@@ -198,3 +198,58 @@ mandatory.
 For `ota-apply`, both inferred and explicit targets require authoritative active-slot metadata. `bootctl_output` supplies that authority only through an explicit `current-slot` or `active-slot` marker; unrelated numeric status fields are ignored. An explicit target with unknown authority returns `ota-active-slot-unknown`.
 
 The version-1 golden transcripts are in `tests/fixtures/protocol/`. `tests/protocol_fixtures.rs` replays every request against the built binary and compares complete response bytes, including field order and the trailing newline. Update every affected transcript from the real binary before running this strict replay.
+
+
+### Data baseline and logfs handoff (assessment v2)
+
+`mode.plan`, `entry.mode`, `install`, and `ota-apply` accept the same source
+fields: `from_mode`, `prior_canoe`, `locked_bootstrap`, and `source_boot_record`.
+The latter two default to false/absent. A target entry or global configuration
+never supplies an implicit source mode. Clients must capability-gate writes
+using `mode-userdata-assessment-v2`; v1 implemented different source and format
+rules.
+
+`locked_bootstrap` asserts untouched, truly locked DeviceInfo for this initial
+transition. It applies only with unknown `from_mode` and a Mode 1/2 target;
+configuration/loader presence does not cancel it. It never overrides an explicit
+Mode 0 crossing, a changed effective key identity, or a known version downgrade.
+It does not establish that AVB accepts the target. No operation formats data.
+A one-shot Mode 0 recovery boot does not erase data: returning to the preceding
+compatible state without formatting/changing data can restore readability.
+
+On Android, `slot.status` adds `boot_evidence:{status,reason,record}`. Status is
+`historical`, `unavailable`, or `unreadable`. The reader opens
+`/dev/block/by-name/logfs` read-only, never mounts it or updates FAT access dates,
+and bounds filesystem reads to 16 MiB and record reads to 257 bytes. The record
+is exactly the 256-byte CNLB v1 ABI documented in firmware `SuperFbLastBoot.h`.
+It includes a SHA256 of the full record, lifecycle, requested/effective modes,
+fallback, pre-repair lock flags, pre-reset GPT slot/retries, BDS build string,
+monotonic attempt bytes, loader derivation digest, and the Mode 2 profile's
+public-key, root-of-trust and verified-boot digests and raw Qualcomm version
+fields. GPT slot is a pre-launch observation, not proof of the slot Android
+ultimately boots. The derivation digest is not a runtime measurement.
+
+A pre-entry record cannot certify Android startup, successful TEE rewrites, or
+userdata access. FAT dates and the monotonic attempt are not freshness proof.
+A client can explicitly confirm that a handoff describes the currently usable
+boot, then send its exact SHA256 as `source_boot_record`. Android re-reads that
+record on every plan/apply. Missing, returned, unmanaged or changed records fail
+with `source-boot-record-changed` before mutation. Confirmation is an operator
+assertion, not cryptographic attestation. Merely reading a historical record does
+not grant a bootstrap waiver or select a source mode.
+
+For a confirmed Mode 2 source, the saved GM2P public key and normalized projected
+versions replace raw current-ROM evidence. The legacy `algorithm_type:0` and
+`rollback_index:0` fields in this projected **current** evidence are placeholders,
+not an AVB-header classification. Target AVB evidence retains its actual values.
+Mode 2 target projection is derived using the canonical profile producer and its
+Qualcomm encoding; raw vbmeta signature/hash changes do not imply key changes.
+Missing vendor/boot version evidence remains unknown rather than guessing from
+another slot or equating a profile version with every KeyMint floor.
+
+`must` creates `P-FORMAT`, with R1 for the Mode 0 boundary and R4 for a changed
+signing identity. `may` means a known relevant downgrade; `unknown` means the
+comparison lacks attributable evidence. Restoring the previous compatible state
+is an alternative to adopting a new binding. Formatting is not an AVB/graft fix
+and does not bypass anti-rollback. Mode 2 supports custom ROMs; no stock-ROM-only
+restriction is inferred from signer identity.

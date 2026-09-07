@@ -101,6 +101,7 @@ pub struct VbmetaEvidence {
 pub enum UserdataRequirement {
     Must,
     May,
+    Unknown,
     NotRequired,
 }
 
@@ -132,6 +133,10 @@ pub struct ModePlan {
 pub enum ModePlanError {
     #[error("mode.plan target mode must be 0, 1 or 2 (got {mode})")]
     InvalidMode { mode: u8 },
+    #[error(
+        "The confirmed source boot record is unavailable or changed; review the data baseline again."
+    )]
+    SourceBootRecordChanged,
     #[error("mode.plan preconditions unsatisfied: {codes}")]
     PreconditionsUnsatisfied { codes: String },
     #[error(transparent)]
@@ -153,6 +158,7 @@ impl ModePlanError {
     pub fn protocol_code(&self) -> &str {
         match self {
             Self::InvalidMode { .. } => "mode-plan-invalid",
+            Self::SourceBootRecordChanged => "source-boot-record-changed",
             Self::PreconditionsUnsatisfied { .. } => "mode-precondition-unsatisfied",
             Self::Extract(error) => error.protocol_code(),
             Self::Worker { code, .. } => code,

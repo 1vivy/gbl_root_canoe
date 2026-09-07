@@ -90,6 +90,8 @@ pub enum Success {
         inactive_slot: Option<Slot>,
         source: String,
         installed: Vec<Slot>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        boot_evidence: Option<crate::boot_evidence::BootEvidence>,
     },
     #[serde(rename = "build")]
     Build {

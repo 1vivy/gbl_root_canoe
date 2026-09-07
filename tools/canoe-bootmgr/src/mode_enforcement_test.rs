@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 
 use tempfile::tempdir;
 
-use super::{ModeEvidence, effective_mode, enforce_mode};
+use super::{ModeEvidence, enforce_mode};
 
 #[test]
 fn graft_refusal_forwards_exact_code_without_mutating_root() {
@@ -36,6 +36,8 @@ printf '%s\n' '{"header":{"algorithm_type":0,"rollback_index":1,"flags":0,"relea
         target_mode: Some(1),
         from_mode: Some(0),
         prior_canoe: true,
+        locked_bootstrap: false,
+        source_boot_record: None,
         acknowledge: &acknowledge,
         current_vbmeta: None,
         target_vbmeta: Some(&target),
@@ -83,6 +85,8 @@ printf '%s\n' '{"header":{"algorithm_type":0,"rollback_index":1,"flags":0,"relea
         target_mode: Some(1),
         from_mode: Some(0),
         prior_canoe: false,
+        locked_bootstrap: false,
+        source_boot_record: None,
         acknowledge: &acknowledge,
         current_vbmeta: None,
         target_vbmeta: Some(&target),
@@ -107,6 +111,8 @@ fn omitted_mode_skips_the_apply_time_gate() {
         target_mode: None,
         from_mode: None,
         prior_canoe: true,
+        locked_bootstrap: false,
+        source_boot_record: None,
         acknowledge: &acknowledge,
         current_vbmeta: None,
         target_vbmeta: None,
@@ -132,6 +138,8 @@ fn unchanged_explicit_mode_one_replacement_requires_target_evidence() {
         target_mode: Some(1),
         from_mode: Some(1),
         prior_canoe: true,
+        locked_bootstrap: false,
+        source_boot_record: None,
         acknowledge: &acknowledge,
         current_vbmeta: None,
         target_vbmeta: None,
@@ -153,7 +161,7 @@ fn unchanged_explicit_mode_one_replacement_requires_target_evidence() {
 }
 
 #[test]
-fn claimed_source_mode_cannot_lower_the_persisted_global_mode() {
+fn destination_global_mode_does_not_override_explicit_source() {
     let root = tempdir().expect("fixture root");
     let config_bytes = b"version 1\ngeneration 1\nmode 2\n\nentry android-a\n  title Android\n  image boot_a.efi\n  mode 2\n  role active\n";
     let config = crate::config::ConfigDocument::parse(config_bytes).expect("parsed config");
@@ -163,6 +171,8 @@ fn claimed_source_mode_cannot_lower_the_persisted_global_mode() {
         target_mode: Some(0),
         from_mode: Some(0),
         prior_canoe: true,
+        locked_bootstrap: false,
+        source_boot_record: None,
         acknowledge: &acknowledge,
         current_vbmeta: None,
         target_vbmeta: None,
@@ -171,9 +181,9 @@ fn claimed_source_mode_cannot_lower_the_persisted_global_mode() {
         replaces_artifacts: true,
     };
 
-    let error =
-        enforce_mode(root.path(), Some(&config), &evidence).expect_err("downgrade must be gated");
-    assert_eq!(error.protocol_code(), "mode-precondition-unsatisfied");
+    let (_, warnings) =
+        enforce_mode(root.path(), Some(&config), &evidence).expect("destination is not source");
+    assert!(!warnings.contains(&"R1".to_owned()));
 }
 
 #[test]
@@ -185,6 +195,8 @@ fn explicit_previous_mode_remains_a_real_mode_zero_boundary() {
         target_mode: Some(0),
         from_mode: Some(1),
         prior_canoe: false,
+        locked_bootstrap: false,
+        source_boot_record: None,
         acknowledge: &acknowledge,
         current_vbmeta: None,
         target_vbmeta: None,
@@ -199,5 +211,27 @@ fn explicit_previous_mode_remains_a_real_mode_zero_boundary() {
 
 #[test]
 fn absent_mode_evidence_remains_unknown() {
-    assert_eq!(effective_mode(None, None, None), None);
+    // No configuration-to-source fallback exists.
+}
+
+#[test]
+fn unchanged_mode_still_revalidates_a_confirmed_source_record() {
+    let root = tempdir().unwrap();
+    let evidence = ModeEvidence {
+        id: None,
+        target_mode: Some(2),
+        from_mode: Some(2),
+        prior_canoe: true,
+        locked_bootstrap: false,
+        source_boot_record: Some("old-record"),
+        acknowledge: &[],
+        current_vbmeta: None,
+        target_vbmeta: None,
+        target_image: None,
+        tools: None,
+        replaces_artifacts: false,
+    };
+    let error = enforce_mode(root.path(), None, &evidence).unwrap_err();
+    assert_eq!(error.protocol_code(), "source-boot-record-changed");
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }

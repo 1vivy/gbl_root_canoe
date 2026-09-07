@@ -91,7 +91,7 @@ fn absent_config_explicit_from_mode_is_planned_before_install() {
 }
 
 #[test]
-fn persisted_mode_one_to_zero_requires_format_acknowledgement() {
+fn explicit_source_mode_one_to_zero_requires_format_acknowledgement() {
     let fixture = fixture_root();
     set_global_mode(&fixture, 1);
     let message = rejected(
@@ -101,7 +101,7 @@ fn persisted_mode_one_to_zero_requires_format_acknowledgement() {
             "staged": staged_path(&fixture),
             "slot": "a",
             "mode": 0,
-            "from_mode": 0
+            "from_mode": 1
         }),
         "mode-precondition-unsatisfied",
     );
@@ -113,6 +113,7 @@ fn persisted_mode_one_to_zero_requires_format_acknowledgement() {
             "staged": staged_path(&fixture),
             "slot": "a",
             "mode": 0,
+            "from_mode": 1,
             "acknowledge": ["P-FORMAT"]
         }),
     );
@@ -120,7 +121,7 @@ fn persisted_mode_one_to_zero_requires_format_acknowledgement() {
 }
 
 #[test]
-fn persisted_mode_two_to_zero_requires_format_acknowledgement() {
+fn explicit_source_mode_two_to_zero_requires_format_acknowledgement() {
     let fixture = fixture_root();
     let message = rejected(
         &fixture,
@@ -129,7 +130,7 @@ fn persisted_mode_two_to_zero_requires_format_acknowledgement() {
             "staged": staged_path(&fixture),
             "slot": "a",
             "mode": 0,
-            "from_mode": 0
+            "from_mode": 2
         }),
         "mode-precondition-unsatisfied",
     );
@@ -141,6 +142,7 @@ fn persisted_mode_two_to_zero_requires_format_acknowledgement() {
             "staged": staged_path(&fixture),
             "slot": "a",
             "mode": 0,
+            "from_mode": 2,
             "acknowledge": ["P-FORMAT"]
         }),
     );

@@ -74,6 +74,8 @@ pub fn parse(args: &[String]) -> Result<InstallOptions, CanoeError> {
         target,
         from: from_mode,
         prior_canoe: false,
+        locked_bootstrap: false,
+        source_boot_record: None,
         acknowledge,
     });
     Ok(InstallOptions {

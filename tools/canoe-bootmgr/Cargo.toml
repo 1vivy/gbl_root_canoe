@@ -45,6 +45,7 @@ tempfile = "3"
 mode2_profile = { path = "../mode2-profile" }
 lz4 = "1"
 flate2 = "1"
+fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

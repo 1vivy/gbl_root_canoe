@@ -238,6 +238,14 @@ pub struct EntryIdArgs {
 #[derive(Debug, Args)]
 pub struct EntryModeArgs {
     #[arg(long)]
+    pub from_mode: Option<u8>,
+    #[arg(long)]
+    pub prior_canoe: bool,
+    #[arg(long)]
+    pub locked_bootstrap: bool,
+    #[arg(long)]
+    pub source_boot_record: Option<String>,
+    #[arg(long)]
     pub id: String,
     #[arg(long)]
     pub mode: u8,

@@ -46,6 +46,10 @@ static EFI_STATUS mOpenStatus;
 static EFI_STATUS mReadStatus;
 static UINTN mCloseCount;
 static CHAR16 mReadPath[SFB_PATH_CHARS];
+static UINT8 mBootRecord[256];
+static UINT8 mBootRecordAtStart[256];
+static BOOLEAN mObserveLocked;
+static void TestBootRecordLifecycle(void);
 static EFI_STATUS mPrepareStatus;
 static SFB_BOOT_MODE mLastPrepareMode;
 static SFB_CONFIG_LOCK_POLICY mLastPreparePolicy;
@@ -812,6 +816,7 @@ FakeStartImage(IN EFI_HANDLE ImageHandle, IN OUT UINTN *ExitDataSize,
 {
   (void)ExitDataSize;
   (void)ExitData;
+  memcpy(mBootRecordAtStart, mBootRecord, sizeof(mBootRecord));
   ++mStartCount;
   mStartEvent = ++mLaunchEvent;
   assert(ImageHandle == mLoadedHandle);
@@ -2369,6 +2374,7 @@ TestPowerOnDecisionTable (void)
 int
 main(void)
 {
+  TestBootRecordLifecycle();
   TestProfileSelection ();
   TestLaunchLifecycle ();
   TestManagedLaunchResetsRetryBetweenLoadAndStart ();
@@ -2804,3 +2810,29 @@ SfbShowBootingScreen(IN CONST CHAR16 *Name,
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenuScaffold.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBrowser.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.c"
+
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLastBoot.c"
+EFI_STATUS SfbLastBootWrite(IN CONST UINT8 *Bytes) { assert(SfbLastBootValid(Bytes, SFB_LAST_BOOT_BYTES)); memcpy(mBootRecord, Bytes, sizeof(mBootRecord)); return EFI_SUCCESS; }
+SFB_OBSERVED_DEVINFO SfbGetObservedDevInfo(VOID) { SFB_OBSERVED_DEVINFO v = {mObserveLocked, FALSE, FALSE}; return v; }
+SFB_SLOT_RETRIES SfbSlotRetries(VOID) { SFB_SLOT_RETRIES v = {0}; return v; }
+
+static void TestBootRecordLifecycle(void) {
+  EFI_DEVICE_PATH_PROTOCOL Path = {0};
+  SFB_MODE2_PROFILE Profile = MakeValidProfile();
+  ResetLaunchBackend(); mObserveLocked = TRUE;
+  assert(SfbLaunchImage(&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL, NULL) == EFI_SUCCESS);
+  assert(mBootRecordAtStart[5] == SFB_LAST_BOOT_HANDOFF);
+  assert(mBootRecordAtStart[7] == 2 && mBootRecordAtStart[9] == 1);
+  assert(mBootRecordAtStart[11] == 1);
+  assert(memcmp(&mBootRecordAtStart[16], &Profile, 120) == 0);
+  assert(mBootRecord[5] == SFB_LAST_BOOT_RETURNED);
+  ResetLaunchBackend(); mObserveLocked = FALSE;
+  assert(SfbLaunchImage(&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL, NULL) == EFI_SUCCESS);
+  assert(mBootRecordAtStart[5] == SFB_LAST_BOOT_UNMANAGED);
+  assert(mBootRecordAtStart[11] == 0);
+  assert(!mSfbInitialDeviceInfo.Available);
+  ResetLaunchBackend(); mObserveLocked = TRUE; mLoadStatus = EFI_DEVICE_ERROR;
+  assert(SfbLaunchImage(&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL, NULL) == EFI_DEVICE_ERROR);
+  assert(mBootRecord[5] == SFB_LAST_BOOT_RETURNED && mBootRecord[9] == 1);
+  ZeroMem(&mSfbInitialDeviceInfo, sizeof(mSfbInitialDeviceInfo)); mObserveLocked = FALSE;
+}

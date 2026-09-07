@@ -212,6 +212,7 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             let userdata_requirement = match plan.userdata.requirement {
                 crate::mode_plan::UserdataRequirement::Must => "must",
                 crate::mode_plan::UserdataRequirement::May => "may",
+                crate::mode_plan::UserdataRequirement::Unknown => "unknown",
                 crate::mode_plan::UserdataRequirement::NotRequired => "not-required",
             };
             format!(

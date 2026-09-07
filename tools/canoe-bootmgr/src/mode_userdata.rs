@@ -23,29 +23,44 @@ pub(crate) fn keymint_relationship(
     current: &HeaderEvidence,
     target: &HeaderEvidence,
 ) -> Option<KeymintRelationship> {
-    let comparisons = [
-        compare_version(
-            current.build_properties.system_os_version.as_deref()?,
-            target.build_properties.system_os_version.as_deref()?,
-        )?,
-        compare_patch(
-            current.build_properties.system_security_patch.as_deref()?,
-            target.build_properties.system_security_patch.as_deref()?,
-        )?,
-        compare_patch(
-            current.build_properties.vendor_security_patch.as_deref()?,
-            target.build_properties.vendor_security_patch.as_deref()?,
-        )?,
-        compare_patch(
-            current.build_properties.boot_security_patch.as_deref()?,
-            target.build_properties.boot_security_patch.as_deref()?,
-        )?,
+    let properties = [
+        (
+            current.build_properties.system_os_version.as_deref(),
+            target.build_properties.system_os_version.as_deref(),
+            true,
+        ),
+        (
+            current.build_properties.system_security_patch.as_deref(),
+            target.build_properties.system_security_patch.as_deref(),
+            false,
+        ),
+        (
+            current.build_properties.vendor_security_patch.as_deref(),
+            target.build_properties.vendor_security_patch.as_deref(),
+            false,
+        ),
+        (
+            current.build_properties.boot_security_patch.as_deref(),
+            target.build_properties.boot_security_patch.as_deref(),
+            false,
+        ),
     ];
-    if comparisons.contains(&Ordering::Less) {
-        Some(KeymintRelationship::Lower)
-    } else {
-        Some(KeymintRelationship::SameOrHigher)
+    let mut complete = true;
+    for (current, target, version) in properties {
+        let comparison = current.zip(target).and_then(|(current, target)| {
+            if version {
+                compare_version(current, target)
+            } else {
+                compare_patch(current, target)
+            }
+        });
+        match comparison {
+            Some(Ordering::Less) => return Some(KeymintRelationship::Lower),
+            Some(_) => {}
+            None => complete = false,
+        }
     }
+    complete.then_some(KeymintRelationship::SameOrHigher)
 }
 
 pub(crate) fn assess(
@@ -54,32 +69,56 @@ pub(crate) fn assess(
     current: Option<&HeaderEvidence>,
     target: Option<&HeaderEvidence>,
     prior_canoe: bool,
+    locked_bootstrap: bool,
 ) -> UserdataAssessment {
+    // An observed true-locked bootstrap waives only the initial lock-state
+    // boundary. It cannot override an explicit subsequent Mode 0 transition.
+    let bootstrap = locked_bootstrap && from_mode.is_none() && target_mode != 0;
+    if bootstrap && current.is_none() {
+        return UserdataAssessment {
+            requirement: UserdataRequirement::NotRequired,
+            reasons: vec![reason(
+                "R1",
+                "Untouched DeviceInfo was truly locked for this bootstrap. Entering Mode 1 or 2 adds no initial lock-state format requirement. This does not waive target AVB checks or future identity/version changes.",
+            )],
+        };
+    }
     if matches!(from_mode, Some(from) if from != target_mode && (from == 0 || target_mode == 0)) {
         return UserdataAssessment {
             requirement: UserdataRequirement::Must,
             reasons: vec![reason(
                 "R1",
-                "This change crosses Mode 0, so formatting userdata is required. Formatting removes apps and user data.",
+                "Using existing data under the new Mode 0 / Mode 1–2 binding requires formatting. A one-shot recovery boot does not erase data: returning to the previous compatible state without formatting or changing data can restore access.",
             )],
         };
     }
 
     let mut reasons = Vec::new();
-    if !prior_canoe {
+    if !prior_canoe && !bootstrap {
         reasons.push(reason(
             "R4",
-            "The current EFISP payload could not be confirmed as CANOE-BDS, or this is a new install. If Android fails to boot after the change, you may need to format data.",
+            "The current Canoe boot chain is not confirmed. Data compatibility is unknown; this is not a recommendation to format.",
         ));
     }
 
-    if from_mode.is_none() {
+    let mut known_risk = false;
+    let mut changed_key = false;
+    if from_mode.is_none() && !bootstrap {
         reasons.push(reason(
             "R2",
-            "The existing boot mode could not be identified, or this is a new install. If Android fails to boot after the change, you may need to format data.",
+            "The running boot mode is unknown. Identify the previous boot state before deciding whether formatting is needed.",
         ));
+    }
+    if bootstrap || (prior_canoe && from_mode.is_some()) {
+        assess_image_evidence(
+            &mut reasons,
+            &mut known_risk,
+            &mut changed_key,
+            current,
+            target,
+        );
     } else {
-        assess_image_evidence(&mut reasons, current, target);
+        reasons.push(reason("R4", "An existing-install signing comparison needs an attributable previous effective identity. Fresh installation has no previous Canoe profile to compare; missing launch evidence does not establish a format requirement."));
     }
 
     if reasons.is_empty() {
@@ -92,7 +131,13 @@ pub(crate) fn assess(
         }
     } else {
         UserdataAssessment {
-            requirement: UserdataRequirement::May,
+            requirement: if changed_key {
+                UserdataRequirement::Must
+            } else if known_risk {
+                UserdataRequirement::May
+            } else {
+                UserdataRequirement::Unknown
+            },
             reasons,
         }
     }
@@ -100,42 +145,50 @@ pub(crate) fn assess(
 
 fn assess_image_evidence(
     reasons: &mut Vec<UserdataReason>,
+    known_risk: &mut bool,
+    changed_key: &mut bool,
     current: Option<&HeaderEvidence>,
     target: Option<&HeaderEvidence>,
 ) {
     match (current, target) {
         (Some(current), Some(target)) => {
             match keymint_relationship(current, target) {
-                Some(KeymintRelationship::Lower) => reasons.push(reason(
+                Some(KeymintRelationship::Lower) => {
+                    *known_risk = true;
+                    reasons.push(reason(
                     "R3",
-                    "A KeyMint-relevant target image property is lower than the current image. If Android fails to boot after the change, you may need to format data.",
-                )),
+                    "A target image reports a lower KeyMint version or security patch. Existing data keys may be incompatible; prefer a compatible image or restore the previous boot chain before considering a format.",
+                ));
+                },
                 Some(KeymintRelationship::SameOrHigher) => {}
                 None => reasons.push(reason(
                     "R3",
-                    "KeyMint-relevant image properties are incomplete or malformed. If Android fails to boot after the change, you may need to format data.",
+                    "Image version or security-patch evidence is incomplete. Data compatibility cannot yet be assessed.",
                 )),
             }
             match provenance_compatible(current, target) {
                 Some(true) => {}
-                Some(false) => reasons.push(reason(
+                Some(false) => {
+                    *changed_key = true;
+                    reasons.insert(0, reason(
                     "R4",
-                    "The signing key or algorithm changed, so compatibility with the current Android data cannot be established. If Android fails to boot after the change, you may need to format data.",
-                )),
+                    "The effective signing public-key identity changes. Using data under this new binding requires formatting; restore the previous compatible identity to retain access instead. Formatting does not fix AVB or graft failures.",
+                ));
+                }
                 None => reasons.push(reason(
                     "R4",
-                    "Signing evidence is incomplete, so compatibility with the current Android data cannot be established. If Android fails to boot after the change, you may need to format data.",
+                    "Signing evidence is incomplete. Data compatibility cannot yet be assessed.",
                 )),
             }
         }
         (Some(_), None) | (None, Some(_)) | (None, None) => {
             reasons.push(reason(
                 "R3",
-                "Current or target KeyMint-relevant image evidence is unavailable. If Android fails to boot after the change, you may need to format data.",
+                "Select and inspect the current and target images to assess data compatibility.",
             ));
             reasons.push(reason(
                 "R4",
-                "Current or target signing evidence is unavailable, so compatibility with the current Android data cannot be established. If Android fails to boot after the change, you may need to format data.",
+                "Current or target signing evidence is unavailable. Missing evidence alone does not establish a need to format.",
             ));
         }
     }
@@ -144,7 +197,7 @@ fn assess_image_evidence(
 fn provenance_compatible(current: &HeaderEvidence, target: &HeaderEvidence) -> Option<bool> {
     let current_key = current.public_key_sha256.as_deref()?;
     let target_key = target.public_key_sha256.as_deref()?;
-    Some(current.algorithm_type == target.algorithm_type && current_key == target_key)
+    Some(current_key == target_key)
 }
 
 fn compare_version(current: &str, target: &str) -> Option<Ordering> {

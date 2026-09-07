@@ -81,8 +81,10 @@ fn entry_mode(backend: &Backend, args: &crate::cli::EntryModeArgs) -> Result<Suc
             let evidence = ModeEvidence {
                 id: Some(&args.id),
                 target_mode: Some(args.mode),
-                from_mode: None,
-                prior_canoe: true,
+                from_mode: args.from_mode,
+                prior_canoe: args.prior_canoe,
+                locked_bootstrap: args.locked_bootstrap,
+                source_boot_record: args.source_boot_record.as_deref(),
                 acknowledge: &args.acknowledge,
                 current_vbmeta: args.current_vbmeta.as_ref(),
                 target_vbmeta: args.target_vbmeta.as_ref(),

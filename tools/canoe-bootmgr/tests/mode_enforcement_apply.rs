@@ -54,7 +54,7 @@ fn existing_entry_set_mode_change_is_rejected_before_installing() {
 }
 
 #[test]
-fn existing_row_mode_is_the_transition_source_not_the_global_mode() {
+fn explicit_source_is_used_independently_of_destination_row() {
     let fixture = fixture_root();
     let message = rejected(
         &fixture,
@@ -63,7 +63,8 @@ fn existing_row_mode_is_the_transition_source_not_the_global_mode() {
             "staged": staged_path(&fixture),
             "slot": "a",
             "mode": 2,
-            "id": "android-a"
+            "id": "android-a",
+            "from_mode": 0
         }),
         "mode-precondition-unsatisfied",
     );
@@ -71,7 +72,7 @@ fn existing_row_mode_is_the_transition_source_not_the_global_mode() {
 }
 
 #[test]
-fn persisted_mode_is_authoritative_for_a_new_row() {
+fn destination_config_does_not_invent_a_source_mode() {
     let fixture = fixture_root();
     let response = applied(
         &fixture,
@@ -85,7 +86,7 @@ fn persisted_mode_is_authoritative_for_a_new_row() {
             "acknowledge": ["P-FORMAT"]
         }),
     );
-    assert_eq!(response["acknowledged"], serde_json::json!(["P-FORMAT"]));
+    assert_eq!(response["acknowledged"], serde_json::json!([]));
     let config = fs::read_to_string(fixture.root.path().join("canoe.cfg")).expect("written config");
     assert!(
         config.lines().any(|line| line.trim() == "mode 0"),

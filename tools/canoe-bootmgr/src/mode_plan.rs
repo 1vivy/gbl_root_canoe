@@ -21,6 +21,17 @@ pub fn plan_transition(
     target: Option<HeaderEvidence>,
     prior_canoe: bool,
 ) -> Result<ModePlan, ModePlanError> {
+    plan_transition_with_bootstrap(from_mode, target_mode, current, target, prior_canoe, false)
+}
+
+pub fn plan_transition_with_bootstrap(
+    from_mode: Option<u8>,
+    target_mode: u8,
+    current: Option<HeaderEvidence>,
+    target: Option<HeaderEvidence>,
+    prior_canoe: bool,
+    locked_bootstrap: bool,
+) -> Result<ModePlan, ModePlanError> {
     if let Some(from_mode) = from_mode {
         config::validate_mode(from_mode)
             .map_err(|_| ModePlanError::InvalidMode { mode: from_mode })?;
@@ -68,6 +79,7 @@ pub fn plan_transition(
         current.as_ref(),
         target.as_ref(),
         prior_canoe,
+        locked_bootstrap,
     );
     if userdata.requirement == UserdataRequirement::Must {
         let reason = userdata
@@ -79,7 +91,15 @@ pub fn plan_transition(
             });
         preconditions.push(ModePrecondition {
             code: "P-FORMAT",
-            rule: "R1",
+            rule: if userdata
+                .reasons
+                .first()
+                .is_some_and(|reason| reason.rule == "R4")
+            {
+                "R4"
+            } else {
+                "R1"
+            },
             blocking: true,
             satisfied: None,
             reason: reason.clone(),
@@ -94,7 +114,7 @@ pub fn plan_transition(
             status: "ready",
             reason: None,
         },
-        UserdataRequirement::May => ModeOutcome {
+        UserdataRequirement::May | UserdataRequirement::Unknown => ModeOutcome {
             status: "cannot-predict",
             reason: Some("userdata impact requires operator review".to_owned()),
         },
@@ -124,16 +144,91 @@ pub fn plan_for_mode(
     tools: Option<&Path>,
     prior_canoe: bool,
 ) -> Result<ModePlan, ModePlanError> {
-    let current = current_vbmeta
-        .map(|path| inspect_header(path, tools).map(|inspection| inspection.evidence()))
+    plan_for_source(
+        from_mode,
+        target_mode,
+        current_vbmeta,
+        target_vbmeta,
+        target_image,
+        tools,
+        prior_canoe,
+        false,
+        None,
+    )
+}
+
+pub fn plan_for_source(
+    from_mode: Option<u8>,
+    target_mode: u8,
+    current_vbmeta: Option<&PathBuf>,
+    target_vbmeta: Option<&PathBuf>,
+    target_image: Option<&PathBuf>,
+    tools: Option<&Path>,
+    prior_canoe: bool,
+    locked_bootstrap: bool,
+    source_boot_record: Option<&str>,
+) -> Result<ModePlan, ModePlanError> {
+    let source_record = source_boot_record
+        .map(crate::boot_evidence::confirmed_record)
         .transpose()?;
-    let target = match target_image {
+    let from_mode = source_record
+        .as_ref()
+        .map(|record| record.effective_mode)
+        .or(from_mode);
+    let prior_canoe = prior_canoe || source_record.is_some();
+    let projected = source_record
+        .as_ref()
+        .and_then(|record| record.profile.as_ref())
+        .map(|profile| profile.header());
+    let current = if projected.is_some() {
+        projected
+    } else {
+        current_vbmeta
+            .map(|path| inspect_header(path, tools).map(|inspection| inspection.evidence()))
+            .transpose()?
+    };
+    let mut target = match target_image {
         Some(path) => Some(inspect_target_image(path, tools)?),
         None => target_vbmeta
             .map(|path| inspect_header(path, tools).map(|inspection| inspection.evidence()))
             .transpose()?,
     };
-    let mut plan = plan_transition(from_mode, target_mode, current, target, prior_canoe)?;
+    // Mode 2 presents GM2P's identity and Qualcomm-encoded version fields.
+    // Preserve AVB algorithm/rollback as separate image evidence.
+    if target_mode == 2 {
+        if let Some(path) = target_vbmeta {
+            use std::io::Read;
+            if let Ok(file) = fs::File::open(path) {
+                let mut bytes = Vec::new();
+                if file
+                    .take(8 * 1024 * 1024 + 1)
+                    .read_to_end(&mut bytes)
+                    .is_ok()
+                    && bytes.len() <= 8 * 1024 * 1024
+                {
+                    if let Ok(profile) = mode2_profile::derive_profile(&bytes) {
+                        let projected =
+                            crate::boot_evidence::ProfileEvidence::from_profile(&profile).header();
+                        if let Some(target) = target.as_mut() {
+                            target.public_key_sha256 = projected.public_key_sha256;
+                            target.build_properties.system_os_version =
+                                projected.build_properties.system_os_version;
+                            target.build_properties.system_security_patch =
+                                projected.build_properties.system_security_patch;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut plan = plan_transition_with_bootstrap(
+        from_mode,
+        target_mode,
+        current,
+        target,
+        prior_canoe,
+        locked_bootstrap,
+    )?;
     if target_mode == 1 && from_mode != Some(1) {
         if let Some(precondition) = plan
             .preconditions
@@ -181,7 +276,7 @@ pub fn plan_for_entry(
     tools: Option<&Path>,
 ) -> Result<ModePlan, ModePlanError> {
     let mut plan = plan_for_mode(
-        Some(entry.mode),
+        None,
         target_mode,
         current_vbmeta,
         target_vbmeta,
@@ -243,7 +338,10 @@ pub fn warnings(plan: &ModePlan) -> Vec<String> {
         })
         .map(|precondition| precondition.code.to_owned())
         .collect::<Vec<_>>();
-    if plan.userdata.requirement == UserdataRequirement::May {
+    if matches!(
+        plan.userdata.requirement,
+        UserdataRequirement::May | UserdataRequirement::Unknown
+    ) {
         for reason in &plan.userdata.reasons {
             if !warnings.contains(&reason.rule) {
                 warnings.push(reason.rule.to_owned());

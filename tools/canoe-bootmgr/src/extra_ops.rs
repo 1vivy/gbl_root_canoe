@@ -74,6 +74,7 @@ fn slot_status(backend: &Backend, args: &SlotStatusArgs) -> Result<Success, AppE
         inactive_slot: status.inactive_slot,
         source: status.source,
         installed,
+        boot_evidence: crate::boot_evidence::device_evidence(),
     })
 }
 pub(crate) fn install_command(backend: &Backend, args: &InstallArgs) -> Result<Success, AppError> {
@@ -118,13 +119,15 @@ pub(crate) fn install_command(backend: &Backend, args: &InstallArgs) -> Result<S
     };
     let (receipt, acknowledged, warnings) = backend
         .with_temp_root_action(|root| {
-            let local = crate::backend::LocalDir::new(root).map_err(AppError::Backend)?;
+            let local = crate::backend::LocalDir::for_discovery(root).map_err(AppError::Backend)?;
             let config = local.read_config().map_err(AppError::Backend)?;
             let evidence = ModeEvidence {
                 id: args.id.as_deref(),
                 target_mode: args.mode,
                 from_mode: args.from_mode,
                 prior_canoe: args.prior_canoe,
+                locked_bootstrap: args.locked_bootstrap,
+                source_boot_record: args.source_boot_record.as_deref(),
                 acknowledge: &args.acknowledge,
                 current_vbmeta: args.current_vbmeta.as_ref(),
                 target_vbmeta: args.target_vbmeta.as_ref(),
@@ -154,6 +157,8 @@ pub(crate) fn install_command(backend: &Backend, args: &InstallArgs) -> Result<S
                             id: args.id.clone(),
                             from_mode: args.from_mode,
                             prior_canoe: args.prior_canoe,
+                            locked_bootstrap: args.locked_bootstrap,
+                            source_boot_record: args.source_boot_record.clone(),
                             target_mode: Some(target_mode),
                             current_vbmeta: args.current_vbmeta.clone(),
                             target_vbmeta: args.target_vbmeta.clone(),
@@ -207,6 +212,8 @@ pub(crate) fn ota_apply(backend: &Backend, args: &OtaApplyArgs) -> Result<Succes
                 target_mode: args.mode,
                 from_mode: args.from_mode,
                 prior_canoe: args.prior_canoe,
+                locked_bootstrap: args.locked_bootstrap,
+                source_boot_record: args.source_boot_record.as_deref(),
                 acknowledge: &args.acknowledge,
                 current_vbmeta: args.current_vbmeta.as_ref(),
                 target_vbmeta: args.target_vbmeta.as_ref(),
@@ -236,6 +243,8 @@ pub(crate) fn ota_apply(backend: &Backend, args: &OtaApplyArgs) -> Result<Succes
                             id: args.id.clone(),
                             from_mode: args.from_mode,
                             prior_canoe: args.prior_canoe,
+                            locked_bootstrap: args.locked_bootstrap,
+                            source_boot_record: args.source_boot_record.clone(),
                             target_mode: Some(target_mode),
                             current_vbmeta: args.current_vbmeta.clone(),
                             target_vbmeta: args.target_vbmeta.clone(),

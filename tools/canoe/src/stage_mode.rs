@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::Path;
 
 use canoe_bootmgr::backend::BootRoot;
@@ -15,48 +14,13 @@ pub(crate) struct InstallContext<'a> {
     pub(crate) slot: canoe_bootmgr::Slot,
 }
 
-fn tree_has_content(root: &Path) -> Result<bool, String> {
-    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        let file_type = entry.file_type().map_err(|error| error.to_string())?;
-        if !file_type.is_dir() || tree_has_content(&entry.path())? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 fn resolve_mode(
     backend: &canoe_bootmgr::Backend,
     mode: Option<&canoe_bootmgr::InstallMode>,
 ) -> Result<Option<canoe_bootmgr::InstallMode>, CanoeError> {
-    let Some(mode) = mode else {
-        return Ok(None);
-    };
-    let config = backend
-        .read_config()
-        .map_err(|error| CanoeError::message(error.to_string()))?;
-    let (from, prior_canoe) = if let Some(config) = config {
-        (Some(config.mode), true)
-    } else if let Some(from) = mode.from {
-        (Some(from), mode.prior_canoe)
-    } else {
-        let populated = backend
-            .with_temp_root_readonly(tree_has_content)
-            .map_err(|error| CanoeError::message(error.to_string()))?;
-        if populated {
-            return Err(CanoeError::message(
-                "boot root has content but no persisted mode",
-            ));
-        }
-        (None, false)
-    };
-    Ok(Some(canoe_bootmgr::InstallMode {
-        target: mode.target,
-        from,
-        prior_canoe,
-        acknowledge: mode.acknowledge.clone(),
-    }))
+    // Validate the destination config, but never promote it to source evidence.
+    backend.read_config().map_err(|error| CanoeError::message(error.to_string()))?;
+    Ok(mode.cloned())
 }
 
 pub(crate) fn install_request(

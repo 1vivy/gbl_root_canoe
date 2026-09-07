@@ -11,6 +11,8 @@ pub(crate) struct ModeEvidence<'a> {
     pub(crate) target_mode: Option<u8>,
     pub(crate) from_mode: Option<u8>,
     pub(crate) prior_canoe: bool,
+    pub(crate) locked_bootstrap: bool,
+    pub(crate) source_boot_record: Option<&'a str>,
     pub(crate) acknowledge: &'a [String],
     pub(crate) current_vbmeta: Option<&'a PathBuf>,
     pub(crate) target_vbmeta: Option<&'a PathBuf>,
@@ -21,8 +23,7 @@ pub(crate) struct ModeEvidence<'a> {
 
 /// Enforce the mode plan before any boot-root transaction can mutate files.
 ///
-/// An existing entry is authoritative for the source mode. A standalone request without source
-/// evidence retains an unknown previous mode for its userdata assessment.
+/// An entry selects the destination; absent source evidence stays unknown.
 pub(crate) fn enforce_mode(
     root: &Path,
     config: Option<&ConfigDocument>,
@@ -42,14 +43,14 @@ pub(crate) fn enforce_mode(
         ),
         None => None,
     };
-    // A persisted row or global mode is authoritative on-device evidence. A root without either
-    // has an unknown previous mode; it must not be silently treated as mode 0.
-    let current_mode = match existing {
-        Some(entry) => Some(entry.mode),
-        None => effective_mode(config, None, evidence.from_mode),
-    };
+    // The destination configuration does not identify the running/data-compatible
+    // source. Inactive entries and one-shot selections can differ from it.
+    let current_mode = evidence.from_mode;
     let requires_target_evidence = evidence.replaces_artifacts && requested_mode == 1;
-    if current_mode == Some(requested_mode) && !evidence.replaces_artifacts {
+    if current_mode == Some(requested_mode)
+        && !evidence.replaces_artifacts
+        && evidence.source_boot_record.is_none()
+    {
         return Ok((Vec::new(), Vec::new()));
     }
     let target_mode = requested_mode;
@@ -62,26 +63,19 @@ pub(crate) fn enforce_mode(
             message: "mode 1 installation requires target vbmeta evidence".to_owned(),
         });
     }
-    let plan = match existing {
-        Some(entry) => mode_plan::plan_for_entry(
-            root,
-            entry,
-            target_mode,
-            evidence.current_vbmeta,
-            evidence.target_vbmeta,
-            evidence.target_image,
-            evidence.tools,
-        )?,
-        None => mode_plan::plan_for_mode(
-            current_mode,
-            target_mode,
-            evidence.current_vbmeta,
-            evidence.target_vbmeta,
-            evidence.target_image,
-            evidence.tools,
-            evidence.prior_canoe || config.is_some(),
-        )?,
-    };
+    let _ = existing; // Validate the destination id without treating it as source evidence.
+    let _ = root;
+    let plan = mode_plan::plan_for_source(
+        current_mode,
+        target_mode,
+        evidence.current_vbmeta,
+        evidence.target_vbmeta,
+        evidence.target_image,
+        evidence.tools,
+        evidence.prior_canoe,
+        evidence.locked_bootstrap,
+        evidence.source_boot_record,
+    )?;
     if evidence.replaces_artifacts
         && target_mode == 1
         && plan
@@ -107,19 +101,6 @@ pub(crate) fn enforce_mode(
     Ok((acknowledged, warnings))
 }
 
-pub(crate) fn effective_mode(
-    config: Option<&ConfigDocument>,
-    requested: Option<u8>,
-    from_mode: Option<u8>,
-) -> Option<u8> {
-    if let Some(mode) = requested {
-        return Some(mode);
-    }
-    if let Some(mode) = config.map(|current| current.mode) {
-        return Some(mode);
-    }
-    from_mode
-}
 #[cfg(all(test, unix))]
 #[path = "mode_enforcement_risk_test.rs"]
 mod risk_tests;

@@ -72,6 +72,8 @@ fn same_mode_replacement<'a>(
         target_mode: Some(2),
         from_mode: Some(2),
         prior_canoe: true,
+        locked_bootstrap: false,
+        source_boot_record: None,
         acknowledge,
         current_vbmeta: Some(&worker.current),
         target_vbmeta: Some(&worker.target),
@@ -96,15 +98,13 @@ fn same_mode_replacement_warns_before_mutation_for_lower_keymint_property() {
 }
 
 #[test]
-fn same_mode_replacement_warns_before_mutation_for_changed_provenance() {
+fn changed_signing_identity_requires_acknowledgement_before_mutation() {
     let root = tempfile::tempdir().expect("fixture root");
     let worker = header_worker("different-key", "2026-03-01");
     let acknowledge = Vec::new();
     let evidence = same_mode_replacement(&worker, &acknowledge);
 
-    let (acknowledged, warnings) =
-        enforce_mode(root.path(), Some(&mode_two_config()), &evidence).expect("warning, not stop");
-
-    assert!(acknowledged.is_empty());
-    assert_eq!(warnings, vec!["R4".to_owned()]);
+    let error = enforce_mode(root.path(), Some(&mode_two_config()), &evidence).unwrap_err();
+    assert_eq!(error.protocol_code(), "mode-precondition-unsatisfied");
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }

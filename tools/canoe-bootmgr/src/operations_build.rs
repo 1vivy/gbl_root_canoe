@@ -60,28 +60,17 @@ pub(super) fn validate_mode_plan_target(target_mode: u8) -> Result<(), AppError>
 pub(super) fn mode_plan(backend: &Backend, args: &ModePlanArgs) -> Result<Success, AppError> {
     backend
         .with_temp_root_readonly_action(|root| {
-            let local = LocalDir::new(root).map_err(AppError::Backend)?;
             let (id, plan) = match args.id.as_deref() {
                 Some(id) => {
+                    let local = LocalDir::new(root).map_err(AppError::Backend)?;
                     let config = super::operations_bootroot::read_existing(&local)?;
                     let entry = config.entry(id).cloned().ok_or_else(|| {
                         AppError::Config(crate::config::ConfigError::Invalid(format!(
                             "no such entry: {id}"
                         )))
                     })?;
-                    let plan = crate::mode_plan::plan_for_entry(
-                        root,
-                        &entry,
-                        args.target_mode,
-                        args.current_vbmeta.as_ref(),
-                        args.target_vbmeta.as_ref(),
-                        args.target_image.as_ref(),
-                        args.tools.as_deref(),
-                    )?;
-                    (Some(id.to_owned()), plan)
-                }
-                None => {
-                    let plan = crate::mode_plan::plan_for_mode(
+                    let _ = entry;
+                    let plan = crate::mode_plan::plan_for_source(
                         args.from_mode,
                         args.target_mode,
                         args.current_vbmeta.as_ref(),
@@ -89,6 +78,22 @@ pub(super) fn mode_plan(backend: &Backend, args: &ModePlanArgs) -> Result<Succes
                         args.target_image.as_ref(),
                         args.tools.as_deref(),
                         args.prior_canoe,
+                        args.locked_bootstrap,
+                        args.source_boot_record.as_deref(),
+                    )?;
+                    (Some(id.to_owned()), plan)
+                }
+                None => {
+                    let plan = crate::mode_plan::plan_for_source(
+                        args.from_mode,
+                        args.target_mode,
+                        args.current_vbmeta.as_ref(),
+                        args.target_vbmeta.as_ref(),
+                        args.target_image.as_ref(),
+                        args.tools.as_deref(),
+                        args.prior_canoe,
+                        args.locked_bootstrap,
+                        args.source_boot_record.as_deref(),
                     )?;
                     (None, plan)
                 }

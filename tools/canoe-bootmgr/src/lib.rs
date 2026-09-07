@@ -8,6 +8,7 @@ pub mod block_write;
 pub mod bls;
 mod bls_parse;
 mod bls_render;
+pub mod boot_evidence;
 pub mod build;
 mod build_cleanup;
 mod build_efisp_tools;
@@ -88,6 +89,8 @@ pub struct InstallMode {
     pub target: u8,
     pub from: Option<u8>,
     pub prior_canoe: bool,
+    pub locked_bootstrap: bool,
+    pub source_boot_record: Option<String>,
     pub acknowledge: Vec<String>,
 }
 
@@ -155,6 +158,14 @@ pub fn install(backend: &Backend, request: &InstallRequest) -> Result<InstallRec
                 acknowledge,
                 current_vbmeta: request.current_vbmeta.as_ref(),
                 prior_canoe,
+                locked_bootstrap: request
+                    .mode
+                    .as_ref()
+                    .is_some_and(|mode| mode.locked_bootstrap),
+                source_boot_record: request
+                    .mode
+                    .as_ref()
+                    .and_then(|mode| mode.source_boot_record.as_deref()),
                 target_vbmeta: request.target_vbmeta.as_ref(),
                 target_image: request.target_image.as_ref(),
                 tools: request.tools.as_deref(),
@@ -185,6 +196,8 @@ pub fn install(backend: &Backend, request: &InstallRequest) -> Result<InstallRec
                             target_mode: Some(mode.target),
                             current_vbmeta: request.current_vbmeta.clone(),
                             prior_canoe: mode.prior_canoe,
+                            locked_bootstrap: mode.locked_bootstrap,
+                            source_boot_record: mode.source_boot_record.clone(),
                             target_vbmeta: request.target_vbmeta.clone(),
                             target_image: request.target_image.clone(),
                             tools: request.tools.clone(),

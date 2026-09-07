@@ -28,6 +28,9 @@ pub struct ModeRequestIdentity {
     pub id: Option<String>,
     pub from_mode: Option<u8>,
     pub prior_canoe: bool,
+    #[serde(default)]
+    pub locked_bootstrap: bool,
+    pub source_boot_record: Option<String>,
     pub target_mode: Option<u8>,
     pub current_vbmeta: Option<PathBuf>,
     pub target_vbmeta: Option<PathBuf>,

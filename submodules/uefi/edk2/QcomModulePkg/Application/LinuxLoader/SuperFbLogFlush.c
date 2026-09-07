@@ -17,6 +17,7 @@
 
 #include "SuperFbGptName.h"
 #include "SuperFbLog.h"
+#include "SuperFbLastBoot.h"
 
 /* File-local since the platform-ring writer that shared them was removed. */
 STATIC
@@ -129,8 +130,10 @@ SfbOpenLogfsRoot (
 
 STATIC
 EFI_STATUS
-SfbLastLaunchWrite (
-  IN CONST SFB_LAST_LAUNCH *Launch
+SfbWriteRecord (
+  IN CONST CHAR16 *Name,
+  IN CONST VOID *Value,
+  IN UINTN ValueBytes
   )
 {
   EFI_STATUS Status;
@@ -138,11 +141,6 @@ SfbLastLaunchWrite (
   EFI_FILE_PROTOCOL *Root = NULL;
   EFI_FILE_PROTOCOL *Directory = NULL;
   EFI_FILE_PROTOCOL *File = NULL;
-  CHAR8 Value[SFB_LAST_LAUNCH_VALUE_BYTES];
-
-  if (!SfbLastLaunchFormat (Launch, Value, sizeof (Value))) {
-    return EFI_INVALID_PARAMETER;
-  }
   Status = SfbOpenLogfsRoot (&Root);
   if (EFI_ERROR (Status) || Root == NULL) {
     Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
@@ -155,7 +153,7 @@ SfbLastLaunchWrite (
     Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
     goto Exit;
   }
-  Status = Directory->Open (Directory, &File, L"last-launch",
+  Status = Directory->Open (Directory, &File, (CHAR16 *)Name,
                             EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
   if (!EFI_ERROR (Status) && File != NULL) {
     Status = File->Delete (File);
@@ -167,14 +165,14 @@ SfbLastLaunchWrite (
     File->Close (File);
     File = NULL;
   }
-  Status = Directory->Open (Directory, &File, L"last-launch",
+  Status = Directory->Open (Directory, &File, (CHAR16 *)Name,
                             EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
                             EFI_FILE_MODE_CREATE, 0);
   if (EFI_ERROR (Status) || File == NULL) {
     Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
     goto Exit;
   }
-  Status = SfbWriteAscii (File, Value);
+  Status = SfbWriteBytes (File, Value, ValueBytes);
   if (!EFI_ERROR (Status)) {
     Status = (File->Flush == NULL) ? EFI_UNSUPPORTED : File->Flush (File);
   }
@@ -191,6 +189,21 @@ Exit:
   if (Directory != NULL) Directory->Close (Directory);
   if (Root != NULL) Root->Close (Root);
   return EFI_ERROR (Status) ? Status : EFI_SUCCESS;
+}
+
+EFI_STATUS
+SfbLastBootWrite (IN CONST UINT8 *Bytes)
+{
+  if (!SfbLastBootValid (Bytes, SFB_LAST_BOOT_BYTES)) return EFI_INVALID_PARAMETER;
+  return SfbWriteRecord (L"last-boot", Bytes, SFB_LAST_BOOT_BYTES);
+}
+
+STATIC EFI_STATUS
+SfbLastLaunchWrite (IN CONST SFB_LAST_LAUNCH *Launch)
+{
+  CHAR8 Value[SFB_LAST_LAUNCH_VALUE_BYTES];
+  if (!SfbLastLaunchFormat (Launch, Value, sizeof (Value))) return EFI_INVALID_PARAMETER;
+  return SfbWriteRecord (L"last-launch", Value, AsciiStrLen (Value));
 }
 
 EFI_STATUS

@@ -48,6 +48,12 @@ pub struct InstallArgs {
     pub from_mode: Option<u8>,
     #[arg(long)]
     pub prior_canoe: bool,
+    /// Untouched true-locked DeviceInfo for this bootstrap transition.
+    #[arg(long)]
+    pub locked_bootstrap: bool,
+    /// Reviewed logfs record SHA256, explicitly confirmed as the usable source boot.
+    #[arg(long)]
+    pub source_boot_record: Option<String>,
     #[arg(long)]
     pub acknowledge: Vec<String>,
     #[arg(long)]
@@ -94,6 +100,12 @@ pub struct OtaApplyArgs {
     pub from_mode: Option<u8>,
     #[arg(long)]
     pub prior_canoe: bool,
+    /// Untouched true-locked DeviceInfo for this bootstrap transition.
+    #[arg(long)]
+    pub locked_bootstrap: bool,
+    /// Reviewed logfs record SHA256, explicitly confirmed as the usable source boot.
+    #[arg(long)]
+    pub source_boot_record: Option<String>,
     #[arg(long)]
     pub acknowledge: Vec<String>,
     #[arg(long)]
@@ -213,6 +225,12 @@ pub struct ModePlanArgs {
     pub from_mode: Option<u8>,
     #[arg(long)]
     pub prior_canoe: bool,
+    /// Untouched true-locked DeviceInfo for this bootstrap transition.
+    #[arg(long)]
+    pub locked_bootstrap: bool,
+    /// Reviewed logfs record SHA256, explicitly confirmed as the usable source boot.
+    #[arg(long)]
+    pub source_boot_record: Option<String>,
     #[arg(long)]
     pub current_vbmeta: Option<PathBuf>,
     #[arg(long)]

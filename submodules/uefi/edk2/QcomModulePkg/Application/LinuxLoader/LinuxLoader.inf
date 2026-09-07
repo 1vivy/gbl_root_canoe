@@ -77,6 +77,8 @@
 	SuperFbLogRing.c
 	SuperFbLogFlush.c
 	SuperFbLogSlot.c
+	SuperFbLastBoot.h
+	SuperFbLastBoot.c
 	SuperFbLastLaunch.h
 	SuperFbLastLaunch.c
 	SuperFbBootRoot.h

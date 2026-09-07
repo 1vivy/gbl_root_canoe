@@ -1,6 +1,8 @@
 #include "SuperFbLaunchPolicy.h"
 #include "SuperFbSlots.h"
 #include "SuperFbLog.h"
+#include "SuperFbLastBoot.h"
+#include "Hook/SuperFbDevInfo.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -22,6 +24,7 @@ STATIC EFI_SECURITY2_FILE_AUTHENTICATION      mSfbOrigSec2Auth;
 STATIC SFB_CONFIG_LOCK_POLICY mSfbLockPolicy = SfbConfigLockAsNeeded;
 STATIC SFB_BOOT_MODE mSfbRequestedMode = SfbBootModeHonestUnlocked;
 STATIC BOOLEAN mSfbRequestedModeValid = FALSE;
+STATIC SFB_OBSERVED_DEVINFO mSfbInitialDeviceInfo;
 
 VOID
 SfbSetLaunchLockPolicy (IN SFB_CONFIG_LOCK_POLICY Policy)
@@ -271,6 +274,23 @@ SfbLaunchModeText (IN BOOLEAN Managed, IN SFB_BOOT_MODE Mode)
   return (Mode <= SfbBootModeKmProfile) ? Modes[Mode] : "?";
 }
 
+/* This snapshot describes a launch decision, not successful Android startup.
+ * Rewrite its lifecycle on return and on unmanaged attempts. Readers must not
+ * infer current-boot freshness from FAT dates or the monotonic count alone. */
+STATIC VOID
+SfbPersistBootRecord (UINT8 *Record, UINT8 Phase)
+{
+  UINT32 Checksum;
+  UINTN Index;
+  EFI_STATUS Status;
+  Record[5] = Phase;
+  Checksum = SfbLastBootChecksum (Record);
+  for (Index = 0; Index < 4; ++Index) Record[252 + Index] = (UINT8)(Checksum >> (8 * Index));
+  Status = SfbLastBootWrite (Record);
+  DEBUG ((EFI_ERROR (Status) ? EFI_D_WARN : EFI_D_INFO,
+          "SFB: MARK last-boot phase=%u status=%r\n", (UINT32)Phase, Status));
+}
+
 EFI_STATUS
 SfbLaunchImage (
   IN EFI_DEVICE_PATH_PROTOCOL *DevicePath,
@@ -289,6 +309,11 @@ SfbLaunchImage (
   SFB_BOOT_MODE LaunchMode = EffectiveMode;
   SFB_BOOT_MODE RequestedMode = EffectiveMode;
   SFB_LAUNCH_REASON LaunchReason;
+  SFB_OBSERVED_DEVINFO Observed = { FALSE, FALSE, FALSE };
+  SFB_SLOT_RETRIES Retries;
+  UINT8 BootRecord[SFB_LAST_BOOT_BYTES];
+  UINT64 Attempt = 0;
+  UINTN RecordIndex;
 
   if (Managed && mSfbRequestedModeValid) {
     RequestedMode = mSfbRequestedMode;
@@ -312,9 +337,32 @@ SfbLaunchImage (
     return EFI_INVALID_PARAMETER;
   }
 
+  ZeroMem (BootRecord, sizeof (BootRecord));
+  CopyMem (BootRecord, "CNLB", 4);
+  BootRecord[4] = 1;
+  BootRecord[6] = Managed ? (UINT8)RequestedMode : 0;
+  BootRecord[7] = Managed ? (UINT8)LaunchMode : 0;
+  BootRecord[10] = (UINT8)SfbActiveSlot ();
+  Retries = SfbSlotRetries ();
+  BootRecord[12] = Retries.A.Available ? Retries.A.RetryCount : 255;
+  BootRecord[13] = Retries.B.Available ? Retries.B.RetryCount : 255;
+  for (RecordIndex = 0; RecordIndex < 47 && SFB_BDS_VERSION[RecordIndex] != '\0'; ++RecordIndex)
+    BootRecord[168 + RecordIndex] = (UINT8)SFB_BDS_VERSION[RecordIndex];
+  if (gBS->GetNextMonotonicCount != NULL) gBS->GetNextMonotonicCount (&Attempt);
+  for (RecordIndex = 0; RecordIndex < 8; ++RecordIndex)
+    BootRecord[216 + RecordIndex] = (UINT8)(Attempt >> (8 * RecordIndex));
+  /* Invalidate a preceding handoff before any preparation can fail. */
+  SfbPersistBootRecord (BootRecord, SFB_LAST_BOOT_RETURNED);
+
   if (Managed) {
     Status = SfbPrepareManagedAblHooks (LaunchMode, Profile, TzMap,
                                         mSfbLockPolicy);
+    Observed = SfbGetObservedDevInfo ();
+    if (!mSfbInitialDeviceInfo.Available && Observed.Available) mSfbInitialDeviceInfo = Observed;
+    if (mSfbInitialDeviceInfo.Available) Observed = mSfbInitialDeviceInfo;
+    BootRecord[9] = Observed.Available ? (UINT8)(1 | (Observed.Unlocked ? 2 : 0) | (Observed.Critical ? 4 : 0)) : 0;
+    /* Preserve the pre-repair observation even if LoadImage later fails. */
+    SfbPersistBootRecord (BootRecord, SFB_LAST_BOOT_RETURNED);
     if (Status == EFI_ACCESS_DENIED) {
       /*
        * The config withheld permission for the DeviceInfo repair this mode
@@ -433,9 +481,22 @@ SfbLaunchImage (
           "SFB: MARK image-loaded managed=%u mode=%a\n",
           (UINT32)Managed, SfbLaunchModeText (Managed, LaunchMode)));
 
+  BootRecord[7] = Managed ? (UINT8)LaunchMode : 0;
+  BootRecord[8] = (UINT8)LaunchReason;
+  BootRecord[9] = Observed.Available ? (UINT8)(1 | (Observed.Unlocked ? 2 : 0) | (Observed.Critical ? 4 : 0)) : 0;
+  if (Managed && LaunchMode == SfbBootModeKmProfile && Profile != NULL) {
+    BootRecord[11] = 1;
+    CopyMem (&BootRecord[16], Profile, SFB_MODE2_PROFILE_BYTES);
+  }
+  if (Managed && TzMap != NULL) CopyMem (&BootRecord[136], TzMap->AblDigest, 32);
+  SfbPersistBootRecord (BootRecord, Managed ? SFB_LAST_BOOT_HANDOFF : SFB_LAST_BOOT_UNMANAGED);
+
   DEBUG ((EFI_D_INFO,
           "SFB: MARK image-start managed=%u mode=%a\n",
           (UINT32)Managed, SfbLaunchModeText (Managed, LaunchMode)));
+  /* An uncontrolled/honest child could change the source state. Do not carry
+   * the initial locked exemption across a return from that lifecycle. */
+  if (!Managed || LaunchMode == SfbBootModeHonestUnlocked) ZeroMem (&mSfbInitialDeviceInfo, sizeof (mSfbInitialDeviceInfo));
   Status = gBS->StartImage (ImageHandle, &ExitDataSize, &ExitData);
   DEBUG ((EFI_D_WARN,
           "SFB: MARK image-return managed=%u mode=%a status=%r\n",
@@ -448,6 +509,7 @@ SfbLaunchImage (
    */
   gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
   SfbDisarmManagedAblHooks ();
+  SfbPersistBootRecord (BootRecord, SFB_LAST_BOOT_RETURNED);
   if (Options != NULL) {
     FreePool (Options);
   }

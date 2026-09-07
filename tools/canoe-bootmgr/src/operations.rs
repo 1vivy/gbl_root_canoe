@@ -6,7 +6,7 @@ use crate::cli::{Command, Success};
 const PROTOCOL_CAPABILITIES: &[&str] = &[
     "reviewed-identity",
     "tools.inventory",
-    "mode-userdata-assessment-v1",
+    "mode-userdata-assessment-v2",
     "image-zero-v1",
     "whole-partition-write-v1",
 ];
@@ -92,12 +92,21 @@ fn backend_for_cli(
         .transpose()?;
     Ok((backend, guard))
 }
+fn allows_uncreated_local_root(command: &Command) -> bool {
+    matches!(command, Command::Slot { .. } | Command::Install(_))
+        || matches!(command, Command::ModePlan(args) if args.id.is_none())
+}
+
 fn backend_for_request(
     root: &Path,
     command: &Command,
 ) -> Result<(Backend, Option<crate::device_access::DeviceGuard>), AppError> {
     match request_boot_root_source(command) {
         Some(source) => backend_from_request_source(source),
+        None if allows_uncreated_local_root(command) => Ok((
+            Backend::Local(crate::backend::LocalDir::for_discovery(root)?),
+            None,
+        )),
         None => Ok((Backend::local(root)?, None)),
     }
 }
@@ -107,6 +116,11 @@ fn backend_for_cli_request(
     command: &Command,
 ) -> Result<(Backend, Option<crate::device_access::DeviceGuard>), AppError> {
     let Some(local_source) = request_boot_root_source(command) else {
+        if allows_uncreated_local_root(command) && cli.source.is_none() && cli.image.is_none() {
+            if let Some(root) = cli.boot_root.as_deref() {
+                return backend_for_request(root, command);
+            }
+        }
         return backend_for_cli(cli);
     };
     if let Some(global_source) = cli.source.as_deref() {

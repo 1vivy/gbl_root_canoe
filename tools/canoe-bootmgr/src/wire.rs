@@ -116,6 +116,14 @@ pub enum JsonRequest {
     EntryRemove { id: String },
     #[serde(rename = "entry.mode")]
     EntryMode {
+        #[serde(default)]
+        from_mode: Option<u8>,
+        #[serde(default)]
+        prior_canoe: bool,
+        #[serde(default)]
+        locked_bootstrap: bool,
+        #[serde(default)]
+        source_boot_record: Option<String>,
         id: String,
         mode: u8,
         #[serde(default)]
@@ -138,6 +146,10 @@ pub enum JsonRequest {
         from_mode: Option<u8>,
         #[serde(default)]
         prior_canoe: bool,
+        #[serde(default)]
+        locked_bootstrap: bool,
+        #[serde(default)]
+        source_boot_record: Option<String>,
         #[serde(default)]
         current_vbmeta: Option<PathBuf>,
         #[serde(default)]
@@ -209,6 +221,10 @@ pub enum JsonRequest {
         #[serde(default)]
         prior_canoe: bool,
         #[serde(default)]
+        locked_bootstrap: bool,
+        #[serde(default)]
+        source_boot_record: Option<String>,
+        #[serde(default)]
         acknowledge: Vec<String>,
         #[serde(default)]
         current_vbmeta: Option<PathBuf>,
@@ -252,6 +268,10 @@ pub enum JsonRequest {
         from_mode: Option<u8>,
         #[serde(default)]
         prior_canoe: bool,
+        #[serde(default)]
+        locked_bootstrap: bool,
+        #[serde(default)]
+        source_boot_record: Option<String>,
         #[serde(default)]
         acknowledge: Vec<String>,
         #[serde(default)]

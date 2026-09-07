@@ -86,6 +86,15 @@ pub struct LocalDir {
 }
 
 impl LocalDir {
+    pub(crate) fn for_discovery(root: &Path) -> Result<Self, BackendError> {
+        if !root.exists() && root.parent().is_some_and(|parent| parent.is_dir()) {
+            return Ok(Self {
+                root: root.to_path_buf(),
+            });
+        }
+        Self::new(root)
+    }
+
     pub fn new(root: impl AsRef<Path>) -> Result<Self, BackendError> {
         let root = root.as_ref().to_path_buf();
         let metadata = fs::metadata(&root).map_err(|source| BackendError::Io {
