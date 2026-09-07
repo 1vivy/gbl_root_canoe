@@ -110,7 +110,7 @@ fn lock_path() -> PathBuf {
     })
 }
 
-fn live_export_node() -> Result<Option<PathBuf>, FastbootError> {
+pub(crate) fn live_export_node() -> Result<Option<PathBuf>, FastbootError> {
     let sources = detect::detect_sources().map_err(|error| FastbootError::Discovery {
         message: error.to_string(),
     })?;
