@@ -21,15 +21,19 @@ The GUI uses the platform WebView runtime:
   start without these libraries.
 - **Windows:** install the Microsoft WebView2 runtime. It is present by
   default on current Windows 11; install it separately on Windows systems that
-  do not include it. The GUI will not start without WebView2. The GUI also
-  requests Administrator at launch because writing the raw exported volume
-  (`\\.\PhysicalDrive<N>`) requires elevation; this matches comparable Windows
-  raw-disk tools. Because the binary is not code-signed, the UAC prompt shows
-  an unknown publisher. The Windows package builds, but GUI runtime behavior
-  is unverified here because there is no Windows machine and Wine has no UAC.
-  If you will not approve the GUI prompt, `canoe.exe` in the same archive
-  needs no WebView2 runtime and performs the same work when run from an
-  elevated prompt.
+  do not include it. The GUI will not start without WebView2. The GUI itself
+  stays unprivileged; its helper requests Administrator only when the first
+  protected raw-disk operation is needed. Because the binary is not code-signed,
+  the UAC prompt shows an unknown publisher. The Windows package builds, but
+  GUI runtime behavior is unverified here because there is no Windows machine
+  and Wine has no UAC. The `canoe.exe` client in the same archive needs no
+  WebView2 runtime; run it from an elevated prompt for protected raw-disk work.
+
+On both platforms, the authorized helper is reused until you quit the app,
+including across source changes and intervening local work. No password is
+stored, local artifacts remain owned by your ordinary user, and writes still
+require their own confirmation. If the authorized helper unexpectedly ends,
+quit and reopen the app before another protected operation.
 
 The CLI has none of these GUI dependencies. A host that has neither the Linux
 WebKit libraries nor WebView2 can still use `./canoe` or `canoe.exe` and the

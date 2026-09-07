@@ -2,7 +2,6 @@ use std::path::Path;
 
 use crate::backend::Backend;
 use crate::cli::{Command, Success};
-use crate::wire::JsonRequest;
 
 const PROTOCOL_CAPABILITIES: &[&str] = &[
     "reviewed-identity",
@@ -20,10 +19,14 @@ mod operations_build;
 mod operations_device;
 #[path = "operations_fastboot.rs"]
 mod operations_fastboot;
+#[path = "operations_request.rs"]
+mod operations_request;
 #[path = "operations_vbmeta.rs"]
 mod operations_vbmeta;
 
 pub use crate::errors::AppError;
+pub(crate) use operations_request::execute_desktop_request;
+pub use operations_request::{execute_request, execute_request_cli};
 
 pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     let Some(command) = cli.command.as_ref() else {
@@ -73,111 +76,6 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     }
     let (backend, _export_guard) = backend_for_cli_request(cli, command)?;
     execute_command(&backend, command)
-}
-
-pub fn execute_request(root: &Path, request: JsonRequest) -> Result<Success, AppError> {
-    let command = request.into_command();
-    if matches!(command, Command::ProtocolVersion) {
-        return Ok(protocol_version());
-    }
-    if let Command::Build(args) = &command {
-        return operations_build::build(args);
-    }
-    if let Command::AblVerify(args) = &command {
-        return operations_build::abl_verify(args);
-    }
-    if let Command::BlockWrite(args) = &command {
-        return operations_build::block_write(args);
-    }
-    if let Command::ImageDigest(args) = &command {
-        return operations_device::image_digest(args);
-    }
-    if let Command::ImageZero(args) = &command {
-        return operations_device::image_zero(args);
-    }
-    if let Command::BlockRead(args) = &command {
-        return operations_device::block_read(args);
-    }
-    if let Command::SystemReboot(args) = &command {
-        return operations_device::system_reboot(args);
-    }
-    if let Command::AblLookup(args) = &command {
-        return operations_device::abl_lookup(args);
-    }
-    if let Command::VbmetaExtract(args) = &command {
-        return operations_vbmeta::extract(args);
-    }
-    if let Command::VbmetaCheck(args) = &command {
-        return operations_vbmeta::check(args);
-    }
-    if let Command::ModePlan(args) = &command {
-        operations_build::validate_mode_plan_target(args.target_mode)?;
-    }
-    if let Command::VbmetaInspect(args) = &command {
-        return operations_vbmeta::inspect(args);
-    }
-    if let Command::VbmetaHeader(args) = &command {
-        return operations_vbmeta::header(args);
-    }
-    if let Command::Fastboot { command } = &command {
-        return operations_fastboot::command(command, None);
-    }
-    let (backend, _export_guard) = backend_for_request(root, &command)?;
-    execute_command(&backend, &command)
-}
-
-pub fn execute_request_cli(
-    cli: &crate::cli::Cli,
-    request: JsonRequest,
-) -> Result<Success, AppError> {
-    let command = request.into_command();
-    if matches!(command, Command::ProtocolVersion) {
-        return Ok(protocol_version());
-    }
-    if let Command::Build(args) = &command {
-        return operations_build::build(args);
-    }
-    if let Command::AblVerify(args) = &command {
-        return operations_build::abl_verify(args);
-    }
-    if let Command::BlockWrite(args) = &command {
-        return operations_build::block_write(args);
-    }
-    if let Command::ImageDigest(args) = &command {
-        return operations_device::image_digest(args);
-    }
-    if let Command::ImageZero(args) = &command {
-        return operations_device::image_zero(args);
-    }
-    if let Command::BlockRead(args) = &command {
-        return operations_device::block_read(args);
-    }
-    if let Command::SystemReboot(args) = &command {
-        return operations_device::system_reboot(args);
-    }
-    if let Command::AblLookup(args) = &command {
-        return operations_device::abl_lookup(args);
-    }
-    if let Command::ModePlan(args) = &command {
-        operations_build::validate_mode_plan_target(args.target_mode)?;
-    }
-    if let Command::VbmetaInspect(args) = &command {
-        return operations_vbmeta::inspect(args);
-    }
-    if let Command::VbmetaHeader(args) = &command {
-        return operations_vbmeta::header(args);
-    }
-    if let Command::VbmetaExtract(args) = &command {
-        return operations_vbmeta::extract(args);
-    }
-    if let Command::VbmetaCheck(args) = &command {
-        return operations_vbmeta::check(args);
-    }
-    if let Command::Fastboot { command } = &command {
-        return operations_fastboot::command(command, cli.runtime_root.as_deref());
-    }
-    let (backend, _export_guard) = backend_for_cli_request(cli, &command)?;
-    execute_command(&backend, &command)
 }
 
 fn backend_for_cli(

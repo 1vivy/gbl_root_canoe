@@ -19,10 +19,14 @@ pub mod cli;
 mod cli_extra;
 #[cfg(feature = "cli")]
 mod cli_runner;
+#[cfg(feature = "cli")]
+mod cli_success;
 pub mod config;
 mod config_ops;
 mod config_parse;
 mod config_render;
+#[cfg(feature = "cli")]
+mod desktop_session;
 pub mod detect;
 mod device_access;
 pub mod errors;

@@ -72,6 +72,16 @@ where
         }
         (None, None) => {}
     }
+    if cli.desktop_session.is_some()
+        && (cli.command.is_some() || cli.request_b64.is_some() || !cli.json)
+    {
+        return emit_json_error(
+            "usage",
+            "--desktop-session requires --json with no command or --request-b64",
+            EXIT_USAGE,
+        );
+    }
+
     if let Some(token) = cli.request_b64.as_deref() {
         if cli.command.is_some() {
             return emit_json_error(
@@ -131,19 +141,35 @@ pub(crate) fn run_jsonl_io<R: BufRead, W: std::io::Write>(
         if line.trim().is_empty() {
             continue;
         }
-        let response = match wire::parse_json(line.as_bytes()) {
-            Ok(request) => match operations::execute_request_cli(cli, request) {
-                Ok(success) => emit_json_success_to(&mut output, &success),
-                Err(error) => emit_json_error_to(
-                    &mut output,
-                    error.protocol_code(),
-                    &error.to_string(),
-                    EXIT_OPERATION,
-                ),
+        let response = match cli.desktop_session {
+            Some(session) => match crate::desktop_session::parse_frame(line.as_bytes()) {
+                Ok(frame) => match operations::execute_desktop_request(cli, session, frame) {
+                    Ok(success) => emit_json_success_to(&mut output, &success),
+                    Err(error) => emit_json_error_to(
+                        &mut output,
+                        error.protocol_code(),
+                        &error.to_string(),
+                        EXIT_OPERATION,
+                    ),
+                },
+                Err(error) => {
+                    emit_json_error_to(&mut output, "request", &error.to_string(), EXIT_OPERATION)
+                }
             },
-            Err(error) => {
-                emit_json_error_to(&mut output, "request", &error.to_string(), EXIT_OPERATION)
-            }
+            None => match wire::parse_json(line.as_bytes()) {
+                Ok(request) => match operations::execute_request_cli(cli, request) {
+                    Ok(success) => emit_json_success_to(&mut output, &success),
+                    Err(error) => emit_json_error_to(
+                        &mut output,
+                        error.protocol_code(),
+                        &error.to_string(),
+                        EXIT_OPERATION,
+                    ),
+                },
+                Err(error) => {
+                    emit_json_error_to(&mut output, "request", &error.to_string(), EXIT_OPERATION)
+                }
+            },
         };
         if response != EXIT_OK {
             failed = true;
