@@ -109,12 +109,9 @@ impl Ext4Dir {
         helper: impl AsRef<Path>,
     ) -> Result<Self, Ext4Error> {
         let source = source.as_ref().to_path_buf();
-        if !source.exists() {
-            return Err(Ext4Error::Operation(format!(
-                "source does not exist: {}",
-                source.display()
-            )));
-        }
+        // Windows device objects (\\.\PhysicalDriveN) support CreateFile but
+        // not filesystem metadata queries. Test access, not Path::exists().
+        drop(fs::File::open(&source).map_err(|error| io("open source", &source, error))?);
         let helper = helper.as_ref().to_path_buf();
         if !helper.is_file() {
             return Err(Ext4Error::Operation(format!(

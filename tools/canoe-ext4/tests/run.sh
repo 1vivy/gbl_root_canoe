@@ -154,7 +154,7 @@ cp "$IMAGE_DIR/16m-1024b-baseline.img" "$locked"
 (
     flock -n 9
     sleep 3
-) 9>"$locked" &
+) 9<>"$locked" &
 locker=$!
 sleep 0.1
 set +e
@@ -164,6 +164,17 @@ set -e
 assert_eq 6 "$code" 'locked source exit code'
 lock_error=$(<"$TMP/locked.err")
 assert_contains "$lock_error" 'errno=' 'locked source exposes OS lock errno'
+wait "$locker"
+
+# A transient media probe should finish without forcing the operator to retry.
+(
+    flock -n 9
+    touch "$TMP/probe-ready"
+    sleep 0.3
+) 9<>"$locked" &
+locker=$!
+while [ ! -e "$TMP/probe-ready" ]; do sleep 0.01; done
+"$BIN" inspect "$locked" >/dev/null
 wait "$locker"
 
 # Every regular file this helper creates must be extent-mapped, and a

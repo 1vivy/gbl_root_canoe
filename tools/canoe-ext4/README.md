@@ -2,7 +2,10 @@
 
 `canoe-ext4` is a bounded, headless ext4 reader/writer backed by e2fsprogs'
 `libext2fs`. It accepts an ext4 partition image or an exported block-device
-path and never requires a filesystem mount.
+path and never requires a filesystem mount. On Windows, raw sources such as
+`\\.\PhysicalDriveN` are opened through Win32 handles; filesystem metadata
+queries cannot establish whether those device objects exist. The OS access
+check, independent superblock probe, and libext2fs validation still apply.
 
 ## Commands
 
@@ -70,7 +73,10 @@ Both paths are hex-encoded so whitespace cannot change field boundaries.
 On Linux, install the e2fsprogs development package (`libext2fs-dev` on
 Debian/Ubuntu), then run `make`. The normal binary links dynamically to
 `libext2fs` and `libcom_err`; `make static` requests a fully static link when
-the host supplies suitable archives.
+the host supplies suitable archives, producing `canoe-ext4-static`. Linux toolkit
+packaging uses this separate static output so recipients do not need the build
+machine's libext2fs ABI. Install static development archives, or supply
+`EXT2FS_CFLAGS` and `LDLIBS` for an independently built e2fsprogs tree.
 
 `build-windows.sh` cross-builds `canoe-ext4.exe` for x86_64 Windows. It
 deliberately produces no placeholder binary when MinGW or the e2fsprogs source

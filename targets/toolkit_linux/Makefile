@@ -60,9 +60,10 @@ submodule_canoe_bootmgr: copy_resources
 	test -x ../../tools/canoe-bootmgr/target/release/canoe-bootmgr
 	cp ../../tools/canoe-bootmgr/target/release/canoe-bootmgr ./build/toolkit/bin/canoe-bootmgr
 submodule_canoe_ext4: copy_resources
-	$(MAKE) -C ../../tools/canoe-ext4 canoe-ext4
-	test -x ../../tools/canoe-ext4/canoe-ext4
-	cp ../../tools/canoe-ext4/canoe-ext4 ./build/toolkit/bin/canoe-ext4
+	$(MAKE) -C ../../tools/canoe-ext4 static
+	test -x ../../tools/canoe-ext4/canoe-ext4-static
+	! readelf -d ../../tools/canoe-ext4/canoe-ext4-static | grep -q '(NEEDED)'
+	cp ../../tools/canoe-ext4/canoe-ext4-static ./build/toolkit/bin/canoe-ext4
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build
 	cp ../../submodules/ablfvextractor/build/extractfv ./build/toolkit/bin/extractfv

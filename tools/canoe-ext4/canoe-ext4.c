@@ -140,7 +140,29 @@ static int lock_source(int fd) {
     (void)fd;
     return 0;
 #else
-    return flock(fd, LOCK_EX | LOCK_NB);
+    /* udev briefly holds a shared lock while probing newly exposed media,
+     * including between our mkdir and write helper invocations. Keep exclusive
+     * ownership, but give that probe a bounded opportunity to finish. */
+    struct timespec started, now;
+    if (clock_gettime(CLOCK_MONOTONIC, &started) < 0)
+        return -1;
+    for (;;) {
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0)
+            return 0;
+        int lock_error = errno;
+        if (lock_error != EWOULDBLOCK && lock_error != EINTR)
+            return -1;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+            return -1;
+        int64_t elapsed = (int64_t)(now.tv_sec - started.tv_sec) * 1000000000
+                          + now.tv_nsec - started.tv_nsec;
+        if (elapsed >= 2000000000) {
+            errno = EWOULDBLOCK;
+            return -1;
+        }
+        struct timespec pause = { .tv_sec = 0, .tv_nsec = 50000000 };
+        nanosleep(&pause, NULL);
+    }
 #endif
 }
 
@@ -1687,14 +1709,29 @@ int main(int argc, char **argv) {
         usage(argv[0]);
 
     const char *source = argv[first_argument];
-    struct stat source_stat;
-    if (stat(source, &source_stat) < 0)
-        fail(EXIT_IO, "cannot stat source");
+    struct stat source_stat = {0};
     int open_flags = (command_mutates ? O_RDWR : O_RDONLY);
 #ifdef _WIN32
     open_flags |= O_BINARY;
-#endif
+    /* Raw disks are device objects, not directory entries: stat/_open cannot
+     * validate them. Keep a Win32 handle for the independent superblock probe
+     * and final flush, just as libext2fs' windows_io_manager does for its IO. */
+    HANDLE source_handle = CreateFileA(source,
+        GENERIC_READ | (command_mutates ? GENERIC_WRITE : 0),
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, NULL);
+    if (source_handle == INVALID_HANDLE_VALUE) {
+        fprintf(stderr, "canoe-ext4: cannot open source (Windows error %lu)\n", GetLastError());
+        return EXIT_IO;
+    }
+    source_fd = _open_osfhandle((intptr_t)source_handle, open_flags);
+    if (source_fd < 0)
+        CloseHandle(source_handle);
+#else
+    if (stat(source, &source_stat) < 0)
+        fail(EXIT_IO, "cannot stat source");
     source_fd = open(source, open_flags);
+#endif
     if (source_fd < 0)
         fail(EXIT_IO, "cannot open source");
     if (lock_source(source_fd) < 0) {

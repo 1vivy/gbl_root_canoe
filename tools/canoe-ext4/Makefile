@@ -11,17 +11,20 @@ endif
 LDLIBS += $(EXT2FS_LIBS) -lcom_err
 LDFLAGS += -Wl,-z,relro,-z,now
 
-.PHONY: all clean test windows
+.PHONY: all clean test windows static
 
 all: canoe-ext4
 
 canoe-ext4: canoe-ext4.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(EXT2FS_CFLAGS) $(LDFLAGS) -o $@ $< $(LDLIBS)
 
-# Static libext2fs builds can be requested by supplying STATIC=1.  The
-# distribution's libcom_err and libc may still remain dynamic on glibc hosts.
-static: LDFLAGS += -static
-static: canoe-ext4
+# Release helpers must not depend on the recipient's libext2fs ABI. Keep a
+# separate output so a previous dynamic development build cannot be packaged.
+static: canoe-ext4-static
+
+canoe-ext4-static: canoe-ext4.c Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(EXT2FS_CFLAGS) $(LDFLAGS) -static -o $@ $< $(LDLIBS)
+	! readelf -d $@ | grep -q '(NEEDED)'
 
 test: canoe-ext4
 	sh tests/run.sh
@@ -30,4 +33,4 @@ windows:
 	sh build-windows.sh
 
 clean:
-	rm -f canoe-ext4
+	rm -f canoe-ext4 canoe-ext4-static
