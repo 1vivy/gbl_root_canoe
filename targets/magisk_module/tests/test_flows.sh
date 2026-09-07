@@ -143,10 +143,11 @@ assert_file "$ABL_REPO/abl.img"
 pass 'bootstrap writes no partition and leaves the boot root byte-identical'
 
 sh -n "$ROOT/targets/magisk_module/module/customize.sh"
-corpus=$(cat "$ROOT/targets/magisk_module/module/copy-corpus.json")
-assert_contains "$corpus" '"format_data_explanation"' \
-  'format explanation is absent from the copy corpus'
-assert_contains "$corpus" '"zh":' 'Chinese copy entries are absent'
-assert_contains "$corpus" '"en":' 'English copy entries are absent'
-pass 'bilingual copy corpus has stable ids and both locales'
+assert_contains "$(cat "$UI_LOG")" 'Installing this module alone does not require formatting data.' \
+  'module installation was not distinguished from boot-chain deployment'
+assert_contains "$(cat "$UI_LOG")" 'Reboot when KernelSU requests module activation' \
+  'activation guidance was not displayed'
+assert_contains "$(cat "$UI_LOG")" '此步骤仅安装管理界面和工具' \
+  'Chinese activation guidance is absent'
+pass 'bootstrap explains module activation separately from boot-chain deployment'
 echo 'all module bootstrap fixtures passed'

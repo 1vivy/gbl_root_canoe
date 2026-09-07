@@ -69,8 +69,6 @@ set_perm_recursive "$MODPATH/webroot" 0 0 0755 0644
 set_perm "$MODPATH/module.prop" 0 0 0644
 set_perm "$MODPATH/customize.sh" 0 0 0755
 set_perm "$MODPATH/lang.txt" 0 0 0644
-[ -f "$MODPATH/copy-corpus.json" ] &&
-  set_perm "$MODPATH/copy-corpus.json" 0 0 0644
 
 # The build step bundles ablrepo for the WebUI's offline lookup. Keep it in
 # the installed module at /data/adb/modules/<module-id>/ablrepo; module.prop
@@ -79,4 +77,19 @@ set_perm "$MODPATH/lang.txt" 0 0 0644
 
 # No partition reader, partition writer, reboot, mode policy, or boot-root
 # transaction is allowed here.  The WebUI owns all of those operations.
+ui_print ""
+ui_print "Canoe Boot Manager"
+if [ "$user_lang" = "zh" ]; then
+  ui_print "- 此步骤仅安装管理界面和工具，不修改启动分区或手机数据。"
+  ui_print "- 按 KernelSU 提示重启以激活模块，然后打开 WebUI。"
+  ui_print "- 更新激活前仍可见的 WebUI 可能属于旧版本。"
+  ui_print "- 首次部署、模式选择和 OTA 准备均在 WebUI 中完成。"
+  ui_print "- 安装本模块本身不需要格式化数据。"
+else
+  ui_print "- This step installs the manager and tools; it does not change boot partitions or phone data."
+  ui_print "- Reboot when KernelSU requests module activation, then open the WebUI."
+  ui_print "- A WebUI visible before an update activates may still be the previous version."
+  ui_print "- Complete first deployment, mode selection, or OTA preparation in the WebUI."
+  ui_print "- Installing this module alone does not require formatting data."
+fi
 exit 0
