@@ -34,11 +34,10 @@ pub fn read(request: &BlockReadRequest) -> Result<BlockReadReceipt, BlockWriteEr
     #[cfg(windows)]
     return Err(BlockWriteError::UnsupportedPlatform);
     #[cfg(not(windows))]
-    read_at_root_inner(
-        request,
-        Path::new(crate::block_partition::BY_NAME_ROOT),
-        true,
-    )
+    {
+        let (root, require_block_device) = crate::block_partition::by_name_root();
+        read_at_root_inner(request, &root, require_block_device)
+    }
 }
 
 /// Test seam for reading a regular file as a partition node.

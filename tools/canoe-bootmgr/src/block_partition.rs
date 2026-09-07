@@ -6,6 +6,21 @@ use thiserror::Error;
 #[cfg(not(windows))]
 pub(crate) const BY_NAME_ROOT: &str = "/dev/block/by-name";
 
+/// Where partition nodes resolve and whether they must be block devices.
+///
+/// Production always answers the by-name directory and insists on real block
+/// devices. A build with the `test-seams` feature may point the harness at a
+/// directory of regular files through `CANOE_BLOCK_BY_NAME_ROOT`, which is
+/// how the app's Tier 0 tests drive this binary without a device.
+#[cfg(not(windows))]
+pub(crate) fn by_name_root() -> (PathBuf, bool) {
+    #[cfg(feature = "test-seams")]
+    if let Some(root) = std::env::var_os("CANOE_BLOCK_BY_NAME_ROOT") {
+        return (PathBuf::from(root), false);
+    }
+    (PathBuf::from(BY_NAME_ROOT), true)
+}
+
 #[derive(Debug, Error)]
 pub enum BlockError {
     #[error(

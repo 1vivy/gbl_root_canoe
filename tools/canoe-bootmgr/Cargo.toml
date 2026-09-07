@@ -18,6 +18,10 @@ required-features = ["cli"]
 [features]
 default = ["cli"]
 cli = ["dep:clap"]
+# Harness-only seams: CANOE_BLOCK_BY_NAME_ROOT redirects partition nodes to a
+# directory of regular files and CANOE_BLOCK_WRITE_FAULT injects the block
+# write test faults. Never enabled in a shipped build.
+test-seams = []
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"], optional = true }

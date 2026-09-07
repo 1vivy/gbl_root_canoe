@@ -192,8 +192,6 @@ jobs:
         test -f artifacts/toolkit_windows/canoe.exe
         test -f artifacts/toolkit_android/build.sh
         test -f artifacts/magisk_module/customize.sh
-        test -f artifacts/magisk_module/bin/bl_flasher.sh
-        test -f artifacts/magisk_module/bin/canoe_vendor_boot.sh
         test -x artifacts/toolkit_linux/bin/canoe-boot-manager
         test -x artifacts/toolkit_linux/canoe-boot-manager.sh
         test -f artifacts/toolkit_windows/bin/canoe-boot-manager.exe

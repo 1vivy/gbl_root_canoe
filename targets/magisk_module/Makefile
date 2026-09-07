@@ -11,6 +11,17 @@ CANOE_WEBUI_ARCHIVE := $(CANOE_ROOT_DIR)/.cache/canoe-boot-manager/canoe-boot-ma
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
 
+# Shipped modules are aarch64 (the only architecture the devices have). The
+# app's e2e harness builds a test-only x86_64 module for an x86_64 Cuttlefish
+# guest with `make target_magisk_module MODULE_ARCH=x86_64`; the C helpers
+# (patch_abl, extractfv) stay aarch64 in that build and are not exercised there.
+MODULE_ARCH ?= aarch64
+ANDROID_TARGET := $(MODULE_ARCH)-linux-android
+ANDROID_TARGET_ENV := $(subst -,_,$(ANDROID_TARGET))
+ANDROID_CLANG := $(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/$(ANDROID_TARGET)31-clang
+ANDROID_AR := $(ANDROID_AR)
+ANDROID_LINKER_VAR := CARGO_TARGET_$(shell printf '%s' '$(ANDROID_TARGET_ENV)' | tr a-z A-Z)_LINKER
+
 clean:
 	rm -rf build || true
 copy_resources:
@@ -87,25 +98,25 @@ submodule_patcher: copy_resources
 	cp ../../submodules/patcher/build/patch_abl_android ./build/module/bin/patch_abl
 submodule_mode2_profile: copy_resources
 	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for mode2_profile"; exit 1; }
-	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
-	test -d "$$(rustc --print target-libdir --target aarch64-linux-android 2>/dev/null)" || { echo "Rust Android std is unavailable; use rustup cargo first on PATH (for example: PATH=\"\$$HOME/.cargo/bin:\$$PATH\" make target_magisk_module NDK_PATH=/path/to/android-ndk) with aarch64-linux-android installed"; exit 1; }
-	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/mode2-profile/Cargo.toml
-	test -f ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile
-	cp ../../tools/mode2-profile/target/aarch64-linux-android/release/mode2_profile ./build/module/bin/mode2_profile
+	test -x "$(ANDROID_CLANG)" || { echo "Android NDK clang is unavailable"; exit 1; }
+	test -d "$$(rustc --print target-libdir --target $(ANDROID_TARGET) 2>/dev/null)" || { echo "Rust Android std is unavailable; use rustup cargo first on PATH (for example: PATH=\"\$$HOME/.cargo/bin:\$$PATH\" make target_magisk_module NDK_PATH=/path/to/android-ndk) with $(ANDROID_TARGET) installed"; exit 1; }
+	$(ANDROID_LINKER_VAR)="$(ANDROID_CLANG)" cargo build --locked --release --target $(ANDROID_TARGET) --manifest-path ../../tools/mode2-profile/Cargo.toml
+	test -f ../../tools/mode2-profile/target/$(ANDROID_TARGET)/release/mode2_profile
+	cp ../../tools/mode2-profile/target/$(ANDROID_TARGET)/release/mode2_profile ./build/module/bin/mode2_profile
 submodule_abl_tzmap: copy_resources
 	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for abl_tzmap"; exit 1; }
-	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
-	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/abl-tzmap/Cargo.toml
-	test -f ../../tools/abl-tzmap/target/aarch64-linux-android/release/abl_tzmap
-	cp ../../tools/abl-tzmap/target/aarch64-linux-android/release/abl_tzmap ./build/module/bin/abl_tzmap
+	test -x "$(ANDROID_CLANG)" || { echo "Android NDK clang is unavailable"; exit 1; }
+	$(ANDROID_LINKER_VAR)="$(ANDROID_CLANG)" cargo build --locked --release --target $(ANDROID_TARGET) --manifest-path ../../tools/abl-tzmap/Cargo.toml
+	test -f ../../tools/abl-tzmap/target/$(ANDROID_TARGET)/release/abl_tzmap
+	cp ../../tools/abl-tzmap/target/$(ANDROID_TARGET)/release/abl_tzmap ./build/module/bin/abl_tzmap
 submodule_canoe_bootmgr: copy_resources
 	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for canoe-bootmgr"; exit 1; }
-	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
-	CC_aarch64_linux_android="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" \
-	AR_aarch64_linux_android="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" \
-	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
-	test -f ../../tools/canoe-bootmgr/target/aarch64-linux-android/release/canoe-bootmgr
-	cp ../../tools/canoe-bootmgr/target/aarch64-linux-android/release/canoe-bootmgr ./build/module/bin/canoe-bootmgr
+	test -x "$(ANDROID_CLANG)" || { echo "Android NDK clang is unavailable"; exit 1; }
+	CC_$(ANDROID_TARGET_ENV)="$(ANDROID_CLANG)" \
+	AR_$(ANDROID_TARGET_ENV)="$(ANDROID_AR)" \
+	$(ANDROID_LINKER_VAR)="$(ANDROID_CLANG)" cargo build --locked --release --target $(ANDROID_TARGET) --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
+	test -f ../../tools/canoe-bootmgr/target/$(ANDROID_TARGET)/release/canoe-bootmgr
+	cp ../../tools/canoe-bootmgr/target/$(ANDROID_TARGET)/release/canoe-bootmgr ./build/module/bin/canoe-bootmgr
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/module/bin/extractfv

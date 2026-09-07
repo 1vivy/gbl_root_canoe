@@ -21,8 +21,29 @@ use block_write_io::{
 };
 
 pub(crate) use crate::block_partition::{slot_suffix, validate_partition};
-#[cfg(not(windows))]
-const BY_NAME_ROOT: &str = crate::block_partition::BY_NAME_ROOT;
+#[cfg(all(not(windows), feature = "test-seams"))]
+fn seam_fault() -> Result<Option<BlockWriteTestFault>, BlockWriteError> {
+    let Some(value) = std::env::var_os("CANOE_BLOCK_WRITE_FAULT") else {
+        return Ok(None);
+    };
+    match value.to_str() {
+        Some("corrupt-readback") => Ok(Some(BlockWriteTestFault::CorruptReadback)),
+        Some("rollback-failure") => Ok(Some(BlockWriteTestFault::RollbackFailure)),
+        Some("write-open") => Ok(Some(BlockWriteTestFault::WriteOpen)),
+        Some("write-copy") => Ok(Some(BlockWriteTestFault::WriteCopy)),
+        Some("write-flush") => Ok(Some(BlockWriteTestFault::WriteFlush)),
+        Some("readback") => Ok(Some(BlockWriteTestFault::Readback)),
+        _ => Err(BlockWriteError::BlockNotWritable {
+            node: PathBuf::from("CANOE_BLOCK_WRITE_FAULT"),
+            message: format!("unknown test fault {}", value.to_string_lossy()),
+        }),
+    }
+}
+
+#[cfg(all(not(windows), not(feature = "test-seams")))]
+fn seam_fault() -> Result<Option<BlockWriteTestFault>, BlockWriteError> {
+    Ok(None)
+}
 
 #[derive(Debug, Clone)]
 pub struct BlockWriteRequest {
@@ -59,7 +80,10 @@ pub fn write(request: &BlockWriteRequest) -> Result<BlockWriteReceipt, BlockWrit
     #[cfg(windows)]
     return Err(BlockWriteError::UnsupportedPlatform);
     #[cfg(not(windows))]
-    write_at_root_inner(request, Path::new(BY_NAME_ROOT), None, true)
+    {
+        let (root, require_block_device) = crate::block_partition::by_name_root();
+        write_at_root_inner(request, &root, seam_fault()?, require_block_device)
+    }
 }
 
 /// Test seam for replacing `/dev/block/by-name` with a temporary directory.
