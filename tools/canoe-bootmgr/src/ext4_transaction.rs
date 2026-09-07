@@ -1,8 +1,7 @@
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::{Ext4Dir, Ext4Error, KNOWN_FILES};
+use super::{Ext4Dir, Ext4Error};
 
 impl Ext4Dir {
     pub(super) fn snapshot_temp_root(root: &Path, expected_root: &Path) -> Result<(), Ext4Error> {
@@ -12,7 +11,10 @@ impl Ext4Dir {
     }
 
     pub(super) fn sync_temp(&self, root: &Path, expected_root: &Path) -> Result<(), Ext4Error> {
-        let manifest = sync_manifest(self, root, expected_root)?;
+        let manifest = super::ext4_delta::sync_manifest(self, root, expected_root)?;
+        if manifest.is_empty() {
+            return Ok(());
+        }
         let manifest_path = expected_root.join(".canoe-ext4-sync.manifest");
         fs::write(&manifest_path, manifest)
             .map_err(|source| io("write ext4 sync manifest", &manifest_path, source))?;
@@ -64,165 +66,6 @@ fn copy_temp_tree(source: &Path, destination: &Path) -> Result<(), Ext4Error> {
                 "unsupported temporary ext4 entry type: {}",
                 source_path.display()
             )));
-        }
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum ExpectedState {
-    Absent,
-    File,
-    Unobserved,
-}
-
-impl ExpectedState {
-    const fn manifest_code(self) -> u8 {
-        match self {
-            Self::Absent => b'a',
-            Self::File => b'f',
-            Self::Unobserved => b'u',
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum DesiredState {
-    Absent,
-    Directory,
-    File,
-}
-
-impl DesiredState {
-    const fn manifest_code(self) -> u8 {
-        match self {
-            Self::Absent => b'a',
-            Self::Directory => b'd',
-            Self::File => b'f',
-        }
-    }
-}
-
-struct SyncPath {
-    logical: String,
-    desired: DesiredState,
-    expected: ExpectedState,
-}
-
-fn sync_manifest(
-    backend: &Ext4Dir,
-    root: &Path,
-    expected_root: &Path,
-) -> Result<Vec<u8>, Ext4Error> {
-    let paths = sync_paths(root, expected_root)?;
-    let mut manifest = Vec::new();
-    for path in paths {
-        let target = backend.remote(&path.logical);
-        manifest.push(path.desired.manifest_code());
-        manifest.push(b' ');
-        manifest.push(path.expected.manifest_code());
-        manifest.push(b' ');
-        append_hex(&mut manifest, target.as_bytes());
-        manifest.push(b' ');
-        append_hex(
-            &mut manifest,
-            path.logical.trim_start_matches('/').as_bytes(),
-        );
-        manifest.push(b'\n');
-    }
-    Ok(manifest)
-}
-
-fn append_hex(output: &mut Vec<u8>, bytes: &[u8]) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    for byte in bytes {
-        output.push(HEX[usize::from(byte >> 4)]);
-        output.push(HEX[usize::from(byte & 0x0f)]);
-    }
-}
-
-fn sync_paths(root: &Path, expected_root: &Path) -> Result<Vec<SyncPath>, Ext4Error> {
-    let mut paths = BTreeSet::new();
-    for remote in KNOWN_FILES {
-        let local = root.join(remote.trim_start_matches('/'));
-        if !local.exists() && !remote.ends_with('/') {
-            paths.insert(remote.to_owned());
-        }
-    }
-    collect_sync_paths(root, root, &mut paths)?;
-    collect_sync_paths(expected_root, expected_root, &mut paths)?;
-    paths
-        .into_iter()
-        .map(|logical| sync_path(root, expected_root, logical))
-        .collect()
-}
-
-fn sync_path(root: &Path, expected_root: &Path, logical: String) -> Result<SyncPath, Ext4Error> {
-    let relative = logical.trim_start_matches('/');
-    let local = root.join(relative);
-    let desired = match fs::symlink_metadata(&local) {
-        Ok(metadata) if metadata.file_type().is_file() => DesiredState::File,
-        Ok(metadata) if metadata.file_type().is_dir() => DesiredState::Directory,
-        Ok(_) => {
-            return Err(Ext4Error::Operation(format!(
-                "unsupported temporary ext4 entry type: {}",
-                local.display()
-            )));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DesiredState::Absent,
-        Err(source) => return Err(io("stat temporary ext4 entry", &local, source)),
-    };
-    let expected_path = expected_root.join(relative);
-    let expected = match fs::symlink_metadata(&expected_path) {
-        Ok(metadata) if metadata.file_type().is_file() => ExpectedState::File,
-        // Extraction synthesizes parent directories even when the source has none.
-        // Only file bytes and known-file absence are observations of source state.
-        Ok(metadata) if metadata.file_type().is_dir() => ExpectedState::Unobserved,
-        Ok(_) => {
-            return Err(Ext4Error::Operation(format!(
-                "unsupported expected ext4 entry type: {}",
-                expected_path.display()
-            )));
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            if KNOWN_FILES.contains(&logical.as_str()) {
-                ExpectedState::Absent
-            } else {
-                ExpectedState::Unobserved
-            }
-        }
-        Err(source) => return Err(io("stat expected ext4 entry", &expected_path, source)),
-    };
-    Ok(SyncPath {
-        logical,
-        desired,
-        expected,
-    })
-}
-
-fn collect_sync_paths(
-    root: &Path,
-    current: &Path,
-    paths: &mut BTreeSet<String>,
-) -> Result<(), Ext4Error> {
-    let entries =
-        fs::read_dir(current).map_err(|source| io("read temporary directory", current, source))?;
-    for item in entries {
-        let item = item.map_err(|source| io("read temporary entry", current, source))?;
-        let path = item.path();
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| Ext4Error::Output("temporary path escaped root".to_owned()))?;
-        let relative = relative
-            .to_str()
-            .ok_or_else(|| Ext4Error::Output("temporary path is not UTF-8".to_owned()))?;
-        paths.insert(format!("/{}", relative.replace('\\', "/")));
-        if item
-            .file_type()
-            .map_err(|source| io("stat temporary entry", &path, source))?
-            .is_dir()
-        {
-            collect_sync_paths(root, &path, paths)?;
         }
     }
     Ok(())

@@ -119,6 +119,18 @@ sidecars, configuration, and rollback as one transaction. The host installer
 does not flash a partition; the vulnerable ABL and `BDS.efi` operations remain
 separate, deliberate fastboot actions in the install guide.
 
+The temporary extracted tree is not a replacement for the boot root. Commit
+applies only files added, changed, or removed by the requested operation.
+Unrelated files and hand edits remain untouched, including files created
+after the initial read. A concurrent edit to a file the operation actually
+replaces or removes still causes a conflict instead of overwriting that edit.
+The next read observes the current filesystem, not a cached workspace index.
+
+The snapshot includes existing files directly under `tools/`, even when no
+`canoe.cfg` row references them. Reinstalling staged tools compares against
+those captured bytes rather than falsely requiring their destinations to be
+absent.
+
 After the transaction, end the export from the host or the device. For the host-ending path:
 
 ```bash

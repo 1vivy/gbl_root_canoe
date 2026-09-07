@@ -28,6 +28,7 @@ impl Ext4Dir {
         }
         self.populate_config_artifacts(root)?;
         self.populate_bls(root)?;
+        self.populate_tools(root)?;
         Ok(())
     }
 
@@ -53,6 +54,27 @@ impl Ext4Dir {
                 }
                 fs::write(&local, bytes)
                     .map_err(|source| io("populate config artifact", &local, source))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn populate_tools(&self, root: &Path) -> Result<(), Ext4Error> {
+        let remote = self.remote("/tools");
+        self.ensure_remote_components(&remote)?;
+        let entries = self.list_directory(&remote)?;
+        let directory = root.join("tools");
+        fs::create_dir_all(&directory)
+            .map_err(|source| io("create temporary tools directory", &directory, source))?;
+        for entry in entries.into_iter().filter(|entry| entry.kind == "file") {
+            let relative = format!("tools/{}", parse_file_name(&entry.name)?);
+            let local = temp_destination(root, &relative)?;
+            if local.is_file() {
+                continue;
+            }
+            if let Some(bytes) = self.read_path(&format!("/{relative}"))? {
+                fs::write(&local, bytes)
+                    .map_err(|source| io("populate tool file", &local, source))?;
             }
         }
         Ok(())
@@ -87,7 +109,7 @@ impl Ext4Dir {
         let entries = entries
             .into_iter()
             .filter(|entry| entry.kind == "file")
-            .map(|entry| parse_bls_name(&entry.name).map(str::to_owned))
+            .map(|entry| parse_file_name(&entry.name).map(str::to_owned))
             .collect::<Result<Vec<_>, Ext4Error>>()?;
         for name in entries {
             let remote = format!("/loader/entries/{name}");
@@ -146,7 +168,7 @@ fn parse_relative_path(logical: &str) -> Result<RelativePath<'_>, Ext4Error> {
     Ok(RelativePath { components })
 }
 
-fn parse_bls_name(logical: &str) -> Result<&str, Ext4Error> {
+fn parse_file_name(logical: &str) -> Result<&str, Ext4Error> {
     let path = parse_relative_path(logical)?;
     match path.components.as_slice() {
         [component] => Ok(*component),

@@ -2,9 +2,10 @@
 
 `canoe.cfg` is the BDS menu state for 7.x. In 7.0.0-b3 the boot policy is
 explicit: fresh installs default to Silent mode, while the writer and BDS share
-the grammar below. The BDS only reads this file; `canoe-bootmgr` transactions
-and the device-side module are the writers. The file lives under `persist/efisp`,
-while the raw `efisp` partition contains only `BDS.efi`.
+the grammar below. The BDS only reads this file; `canoe-bootmgr` is the shared
+programmatic writer. The owner can also hand-edit the file and add ordinary
+EFI payloads under `persist/efisp`; no registration database or exclusive
+workspace is required. The raw `efisp` partition contains only `BDS.efi`.
 
 ## Location and syntax
 

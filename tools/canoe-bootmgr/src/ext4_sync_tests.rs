@@ -7,7 +7,7 @@ use std::path::Path;
 #[cfg(unix)]
 use super::super::{Ext4Dir, Ext4Error};
 
-use super::{bls_artifact_destination, parse_bls_name, parse_relative_path, temp_destination};
+use super::{bls_artifact_destination, parse_file_name, parse_relative_path, temp_destination};
 
 #[test]
 fn relative_parser_rejects_windows_and_traversal_forms() {
@@ -49,7 +49,7 @@ fn nested_artifact_destination_is_built_under_root() {
 #[test]
 fn bls_name_requires_one_safe_component() {
     assert_eq!(
-        parse_bls_name("linux.conf").expect("safe BLS name"),
+        parse_file_name("linux.conf").expect("safe BLS name"),
         "linux.conf"
     );
     for logical in [
@@ -62,7 +62,7 @@ fn bls_name_requires_one_safe_component() {
         r"linux\conf",
     ] {
         assert!(
-            parse_bls_name(logical).is_err(),
+            parse_file_name(logical).is_err(),
             "unsafe BLS name was accepted: {logical:?}"
         );
     }

@@ -16,6 +16,8 @@ mod ext4_source;
 use ext4_source::{
     locate_helper, probe_boot_root, source_file_is_block_device, source_is_block_device,
 };
+#[path = "ext4_delta.rs"]
+mod ext4_delta;
 #[path = "ext4_sync.rs"]
 mod ext4_sync;
 #[path = "ext4_transaction.rs"]

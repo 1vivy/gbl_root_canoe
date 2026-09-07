@@ -13,6 +13,9 @@ const BLS_FIXTURE: &str = include_str!("fixtures/linux.conf");
 #[path = "ext4/transactions.rs"]
 mod transactions;
 
+#[path = "ext4/transaction_scope.rs"]
+mod transaction_scope;
+
 #[path = "support/ext4.rs"]
 mod ext4_fixture;
 use ext4_fixture::{ext4_image, helper_path};
