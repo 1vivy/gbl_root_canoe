@@ -13,9 +13,10 @@ export NDK_PATH
 
 # Shipped modules are aarch64 (the only architecture the devices have). The
 # app's e2e harness builds a test-only x86_64 module for an x86_64 Cuttlefish
-# guest with `make target_magisk_module MODULE_ARCH=x86_64`; the C helpers
-# (patch_abl, extractfv) stay aarch64 in that build and are not exercised there.
+# guest with `make target_magisk_module MODULE_ARCH=x86_64`. All native helpers
+# use that architecture; the ABL/UEFI images they process remain ARM firmware.
 MODULE_ARCH ?= aarch64
+export ANDROID_ARCH := $(MODULE_ARCH)
 ANDROID_TARGET := $(MODULE_ARCH)-linux-android
 ANDROID_TARGET_ENV := $(subst -,_,$(ANDROID_TARGET))
 ANDROID_CLANG := $(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/$(ANDROID_TARGET)31-clang

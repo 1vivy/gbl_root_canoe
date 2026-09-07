@@ -9,6 +9,8 @@ SRCS := src/patch_abl.c \
 	src/patchs/oplus/forceenablefastboot.c \
 	src/arm64_inst/arm64_inst_decoder.c \
 	src/arm64_inst/utils.c
+ANDROID_ARCH ?= aarch64
+
 CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -Iinclude
 
 clean:
@@ -20,7 +22,7 @@ build:
 
 build_android:
 	mkdir -p build
-	$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang $(CFLAGS) -o build/patch_abl_android $(SRCS)
+	$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/$(ANDROID_ARCH)-linux-android31-clang $(CFLAGS) -o build/patch_abl_android $(SRCS)
 
 test: tests/test_libavb_force_success.c tests/test_fastboot_lock_gates.c
 	mkdir -p build
