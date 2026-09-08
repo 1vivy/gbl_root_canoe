@@ -106,6 +106,10 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   The worker shares the primitive while retaining its readback/receipts. Tests
   cover preserved legacy/unrelated files, existing/attached refusals, initialized
   extents and clean filesystem checks.
+- The USB producer now follows LUN removability; BDS marks the contained FAT
+  removable and preserves the physical parent. Producer identity/flush/eject
+  tests, PE relocation verification, BDS host tests and a fresh BDS build pass.
+  Native Windows mounted-USB acceptance remains to be exercised.
 - Full mounted FAT integration, loader/BLS artifact
   commands and application workflow consolidation remain in progress.
 - The Windows app last inspected reports b3. Do not launch a mixed intermediate

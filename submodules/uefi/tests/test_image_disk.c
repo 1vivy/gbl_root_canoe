@@ -74,6 +74,8 @@ int main (void)
   m->Ranges[2] =
       (EXT4_IMAGE_RANGE){16 * 1024 * 1024 + 1024, 40 * 1024 * 1024, 16 * 1024 * 1024 - 1024};
   assert (SfbImageDiskInit (&d, m) == EFI_SUCCESS);
+  assert (d.Media.RemovableMedia == TRUE);
+  assert (m->Parent->Media->RemovableMedia == FALSE);
   assert (d.Block.WriteBlocks (&d.Block, 42, 1, sizeof (data), data) == EFI_SUCCESS);
   memcpy (expected + 1536, data, 512);
   memcpy (expected + 16 * 1024 * 1024 + 1024, data + 512, sizeof (data) - 512);

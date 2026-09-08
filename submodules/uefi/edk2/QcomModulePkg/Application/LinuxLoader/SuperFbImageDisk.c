@@ -155,6 +155,8 @@ EFI_STATUS SfbImageDiskInit (SFB_IMAGE_DISK *D, EXT4_IMAGE_MAP *Map)
     return EFI_OUT_OF_RESOURCES;
   D->Media.MediaId = Map->MediaId;
   D->Media.MediaPresent = TRUE;
+  /* A standalone FAT USB LUN must mount as ordinary removable media. */
+  D->Media.RemovableMedia = TRUE;
   D->Media.LogicalPartition = TRUE;
   D->Media.WriteCaching = TRUE;
   D->Media.BlockSize = 512;
