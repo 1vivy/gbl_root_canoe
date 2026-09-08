@@ -63,16 +63,14 @@ firmware restore images remain relevant until the new path is confirmed.
 
 1. After RegionalHybrid, capture fresh build/slot/lock state and partition hashes.
    Prior cached boot/vbmeta images are reference material, not new graft donors.
-2. Agree on the BDS launch method. A raw UEFI `.efi` is not automatically a valid
-   payload for Android `fastboot boot`. A nested launch through an existing UEFI
-   environment, if supported, also does not prove the cold ABL → raw efisp path.
-   b3's compiled `boot` handler accepts an EFI payload inside an Android boot-image
-   wrapper; its OEM handler has no `boot-efi` command. The acknowledgement occurs
-   before child loading, so confirm the running BDS version afterwards. A nested
-   launch can retain b3's Ext4Dxe; b4 deliberately rejects a foreign file interface
-   in its container mapper, so that refusal alone would not prove cold-boot failure.
-3. Test menu/Super Fastboot with no populated new boot root. Check the real serial,
-   capability variables and reconnect behavior before managed Android launch.
+2. Once the RAM-boot test is authorized, use `fastboot boot BDS-7.0.0-b4.efi`
+   from the existing Super Fastboot session. The raw UEFI file is supported;
+   the tooling handles packaging. Confirm the running BDS version afterwards,
+   since command acknowledgement precedes child loading.
+3. Keep this first test to BDS startup/menu and Super Fastboot basics: device
+   detection, real serial, capability/slot variable reads and reconnect behavior.
+   Flashing, container provisioning and managed Android boot are later stages,
+   not prerequisites for this initial check.
 4. Separately provision/inspect an empty canonical container, after approving
    that persist write. Check export, native FAT mounting, a benign file roundtrip,
    ejection and independent readback. Keep bootloader/image changes out of this

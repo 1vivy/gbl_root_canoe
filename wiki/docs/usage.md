@@ -20,11 +20,15 @@ successful receipts remain inspectable.
 Super Fastboot is the BDS's own fastboot session. Press **VOL UP during boot**
 to open the BDS menu, then choose **Enter Super Fastboot**.
 
-The b3/b4 `boot` command can RAM-load an EFI payload carried in an Android
-boot-image wrapper. Use a correctly prepared wrapper; do not assume an arbitrary
-host fastboot binary wraps a raw `BDS.efi` for you. The current OEM handler does
-not implement `oem boot-efi`, so the previously documented `stage`/`boot-efi`
-sequence is not supported by these sources.
+From Super Fastboot, RAM-load the raw UEFI payload directly:
+
+```sh
+fastboot boot BDS.efi
+```
+
+The Super Fastboot tooling handles the packaging; no manually prepared Android
+boot-image wrapper is needed. The current OEM handler does not implement
+`oem boot-efi`.
 
 RAM-loading leaves the installed ABL and raw efisp images in place. BDS can still
 write its normal logs. Confirm the new BDS version on the device: the command
@@ -32,10 +36,9 @@ acknowledges before `LoadImage`/`StartImage`, so a successful host response alon
 does not prove the new BDS ran. A failed launch may require a manual restart
 because the old USB session has already stopped.
 
-A nested launch inherits firmware drivers from its parent. In particular, b4's
-container mapper requires its own Ext4Dxe file interface; an ext4 volume still
-bound to b3's driver can be refused. Test launch is useful for initial menu/USB
-checks but does not replace clean cold-boot/container validation.
+For the first test, confirm BDS starts, opens its menu and enters Super Fastboot,
+then check device detection, variable reads and reconnect behavior. Container
+provisioning and managed Android boot are separate later tests.
 
 Super Fastboot waives ABL's critical-partition status, so flashing works from
 this BDS session; partitions inside `super` remain the exception. Stock
