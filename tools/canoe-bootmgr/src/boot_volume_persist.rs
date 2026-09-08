@@ -8,14 +8,14 @@ use serde::Deserialize;
 
 use crate::boot_volume::{CONTAINER_BYTES, PERSIST_RESERVE_BYTES};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 pub struct Allocation {
     pub bytes: u64,
     pub block_size: u64,
     pub initialized: bool,
     pub extents: Vec<Extent>,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 pub struct Extent {
     pub logical_block: u64,
     pub physical_block: u64,
@@ -41,6 +41,29 @@ fn helper_output(helper: &Path, source: &Path, operation: &str, path: &str) -> i
 /// persist filesystem. Failure retains that file for recovery; it is never
 /// automatically replaced or promoted to `/efisp.fat`.
 pub fn stage(source: &Path, helper: &Path, staging_name: &str) -> io::Result<Allocation> {
+    let workspace = tempfile::tempdir()?;
+    let image_path = workspace.path().join("staging.fat");
+    crate::boot_volume::create_staging(&image_path)?;
+    stage_image(source, helper, staging_name, &image_path).map(|receipt| receipt.allocation)
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct StagedVolume {
+    pub path: String,
+    pub bytes: u64,
+    pub sha256: String,
+    pub allocation: Allocation,
+}
+
+/// Stage the complete prepared boot volume, retaining the exact identity that
+/// a separate activation review must bind. Never populate it from legacy files.
+pub fn stage_image(
+    source: &Path,
+    helper: &Path,
+    staging_name: &str,
+    image_path: &Path,
+) -> io::Result<StagedVolume> {
+    use sha2::{Digest, Sha256};
     let suffix = staging_name
         .strip_prefix(".canoe-boot-volume-")
         .ok_or_else(|| io::Error::other("invalid container staging name"))?;
@@ -52,10 +75,10 @@ pub fn stage(source: &Path, helper: &Path, staging_name: &str) -> io::Result<All
     {
         return Err(io::Error::other("invalid container staging name"));
     }
+    let mut file = crate::file_identity::open_readonly(image_path)?;
+    let image = crate::boot_volume_transaction::read_volume(&mut file)?;
     let workspace = tempfile::tempdir()?;
-    let image_path = workspace.path().join("staging.fat");
-    crate::boot_volume::create_staging(&image_path)?;
-    let image = std::fs::read(image_path)?;
+    crate::boot_volume_tree::extract(&image, workspace.path())?;
     let remote = format!("/{staging_name}");
     let mut child = crate::process::command(helper)
         .arg("create")
@@ -95,5 +118,10 @@ pub fn stage(source: &Path, helper: &Path, staging_name: &str) -> io::Result<All
     {
         return Err(io::Error::other("persist staging allocation is incomplete"));
     }
-    Ok(allocation)
+    Ok(StagedVolume {
+        path: remote,
+        bytes: CONTAINER_BYTES,
+        sha256: format!("{:x}", Sha256::digest(&image)),
+        allocation,
+    })
 }

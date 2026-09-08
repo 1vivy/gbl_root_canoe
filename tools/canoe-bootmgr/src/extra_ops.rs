@@ -273,7 +273,7 @@ pub(crate) fn tools_update(backend: &Backend, args: &ToolsUpdateArgs) -> Result<
         Backend::Local(local) => {
             crate::tools_update::update_with_inventory(local.root(), &args.source, &args.inventory)?
         }
-        Backend::Ext4(_) => backend
+        Backend::Ext4(_) | Backend::Fat(_) => backend
             .with_temp_root(|root| {
                 crate::tools_update::update_with_inventory(root, &args.source, &args.inventory)
                     .map_err(|error| error.to_string())

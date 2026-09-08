@@ -237,3 +237,69 @@ mod tests {
         assert!(build(source.path()).is_err());
     }
 }
+
+/// Content identity for detecting no-op canonical operations without rewriting
+/// FAT allocation or timestamps. Paths and file lengths delimit every record.
+pub(crate) fn fingerprint(root: &Path) -> io::Result<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    fn visit(root: &Path, depth: usize, budget: &mut Budget, hash: &mut Sha256) -> io::Result<()> {
+        let mut entries = fs::read_dir(root)?
+            .take(MAX_ENTRIES + 1)
+            .collect::<io::Result<Vec<_>>>()?;
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| invalid("non-UTF8 boot filename"))?;
+            if !safe_name(&name) {
+                return Err(invalid("unsafe boot filename"));
+            }
+            let kind = entry.file_type()?;
+            if !kind.is_dir() && !kind.is_file() {
+                return Err(invalid("boot tree contains a special file"));
+            }
+            let bytes = if kind.is_file() {
+                entry.metadata()?.len()
+            } else {
+                0
+            };
+            budget.entry(depth, bytes)?;
+            hash.update([u8::from(kind.is_dir())]);
+            hash.update((name.len() as u64).to_le_bytes());
+            hash.update(name.as_bytes());
+            hash.update(bytes.to_le_bytes());
+            if kind.is_dir() {
+                visit(&entry.path(), depth + 1, budget, hash)?;
+            } else {
+                let mut input = File::open(entry.path())?.take(bytes);
+                let mut buffer = [0; 65536];
+                let mut total = 0;
+                loop {
+                    let n = input.read(&mut buffer)?;
+                    if n == 0 {
+                        break;
+                    }
+                    hash.update(&buffer[..n]);
+                    total += n as u64;
+                }
+                if total != bytes {
+                    return Err(invalid("boot file changed during inventory"));
+                }
+            }
+            hash.update([0xff]);
+        }
+        Ok(())
+    }
+    let mut hash = Sha256::new();
+    visit(
+        root,
+        0,
+        &mut Budget {
+            entries: 0,
+            bytes: 0,
+        },
+        &mut hash,
+    )?;
+    Ok(hash.finalize().to_vec())
+}

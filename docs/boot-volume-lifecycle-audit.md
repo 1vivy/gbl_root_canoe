@@ -46,14 +46,22 @@ must not be weakened when sharing operations with FAT.
 
 ## Remaining integration boundaries
 
-- Native backend dispatch still selects Local/Ext4 and production Android paths
-  still use the legacy root. Add the FAT boot-volume backend and its activation
-  transaction before changing GUI defaults.
+- Native backend dispatch now includes an explicit offline FAT image adapter.
+  It runs the canonical operations and retains before/after images in an
+  external recovery directory. The platform-independent transaction marks FAT
+  dirty before changing structures, verifies readback before marking it clean,
+  and requires an explicit resume/revert after failure. Live USB and Android
+  adapters, CLI/GUI source selection, and final-name activation remain unconnected.
+  Production Android paths still use the legacy root; do not change GUI defaults
+  until the owned mount interface is ready.
 - GUI `src/lib/artifacts/paths.ts` contains `DEVICE_BOOT_ROOT` pointing at the
   legacy directory. The backend must return the owned mount root; the GUI must
   not independently discover or mount it.
 - Consume `canoe-boot-volume=fat16-container-v1` before requesting the BDS
   `boot-root` export. Track ownership across UAC helpers and USB transitions.
+- Persist staging now accepts a fully prepared FAT image and returns its exact
+  identity and initialized allocation evidence. Final-name activation and the
+  full deployment receipt still need to bind that evidence.
 - First allocation/final-name activation, exact readback, durable receipts,
   retries, and cleanup must share a lifecycle. Recovery information must live
   outside temporary extraction directories and the boot root being removed.
@@ -71,3 +79,29 @@ must not be weakened when sharing operations with FAT.
 
 Physical phone writes, slot changes, reboots, and formatting are not part of
 these source/build checks.
+
+## Backend validation and Windows finding
+
+The offline FAT backend passes the native Rust aggregate and six targeted
+checks on Linux and the real Windows 11 guest. Checks include interrupted
+partial writes, restart recovery in both directions, failed flush/readback,
+foreign target/content/snapshot rejection, byte-identical no-ops, unchanged
+unrelated files, Unicode paths, and Windows exclusive file ownership. The
+Linux run additionally verifies the resulting FAT with `fsck.fat -n`.
+
+A prepared canonical config has also been staged into a real ext4 image with
+exact readback and an independent `e2fsck -fn` pass. This is image-file and
+filesystem-adapter evidence, not physical USB or Android-mount acceptance.
+
+The Windows guest exposed an existing error in `LocalDir::write_config`: it
+opened a directory using normal file access and tried to flush it. File
+publication now has a shared OS adapter: Unix retains rename and directory
+fsync; Windows uses a same-volume, write-through `MoveFileExW` after flushing
+the temporary file. Recovery records use the same publication operation.
+Sources: [MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
+and [FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers).
+
+The audit also found other direct directory/file flush calls in bootstrap and
+boot-root cleanup. Review their platform and access-mode assumptions when
+connecting uninstall and Android activation; a read-only Windows file handle
+cannot satisfy the documented `FlushFileBuffers` write-access requirement.

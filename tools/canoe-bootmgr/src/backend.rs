@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -32,6 +32,8 @@ pub enum BackendError {
     Ext4Typed(#[source] crate::ext4::Ext4Error),
     #[error("backend transaction: {0}")]
     Transaction(String),
+    #[error("boot volume: {0}")]
+    BootVolume(#[source] std::io::Error),
     #[error("clock is before the Unix epoch")]
     Clock,
 }
@@ -55,6 +57,10 @@ impl BackendError {
                 "permission-denied"
             }
             Self::Ext4Typed(error) => error.protocol_code(),
+            Self::BootVolume(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                "permission-denied"
+            }
+            Self::BootVolume(_) => "boot-volume",
             Self::Io { .. }
             | Self::Config(_)
             | Self::Bls(_)
@@ -245,18 +251,14 @@ pub(crate) fn atomic_replace(
             path: temporary.clone(),
             source,
         })?;
-        fs::rename(&temporary, destination).map_err(|source| BackendError::Io {
-            operation: "replace config",
-            path: destination.to_path_buf(),
-            source,
-        })?;
-        File::open(root)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|source| BackendError::Io {
-                operation: "sync config directory",
-                path: root.to_path_buf(),
+        drop(file);
+        crate::fs_commit::publish_file(&temporary, destination, true).map_err(|source| {
+            BackendError::Io {
+                operation: "commit config",
+                path: destination.to_path_buf(),
                 source,
-            })
+            }
+        })
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);

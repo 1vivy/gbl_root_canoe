@@ -7,9 +7,14 @@ use crate::config::ConfigDocument;
 pub enum Backend {
     Local(LocalDir),
     Ext4(crate::ext4::Ext4Dir),
+    Fat(crate::boot_volume_backend::FatImage),
 }
 
 impl Backend {
+    pub fn fat_image(source: &Path, recovery_root: &Path) -> Result<Self, BackendError> {
+        crate::boot_volume_backend::FatImage::new(source, recovery_root).map(Self::Fat)
+    }
+
     pub fn local(root: impl AsRef<Path>) -> Result<Self, BackendError> {
         Ok(Self::Local(LocalDir::new(root)?))
     }
@@ -52,7 +57,7 @@ impl Backend {
 
     pub(crate) fn source_is_block_device(&self) -> bool {
         match self {
-            Self::Local(_) => false,
+            Self::Local(_) | Self::Fat(_) => false,
             Self::Ext4(ext4) => ext4.source_is_block_device(),
         }
     }
@@ -64,6 +69,10 @@ impl Backend {
         match self {
             Self::Local(local) => action(local.root()).map_err(BackendError::Transaction),
             Self::Ext4(ext4) => ext4.with_temp_root(action).map_err(BackendError::Ext4Typed),
+            Self::Fat(fat) => fat.with_action(true, action).map_err(|e| match e {
+                BackendActionError::Backend(e) => e,
+                BackendActionError::Action(e) => BackendError::Transaction(e),
+            }),
         }
     }
 
@@ -77,6 +86,7 @@ impl Backend {
         match self {
             Self::Local(local) => action(local.root()).map_err(BackendActionError::Action),
             Self::Ext4(ext4) => ext4.with_temp_root_action(action),
+            Self::Fat(fat) => fat.with_action(true, action),
         }
     }
 
@@ -90,6 +100,7 @@ impl Backend {
         match self {
             Self::Local(local) => action(local.root()).map_err(BackendActionError::Action),
             Self::Ext4(ext4) => ext4.with_temp_root_readonly_action(action),
+            Self::Fat(fat) => fat.with_action(false, action),
         }
     }
 
@@ -102,6 +113,10 @@ impl Backend {
             Self::Ext4(ext4) => ext4
                 .with_temp_root_readonly(action)
                 .map_err(BackendError::Ext4Typed),
+            Self::Fat(fat) => fat.with_action(false, action).map_err(|e| match e {
+                BackendActionError::Backend(e) => e,
+                BackendActionError::Action(e) => BackendError::Transaction(e),
+            }),
         }
     }
 }
@@ -111,6 +126,7 @@ impl BootRoot for Backend {
         match self {
             Self::Local(local) => local.root(),
             Self::Ext4(ext4) => ext4.root(),
+            Self::Fat(fat) => fat.root(),
         }
     }
 
@@ -118,6 +134,7 @@ impl BootRoot for Backend {
         match self {
             Self::Local(local) => local.read_config(),
             Self::Ext4(ext4) => ext4.read_config(),
+            Self::Fat(fat) => fat.read_config(),
         }
     }
 
@@ -125,6 +142,7 @@ impl BootRoot for Backend {
         match self {
             Self::Local(local) => local.write_config(config),
             Self::Ext4(ext4) => ext4.write_config(config),
+            Self::Fat(fat) => fat.write_config(config),
         }
     }
 
@@ -132,6 +150,7 @@ impl BootRoot for Backend {
         match self {
             Self::Local(local) => local.list_bls(),
             Self::Ext4(ext4) => ext4.list_bls(),
+            Self::Fat(fat) => fat.list_bls(),
         }
     }
 
@@ -139,6 +158,7 @@ impl BootRoot for Backend {
         match self {
             Self::Local(local) => local.read_bls(name),
             Self::Ext4(ext4) => ext4.read_bls(name),
+            Self::Fat(fat) => fat.read_bls(name),
         }
     }
 }

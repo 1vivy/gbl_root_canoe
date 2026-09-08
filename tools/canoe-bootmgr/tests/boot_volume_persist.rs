@@ -145,3 +145,51 @@ fn allocation_rejects_sparse_unwritten_and_dirty_images() {
     assert_eq!(dirty.status.code(), Some(4));
     assert!(fs::read(source).unwrap() == before);
 }
+
+#[test]
+fn prepared_canonical_fat_generation_is_staged_byte_for_byte() {
+    use canoe_bootmgr::{
+        backend::{Backend, BootRoot},
+        config::ConfigDocument,
+    };
+    let work = tempfile::tempdir().unwrap();
+    let source = fixture::ext4_image(work.path(), "persist.img", 128 * 1024 * 1024);
+    let helper = fixture::helper_path();
+    let image = work.path().join("prepared.fat");
+    canoe_bootmgr::boot_volume::create_staging(&image).unwrap();
+    let recovery = work.path().join("recovery");
+    fs::create_dir(&recovery).unwrap();
+    let backend = Backend::fat_image(&image, &recovery).unwrap();
+    let config = ConfigDocument::parse(b"version 1\ngeneration 1\nmode 1\n\nentry android-a\n title Android\n image boot_a.efi\n mode 1\n role active\n").unwrap();
+    backend.write_config(&config).unwrap();
+    let receipt = canoe_bootmgr::boot_volume_persist::stage_image(
+        &source,
+        &helper,
+        ".canoe-boot-volume-prepared",
+        &image,
+    )
+    .unwrap();
+    let actual = Command::new(&helper)
+        .arg("read")
+        .arg(&source)
+        .arg(&receipt.path)
+        .output()
+        .unwrap();
+    assert!(actual.status.success());
+    assert_eq!(actual.stdout, fs::read(&image).unwrap());
+    let tree = work.path().join("readback");
+    fs::create_dir(&tree).unwrap();
+    canoe_bootmgr::boot_volume_tree::extract(&actual.stdout, &tree).unwrap();
+    assert_eq!(
+        fs::read(tree.join("canoe.cfg")).unwrap(),
+        config.serialize().unwrap()
+    );
+    assert!(
+        Command::new("e2fsck")
+            .arg("-fn")
+            .arg(&source)
+            .status()
+            .unwrap()
+            .success()
+    );
+}

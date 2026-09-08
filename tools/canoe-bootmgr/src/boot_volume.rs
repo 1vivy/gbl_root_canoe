@@ -96,10 +96,10 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
         || sector != SECTOR_BYTES
         || cluster != CLUSTER_BYTES
         || u64::from(sectors) * u64::from(sector) != bytes
-        || reserved == 0
+        || reserved != 1
         || boot[16] != 2
-        || root_entries == 0
-        || fat_sectors == 0
+        || root_entries != 512
+        || fat_sectors != 64
         || !(4085..65525).contains(&clusters)
         || boot[510..512] != [0x55, 0xaa]
         || u64::from(fat_sectors) * u64::from(sector) < (clusters + 2) * 2
@@ -107,6 +107,18 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "not a supported Canoe 32 MiB FAT16 boot volume",
+        ));
+    }
+    let mut fat = vec![0; 64 * 512];
+    let mut mirror = vec![0; fat.len()];
+    disk.seek(SeekFrom::Start(512))?;
+    disk.read_exact(&mut fat)?;
+    disk.seek(SeekFrom::Start(65 * 512))?;
+    disk.read_exact(&mut mirror)?;
+    if fat != mirror || fat[..2] != [0xf8, 0xff] || fat[3] & 0xc0 != 0xc0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "boot volume has dirty or inconsistent FAT tables; recover before use",
         ));
     }
     disk.seek(SeekFrom::Start(0))?;
