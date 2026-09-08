@@ -3,8 +3,8 @@
 # `make version-check` fails when they drift.
 # Direct CANOE_VERSION overrides are refused unless an explicit non-release opt-in is present.
 _CANOE_VERSION_SOURCE := $(shell sed -n "/^[[:space:]]*CANOE_VERSION[[:space:]]*=/ { s/^[[:space:]]*CANOE_VERSION[[:space:]]*=[[:space:]]*//; p; q; }" $(lastword $(MAKEFILE_LIST)))
-CANOE_VERSION = 7.0.0-b3
-CANOE_VERSION_CODE = 16
+CANOE_VERSION = 7.0.0-b4
+CANOE_VERSION_CODE = 17
 CANOE_VERSION_OVERRIDE ?= 0
 ifneq ($(origin CANOE_VERSION),file)
 ifneq ($(CANOE_VERSION),$(_CANOE_VERSION_SOURCE))

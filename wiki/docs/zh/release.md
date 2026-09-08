@@ -20,7 +20,7 @@ cd /home/vivy/Projects/efisp-projects/gbl_root_canoe/.work/gui-work
 worktree 执行发布时，必须按以下顺序操作：
 
 ```sh
-make bump VERSION=7.0.0-b3 VERSION_CODE=16
+make bump VERSION=7.0.0-b4 VERSION_CODE=17
 ```
 
 直接使用 `CANOE_VERSION=<other-version>` 覆盖时，会在任何配方运行前拒绝。

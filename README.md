@@ -9,7 +9,7 @@ Qualcomm ABL images. It provides a Fake Locked Bootloader state on Snapdragon
 8 Gen 5 / 8 Elite devices: the hardware remains unlocked while the patched
 loader presents the locked state required by software checks.
 
-The 7.0.0-b3 release surface adds the `canoe-bootmgr` single-writer core
+The 7.0.0-b4 release surface adds the `canoe-bootmgr` single-writer core
 and the `canoe-ext4` direct ext4 backend. Managed boot artifacts are per-slot
 triplets rather than one singular `boot.efi`.
 
