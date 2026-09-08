@@ -9,14 +9,23 @@ use std::{
     process::{Command, Stdio},
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileIdentity {
+    pub filesystem: String,
+    pub inode: u32,
+    pub generation: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Allocation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<FileIdentity>,
     pub bytes: u64,
     pub block_size: u64,
     pub initialized: bool,
     pub extents: Vec<Extent>,
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Extent {
     pub logical_block: u64,
     pub physical_block: u64,
@@ -145,6 +154,25 @@ impl<'a> Offline<'a> {
         let bytes = self.output("read", &["/efisp.fat"])?;
         volume::inspect(&mut io::Cursor::new(bytes))?;
         self.output("remove", &["/efisp.fat"])?;
+        Ok(())
+    }
+    /// Remove a previously inspected container incarnation, even if interrupted
+    /// FAT maintenance left its contents dirty. The caller owns recovery and
+    /// must have released every attachment before opening this offline image.
+    pub fn remove_matching(&self, expected: &Allocation) -> io::Result<()> {
+        let identity = expected
+            .identity
+            .as_ref()
+            .ok_or_else(|| io::Error::other("container incarnation evidence is unavailable"))?;
+        if identity.generation == 0 || self.allocation("/efisp.fat")? != *expected {
+            return Err(io::Error::other("container identity or allocation changed"));
+        }
+        self.output("remove", &["/efisp.fat"])?;
+        if self.inspect()?.path_exists {
+            return Err(io::Error::other(
+                "container removal did not remove its name",
+            ));
+        }
         Ok(())
     }
 }

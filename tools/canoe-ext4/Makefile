@@ -8,7 +8,7 @@ EXT2FS_LIBS := $(shell $(PKG_CONFIG) --libs ext2fs 2>/dev/null)
 ifeq ($(strip $(EXT2FS_LIBS)),)
 EXT2FS_LIBS := -lext2fs
 endif
-LDLIBS += $(EXT2FS_LIBS) -lcom_err
+LDLIBS += $(EXT2FS_LIBS) -lcom_err -luuid
 LDFLAGS += -Wl,-z,relro,-z,now
 
 .PHONY: all clean test windows static

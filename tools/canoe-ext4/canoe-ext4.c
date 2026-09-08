@@ -32,6 +32,12 @@
 #define O_BINARY _O_BINARY
 #endif
 
+#ifdef _WIN32
+/* rpc.h aliases uuid_t to its GUID structure. libuuid's public ABI is its
+ * own 16-byte array; do not let that Windows macro rewrite the header. */
+#undef uuid_t
+#endif
+#include <uuid/uuid.h>
 #include <et/com_err.h>
 #include <ext2fs/ext2_err.h>
 #include <ext2fs/ext2_fs.h>
@@ -817,6 +823,13 @@ static void create_or_overwrite(const char *path, const unsigned char *data,
         memset(&metadata, 0, sizeof(metadata));
         metadata.i_mode = LINUX_S_IFREG | 0644;
         metadata.i_links_count = 1;
+        /* Distinguish a newly allocated inode from a later reuse of its number.
+         * The manager binds this with filesystem UUID and allocation evidence. */
+        uuid_t incarnation;
+        uuid_generate_random(incarnation);
+        memcpy(&metadata.i_generation, incarnation, sizeof(metadata.i_generation));
+        if (metadata.i_generation == 0)
+            metadata.i_generation = 1;
         if (ext2fs_has_feature_extents(fs->super))
             mark_extent_mapped(&metadata);
         rc = ext2fs_write_new_inode(fs, inode, &metadata);
@@ -1139,8 +1152,12 @@ static void inspect_allocation(const char *path) {
     for (size_t i = 1; i < count; i++)
         if (sorted[i] == sorted[i - 1])
             fail(EXIT_OPERATION, "file contains overlapping physical blocks");
-    printf("{\"bytes\":%" PRIu64 ",\"block_size\":%u,\"initialized\":true,\"extents\":[",
-           bytes, fs->blocksize);
+    char filesystem_uuid[37];
+    uuid_unparse_lower(fs->super->s_uuid, filesystem_uuid);
+    printf("{\"identity\":{\"filesystem\":\"%s\",\"inode\":%" PRIu32
+           ",\"generation\":%" PRIu32 "},\"bytes\":%" PRIu64
+           ",\"block_size\":%u,\"initialized\":true,\"extents\":[",
+           filesystem_uuid, (uint32_t)number, (uint32_t)inode.i_generation, bytes, fs->blocksize);
     for (size_t first = 0; first < count;) {
         size_t next = first + 1;
         while (next < count && blocks[next] == blocks[next - 1] + 1)

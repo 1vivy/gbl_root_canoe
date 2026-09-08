@@ -1,6 +1,6 @@
 //! Linux/Android primitives for an existing ext4 persist mount. Mount lifecycle
 //! and root acquisition belong to the application's OS adapter.
-use crate::volume::{self, CONTAINER_BYTES, CONTAINER_NAME};
+use crate::volume::{self, CONTAINER_NAME};
 use std::{
     fs::{self, File, OpenOptions},
     io,
@@ -11,86 +11,39 @@ use std::{
     path::Path,
 };
 
-fn open_directory(root: &Path) -> io::Result<File> {
-    let dir = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
-        .open(root)?;
-    let mut info: libc::statfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstatfs(dir.as_raw_fd(), &mut info) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if info.f_type as u64 != 0xef53 {
-        return Err(io::Error::other("persist directory must be on ext4"));
-    }
-    Ok(dir)
-}
 pub fn create(root: &Path) -> io::Result<volume::VolumeInfo> {
-    let root = fs::canonicalize(root)?;
-    let directory = open_directory(&root)?;
-    let target = root.join(CONTAINER_NAME);
-    if target.symlink_metadata().is_ok() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "efisp.fat already exists",
-        ));
-    }
-    let mut space: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstatvfs(directory.as_raw_fd(), &mut space) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let available = (space.f_bavail as u64)
-        .checked_mul(space.f_frsize as u64)
-        .ok_or_else(|| io::Error::other("persist capacity overflow"))?;
-    // Reserve pessimistic extent metadata plus directory growth.
-    volume::require_capacity(available, 1024 * 1024)?;
-    let mut staging = tempfile::Builder::new()
+    let persist = crate::mounted_root::PersistRoot::open(root)?;
+    let work = tempfile::Builder::new()
         .prefix(".canoe-boot-volume-")
-        .tempfile_in(&root)?;
-    volume::initialize(&mut staging)?;
-    staging.as_file().sync_all()?;
-    if staging.as_file().metadata()?.blocks() * 512 < CONTAINER_BYTES {
-        return Err(io::Error::other("container allocation contains holes"));
-    }
-    let result = volume::inspect(staging.as_file_mut())?;
-    crate::allocation::inspect(staging.as_file())?;
-    // persist is ext4, so tempfile's no-clobber publication can use a hard link.
-    // The temporary link is removed before BDS can inspect the final inode.
-    staging.persist_noclobber(&target).map_err(|e| e.error)?;
-    directory.sync_all()?;
+        .tempdir()?;
+    let stage = work.path().file_name().unwrap().to_str().unwrap();
+    let identity = persist.create_stage(stage)?;
+    // Failed stages remain named for deliberate operator recovery.
+    let result = persist.initialize_stage(stage, &identity)?;
+    persist.publish_stage(stage, &identity)?;
     Ok(result)
 }
 pub fn inspect(root: &Path) -> io::Result<volume::VolumeInfo> {
-    let _directory = open_directory(&fs::canonicalize(root)?)?;
-    let mut file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(root.join(CONTAINER_NAME))?;
-    lock(&file, libc::LOCK_SH)?;
-    require_unattached_file(&file)?;
-    volume::inspect(&mut file)
+    let persist = crate::mounted_root::PersistRoot::open(root)?;
+    let identity = persist
+        .named_identity(CONTAINER_NAME)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "efisp.fat is absent"))?;
+    persist.inspect(CONTAINER_NAME, &identity)
 }
 pub fn remove(root: &Path) -> io::Result<()> {
-    let root = fs::canonicalize(root)?;
-    let directory = open_directory(&root)?;
-    let target = root.join(CONTAINER_NAME);
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&target)?;
-    lock(&file, libc::LOCK_EX)?;
-    require_unattached_file(&file)?;
-    volume::inspect(&mut file)?;
-    let named = fs::symlink_metadata(&target)?;
-    let held = file.metadata()?;
-    if !named.is_file() || named.dev() != held.dev() || named.ino() != held.ino() {
-        return Err(io::Error::other("container path changed before removal"));
-    }
-    fs::remove_file(target)?;
-    directory.sync_all()
+    let persist = crate::mounted_root::PersistRoot::open(root)?;
+    let identity = persist
+        .named_identity(CONTAINER_NAME)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "efisp.fat is absent"))?;
+    persist.inspect(CONTAINER_NAME, &identity)?;
+    let work = tempfile::Builder::new()
+        .prefix(".canoe-boot-volume-")
+        .tempdir()?;
+    let retired = work.path().file_name().unwrap().to_str().unwrap();
+    persist.retire(retired, &identity)?;
+    persist.discard_stage(retired, &identity)
 }
-fn lock(file: &File, mode: libc::c_int) -> io::Result<()> {
+pub(crate) fn lock(file: &File, mode: libc::c_int) -> io::Result<()> {
     if unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } != 0 {
         return Err(io::Error::last_os_error());
     }

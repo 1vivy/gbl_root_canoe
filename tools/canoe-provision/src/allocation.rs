@@ -125,6 +125,7 @@ pub fn inspect(file: &File) -> io::Result<Allocation> {
         return Err(io::Error::other("container physical extents overlap"));
     }
     Ok(Allocation {
+        identity: None,
         bytes: CONTAINER_BYTES,
         block_size,
         initialized: true,
