@@ -4,6 +4,7 @@ pub mod allocation;
 pub mod cli;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod mounted;
+pub mod mounted_identity;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub mod mounted_root;
 pub mod offline;

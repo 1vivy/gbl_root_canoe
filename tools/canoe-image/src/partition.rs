@@ -41,3 +41,88 @@ pub fn materialize(image: &[u8], partition_bytes: u64, kind: Kind) -> io::Result
     }
     Ok(output)
 }
+
+/// Structural guard for a Qualcomm AArch64 ABL firmware image. This does not
+/// prove that its firmware version is suitable for a particular phone or slot.
+pub fn validate_abl(image: &[u8]) -> io::Result<()> {
+    let invalid =
+        || io::Error::other("select an AArch64 ABL image extracted from the intended firmware");
+    if image.len() < 64 || image.get(..7) != Some(b"\x7fELF\x02\x01\x01") {
+        return Err(invalid());
+    }
+    let u16_at = |n| u16::from_le_bytes(image[n..n + 2].try_into().unwrap());
+    let u64_at = |n| u64::from_le_bytes(image[n..n + 8].try_into().unwrap());
+    if u16_at(18) != 183 || u16_at(52) != 64 || u16_at(54) != 56 {
+        return Err(invalid());
+    }
+    let start = usize::try_from(u64_at(32)).map_err(|_| invalid())?;
+    let count = usize::from(u16_at(56));
+    let end = count
+        .checked_mul(56)
+        .and_then(|len| start.checked_add(len))
+        .ok_or_else(invalid)?;
+    if count == 0 || count > 128 || start < 64 || end > image.len() {
+        return Err(invalid());
+    }
+    let mut load = false;
+    for entry in image[start..end].chunks_exact(56) {
+        let number = |n| u64::from_le_bytes(entry[n..n + 8].try_into().unwrap());
+        let bytes = number(32);
+        let offset = number(8);
+        if bytes != 0
+            && offset
+                .checked_add(bytes)
+                .is_none_or(|end| end > image.len() as u64)
+        {
+            return Err(invalid());
+        }
+        if u32::from_le_bytes(entry[..4].try_into().unwrap()) == 1 {
+            if number(40) < bytes {
+                return Err(invalid());
+            }
+            load |= bytes != 0;
+        }
+    }
+    if !load {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn abl() -> Vec<u8> {
+        let mut bytes = vec![0u8; 512];
+        bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
+        for (offset, value) in [(18, 183u16), (52, 64), (54, 56), (56, 1)] {
+            bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        bytes[32..40].copy_from_slice(&64u64.to_le_bytes());
+        bytes[64..68].copy_from_slice(&1u32.to_le_bytes());
+        bytes[96..104].copy_from_slice(&512u64.to_le_bytes());
+        bytes[104..112].copy_from_slice(&512u64.to_le_bytes());
+        bytes
+    }
+    #[test]
+    fn abl_bounds_and_architecture_are_checked_without_claiming_firmware_suitability() {
+        let valid = abl();
+        validate_abl(&valid).unwrap();
+        for size in [0, 63, 64, 119, 511] {
+            assert!(validate_abl(&valid[..size]).is_err());
+        }
+        for (offset, value) in [(18, 62u16), (52, 0), (54, 0), (56, 0), (56, 129)] {
+            let mut changed = valid.clone();
+            changed[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+            assert!(validate_abl(&changed).is_err());
+        }
+        for offset in [32, 72, 96] {
+            let mut changed = valid.clone();
+            changed[offset..offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+            assert!(validate_abl(&changed).is_err());
+        }
+        let mut changed = valid.clone();
+        changed[64..68].fill(0);
+        assert!(validate_abl(&changed).is_err());
+    }
+}

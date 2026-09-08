@@ -3,7 +3,6 @@
 use crate::{mounted, offline, volume};
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, OpenOptions};
-use serde::{Deserialize, Serialize};
 use std::{
     ffi::CString,
     fs::File,
@@ -12,14 +11,7 @@ use std::{
     path::Path,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Identity {
-    pub filesystem: [u8; 8],
-    pub device: u64,
-    pub inode: u64,
-    pub generation: u32,
-}
+pub use crate::mounted_identity::Identity;
 fn identity(file: &File) -> io::Result<Identity> {
     let info = filesystem(file)?;
     let metadata = file.metadata()?;
@@ -214,6 +206,12 @@ impl PersistRoot {
                 "container name now refers to a different file",
             ));
         }
+        Ok(())
+    }
+    /// Check removal eligibility without requiring readable or clean FAT contents.
+    pub fn check_retire(&self, expected: &Identity) -> io::Result<()> {
+        let file = self.checked(volume::CONTAINER_NAME, expected, false)?;
+        crate::allocation::inspect(&file)?;
         Ok(())
     }
     /// Detach the reviewed final name before unlinking it. The caller records
