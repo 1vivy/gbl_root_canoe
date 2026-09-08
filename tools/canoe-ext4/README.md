@@ -102,7 +102,10 @@ E2FSPROGS_SRC=/tmp/e2fsprogs ZLIB_PREFIX=/tmp/zlib-mingw sh build-windows.sh
 
 The first configure run is slow (every MinGW probe compiles); results are
 cached in the build directory, so reruns are fast. On Windows the helper uses
-`libext2fs`' `windows_io_manager` against `\\.\PhysicalDrive<N>`. The e2fsprogs
+Canoe's sector-aware I/O manager against `\\.\PhysicalDrive<N>`. It implements
+the public libext2fs I/O interface without patching or forking e2fsprogs. Device
+geometry controls offset/length alignment; partial-sector writes preserve the
+other bytes, and flush errors propagate to the caller. The e2fsprogs
 journal replay objects (`debugfs/journal.c`, `e2fsck/revoke.c`, and
 `e2fsck/recovery.c`) are linked into the helper and use the manager's
 read/write, block-size, and flush callbacks. Consequently dirty-source

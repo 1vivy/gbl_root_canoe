@@ -38,6 +38,15 @@ pub fn require_capacity(available: u64, allocation_overhead: u64) -> io::Result<
     Ok(())
 }
 
+pub(crate) fn format_options() -> fatfs::FormatVolumeOptions {
+    fatfs::FormatVolumeOptions::new()
+        .fat_type(fatfs::FatType::Fat16)
+        .bytes_per_sector(SECTOR_BYTES)
+        .bytes_per_cluster(CLUSTER_BYTES)
+        .total_sectors((CONTAINER_BYTES / u64::from(SECTOR_BYTES)) as u32)
+        .volume_label(*b"CANOE BOOT ")
+}
+
 /// Create a staging image only. A failed image stays at the supplied staging
 /// path for its owner to diagnose/remove; no failure promotes it to efisp.fat.
 pub fn create_staging(path: &Path) -> io::Result<VolumeInfo> {
@@ -54,15 +63,7 @@ pub fn create_staging(path: &Path) -> io::Result<VolumeInfo> {
         file.write_all(&zeros)?;
     }
     file.seek(SeekFrom::Start(0))?;
-    fatfs::format_volume(
-        &mut file,
-        fatfs::FormatVolumeOptions::new()
-            .fat_type(fatfs::FatType::Fat16)
-            .bytes_per_sector(SECTOR_BYTES)
-            .bytes_per_cluster(CLUSTER_BYTES)
-            .total_sectors((CONTAINER_BYTES / u64::from(SECTOR_BYTES)) as u32)
-            .volume_label(*b"CANOE BOOT "),
-    )?;
+    fatfs::format_volume(&mut file, format_options())?;
     file.sync_all()?;
     drop(file);
     inspect(&mut File::open(path)?)
