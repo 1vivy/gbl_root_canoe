@@ -1,0 +1,24 @@
+/* SPDX-License-Identifier: BSD-2-Clause-Patent */
+#ifndef EXT4_IMAGE_MAP_H
+#define EXT4_IMAGE_MAP_H
+#include <Uefi.h>
+#include <Protocol/SimpleFileSystem.h>
+#include <Protocol/BlockIo.h>
+#define EXT4_IMAGE_BYTES (32U * 1024U * 1024U)
+#define EXT4_IMAGE_MAX_EXTENTS (EXT4_IMAGE_BYTES / 1024U)
+typedef struct {
+  UINT64 Logical;
+  UINT64 Physical;
+  UINT64 Bytes;
+} EXT4_IMAGE_RANGE;
+typedef struct {
+  EFI_BLOCK_IO_PROTOCOL *Parent;
+  UINT32 MediaId;
+  UINTN Count;
+  EXT4_IMAGE_RANGE Ranges[EXT4_IMAGE_MAX_EXTENTS];
+} EXT4_IMAGE_MAP;
+/* File must come from this embedded ext4 driver. Caller frees the returned map.
+ * It is session evidence only: release before exporting persist or remounting.
+ * No filesystem allocation, repair, or writes are performed here. */
+EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *File, EXT4_IMAGE_MAP **Map);
+#endif

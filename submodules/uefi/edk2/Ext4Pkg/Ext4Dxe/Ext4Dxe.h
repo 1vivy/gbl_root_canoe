@@ -937,4 +937,7 @@ Ext4HasGdtCsum (
   return Ext4HasRoCompat (Partition, EXT4_FEATURE_RO_COMPAT_METADATA_CSUM);
 }
 
+/* Header bounds must be validated before the checksum locates its tail. */
+BOOLEAN Ext4CheckExtentChecksum (CONST EXT4_EXTENT_HEADER *Header, CONST EXT4_FILE *File);
+
 #endif

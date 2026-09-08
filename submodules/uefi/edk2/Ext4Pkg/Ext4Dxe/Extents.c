@@ -9,19 +9,6 @@
 #include "Ext4Dxe.h"
 
 /**
-   Checks if the checksum of the extent data block is correct.
-   @param[in]      ExtHeader     Pointer to the EXT4_EXTENT_HEADER.
-   @param[in]      File          Pointer to the file.
-
-   @return TRUE if the checksum is correct, FALSE if there is corruption.
-*/
-BOOLEAN
-Ext4CheckExtentChecksum (
-  IN CONST EXT4_EXTENT_HEADER *ExtHeader,
-  IN CONST EXT4_FILE *File
-  );
-
-/**
    Calculates the checksum of the extent data block.
    @param[in]      ExtHeader     Pointer to the EXT4_EXTENT_HEADER.
    @param[in]      File          Pointer to the file.

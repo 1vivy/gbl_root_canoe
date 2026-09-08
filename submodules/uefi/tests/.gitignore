@@ -10,6 +10,7 @@ test_slot_retries
 test_slot_attributes
 test_last_launch
 test_boot_root
+test_image_map
 test_fat
 test_hooks
 test_launch
