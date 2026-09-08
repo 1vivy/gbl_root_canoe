@@ -18,6 +18,7 @@
 
 #include "SuperFbMassStorage.h"
 #include "SuperFbMenu.h"
+#include "SuperFbContainer.h"
 #include "SuperFbLog.h"
 
 #include <FastbootLib/FastbootMain.h>
@@ -194,6 +195,8 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    * The USB stack is this session's one external prerequisite; settle it
    * before any driver state is touched.
    */
+  Status = SfbContainerUnmount ();
+  if (EFI_ERROR (Status)) return Status;
   SfbMassStorageEnsureUsbStack ();
 
   /*

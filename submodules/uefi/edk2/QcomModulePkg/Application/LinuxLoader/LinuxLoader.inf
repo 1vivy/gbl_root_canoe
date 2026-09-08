@@ -86,6 +86,8 @@
 	SuperFbConfig.h
 	SuperFbConfig.c
 	SuperFbFat.c
+	SuperFbImageDisk.c
+	SuperFbContainer.c
 	SuperFbEntries.c
 	SuperFbMenu.c
 	SuperFbMenuScaffold.c
@@ -131,6 +133,7 @@
 	MdeModulePkg/MdeModulePkg.dec
 	QcomModulePkg/QcomModulePkg.dec
 	FatPkg/FatPkg.dec
+	Ext4Pkg/Ext4Pkg.dec
 
 [LibraryClasses]
 	DxeServicesTableLib

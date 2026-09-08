@@ -11,6 +11,7 @@
  */
 
 #include "SuperFbFatClassify.h"
+#include "SuperFbContainer.h"
 #include "SuperFbGptName.h"
 
 #include <Library/BaseLib.h>
@@ -759,69 +760,18 @@ SfbClassifyVolume (IN EFI_HANDLE Volume)
   }
   return Kind;
 }
-/*
- * The subdirectory that plays the role of a volume root on a given
- * volume: empty for genuine FAT (its root already is the scan root) and
- * \efisp for the ext4 persist partition, whose boot files live there. The
- * entry scanner and the browser prepend this to the well-known boot file
- * paths and use it as the browse floor respectively.
- */
+/* Every discoverable boot volume is FAT and uses its volume root. The ext4
+ * parent is exclusively a container locator and is never a boot-root fallback. */
 CONST CHAR16 *
 SfbVolumeRootPrefix (IN EFI_HANDLE Volume)
 {
-  return SfbClassifyVolume (Volume) == SfbVolumeKindExt4 ?
-           L"\\efisp" : L"";
+  (VOID)Volume;
+  return L"";
 }
 BOOLEAN
 SfbVolumeIsExt4 (IN EFI_HANDLE Volume)
 {
   return (BOOLEAN)(SfbClassifyVolume (Volume) == SfbVolumeKindExt4);
-}
-
-/*
- * TRUE when Path names an existing directory on Volume. Ext4 volumes are only
- * treated as boot volumes when they carry \efisp, so an ext4 partition whose
- * \efisp directory has not been created is never scanned or offered in the
- * browser. FAT volumes are never gated on this: their root is the boot root.
- */
-STATIC
-BOOLEAN
-SfbVolumeHasDir (IN EFI_HANDLE Volume, IN CONST CHAR16 *Path)
-{
-  EFI_STATUS         Status;
-  EFI_FILE_PROTOCOL  *Root = NULL;
-  EFI_FILE_PROTOCOL  *Dir = NULL;
-  EFI_FILE_INFO      *Info;
-  UINTN              InfoSize;
-  BOOLEAN            IsDir = FALSE;
-
-  if (EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) || Root == NULL) {
-    return FALSE;
-  }
-
-  Status = Root->Open (Root, &Dir, (CHAR16 *)Path, EFI_FILE_MODE_READ, 0);
-  if (EFI_ERROR (Status) || Dir == NULL) {
-    Root->Close (Root);
-    return FALSE;
-  }
-
-  InfoSize = 0;
-  Status = Dir->GetInfo (Dir, &gEfiFileInfoGuid, &InfoSize, NULL);
-  if (Status == EFI_BUFFER_TOO_SMALL) {
-    Info = AllocateZeroPool (InfoSize);
-    if (Info != NULL) {
-      Status = Dir->GetInfo (Dir, &gEfiFileInfoGuid, &InfoSize, Info);
-      if (!EFI_ERROR (Status)) {
-        IsDir = (BOOLEAN)((Info->Attribute & EFI_FILE_DIRECTORY) != 0);
-      }
-      FreePool (Info);
-    }
-  }
-
-  Dir->Close (Dir);
-  Root->Close (Root);
-
-  return IsDir;
 }
 
 EFI_STATUS
@@ -836,6 +786,8 @@ SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
 
   *Handles = NULL;
   *Count = 0;
+  Status = SfbContainerMount ();
+  if (EFI_ERROR (Status)) DEBUG ((EFI_D_INFO, "SFB: MARK container unavailable=%r\n", Status));
   SfbResetVolumeClassCache ();
 
   Status = gBS->LocateHandleBuffer (ByProtocol,
@@ -851,28 +803,18 @@ SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
     return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
   }
 
-  /* Filter in place: the buffer is ours, and the survivors keep their order.
-   * FAT volumes of any width are the menu's traditional boot media; ext4
-   * volumes are the persist partition, whose \efisp directory the scanner
-   * treats as a volume root via SfbVolumeRootPrefix (). An ext4 volume without
-   * \efisp is dropped: it has no boot root to scan and nothing to browse, so it
-   * would only clutter the menu. Anything else is dropped too.
-   *
-   * Width matters here because this platform has no FAT32 partition at all.
-   * Accepting only FAT32 dropped all 11 of its FAT volumes - and would drop a
-   * FAT16-formatted USB stick - leaving persist as the sole survivor. */
+  /* Keep the container FAT volume and ordinary FAT media. Legacy ext4
+   * directories are intentionally neither scanned nor offered in the browser. */
   for (Index = 0; Index < AllCount; Index++) {
     Kind = SfbClassifyVolume (All[Index]);
-    if (Kind == SfbVolumeKindFat ||
-        (Kind == SfbVolumeKindExt4 &&
-         SfbVolumeHasDir (All[Index], L"\\efisp"))) {
+    if (Kind == SfbVolumeKindFat) {
       All[Kept++] = All[Index];
     }
   }
 
   Status = (Kept == 0) ? EFI_NOT_FOUND : EFI_SUCCESS;
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK volumes kept=%u of=%u kinds=fat/ext4 status=%r\n",
+          "SFB: MARK volumes kept=%u of=%u kinds=fat status=%r\n",
           (UINT32)Kept, (UINT32)AllCount, Status));
 
   if (Kept == 0) {

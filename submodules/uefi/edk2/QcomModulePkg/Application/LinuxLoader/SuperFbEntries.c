@@ -9,6 +9,7 @@
  */
 
 #include "SuperFbMenu.h"
+#include "SuperFbContainer.h"
 #include "SuperFbLog.h"
 #include "SuperFbBootRoot.h"
 
@@ -1020,7 +1021,7 @@ SfbScanDiscoveredVolumes (IN OUT SFB_MENU_STATE *Menu)
      * it - and because on a device whose USB host mode does not work it is the
      * only place an entry can be staged at all.
      */
-    if (SfbVolumeIsExt4 (Volumes[Index]) || SfbIsUsbVolume (Volumes[Index])) {
+    if (SfbIsContainerVolume (Volumes[Index]) || SfbIsUsbVolume (Volumes[Index])) {
       SfbScanBlsEntries (Menu, Volumes[Index], Root);
     }
 

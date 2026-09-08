@@ -142,10 +142,22 @@ test_surface: test_surface.c \
 	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 clean:
-	rm -f test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface
+	rm -f test_image_map test_image_disk test_container test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_bls test_linuxboot test_log test_surface
 
 .PHONY: test_image_map
 test: test_image_map
 test_image_map:
 	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -I../edk2/EmbeddedPkg/Include -I../edk2/Ext4Pkg/Include -o test_image_map test_image_map.c ../edk2/Ext4Pkg/Ext4Dxe/ImageMap.c
 	./test_image_map
+
+.PHONY: test_image_disk
+test: test_image_disk
+test_image_disk:
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -I../edk2/Ext4Pkg/Include -o test_image_disk test_image_disk.c ../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbImageDisk.c
+	./test_image_disk
+
+.PHONY: test_container
+test: test_container
+test_container:
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -I../edk2/Ext4Pkg/Include -o test_container test_container.c ../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbImageDisk.c ../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbContainer.c
+	./test_container

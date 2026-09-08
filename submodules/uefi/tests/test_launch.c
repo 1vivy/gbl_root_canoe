@@ -2589,6 +2589,13 @@ SfbVolumeRootPrefix(IN EFI_HANDLE Volume)
   }
   return L"";
 }
+/* The discovery fixture models a managed volume independently of its paths. */
+BOOLEAN
+SfbIsContainerVolume(IN EFI_HANDLE Volume)
+{
+  return (BOOLEAN)(Volume == mVolume && mBootRootIsExt4);
+}
+
 BOOLEAN
 SfbVolumeIsExt4(IN EFI_HANDLE Volume)
 {

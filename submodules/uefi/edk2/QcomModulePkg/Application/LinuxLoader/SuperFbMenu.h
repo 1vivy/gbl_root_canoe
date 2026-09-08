@@ -383,17 +383,8 @@ SfbMountLogfs (VOID);
 VOID
 SfbBootMark (IN CONST CHAR16 *Stage);
 
-/*
- * Snapshot of the boot volumes currently in the system: FAT volumes plus the
- * ext4 persist partition. *Handles must be released with FreePool ().
- *
- * Handles whose media is neither FAT nor ext4 are dropped: the menu and the
- * browser are specified in terms of those, and a platform's firmware may well
- * publish Simple File System over things this loader has no business writing
- * to or offering as boot media. An ext4 volume is also dropped unless it carries
- * a \efisp directory: that is its boot root, so without it there is nothing to
- * scan or browse, and the browser must not list it.
- */
+/* Snapshot of FAT boot volumes, including the owned persist/efisp.fat view.
+ * Raw ext4 parents and legacy directories are excluded. FreePool the handles. */
 EFI_STATUS
 SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count);
 
@@ -418,12 +409,7 @@ SfbIsExt4Volume (IN EFI_HANDLE Volume);
 BOOLEAN
 SfbVolumeIsExt4 (IN EFI_HANDLE Volume);
 
-/*
- * The volume-relative directory that acts as the boot root: "" for FAT (its
- * root already is) and "\efisp" for the ext4 persist partition. The scanner
- * prepends this to \EFI\BOOT\BOOTAA64.EFI and friends; the browser starts
- * browsing here.
- */
+/* Discoverable FAT volumes use their filesystem root, with no directory prefix. */
 CONST CHAR16 *
 SfbVolumeRootPrefix (IN EFI_HANDLE Volume);
 

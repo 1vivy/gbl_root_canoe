@@ -9,6 +9,7 @@
  */
 
 #include "SuperFbMenu.h"
+#include "SuperFbContainer.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -726,7 +727,7 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
     }
 
     /* Tag the ext4 persist volume so it is told apart from FAT media. */
-    if (SfbVolumeIsExt4 (Context.Volumes[Index])) {
+    if (SfbIsContainerVolume (Context.Volumes[Index])) {
       if (Label[0] != L'\0') {
         if (RETURN_ERROR (StrCatS (Label, SFB_DESC_CHARS, L" (ext4)"))) {
           Label[0] = L'\0';
