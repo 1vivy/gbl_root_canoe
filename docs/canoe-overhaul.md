@@ -125,5 +125,14 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   fixture passes worker writes, busy-file refusal, retry after closing the file,
   native eject and detached readback/fsck. Guided deployment/UAC integration
   remains outstanding.
+- The worker's ext4 directory backend has been removed. Native source operations
+  now use the mounted filesystem on Windows and owned vfat/loop lifetimes on
+  Linux/Android. Real Linux fixtures cover JSONL source changes, install, tools,
+  unchanged-volume preflight refusal, busy unmount, duplicate attachment and
+  source drift. A source-built Android worker passes in the existing Cuttlefish
+  KSU guest with SELinux enforcing, followed by independent FAT readback/fsck.
+  Loop attachment checks now use kernel backing inode identity, not sysfs path
+  strings. Explicit detach closes a stale-attachment timing gap between requests.
+  The old GUI/module export/provisioning callers still need integration.
 - The Windows app last inspected reports b3. Do not launch a mixed intermediate
   package as b4; replace it only with the integrated, checked b4 build.
