@@ -22,6 +22,13 @@ const CANOE_IDENTITY: &str = "1209:ca0e";
 const FALLBACK_IDENTITY: &str = "05c6:f000";
 
 pub(super) fn setupapi_identities() -> HashMap<u32, String> {
+    setupapi_connections()
+        .into_iter()
+        .map(|(number, (identity, _))| (number, identity))
+        .collect()
+}
+
+pub(super) fn setupapi_connections() -> HashMap<u32, (String, String)> {
     let mut identities = HashMap::new();
     // SAFETY: GUID and flags are immutable inputs; null enumerator means all disk interfaces.
     let set: HDEVINFO = unsafe {
@@ -66,7 +73,7 @@ pub(super) fn setupapi_identities() -> HashMap<u32, String> {
                 null_mut(),
             )
         };
-        if required != 0 {
+        if (8..=65536).contains(&required) {
             let words = usize::try_from(required)
                 .unwrap_or(0)
                 .div_ceil(size_of::<u32>());
@@ -98,11 +105,18 @@ pub(super) fn setupapi_identities() -> HashMap<u32, String> {
                 )
             };
             if ok != 0 {
-                // SAFETY: SetupAPI's detail buffer stores a NUL-terminated DevicePath string.
-                let path = unsafe { utf16_from_ptr((*detail).DevicePath.as_ptr()) };
-                if let Some(identity) = devnode_identity(info.DevInst) {
-                    if let Some(index) = interface_drive_number(&path) {
-                        identities.insert(index, identity);
+                // DevicePath starts after cbSize, including on x64. Bound the
+                // UTF-16 scan to the allocated buffer instead of trusting NUL.
+                let chars = (storage.len() * size_of::<u32>() - 4) / 2;
+                // SAFETY: the aligned allocation contains this many initialized u16s.
+                let units =
+                    unsafe { std::slice::from_raw_parts((*detail).DevicePath.as_ptr(), chars) };
+                if let Some(end) = units.iter().position(|unit| *unit == 0) {
+                    let path = String::from_utf16_lossy(&units[..end]);
+                    if let Some(identity) = devnode_identity(info.DevInst) {
+                        if let Some(index) = interface_drive_number(&path) {
+                            identities.insert(index, (identity, path));
+                        }
                     }
                 }
             }
@@ -188,17 +202,6 @@ fn parse_usb_identity(value: &str) -> Option<String> {
         product.to_ascii_lowercase()
     );
     (identity == CANOE_IDENTITY || identity == FALLBACK_IDENTITY).then_some(identity)
-}
-
-fn utf16_from_ptr(pointer: *const u16) -> String {
-    // SAFETY: SetupAPI's detail buffer stores a NUL-terminated DevicePath string.
-    unsafe {
-        let mut length = 0;
-        while *pointer.add(length) != 0 {
-            length += 1;
-        }
-        String::from_utf16_lossy(std::slice::from_raw_parts(pointer, length))
-    }
 }
 
 pub(super) fn wide_null(value: &str) -> Vec<u16> {

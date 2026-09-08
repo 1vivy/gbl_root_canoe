@@ -30,6 +30,21 @@ impl Drop for DeviceHandle {
 #[path = "setupapi.rs"]
 mod setupapi;
 
+pub(super) fn export_connection(node: &std::path::Path) -> std::io::Result<String> {
+    let name = node
+        .to_str()
+        .ok_or_else(|| std::io::Error::other("invalid disk path"))?;
+    let number = name
+        .strip_prefix(r"\\.\PhysicalDrive")
+        .filter(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+        .and_then(|suffix| suffix.parse::<u32>().ok())
+        .ok_or_else(|| std::io::Error::other("export must name a physical disk directly"))?;
+    setupapi::setupapi_connections()
+        .remove(&number)
+        .map(|(_, path)| path)
+        .ok_or_else(|| std::io::Error::other("selected disk is not a recognized Canoe USB export"))
+}
+
 pub fn detect_windows() -> Result<Vec<SourceCandidate>, super::DetectError> {
     let identities = setupapi::setupapi_identities();
     let mut candidates = Vec::new();

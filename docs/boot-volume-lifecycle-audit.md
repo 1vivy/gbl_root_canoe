@@ -145,3 +145,44 @@ The Windows harness is `canoe-boot-manager/e2e/hosts/windows/provision/test-pers
 It only accepts ordinary image fixtures, preserves their source hash, and retains
 the output for independent inspection. It does not exercise the live raw-device
 adapter or touch the passed-through phone.
+
+## Owned raw host transport
+
+`RawVolume` now retains one recognized Canoe export handle and its connection,
+OS device identity and capacity. It rechecks acquisition instead of treating a
+reusable `/dev/sdX` or `PhysicalDriveN` name as identity. `SectorIo` bounds seeks
+and writes, aligns memory/offsets/lengths to the physical sector and performs
+read/modify/write for partial sectors. Both readback and commit use this handle.
+
+Windows opens the SetupAPI disk interface with unbuffered, write-through I/O,
+validates logical/physical geometry and device identity, then takes the export
+offline with a nonpersistent disk attribute. It verifies that state and leaves
+it offline after close or failure until explicit export removal; onlining a
+partially committed FAT volume would give Windows filesystem access too soon.
+Canoe's gadget presents a fixed disk, which is required for this ownership path.
+Linux opens with `O_EXCL | O_NOFOLLOW | O_DIRECT` and validates retained block
+metadata and USB ancestry. Mounted block volumes cannot be acquired. The
+interprocess Canoe device lease remains held until the raw handle closes.
+These mechanisms exclude filesystem mounting and competing Canoe operations;
+they are not a guarantee against another privileged raw writer.
+
+The test-seams build has a separate owned virtual-disk entry point. The Windows
+harness binds its exact 64 MiB / 4K VHDX, rejects boot/system disks, and the native
+adapter independently requires the file-backed virtual bus and expected size.
+The Linux harness creates its own 64 MiB / 4K loop device; the native adapter
+requires that geometry and its fixture backing name. Neither path permits the
+passed-through USB phone. Both OS runs verified preparation makes no raw writes,
+interrupted commit survives handle close/reopen, explicit resume/revert matches
+whole reviewed images, and unrelated calibration and legacy directory data
+survive. Both exported results passed independent `e2fsck -fn`; Windows remained
+offline until VHDX detachment, and Linux rejected a mounted fixture with EBUSY.
+The generic alignment check also covers 512-byte, 4K and 64K physical sectors,
+small/cross-buffer writes, bounds and read/write/flush failures.
+
+These are actual OS block-device checks, not yet packaged GUI/UAC/USB acceptance.
+The raw transport still needs connection to FAT backend dispatch and protocol
+orchestration. Harnesses: `test-raw-activation.ps1` and `test-raw-activation.sh` in
+the GUI repository's OS provisioning directories.
+Sources: [Windows file buffering](https://learn.microsoft.com/en-us/windows/win32/fileio/file-buffering),
+[SET_DISK_ATTRIBUTES](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-set_disk_attributes),
+and [Linux block-device exclusive access](https://docs.kernel.org/5.16/core-api/kernel-api.html).

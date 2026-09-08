@@ -103,6 +103,24 @@ pub fn detect_sources() -> Result<Vec<SourceCandidate>, DetectError> {
     }
 }
 
+/// Resolve the selected export to an OS connection identity, not a reusable
+/// disk number. The raw adapter rechecks this after retaining its device handle.
+pub(crate) fn export_connection(node: &std::path::Path) -> std::io::Result<String> {
+    #[cfg(target_os = "linux")]
+    {
+        linux::export_connection(node)
+    }
+    #[cfg(windows)]
+    {
+        windows::export_connection(node)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = node;
+        Err(std::io::Error::other("unsupported export platform"))
+    }
+}
+
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::{LinuxProbe, SourceCandidate, SourceKind, detect_linux};

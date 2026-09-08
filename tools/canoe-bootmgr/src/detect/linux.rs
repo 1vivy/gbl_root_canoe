@@ -121,6 +121,48 @@ fn usb_identity(block: &Path) -> Option<String> {
     roots.into_iter().find_map(|root| ancestry_identity(&root))
 }
 
+pub(super) fn export_connection(node: &Path) -> std::io::Result<String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let metadata = fs::symlink_metadata(node)?;
+    if !metadata.file_type().is_block_device() {
+        return Err(std::io::Error::other(
+            "export must name a block device directly",
+        ));
+    }
+    let block = fs::canonicalize(format!(
+        "/sys/dev/block/{}:{}",
+        libc::major(metadata.rdev()),
+        libc::minor(metadata.rdev())
+    ))?;
+    if block.join("partition").exists() {
+        return Err(std::io::Error::other("export must name the whole USB disk"));
+    }
+    let start = fs::canonicalize(block.join("device"))?;
+    for current in start.ancestors().take(16) {
+        if let (Some(vendor), Some(product)) = (
+            read_trimmed(&current.join("idVendor")),
+            read_trimmed(&current.join("idProduct")),
+        ) {
+            let identity = format!(
+                "{}:{}",
+                vendor.to_ascii_lowercase(),
+                product.to_ascii_lowercase()
+            );
+            if super::EXPORT_IDENTITIES.contains(&identity.as_str()) {
+                return serde_json::to_string(&(
+                    identity,
+                    current,
+                    read_trimmed(&current.join("serial")),
+                ))
+                .map_err(std::io::Error::other);
+            }
+        }
+    }
+    Err(std::io::Error::other(
+        "selected disk is not a recognized Canoe USB export",
+    ))
+}
+
 fn ancestry_identity(start: &Path) -> Option<String> {
     let mut current = start.to_path_buf();
     for _ in 0..16 {

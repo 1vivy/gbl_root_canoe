@@ -244,3 +244,6 @@ pub fn verify_tzmap(
 pub mod bootroot_cleanup;
 #[cfg(feature = "cli")]
 pub mod bootstrap;
+
+pub mod sector_io;
+pub mod raw_volume;
