@@ -1,42 +1,32 @@
-use std::ffi::OsString;
-use std::fs;
-use std::path::Path;
-
 use crate::build::{BuildError, io_error};
-
+use canoe_fs::confined::Root;
+use std::{fs, path::Path};
 pub(crate) fn stage(source: &Path, staged: &Path) -> Result<usize, BuildError> {
-    if !source.is_dir() {
+    let input = Root::open(source).map_err(|e| io_error("open EFI tools", source, e))?;
+    let files: Vec<_> = input
+        .names("")
+        .map_err(|e| io_error("list EFI tools", source, e))?
+        .into_iter()
+        .filter(|n| n.to_ascii_lowercase().ends_with(".efi"))
+        .collect();
+    if files.len() > 32 {
         return Err(BuildError::Invalid {
             step: "efisp-tools",
-            message: format!("{} is not an existing directory", source.display()),
+            message: "too many EFI tools".into(),
         });
     }
-
-    let mut files = Vec::new();
-    for entry in
-        fs::read_dir(source).map_err(|error| io_error("read efisp-tools", source, error))?
-    {
-        let entry = entry.map_err(|error| io_error("read efisp-tools", source, error))?;
-        if entry
-            .file_type()
-            .map_err(|error| io_error("inspect efisp-tools entry", &entry.path(), error))?
-            .is_file()
-        {
-            files.push((entry.file_name(), entry.path()));
-        }
-    }
-    files.sort_by(|(left, _), (right, _)| compare_names(left, right));
-
     let destination = staged.join("tools");
-    fs::create_dir_all(&destination)
-        .map_err(|error| io_error("create staged tools directory", &destination, error))?;
-    for (name, file) in &files {
-        let output = destination.join(name);
-        fs::copy(file, &output).map_err(|error| io_error("stage efisp tool", &output, error))?;
+    fs::create_dir(&destination)
+        .map_err(|e| io_error("create private tools directory", &destination, e))?;
+    let output = Root::open(&destination)
+        .map_err(|e| io_error("open private tools directory", &destination, e))?;
+    for name in &files {
+        let bytes = input
+            .read(name, 16 * 1024 * 1024)
+            .map_err(|e| io_error("read EFI tool", source, e))?;
+        output
+            .write(name, &bytes, false)
+            .map_err(|e| io_error("stage EFI tool", &destination, e))?;
     }
     Ok(files.len())
-}
-
-fn compare_names(left: &OsString, right: &OsString) -> std::cmp::Ordering {
-    left.cmp(right)
 }

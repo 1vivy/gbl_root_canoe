@@ -7,7 +7,7 @@ use clap::Args;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::build_cleanup::{self, Cleanup};
+use crate::build_cleanup;
 use crate::build_steps;
 use crate::build_tools::{self, ToolError, ToolResolver, WorkDir};
 pub(crate) const GM2P_BYTES: u64 = 120;
@@ -130,24 +130,76 @@ fn run_full(
     tools: &dyn ToolResolver,
 ) -> Result<BuildOutcome, BuildError> {
     validate_output_paths(args, staged, vbmeta)?;
-    let mut cleanup = Cleanup::prepare(
-        staged,
-        args.keep_unpatched.as_deref(),
-        args.patch_log.as_deref(),
-    )?;
-    match derive_full(args, staged, vbmeta, tools) {
-        Ok(receipt) => {
-            cleanup.commit();
-            Ok(BuildOutcome::Full(receipt))
-        }
-        Err(error) => {
-            cleanup.rollback();
-            Err(error)
+    fs::create_dir_all(staged).map_err(|e| io_error("create output directory", staged, e))?;
+    let destination = canoe_fs::confined::Root::open(staged)
+        .map_err(|e| io_error("open output directory", staged, e))?;
+    if !destination
+        .names("")
+        .map_err(|e| io_error("inspect output directory", staged, e))?
+        .is_empty()
+    {
+        return Err(BuildError::Invalid {
+            step: "output",
+            message: "choose an empty staging directory; existing outputs are preserved".into(),
+        });
+    }
+    let private = WorkDir::new().map_err(|e| io_error("create private workspace", staged, e))?;
+    let generated = private.path().join("staged");
+    fs::create_dir(&generated).map_err(|e| io_error("create private stage", &generated, e))?;
+    let mut private_args = args.clone();
+    private_args.keep_unpatched = args
+        .keep_unpatched
+        .as_ref()
+        .map(|_| private.path().join("unpatched.efi"));
+    private_args.patch_log = args
+        .patch_log
+        .as_ref()
+        .map(|_| private.path().join("patch.log"));
+    let mut receipt = derive_full(&private_args, &generated, vbmeta, tools)?;
+    if !destination
+        .names("")
+        .map_err(|e| io_error("recheck output directory", staged, e))?
+        .is_empty()
+    {
+        return Err(BuildError::Invalid {
+            step: "output",
+            message: "staging directory changed during build".into(),
+        });
+    }
+    let source = canoe_fs::confined::Root::open(&generated)
+        .map_err(|e| io_error("open prepared files", &generated, e))?;
+    for (prepared, output) in [
+        (&private_args.keep_unpatched, &args.keep_unpatched),
+        (&private_args.patch_log, &args.patch_log),
+    ] {
+        if let (Some(prepared), Some(output)) = (prepared, output) {
+            build_cleanup::copy_aux(prepared, output, "publish auxiliary output")?;
         }
     }
+    let mut files = vec!["boot.efi.gm2p".to_owned(), "boot.efi.tzmap".to_owned()];
+    if receipt.tools_staged > 0 {
+        files.extend(
+            source
+                .names("tools")
+                .map_err(|e| io_error("list prepared tools", &generated, e))?
+                .into_iter()
+                .map(|n| format!("tools/{n}")),
+        );
+    }
+    files.push("boot.efi".into());
+    for name in files {
+        let bytes = source
+            .read(&name, 16 * 1024 * 1024)
+            .map_err(|e| io_error("read prepared output", &generated, e))?;
+        destination
+            .write(&name, &bytes, false)
+            .map_err(|e| io_error("publish prepared output", staged, e))?;
+    }
+    receipt.staged = staged.into();
+    Ok(BuildOutcome::Full(receipt))
 }
 
-// Validate before Cleanup touches an earlier staging tree or auxiliary output.
+// Check input/output aliases before creating any output.
 fn validate_output_paths(args: &BuildArgs, staged: &Path, vbmeta: &Path) -> Result<(), BuildError> {
     let inputs = [args.abl.as_path(), vbmeta];
     let mut outputs: Vec<PathBuf> = ["boot.efi", "boot.efi.gm2p", "boot.efi.tzmap"]
