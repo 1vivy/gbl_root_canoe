@@ -2348,6 +2348,8 @@ STATIC VOID
 CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
 {
   CONST CHAR16          *Target;
+  CHAR8                  Identity[33];
+  BOOLEAN                Bound = FALSE;
   EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
   EFI_STATUS             Status;
 
@@ -2394,6 +2396,7 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     Target = L"boot-root";
   } else if (AsciiStrnCmp (Arg, "mass-storage:boot-root:", 23) == 0) {
     Target = L"boot-root";
+    Bound = TRUE;
   } else if (AsciiStrCmp (Arg, "mass-storage:logfs") == 0) {
     Target = L"logfs";
   } else {
@@ -2417,11 +2420,12 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     FastbootFail ("mass-storage partition not found");
     return;
   }
-  if (StrCmp (Target, L"boot-root") == 0 && Arg[22] == ':' &&
-      !SfbContainerMatchesIdentity (Arg + 23)) {
+  if (Bound && !SfbContainerMatchesIdentity (Arg + 23)) {
     FastbootFail ("boot container changed since review");
     return;
   }
+  /* Keep the reviewed identity across fastboot buffer/USB-stack reuse. */
+  if (Bound) CopyMem (Identity, Arg + 23, sizeof (Identity));
 
   /*
    * Once OKAY is sent the host switches from fastboot to USB mass storage.
@@ -2431,7 +2435,7 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
    * on every started-session exit, then this handler returns to fastboot.
    */
   FastbootOkay ("");
-  Status = SfbExportPartitionByName (Target);
+  Status = SfbExportPartitionBound (Target, Bound ? Identity : NULL);
   if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
     DEBUG ((EFI_D_ERROR,
             "SFB: MARK msc-run target=%s status=%r reason=post-handoff\n",

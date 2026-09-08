@@ -241,6 +241,11 @@ EFI_BLOCK_IO_PROTOCOL *SfbContainerDisplayDisk (VOID)
 
 EFI_STATUS SfbContainerUsbBegin (EFI_BLOCK_IO_PROTOCOL **Disk)
 {
+  return SfbContainerUsbBeginBound (Disk, NULL);
+}
+
+EFI_STATUS SfbContainerUsbBeginBound (EFI_BLOCK_IO_PROTOCOL **Disk, CONST CHAR8 *Identity)
+{
   EFI_STATUS Status;
   if (Disk == NULL)
     return EFI_INVALID_PARAMETER;
@@ -250,6 +255,10 @@ EFI_STATUS SfbContainerUsbBegin (EFI_BLOCK_IO_PROTOCOL **Disk)
   Status = SfbContainerMount ();
   if (EFI_ERROR (Status))
     return Status;
+  /* Check the map actually handed to USB, after any host-controller reset.
+   * An earlier fastboot preflight may have inspected a discarded map. */
+  if (Identity != NULL && !SfbContainerMatchesIdentity (Identity))
+    return EFI_ACCESS_DENIED;
   Status = gBS->DisconnectController (mHandle, NULL, NULL);
   if (EFI_ERROR (Status) && Status != EFI_NOT_FOUND)
     return Status;

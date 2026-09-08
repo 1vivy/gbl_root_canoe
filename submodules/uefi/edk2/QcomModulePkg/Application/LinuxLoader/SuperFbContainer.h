@@ -9,6 +9,7 @@ BOOLEAN SfbIsContainerVolume (EFI_HANDLE Handle);
 /* Begin removes the public FAT/Block I/O handle before returning USB's private
  * disk pointer. End requires confirmed gadget stop AND LUN release. */
 EFI_STATUS SfbContainerUsbBegin (EFI_BLOCK_IO_PROTOCOL **Disk);
+EFI_STATUS SfbContainerUsbBeginBound (EFI_BLOCK_IO_PROTOCOL **Disk, CONST CHAR8 *Identity);
 EFI_STATUS SfbContainerUsbEnd (BOOLEAN GadgetReleased);
 EFI_BLOCK_IO_PROTOCOL *SfbContainerDisplayDisk (VOID);
 /* Exact 32-character base64url encoding of the retained map's 24-byte identity.

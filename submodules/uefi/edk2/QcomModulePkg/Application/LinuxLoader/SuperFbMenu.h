@@ -675,6 +675,8 @@ SfbRunMassStorageMenu (VOID);
  */
 EFI_STATUS
 SfbExportPartitionByName (IN CONST CHAR16 *Target);
+EFI_STATUS
+SfbExportPartitionBound (IN CONST CHAR16 *Target, IN CONST CHAR8 *Identity);
 
 /* ---- shared console helpers (SuperFbMenu.c) ----------------------------- */
 

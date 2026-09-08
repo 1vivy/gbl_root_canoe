@@ -168,9 +168,8 @@ SfbMassStoragePartitionBytes (IN EFI_BLOCK_IO_PROTOCOL *BlockIo)
   return Blocks * BlockIo->Media->BlockSize;
 }
 
-EFI_STATUS
-SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
-                          IN CONST CHAR8  *Tag)
+STATIC EFI_STATUS
+ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity)
 {
   EFI_STATUS            Status;
   EFI_STATUS            QueryStatus;
@@ -252,7 +251,7 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
   if (Msd->AssignBlkIoHandle == NULL || Msd->StopDevice == NULL ||
       Msd->StartDevice == NULL || Msd->EventHandler == NULL) return EFI_UNSUPPORTED;
   if (Container) {
-    Status = SfbContainerUsbBegin (&BlockIo);
+    Status = SfbContainerUsbBeginBound (&BlockIo, Identity);
     if (EFI_ERROR (Status)) return Status;
   }
   Status = SfbMsdLeaseAssign (Msd, BlockIo, Container ? SfbContainerUsbEnd : NULL);
@@ -591,11 +590,25 @@ SfbRunMassStorageMenu (VOID)
 EFI_STATUS
 SfbExportPartitionByName (IN CONST CHAR16 *Target)
 {
+  return SfbExportPartitionBound (Target, NULL);
+}
+
+EFI_STATUS
+SfbMassStorageExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag)
+{
+  return ExportDisk (Name, Tag, NULL);
+}
+
+EFI_STATUS
+SfbExportPartitionBound (IN CONST CHAR16 *Target, IN CONST CHAR8 *Identity)
+{
   CONST CHAR8 *Tag;
 
   if (Target == NULL) {
     return EFI_INVALID_PARAMETER;
   }
+  if (Identity != NULL && StrCmp (Target, L"boot-root") != 0)
+    return EFI_INVALID_PARAMETER;
 
   if (StrCmp (Target, L"boot-root") == 0) {
     Tag = "boot-root";
@@ -619,5 +632,5 @@ SfbExportPartitionByName (IN CONST CHAR16 *Target)
    */
   (VOID)SfbLogFlush ("pre-export");
 
-  return SfbMassStorageExportDisk (Target, Tag);
+  return ExportDisk (Target, Tag, Identity);
 }

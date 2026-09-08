@@ -21,6 +21,7 @@ static EFI_FILE_PROTOCOL Root, File;
 static EFI_DEVICE_PATH_PROTOCOL Path;
 static BOOLEAN Connected, Busy, ParentBusy, FailFlush, Missing, BadFat;
 static UINTN Maps, Opens, ParentDisconnects;
+static UINT8 Incarnation;
 static UINT8 Bytes[128 * 1024];
 VOID *EFIAPI CopyMem (VOID *a, CONST VOID *b, UINTN n) { return memcpy (a, b, n); }
 INTN EFIAPI CompareMem (CONST VOID *a, CONST VOID *b, UINTN n) { return memcmp (a, b, n); }
@@ -96,6 +97,7 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *f, EXT4_IMAGE_MAP **out)
   (*out)->MediaId = 5;
   (*out)->Count = 1;
   for (UINTN I = 0; I < 24; I++) (*out)->Identity[I] = (UINT8)I;
+  (*out)->Identity[23] ^= Incarnation;
   (*out)->Ranges[0] = (EXT4_IMAGE_RANGE){0, 0, EXT4_IMAGE_BYTES};
   return EFI_SUCCESS;
 }
@@ -267,7 +269,14 @@ int main (void)
   assert (SfbContainerUnmount () == EFI_SUCCESS);
   {
     EFI_BLOCK_IO_PROTOCOL *Usb = NULL;
-    assert (SfbContainerUsbBegin (&Usb) == EFI_SUCCESS);
+    /* USB-stack setup discards the preflight map. Refuse a replacement even
+     * when the earlier map matched and the replacement is valid FAT. */
+    Incarnation = 1;
+    assert (SfbContainerUsbBeginBound (&Usb, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX") == EFI_ACCESS_DENIED);
+    assert (Usb == NULL && Published && Connected);
+    assert (SfbContainerUnmount () == EFI_SUCCESS);
+    Incarnation = 0;
+    assert (SfbContainerUsbBeginBound (&Usb, "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX") == EFI_SUCCESS);
     assert (Usb != NULL && !Published && !Connected);
     assert (!SfbContainerMatchesIdentity ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYX"));
     assert (SfbContainerDisplayDisk () == NULL);
