@@ -888,6 +888,11 @@ SfbReadFileBytes (IN EFI_FILE_PROTOCOL *Root,
   EFI_STATUS         Status;
   EFI_FILE_PROTOCOL  *File = NULL;
   UINTN              ReadSize = MaxBytes;
+  EFI_STATUS         CloseStatus;
+
+  if (Root == NULL || Path == NULL || Buffer == NULL || BytesRead == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
 
   *BytesRead = 0;
 
@@ -897,10 +902,16 @@ SfbReadFileBytes (IN EFI_FILE_PROTOCOL *Root,
   }
 
   Status = File->Read (File, &ReadSize, Buffer);
-  File->Close (File);
+  CloseStatus = File->Close (File);
 
   if (EFI_ERROR (Status)) {
     return Status;
+  }
+  if (EFI_ERROR (CloseStatus)) {
+    return CloseStatus;
+  }
+  if (ReadSize > MaxBytes) {
+    return EFI_COMPROMISED_DATA;
   }
 
   *BytesRead = ReadSize;
@@ -1050,4 +1061,3 @@ SfbGetVolumeLabel (IN EFI_FILE_PROTOCOL *Root,
 
   FreePool (Label);
 }
-

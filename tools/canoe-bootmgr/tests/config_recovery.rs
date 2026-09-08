@@ -3,6 +3,20 @@ use canoe_bootmgr::{
     config::ConfigDocument,
 };
 use std::fs;
+
+#[test]
+fn bls_only_current_config_never_revives_previous_managed_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("canoe.cfg.prev"), ORIGINAL).unwrap();
+    fs::write(dir.path().join("canoe.cfg"), b"version 1\ngeneration 9\nkey-window 2345\ndefault bls:linux\n").unwrap();
+    let root = LocalDir::new(dir.path()).unwrap();
+    let loaded = root.load_config().unwrap().unwrap();
+    assert_eq!(loaded.source, ConfigSource::Current);
+    assert!(loaded.config.entries.is_empty());
+    assert_eq!(loaded.config.key_window_ms, 2345);
+    assert_eq!(loaded.config.default.as_deref(), Some("bls:linux"));
+    assert!(ConfigDocument::parse(b"version 1\nentry broken\n image ../outside\n").is_err());
+}
 const ORIGINAL: &[u8] =
     b"version 1\ngeneration 3\nmode 1\ndefault a\nentry a\n image boot_a.efi\n mode 1\n";
 

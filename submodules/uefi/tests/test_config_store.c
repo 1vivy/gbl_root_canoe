@@ -120,6 +120,16 @@ static SFB_CONFIG ReadConfig (BOOLEAN *Previous) {
 }
 int main (void) {
   UINTN Boundary, Total; BOOLEAN Previous; SFB_CONFIG Config; FILE_FIXTURE *File;
+  static const char BlsOnly[] = "version 1\ngeneration 9\nkey-window 2345\ndefault bls:linux\n";
+  Reset ();
+  Put ("canoe.cfg.prev", Original, strlen (Original));
+  Put ("canoe.cfg", BlsOnly, strlen (BlsOnly));
+  Config = ReadConfig (&Previous);
+  assert (!Previous && Config.Count == 0 && Config.Generation == 9);
+  assert (Config.DefaultIsBls && Config.KeyWindowMs == 2345);
+  assert (SfbStoreConfigDefault (&Root, "bls:linux", 0) == EFI_SUCCESS);
+  Config = ReadConfig (&Previous);
+  assert (!Previous && Config.Count == 0 && Config.DefaultIsBls);
   Reset ();
   Put (".canoe-cfg-stage-00000001", "old interrupted staging", 23);
   assert (SfbStoreConfigDefault (&Root, "a", 2) == EFI_SUCCESS);

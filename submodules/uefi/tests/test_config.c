@@ -416,7 +416,8 @@ TestNullAndEmpty (void)
   assert (!SfbConfigParse ("version 1\n", 0, &gConfig));
   assert (!SfbConfigParse ("version 1\n", 10, NULL));
   /* Version present, no entry: nothing to boot, so not a usable config. */
-  assert (!Parse ("version 1\ntimeout 3\n"));
+  assert (Parse ("version 1\ntimeout 3\n"));
+  assert (gConfig.Valid && gConfig.Count == 0);
 }
 
 static void

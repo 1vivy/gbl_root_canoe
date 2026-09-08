@@ -447,6 +447,7 @@ SfbConfigParse (
   const char       *Begin;
   const char       *End;
   SFB_BOOLEAN       SawVersion = FALSE;
+  SFB_BOOLEAN       SawEntry = FALSE;
   SFB_CONFIG_ENTRY *Current = NULL;
   char              DefaultId[SFB_CONFIG_ID_CHARS];
   char              DefaultBlsStem[SFB_CONFIG_BLS_STEM_CHARS];
@@ -509,6 +510,7 @@ SfbConfigParse (
     }
 
     if (SfbCfgKeyIs (Begin, KeyEnd, "entry")) {
+      SawEntry = TRUE;
       if (Config->Count >= SFB_CONFIG_MAX_ENTRIES ||
           !SfbCfgValidId (Value, ValueLength) ||
           SfbCfgIdTaken (Config, Value, ValueLength)) {
@@ -684,7 +686,9 @@ SfbConfigParse (
     Config->Count = Keep;
   }
 
-  if (Config->Count == 0) {
+  /* A policy-only/BLS-only current file must not revive rows from .prev.
+   * Declared but unusable entries still mark a corrupt configuration. */
+  if (SawEntry && Config->Count == 0) {
     SfbCfgZero (Config, sizeof (*Config));
     return FALSE;
   }

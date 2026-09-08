@@ -33,6 +33,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
     }
 
     let mut version_seen = false;
+    let mut entry_seen = false;
     let mut generation = 0;
     let mut menu_mode = MenuMode::Silent;
     let mut key_window_ms = 1200;
@@ -66,6 +67,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
             ));
         }
         if key == "entry" {
+            entry_seen = true;
             finish_entry(&mut pending, &mut entries, &mut seen, global_mode);
             pending = Some(PendingEntry {
                 id: value.to_owned(),
@@ -124,7 +126,9 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
         }
     }
     finish_entry(&mut pending, &mut entries, &mut seen, global_mode);
-    if !version_seen || entries.is_empty() {
+    // A policy-only/BLS-only document is valid. Declared but unusable rows
+    // still indicate corruption; absence of rows must not resurrect .prev.
+    if !version_seen || (entry_seen && entries.is_empty()) {
         return Err(ConfigError::Invalid(
             "canoe.cfg has no usable entry".to_owned(),
         ));
