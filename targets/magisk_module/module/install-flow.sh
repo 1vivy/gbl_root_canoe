@@ -66,11 +66,12 @@ canoe_install_flow() {
     canoe_choose "vendor_boot preparation" "Keep current vendor_boot" "Patch vendor_boot" "Install manager only"
     case "$canoe_choice" in 2) canoe_patch=--patch-vendor-boot ;; 1) : ;; *) return ;; esac
   fi
-  mkdir -p /data/adb/canoe || abort "Cannot create recovery directory"
-  chmod 0700 /data/adb/canoe
-  canoe_state=/data/adb/canoe/install-$(date +%s)-$$
+  canoe_choose "Installation history for the data assessment" "Used an EFISP mod before, or unsure" "First EFISP mod on an unlocked phone" "Install manager only"
+  canoe_history=
+  case "$canoe_choice" in 2) canoe_history=--first-unlocked-install ;; 1) : ;; *) return ;; esac
+  canoe_state=/data/adb/canoe-manager/installer/install-$(date +%s)-$$
   canoe_review=$TMPDIR/canoe-review.txt
-  if ! "$MODPATH/bin/canoe-manager" --boot-root /mnt/vendor/persist/efisp bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --mode "$canoe_mode" $canoe_custom $canoe_patch > "$canoe_review" 2>&1; then
+  if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --mode "$canoe_mode" $canoe_custom $canoe_patch $canoe_history > "$canoe_review" 2>&1; then
     cat "$canoe_review"
     ui_print "- Deployment was not started. No Canoe partitions were written."
     canoe_choose "Continue setup" "Install manager only; complete Full installation in WebUI after reboot" "Cancel module installation"
@@ -82,8 +83,9 @@ canoe_install_flow() {
   [ "${#canoe_token}" -eq 64 ] || abort "Native install review is incomplete"
   canoe_choose "Review the targets and data assessment above" "Install manager only" "Apply this deployment" "Cancel module installation"
   case "$canoe_choice" in 2) : ;; 3) abort "Module installation cancelled" ;; *) return ;; esac
-  if ! "$MODPATH/bin/canoe-manager" --boot-root /mnt/vendor/persist/efisp bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
-    ui_print "- Deployment did not complete. Inspect recovery records: $canoe_state"
+  if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
+    ui_print "- Deployment did not complete. Open General -> Saved operations in WebUI for retry or recovery."
+    ui_print "- Recovery records: /data/adb/canoe-manager/operations"
     abort "Canoe deployment failed; completed writes remain recorded"
   fi
 }
