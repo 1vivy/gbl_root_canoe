@@ -247,3 +247,58 @@ fn fresh_install_does_not_invent_a_previous_canoe_identity() {
     assert_eq!(plan.userdata.requirement, UserdataRequirement::Unknown);
     assert!(!has_precondition(&plan, "P-FORMAT"));
 }
+
+#[test]
+fn unchanged_signed_mode_one_does_not_require_missing_version_properties() {
+    use canoe_bootmgr::mode_plan::plan_for_source;
+    let source = tempfile::NamedTempFile::new().unwrap();
+    let mut bytes = std::fs::read("tests/fixtures/vbmeta-inspect-happy.img").unwrap();
+    let property = b"com.android.build.system.os_version";
+    let offset = bytes
+        .windows(property.len())
+        .position(|window| window == property)
+        .unwrap();
+    bytes[offset] = b'x'; // Model firmware that omits this optional property.
+    std::fs::write(source.path(), bytes).unwrap();
+    let image = source.path().to_path_buf();
+    let duplicate = tempfile::NamedTempFile::new().unwrap();
+    std::fs::copy(&image, duplicate.path()).unwrap();
+    let target = duplicate.path().to_path_buf();
+    let plan = |from, mode, prior, destination: &PathBuf| {
+        plan_for_source(
+            from,
+            mode,
+            Some(&image),
+            Some(destination),
+            None,
+            Some(&WORKER_TOOLS),
+            prior,
+            false,
+            None,
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        plan(Some(1), 1, true, &target).userdata.requirement,
+        UserdataRequirement::NotRequired
+    );
+    assert_eq!(
+        plan(None, 1, true, &target).userdata.requirement,
+        UserdataRequirement::Unknown
+    );
+    assert_eq!(
+        plan(Some(1), 1, false, &target).userdata.requirement,
+        UserdataRequirement::Unknown
+    );
+    assert_eq!(
+        plan(Some(0), 1, true, &target).userdata.requirement,
+        UserdataRequirement::Must
+    );
+    let mut bytes = std::fs::read(&target).unwrap();
+    bytes.push(0);
+    std::fs::write(&target, bytes).unwrap();
+    assert_eq!(
+        plan(Some(1), 1, true, &target).userdata.requirement,
+        UserdataRequirement::Unknown
+    );
+}
