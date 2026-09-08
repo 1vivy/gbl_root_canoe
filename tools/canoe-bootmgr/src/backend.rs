@@ -63,6 +63,39 @@ pub struct LoadedConfig {
     pub source: ConfigSource,
 }
 
+/// Canonical current/previous selection shared by mounted commands and application
+/// review. Missing or malformed bytes may fall back; I/O failures may not.
+pub fn select_config(
+    mut read: impl FnMut(&str) -> Result<Option<Vec<u8>>, BackendError>,
+) -> Result<Option<LoadedConfig>, BackendError> {
+    let mut checked = |path| {
+        let bytes = read(path)?;
+        if let Some(bytes) = &bytes {
+            ConfigDocument::parse(bytes)?;
+        }
+        Ok::<_, BackendError>(bytes)
+    };
+    let current = checked("canoe.cfg");
+    match current {
+        Ok(Some(bytes)) => Ok(Some(LoadedConfig {
+            config: ConfigDocument::parse(&bytes)?,
+            source: ConfigSource::Current,
+        })),
+        Ok(None) | Err(BackendError::Config(_)) => match checked("canoe.cfg.prev") {
+            Ok(Some(bytes)) => Ok(Some(LoadedConfig {
+                config: ConfigDocument::parse(&bytes)?,
+                source: ConfigSource::Previous,
+            })),
+            Ok(None) => match current {
+                Err(e) => Err(e),
+                _ => Ok(None),
+            },
+            Err(e) => Err(e),
+        },
+        Err(e) => Err(e),
+    }
+}
+
 pub trait BootRoot {
     fn root(&self) -> &Path;
     fn read_config(&self) -> Result<Option<ConfigDocument>, BackendError>;
@@ -124,25 +157,7 @@ impl LocalDir {
     /// Prefer the current configuration. Only missing/malformed content may
     /// fall back; permissions, symlinks and filesystem I/O errors stay errors.
     pub fn load_config(&self) -> Result<Option<LoadedConfig>, BackendError> {
-        let current = self.config_bytes("canoe.cfg");
-        match current {
-            Ok(Some(bytes)) => Ok(Some(LoadedConfig {
-                config: ConfigDocument::parse(&bytes)?,
-                source: ConfigSource::Current,
-            })),
-            Ok(None) | Err(BackendError::Config(_)) => match self.config_bytes("canoe.cfg.prev") {
-                Ok(Some(bytes)) => Ok(Some(LoadedConfig {
-                    config: ConfigDocument::parse(&bytes)?,
-                    source: ConfigSource::Previous,
-                })),
-                Ok(None) => match current {
-                    Err(e) => Err(e),
-                    _ => Ok(None),
-                },
-                Err(e) => Err(e),
-            },
-            Err(e) => Err(e),
-        }
+        select_config(|path| self.config_bytes(path))
     }
     fn bls_path(&self, name: &str) -> Result<String, BackendError> {
         crate::artifacts::bls_path(name).map_err(|_| BackendError::InvalidBlsName(name.to_owned()))
