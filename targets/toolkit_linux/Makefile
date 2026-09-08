@@ -60,6 +60,10 @@ submodule_canoe_bootmgr: copy_resources
 	cargo build --locked --release --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
 	test -x ../../tools/canoe-bootmgr/target/release/canoe-bootmgr
 	cp ../../tools/canoe-bootmgr/target/release/canoe-bootmgr ./build/toolkit/bin/canoe-bootmgr
+submodule_canoe_image: copy_resources
+	cargo build --locked --release --manifest-path ../../tools/canoe-image/Cargo.toml
+	test -x ../../tools/canoe-image/target/release/canoe-image
+	cp ../../tools/canoe-image/target/release/canoe-image ./build/toolkit/bin/canoe-image
 canoe_manager: copy_resources
 	cargo build --locked --release --manifest-path "$(CANOE_MANAGER_SRC)/Cargo.toml"
 	test -x "$(CANOE_MANAGER_SRC)/target/release/canoe-manager"
@@ -89,6 +93,6 @@ canoe_app: copy_resources
 	}
 	cp "$(CANOE_APP_LINUX_BIN)" ./build/toolkit/bin/canoe-boot-manager
 	chmod +x ./build/toolkit/bin/canoe-boot-manager
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor submodule_vbmetafixer canoe_manager canoe_app
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_image submodule_canoe_ext4 submodule_ablfvextractor submodule_vbmetafixer canoe_manager canoe_app
 	# zip
 	cd build/toolkit && zip -r ../toolkit_linux.zip ./

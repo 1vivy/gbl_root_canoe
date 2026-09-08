@@ -97,7 +97,11 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   traversal and read-only publication failure. Worker native tests, Windows
   cross-check, GUI 515 tests/typecheck/build, Tauri 32 tests and module bootstrap
   checks pass. This is not full mounted-volume application acceptance.
-- Image/provision extraction, full mounted FAT integration, loader/BLS artifact
+- `canoe-image` now owns image preparation and inspection. The application
+  supplies reviewed helpers through a resolver; standalone commands resolve only
+  needed helpers. Image outputs reject input aliases and use unique temporary
+  files. Worker/image tests and Windows cross-check pass.
+- Provision extraction, full mounted FAT integration, loader/BLS artifact
   commands and application workflow consolidation remain in progress.
 - The Windows app last inspected reports b3. Do not launch a mixed intermediate
   package as b4; replace it only with the integrated, checked b4 build.
