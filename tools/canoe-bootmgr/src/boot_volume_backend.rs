@@ -1,26 +1,34 @@
-//! Canonical boot-root operations against an offline FAT image. The image must
-//! not be mounted; live USB and Android mounts require their own owned adapters.
+//! Canonical FAT boot-root operations over an explicitly owned image or USB
+//! export. OS ownership stays in the adapter; filesystem transactions are shared.
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use crate::backend::{BackendActionError, BackendError, BlsFile, BootRoot, LocalDir};
-use crate::boot_volume_transaction::{self as transaction, Direction};
+use crate::boot_volume_transaction::{self as transaction, Direction, VolumeIo};
 use crate::config::ConfigDocument;
+use crate::raw_volume::{RawIdentity, RawVolume};
 
 #[derive(Debug, Clone)]
-pub struct FatImage {
+enum Source {
+    Image,
+    Export(RawIdentity),
+    #[cfg(feature = "test-seams")]
+    FixtureExport(RawIdentity),
+}
+
+#[derive(Debug, Clone)]
+pub struct FatVolume {
     source: PathBuf,
+    kind: Source,
     recovery_root: PathBuf,
 }
 fn error(source: io::Error) -> BackendError {
     BackendError::BootVolume(source)
 }
 
-impl FatImage {
-    /// Explicit offline-image adapter. Never infer this from a persist directory
-    /// or open a physical disk through filesystem-file assumptions.
-    pub fn new(source: &Path, recovery_root: &Path) -> Result<Self, BackendError> {
+impl FatVolume {
+    pub fn image(source: &Path, recovery_root: &Path) -> Result<Self, BackendError> {
         if !fs::symlink_metadata(source).map_err(error)?.is_file() {
             return Err(error(io::Error::other(
                 "FAT image must be an unmounted regular file",
@@ -28,26 +36,63 @@ impl FatImage {
         }
         Ok(Self {
             source: fs::canonicalize(source).map_err(error)?,
+            kind: Source::Image,
             recovery_root: recovery_root.to_owned(),
         })
     }
-
+    /// Requires the reviewed identity of BDS's dedicated FAT export. A persist
+    /// export is deliberately not accepted as a FAT volume by size guessing.
+    pub fn export(
+        source: &Path,
+        expected: RawIdentity,
+        recovery_root: &Path,
+    ) -> Result<Self, BackendError> {
+        if expected.bytes != crate::boot_volume::CONTAINER_BYTES {
+            return Err(error(io::Error::other(
+                "boot-root export must contain the fixed 32 MiB FAT volume",
+            )));
+        }
+        Ok(Self {
+            source: source.to_owned(),
+            kind: Source::Export(expected),
+            recovery_root: recovery_root.to_owned(),
+        })
+    }
+    #[cfg(feature = "test-seams")]
+    pub fn fixture_export(
+        source: &Path,
+        expected: RawIdentity,
+        recovery_root: &Path,
+    ) -> Result<Self, BackendError> {
+        let mut value = Self::export(source, expected.clone(), recovery_root)?;
+        value.kind = Source::FixtureExport(expected);
+        Ok(value)
+    }
+    fn open(&self, write: bool) -> io::Result<OwnedVolume> {
+        match &self.kind {
+            Source::Image => open_image(&self.source, write).map(OwnedVolume::Image),
+            #[cfg(feature = "test-seams")]
+            Source::FixtureExport(expected) => {
+                RawVolume::open_fixture(&self.source, Some(expected)).map(OwnedVolume::Export)
+            }
+            Source::Export(expected) => {
+                RawVolume::open_export(&self.source, Some(expected)).map(OwnedVolume::Export)
+            }
+        }
+    }
     pub fn pending(&self) -> Result<Vec<PathBuf>, BackendError> {
         transaction::pending(&self.recovery_root).map_err(error)
     }
-
     pub fn recover(&self, directory: &Path, direction: Direction) -> Result<(), BackendError> {
-        let records = self.pending()?;
-        if !records.iter().any(|record| record == directory) {
+        if !self.pending()?.iter().any(|record| record == directory) {
             return Err(error(io::Error::other(
-                "recovery must name a pending transaction for this image",
+                "recovery must name a pending transaction for this volume",
             )));
         }
-        let mut owned = open(&self.source, true).map_err(error)?;
-        let target = identity(&owned).map_err(error)?;
-        transaction::recover(file_mut(&mut owned), &target, directory, direction).map_err(error)
+        let mut owned = self.open(true).map_err(error)?;
+        let target = owned.identity().map_err(error)?;
+        transaction::recover(&mut owned, &target, directory, direction).map_err(error)
     }
-
     pub(crate) fn with_action<T, E, F>(
         &self,
         write: bool,
@@ -57,7 +102,7 @@ impl FatImage {
         F: FnOnce(&Path) -> Result<T, E>,
     {
         let fail = |e| BackendActionError::Backend(error(e));
-        let mut owned = open(&self.source, write).map_err(fail)?;
+        let mut owned = self.open(write).map_err(fail)?;
         if !self
             .pending()
             .map_err(BackendActionError::Backend)?
@@ -67,8 +112,8 @@ impl FatImage {
                 "boot-volume recovery pending; resume or revert before another operation",
             )));
         }
-        let target = identity(&owned).map_err(fail)?;
-        let original = transaction::read_volume(file_mut(&mut owned)).map_err(fail)?;
+        let target = owned.identity().map_err(fail)?;
+        let original = transaction::read_volume(&mut owned).map_err(fail)?;
         let workspace = tempfile::tempdir().map_err(fail)?;
         crate::boot_volume_tree::extract(&original, workspace.path()).map_err(fail)?;
         let before = crate::boot_volume_tree::fingerprint(workspace.path()).map_err(fail)?;
@@ -77,30 +122,15 @@ impl FatImage {
             && before != crate::boot_volume_tree::fingerprint(workspace.path()).map_err(fail)?
         {
             let next = crate::boot_volume_tree::build(workspace.path()).map_err(fail)?;
-            if identity(&owned).map_err(fail)? != target {
-                return Err(fail(io::Error::other(
-                    "boot-volume source identity changed during preparation",
-                )));
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                let current = fs::symlink_metadata(&self.source).map_err(fail)?;
-                let retained = owned.metadata().map_err(fail)?;
-                if current.dev() != retained.dev() || current.ino() != retained.ino() {
-                    return Err(fail(io::Error::other(
-                        "boot-volume source path changed during preparation",
-                    )));
-                }
-            }
-            if transaction::read_volume(file_mut(&mut owned)).map_err(fail)? != original {
+            owned.verify(&self.source, &target).map_err(fail)?;
+            if transaction::read_volume(&mut owned).map_err(fail)? != original {
                 return Err(fail(io::Error::other(
                     "boot-volume source changed during preparation",
                 )));
             }
             let directory = transaction::prepare(&self.recovery_root, &target, &original, &next)
                 .map_err(fail)?;
-            transaction::apply(file_mut(&mut owned), &target, &directory).map_err(|e| {
+            transaction::apply(&mut owned, &target, &directory).map_err(|e| {
                 fail(io::Error::new(
                     e.kind(),
                     format!("{e}; recovery: {}", directory.display()),
@@ -109,7 +139,6 @@ impl FatImage {
         }
         Ok(value)
     }
-
     fn local<T>(
         &self,
         write: bool,
@@ -121,8 +150,7 @@ impl FatImage {
             })
     }
 }
-
-impl BootRoot for FatImage {
+impl BootRoot for FatVolume {
     fn root(&self) -> &Path {
         &self.source
     }
@@ -140,11 +168,79 @@ impl BootRoot for FatImage {
     }
 }
 
+enum OwnedVolume {
+    Image(OwnedFile),
+    Export(RawVolume),
+}
+impl OwnedVolume {
+    fn identity(&self) -> io::Result<String> {
+        match self {
+            Self::Image(file) => image_identity(file),
+            Self::Export(raw) => raw.identity().transaction_key(),
+        }
+    }
+    fn verify(&self, path: &Path, expected: &str) -> io::Result<()> {
+        if self.identity()? != expected {
+            return Err(io::Error::other(
+                "boot-volume source identity changed during preparation",
+            ));
+        }
+        #[cfg(unix)]
+        if let Self::Image(owned) = self {
+            use std::os::unix::fs::MetadataExt;
+            let current = fs::symlink_metadata(path)?;
+            let retained = owned.metadata()?;
+            if current.dev() != retained.dev() || current.ino() != retained.ino() {
+                return Err(io::Error::other(
+                    "boot-volume source path changed during preparation",
+                ));
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = path;
+        Ok(())
+    }
+}
+impl Read for OwnedVolume {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Image(file) => file.read(out),
+            Self::Export(raw) => raw.read(out),
+        }
+    }
+}
+impl Write for OwnedVolume {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Image(file) => file.write(bytes),
+            Self::Export(raw) => raw.write(bytes),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.sync()
+    }
+}
+impl Seek for OwnedVolume {
+    fn seek(&mut self, at: SeekFrom) -> io::Result<u64> {
+        match self {
+            Self::Image(file) => file.seek(at),
+            Self::Export(raw) => raw.seek(at),
+        }
+    }
+}
+impl VolumeIo for OwnedVolume {
+    fn sync(&mut self) -> io::Result<()> {
+        match self {
+            Self::Image(file) => file.sync_all(),
+            Self::Export(raw) => raw.sync(),
+        }
+    }
+}
 #[cfg(unix)]
 type OwnedFile = nix::fcntl::Flock<File>;
 #[cfg(not(unix))]
 type OwnedFile = File;
-fn open(path: &Path, write: bool) -> io::Result<OwnedFile> {
+fn open_image(path: &Path, write: bool) -> io::Result<OwnedFile> {
     let mut options = OpenOptions::new();
     options.read(true).write(write);
     #[cfg(unix)]
@@ -176,7 +272,7 @@ fn open(path: &Path, write: bool) -> io::Result<OwnedFile> {
         Ok(file)
     }
 }
-fn identity(file: &File) -> io::Result<String> {
+fn image_identity(file: &File) -> io::Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -209,8 +305,4 @@ fn identity(file: &File) -> io::Result<String> {
             "file identity unsupported on this platform",
         ))
     }
-}
-
-fn file_mut(file: &mut OwnedFile) -> &mut File {
-    file
 }

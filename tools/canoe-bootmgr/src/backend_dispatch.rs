@@ -7,12 +7,21 @@ use crate::config::ConfigDocument;
 pub enum Backend {
     Local(LocalDir),
     Ext4(crate::ext4::Ext4Dir),
-    Fat(crate::boot_volume_backend::FatImage),
+    Fat(crate::boot_volume_backend::FatVolume),
 }
 
 impl Backend {
     pub fn fat_image(source: &Path, recovery_root: &Path) -> Result<Self, BackendError> {
-        crate::boot_volume_backend::FatImage::new(source, recovery_root).map(Self::Fat)
+        crate::boot_volume_backend::FatVolume::image(source, recovery_root).map(Self::Fat)
+    }
+
+    pub fn fat_export(
+        source: &Path,
+        expected: crate::raw_volume::RawIdentity,
+        recovery_root: &Path,
+    ) -> Result<Self, BackendError> {
+        crate::boot_volume_backend::FatVolume::export(source, expected, recovery_root)
+            .map(Self::Fat)
     }
 
     pub fn local(root: impl AsRef<Path>) -> Result<Self, BackendError> {
@@ -55,8 +64,10 @@ impl Backend {
         Self::local(root.unwrap_or_else(|| Path::new(".")))
     }
 
-    pub(crate) fn source_is_block_device(&self) -> bool {
+    pub(crate) fn requires_external_export_guard(&self) -> bool {
         match self {
+            // FAT exports retain their own raw-device guard for each action.
+            // The legacy ext4 caller guard must not be acquired a second time.
             Self::Local(_) | Self::Fat(_) => false,
             Self::Ext4(ext4) => ext4.source_is_block_device(),
         }

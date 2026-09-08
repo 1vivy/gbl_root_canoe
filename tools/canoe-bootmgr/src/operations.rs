@@ -97,7 +97,7 @@ fn backend_for_cli(
         cli.image.as_deref(),
     )?;
     let guard = backend
-        .source_is_block_device()
+        .requires_external_export_guard()
         .then(|| crate::device_access::require_export("ext4"))
         .transpose()?;
     Ok((backend, guard))
@@ -163,7 +163,7 @@ fn backend_from_request_source(
 ) -> Result<(Backend, Option<crate::device_access::DeviceGuard>), AppError> {
     let backend = Backend::from_paths(None, Some(source), None)?;
     let guard = backend
-        .source_is_block_device()
+        .requires_external_export_guard()
         .then(|| crate::device_access::require_export("ext4"))
         .transpose()?;
     Ok((backend, guard))

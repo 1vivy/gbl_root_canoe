@@ -152,3 +152,69 @@ fn raw_fixture_refuses_mounted_volume() {
         .expect("mounted fixture was acquired");
     assert_eq!(error.raw_os_error(), Some(libc::EBUSY));
 }
+
+#[test]
+#[ignore = "requires an explicitly owned 32 MiB / 4K FAT OS disk fixture"]
+fn canonical_fat_operations_use_the_owned_raw_export() {
+    use canoe_bootmgr::{
+        backend::{Backend, BootRoot},
+        boot_volume_backend::FatVolume,
+        boot_volume_tree,
+        config::ConfigDocument,
+    };
+    let node = env("CANOE_RAW_FIXTURE");
+    let output = env("CANOE_RAW_RESULT");
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("root");
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("keep.bin"), b"unrelated boot content").unwrap();
+    let before = boot_volume_tree::build(&root).unwrap();
+    let mut raw = RawVolume::open_fixture(&node, None).unwrap();
+    let identity = raw.identity().clone();
+    assert_eq!(identity.bytes, boot_volume::CONTAINER_BYTES);
+    raw.write_all(&before).unwrap();
+    raw.finish().unwrap();
+    let recovery = work.path().join("recovery");
+    fs::create_dir(&recovery).unwrap();
+    let volume = FatVolume::fixture_export(&node, identity.clone(), &recovery).unwrap();
+    let backend = Backend::Fat(volume);
+    let config =
+        ConfigDocument::parse(b"version 1\ngeneration 1\nmode 1\nmenu-mode menu\nkey-window 900\nmenu-timeout 10\n\nentry android-a\n title Android\n image boot_a.efi\n mode 1\n role active\n")
+            .unwrap();
+    backend.write_config(&config).unwrap();
+    assert_eq!(
+        backend.read_config().unwrap().unwrap().serialize().unwrap(),
+        config.serialize().unwrap()
+    );
+    backend
+        .with_temp_root(|root| {
+            fs::write(root.join("boot_a.efi"), vec![0x7a; 120_000]).map_err(|e| e.to_string())
+        })
+        .unwrap();
+    let snapshot = || {
+        let mut raw = RawVolume::open_fixture(&node, Some(&identity)).unwrap();
+        tx::read_volume(&mut raw).unwrap()
+    };
+    let after = snapshot();
+    backend.write_config(&config).unwrap();
+    assert_eq!(snapshot(), after, "canonical no-op changed raw sectors");
+    let failed: Result<(), _> = backend.with_temp_root(|root| {
+        fs::write(root.join("keep.bin"), b"discarded private change").unwrap();
+        Err("preparation failed before commit".to_owned())
+    });
+    assert!(failed.is_err());
+    assert_eq!(snapshot(), after, "failed preparation changed raw sectors");
+    let inspection = work.path().join("inspection");
+    fs::create_dir(&inspection).unwrap();
+    boot_volume_tree::extract(&after, &inspection).unwrap();
+    assert_eq!(
+        fs::read(inspection.join("keep.bin")).unwrap(),
+        b"unrelated boot content"
+    );
+    assert_eq!(
+        fs::read(inspection.join("boot_a.efi")).unwrap(),
+        vec![0x7a; 120_000]
+    );
+    assert!(tx::pending(&recovery).unwrap().is_empty());
+    fs::write(output, after).unwrap();
+}

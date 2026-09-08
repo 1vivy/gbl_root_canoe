@@ -46,12 +46,11 @@ must not be weakened when sharing operations with FAT.
 
 ## Remaining integration boundaries
 
-- Native backend dispatch now includes an explicit offline FAT image adapter.
+- Native backend dispatch includes explicit offline-image and owned raw-export FAT adapters.
   It runs the canonical operations and retains before/after images in an
   external recovery directory. The platform-independent transaction marks FAT
   dirty before changing structures, verifies readback before marking it clean,
-  and requires an explicit resume/revert after failure. Live USB and Android
-  adapters and CLI/GUI source selection remain unconnected. Final-name activation
+  and requires an explicit resume/revert after failure. CLI/GUI source selection and the Android mount adapter remain unconnected. Final-name activation
   is now prepared and validated on private persist images, but its live-source
   adapter and protocol orchestration still need integration.
   Production Android paths still use the legacy root; do not change GUI defaults
@@ -180,9 +179,33 @@ The generic alignment check also covers 512-byte, 4K and 64K physical sectors,
 small/cross-buffer writes, bounds and read/write/flush failures.
 
 These are actual OS block-device checks, not yet packaged GUI/UAC/USB acceptance.
-The raw transport still needs connection to FAT backend dispatch and protocol
-orchestration. Harnesses: `test-raw-activation.ps1` and `test-raw-activation.sh` in
+The raw transport is connected to FAT backend dispatch; protocol orchestration
+and source selection remain to be integrated. Harnesses: `test-raw-activation.ps1` and `test-raw-activation.sh` in
 the GUI repository's OS provisioning directories.
 Sources: [Windows file buffering](https://learn.microsoft.com/en-us/windows/win32/fileio/file-buffering),
 [SET_DISK_ATTRIBUTES](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-set_disk_attributes),
 and [Linux block-device exclusive access](https://docs.kernel.org/5.16/core-api/kernel-api.html).
+
+## FAT operations over the raw export
+
+The FAT backend is now `FatVolume`, with explicit image and reviewed raw-export
+constructors. Both run the same canonical config/BLS/artifact operations on a
+private tree and the same before/after transaction. A raw constructor requires
+an exact 32 MiB expected identity; acquisition delegates to `RawVolume`. The
+legacy ext4 caller's device guard is not acquired around this backend, avoiding
+a nested lease wait. The retained raw handle remains alive through preparation,
+source-drift validation, commit and readback. Failure leaves the USB export owned
+by its transport until explicit teardown; no filesystem fallback is attempted.
+
+Actual 32 MiB / 4K raw fixtures passed on Linux and Windows: canonical config
+write/read, artifact population, preservation of unrelated files, byte-identical
+no-ops and byte-identical failed preparation. Both returned FAT files passed
+`fsck.fat -n`. The fixture entry point is test-seams-only and is distinct from
+production Canoe USB discovery. Its permitted owned geometries are now 32 MiB
+for FAT and 64 MiB for persist activation; physical USB disks remain excluded.
+The Windows harness supports `-Scenario Fat`; its new fixture creator only
+publishes a newly created empty VHDX, never modifies an existing disk image.
+
+CLI/JSON source selection, capability negotiation and deployment orchestration
+still need to select this backend explicitly. None of these checks establish
+that the current packaged app has switched away from the legacy persist path.

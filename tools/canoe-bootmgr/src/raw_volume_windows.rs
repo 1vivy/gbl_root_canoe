@@ -198,11 +198,11 @@ pub(super) fn open(
     if fixture {
         if !cfg!(feature = "test-seams")
             || bus != BusTypeFileBackedVirtual
-            || bytes != 64 * 1024 * 1024
+            || !matches!(bytes, 33_554_432 | 67_108_864)
             || geometry.BytesPerSector != 4096
         {
             return Err(io::Error::other(
-                "raw fixture requires the owned 64 MiB / 4K virtual disk",
+                "raw fixture requires the owned 32 or 64 MiB / 4K virtual disk",
             ));
         }
     } else if bus != BusTypeUsb || crate::detect::export_connection(node)? != connection {

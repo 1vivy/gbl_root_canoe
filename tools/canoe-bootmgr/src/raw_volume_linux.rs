@@ -60,13 +60,13 @@ pub(super) fn open(
         {
             let backing = fs::read_to_string(block.join("loop/backing_file"))?;
             let backing = backing.trim();
-            if bytes != 64 * 1024 * 1024
+            if !matches!(bytes, 33_554_432 | 67_108_864)
                 || logical != 4096
                 || Path::new(backing).file_name().and_then(|s| s.to_str())
                     != Some("canoe-raw-volume-fixture.img")
             {
                 return Err(io::Error::other(
-                    "raw fixture requires the owned 64 MiB / 4K loop disk",
+                    "raw fixture requires the owned 32 or 64 MiB / 4K loop disk",
                 ));
             }
             format!("loop:{backing}")
