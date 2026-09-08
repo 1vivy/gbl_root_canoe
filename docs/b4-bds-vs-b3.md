@@ -66,6 +66,11 @@ firmware restore images remain relevant until the new path is confirmed.
 2. Agree on the BDS launch method. A raw UEFI `.efi` is not automatically a valid
    payload for Android `fastboot boot`. A nested launch through an existing UEFI
    environment, if supported, also does not prove the cold ABL → raw efisp path.
+   b3's compiled `boot` handler accepts an EFI payload inside an Android boot-image
+   wrapper; its OEM handler has no `boot-efi` command. The acknowledgement occurs
+   before child loading, so confirm the running BDS version afterwards. A nested
+   launch can retain b3's Ext4Dxe; b4 deliberately rejects a foreign file interface
+   in its container mapper, so that refusal alone would not prove cold-boot failure.
 3. Test menu/Super Fastboot with no populated new boot root. Check the real serial,
    capability variables and reconnect behavior before managed Android launch.
 4. Separately provision/inspect an empty canonical container, after approving
