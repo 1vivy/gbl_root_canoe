@@ -113,6 +113,10 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   volume-GUID CLI writes, preservation, rejected traversal, native flush/lock/
   dismount/eject and independent detached readback/fsck. Application ownership
   and deployment integration are still pending.
+- Removed the unused raw FAT reconstruction backend, its whole-FAT recovery
+  format and obsolete raw FAT fixture routes. Persist provisioning retains its
+  separate partition recovery. The only remaining runtime FAT library use is
+  read-only logfs evidence inspection, not boot-root maintenance.
 - Full mounted FAT integration, loader/BLS artifact
   commands and application workflow consolidation remain in progress.
 - The Windows app last inspected reports b3. Do not launch a mixed intermediate
