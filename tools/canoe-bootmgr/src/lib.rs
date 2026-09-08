@@ -11,6 +11,7 @@ mod bls_render;
 pub mod boot_evidence;
 pub mod boot_volume;
 pub mod boot_volume_tree;
+pub mod boot_volume_persist;
 pub mod build;
 mod build_cleanup;
 mod build_efisp_tools;

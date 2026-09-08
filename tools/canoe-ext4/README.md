@@ -19,8 +19,10 @@ the helper does not clear protection flags as an implicit repair.
 
 ```
 canoe-ext4 inspect SOURCE [--path PATH]
+canoe-ext4 allocation SOURCE PATH
 canoe-ext4 read SOURCE PATH
 canoe-ext4 write SOURCE PATH < BYTES
+canoe-ext4 create SOURCE PATH MIN_FREE_BYTES < BYTES
 canoe-ext4 mkdir SOURCE PATH
 canoe-ext4 remove SOURCE PATH
 canoe-ext4 rename SOURCE OLD_PATH NEW_PATH
@@ -111,3 +113,22 @@ journal replay objects (`debugfs/journal.c`, `e2fsck/revoke.c`, and
 read/write, block-size, and flush callbacks. Consequently dirty-source
 recovery is available on Windows under the same explicit `--recover`
 authorization as Linux; discard/zeroout are not part of the replay path.
+
+### Container staging primitives
+
+`create` writes a new regular extent file and refuses any existing target. The
+caller supplies the required free-space reserve in bytes. The helper checks
+allocatable space excluding ext4 reserved blocks, accounts for extent metadata,
+and performs preflight read-only under the same exclusive lock used for the
+write. A dirty filesystem is rejected even with `--recover`; recovery must be
+reviewed separately. Rejected preflight does not update filesystem bookkeeping.
+A failure after writing starts can leave a staging file; the caller retains its
+name for recovery and must not treat it as an activated boot volume.
+
+`allocation` reports a bounded regular file's initialized logical-to-physical
+extents. Holes, unwritten blocks, duplicate physical blocks, extra inode flags,
+multiple links, dirty sources and unallocated/out-of-range blocks are rejected.
+This report is allocation evidence, **not** permission for raw extent writes:
+firmware must independently validate mapping, metadata exclusion and ownership
+for its current session. `inspect` also reports `allocatable_bytes` excluding
+ext4 reserved blocks.

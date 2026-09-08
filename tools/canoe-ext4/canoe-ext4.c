@@ -859,6 +859,45 @@ static void create_or_overwrite(const char *path, const unsigned char *data,
         fail_rc(EXIT_IO, "write-close", rc);
 }
 
+/* A staging-file allocation primitive. It never replaces an existing inode or
+ * publishes a final boot-volume name. The caller owns promotion and recovery. */
+static void validate_create(const char *path, size_t length, const char *reserve_text) {
+    if (is_dirty(fs->super))
+        fail(EXIT_DIRTY, "create requires a clean filesystem");
+    char *end = NULL;
+    errno = 0;
+    if (*reserve_text < '0' || *reserve_text > '9')
+        fail(EXIT_USAGE, "reserve must be an unsigned byte count");
+    uint64_t reserve = strtoull(reserve_text, &end, 10);
+    if (errno != 0 || *end != '\0')
+        fail(EXIT_USAGE, "reserve must be an unsigned byte count");
+    if (lookup_path(path, true) != 0)
+        fail(EXIT_OPERATION, "create target already exists");
+    if (!ext2fs_has_feature_extents(fs->super))
+        fail(EXIT_UNSUPPORTED, "staging allocation requires extents");
+    if (fs->super->s_free_inodes_count == 0)
+        fail(EXIT_OPERATION, "no free inode for staging file");
+    uint64_t block_size = fs->blocksize;
+    uint64_t data_blocks = (length + block_size - 1) / block_size;
+    uint64_t reserve_blocks = reserve / block_size + (reserve % block_size != 0);
+    /* Worst-case one extent per data block, including all index levels and
+     * a directory expansion. This is separate from the caller's free reserve. */
+    uint64_t metadata_blocks = 1;
+    uint64_t entries = data_blocks;
+    uint64_t per_node = (block_size - sizeof(struct ext3_extent_header)) /
+                        sizeof(struct ext3_extent);
+    do {
+        entries = (entries + per_node - 1) / per_node;
+        metadata_blocks += entries;
+    } while (entries > 1);
+    uint64_t free_blocks = ext2fs_free_blocks_count(fs->super);
+    uint64_t reserved_blocks = ext2fs_r_blocks_count(fs->super);
+    uint64_t usable = free_blocks > reserved_blocks ? free_blocks - reserved_blocks : 0;
+    if (reserve_blocks > usable || data_blocks > usable - reserve_blocks ||
+        metadata_blocks > usable - reserve_blocks - data_blocks)
+        fail(EXIT_OPERATION, "insufficient allocatable space with requested reserve");
+}
+
 struct empty_directory {
     bool nonempty;
 };
@@ -1024,6 +1063,8 @@ static int list_entry(ext2_ino_t dir, int entry, struct ext2_dir_entry *dirent,
 static void inspect_filesystem(const char *path) {
     struct ext2_super_block *super = fs->super;
     uint64_t free_blocks = ext2fs_free_blocks_count(super);
+    uint64_t reserved_blocks = ext2fs_r_blocks_count(super);
+    uint64_t usable_blocks = free_blocks > reserved_blocks ? free_blocks - reserved_blocks : 0;
     uint64_t total_blocks = ext2fs_blocks_count(super);
     uint64_t block_size = fs->blocksize;
     printf("{\"state\":\"");
@@ -1032,6 +1073,7 @@ static void inspect_filesystem(const char *path) {
            ",\"free_blocks\":%" PRIu64 ",\"free_bytes\":%" PRIu64,
            total_blocks, total_blocks * block_size, free_blocks,
            free_blocks * block_size);
+    printf(",\"allocatable_bytes\":%" PRIu64, usable_blocks * block_size);
     printf(",\"free_inodes\":%" PRIu32 ",\"block_size\":%" PRIu64
            ",\"features\":{\"compat\":%" PRIu32,
            super->s_free_inodes_count, block_size, super->s_feature_compat);
@@ -1051,6 +1093,65 @@ static void inspect_filesystem(const char *path) {
         printf(",\"path_exists\":%s", inode == 0 ? "false" : "true");
     }
     puts("}");
+}
+
+static int compare_block(const void *a, const void *b) {
+    blk64_t x = *(const blk64_t *)a, y = *(const blk64_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* Allocation evidence, not an authorization to write physical extents. Firmware
+ * independently validates its mapping and ownership immediately before use. */
+static void inspect_allocation(const char *path) {
+    if (is_dirty(fs->super))
+        fail(EXIT_DIRTY, "allocation inspection requires a clean filesystem");
+    ext2_ino_t number = lookup_path(path, false);
+    struct ext2_inode inode;
+    errcode_t rc = ext2fs_read_inode(fs, number, &inode);
+    if (rc != 0)
+        fail_rc(EXIT_IO, "allocation-inode", rc);
+    if (!LINUX_S_ISREG(inode.i_mode) || inode.i_links_count != 1 ||
+        inode.i_flags != EXT4_EXTENTS_FL)
+        fail(EXIT_UNSUPPORTED, "allocation requires a single-link plain extent file");
+    uint64_t bytes = EXT2_I_SIZE(&inode);
+    if (bytes == 0 || bytes > MAX_WRITE_BYTES || bytes % fs->blocksize != 0)
+        fail(EXIT_OPERATION, "allocation requires a bounded block-aligned file");
+    size_t count = bytes / fs->blocksize;
+    blk64_t *blocks = calloc(count, sizeof(*blocks));
+    blk64_t *sorted = calloc(count, sizeof(*sorted));
+    if (blocks == NULL || sorted == NULL)
+        fail(EXIT_IO, "cannot allocate extent inspection buffers");
+    rc = ext2fs_read_block_bitmap(fs);
+    if (rc != 0)
+        fail_rc(EXIT_IO, "allocation-bitmap", rc);
+    for (size_t logical = 0; logical < count; logical++) {
+        int flags = 0;
+        rc = ext2fs_bmap2(fs, number, &inode, NULL, 0, logical, &flags, &blocks[logical]);
+        if (rc != 0)
+            fail_rc(EXIT_IO, "allocation-map", rc);
+        if (flags != 0 || blocks[logical] == 0 ||
+            blocks[logical] >= ext2fs_blocks_count(fs->super) ||
+            !ext2fs_test_block_bitmap2(fs->block_map, blocks[logical]))
+            fail(EXIT_OPERATION, "file contains a hole, unwritten or unallocated extent");
+        sorted[logical] = blocks[logical];
+    }
+    qsort(sorted, count, sizeof(*sorted), compare_block);
+    for (size_t i = 1; i < count; i++)
+        if (sorted[i] == sorted[i - 1])
+            fail(EXIT_OPERATION, "file contains overlapping physical blocks");
+    printf("{\"bytes\":%" PRIu64 ",\"block_size\":%u,\"initialized\":true,\"extents\":[",
+           bytes, fs->blocksize);
+    for (size_t first = 0; first < count;) {
+        size_t next = first + 1;
+        while (next < count && blocks[next] == blocks[next - 1] + 1)
+            next++;
+        printf("%s{\"logical_block\":%zu,\"physical_block\":%" PRIu64 ",\"blocks\":%zu}",
+               first == 0 ? "" : ",", first, (uint64_t)blocks[first], next - first);
+        first = next;
+    }
+    puts("]}");
+    free(sorted);
+    free(blocks);
 }
 
 static void list_directory(const char *path) {
@@ -1639,7 +1740,9 @@ static void usage(const char *argv0) {
             "commands:\n"
             "  inspect SOURCE [--path PATH]\n"
             "  read SOURCE PATH\n"
+            "  allocation SOURCE PATH\n"
             "  write SOURCE PATH < STDIN\n"
+            "  create SOURCE PATH MIN_FREE_BYTES < STDIN\n"
             "  mkdir SOURCE PATH\n"
             "  remove SOURCE PATH\n"
             "  rename SOURCE OLD_PATH NEW_PATH\n"
@@ -1689,18 +1792,19 @@ int main(int argc, char **argv) {
     int argument_count = argc - first_argument;
     bool command_mutates = strcmp(command, "write") == 0 || strcmp(command, "mkdir") == 0 ||
                            strcmp(command, "remove") == 0 || strcmp(command, "rename") == 0 ||
-                           strcmp(command, "sync") == 0;
+                           strcmp(command, "sync") == 0 || strcmp(command, "create") == 0;
     if (strcmp(command, "inspect") != 0 && strcmp(command, "read") != 0 &&
         strcmp(command, "write") != 0 && strcmp(command, "mkdir") != 0 &&
         strcmp(command, "remove") != 0 && strcmp(command, "rename") != 0 &&
-        strcmp(command, "sync") != 0 && strcmp(command, "list") != 0)
+        strcmp(command, "sync") != 0 && strcmp(command, "list") != 0 &&
+        strcmp(command, "create") != 0 && strcmp(command, "allocation") != 0)
         usage(argv[0]);
 
     bool trailing_inspect_path = strcmp(command, "inspect") == 0 && argument_count == 3 &&
                                  strcmp(argv[first_argument + 1], "--path") == 0;
     if (trailing_inspect_path)
         options.inspect_path = argv[first_argument + 2];
-    int required = strcmp(command, "rename") == 0
+    int required = (strcmp(command, "rename") == 0 || strcmp(command, "create") == 0)
                        ? 3
                        : (strcmp(command, "sync") == 0 ? 4
                                                         : (strcmp(command, "inspect") == 0 ? 1 : 2));
@@ -1780,18 +1884,31 @@ int main(int argc, char **argv) {
     }
 
     mutating = command_mutates;
-    open_filesystem(command_mutates, options.recover);
+    open_filesystem(command_mutates && strcmp(command, "create") != 0, options.recover);
     if (strcmp(command, "inspect") == 0) {
         inspect_filesystem(path_a);
+    } else if (strcmp(command, "allocation") == 0) {
+        inspect_allocation(path_a);
     } else if (strcmp(command, "read") == 0) {
         read_file_to_stdout(path_a);
         if (fflush(stdout) != 0)
             fail(EXIT_IO, "stdout flush failed");
-    } else if (strcmp(command, "write") == 0) {
+    } else if (strcmp(command, "write") == 0 || strcmp(command, "create") == 0) {
         unsigned char *data = NULL;
         size_t length = 0;
         read_stdin(&data, &length);
-        create_or_overwrite(path_a, data, length, options.mkdir_p);
+        if (strcmp(command, "create") == 0) {
+            validate_create(path_a, length, argv[first_argument + 2]);
+            errcode_t rc = ext2fs_close(fs);
+            fs = NULL;
+            if (rc != 0)
+                fail_rc(EXIT_IO, "create-preflight-close", rc);
+            /* source_fd retains its exclusive lock across this reopen. */
+            open_filesystem(true, false);
+            validate_create(path_a, length, argv[first_argument + 2]);
+            create_or_overwrite(path_a, data, length, false);
+        } else
+            create_or_overwrite(path_a, data, length, options.mkdir_p);
         free(data);
     } else if (strcmp(command, "mkdir") == 0) {
         if (options.mkdir_p)
