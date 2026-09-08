@@ -82,6 +82,7 @@
 [Sources]
   FastbootMain.c
   UsbDescriptors.c
+  UsbSerial.c
   FastbootCmds.c
   PartitionTableUpdate.c
   Board.c

@@ -12,7 +12,8 @@ CFLAGS += $(SFB_VERSION_CFLAGS)
 
 .PHONY: test test_gpt_slot_reset clean
 
-test: test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_gpt_slot_reset test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
+test: test_usb_serial test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_gpt_slot_reset test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
+	./test_usb_serial
 	./test_profile
 	./test_deviceinfo
 	./test_devinfo
@@ -146,7 +147,7 @@ test_surface: test_surface.c \
 	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 clean:
-	rm -f test_msd_lease test_image_map test_image_disk test_container test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
+	rm -f test_usb_serial test_msd_lease test_image_map test_image_disk test_container test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
 
 .PHONY: test_image_map
 test: test_image_map
@@ -178,3 +179,7 @@ test_config_store: test_config_store.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfigStore.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfigSave.c
 	$(CC) $(CFLAGS) -DNO_MSABI_VA_FUNCS -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
+
+
+test_usb_serial: test_usb_serial.c ../edk2/QcomModulePkg/Library/FastbootLib/UsbSerial.c
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $^

@@ -2851,6 +2851,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   STATIC CHAR8 DevInfoBuf[SFB_DEVINFO_VALUE_BYTES];
   STATIC CHAR8 LastLaunchBuf[SFB_LAST_LAUNCH_VALUE_BYTES];
   STATIC CHAR8 BootRootBuf[SFB_BOOT_ROOT_VALUE_BYTES];
+  STATIC CHAR8 SerialBuf[31];
   SFB_OBSERVED_DEVINFO ObservedDevInfo;
   SFB_BOOT_ROOT_OBSERVATION BootRootObservation;
   SFB_SLOT_RETRIES SlotRetries;
@@ -2902,6 +2903,10 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   AsciiSPrint (FullProduct, sizeof (FullProduct), "%a", PRODUCT_NAME);
   FastbootPublishVar ("product", FullProduct);
 
+  if (!EFI_ERROR (BoardSerialNum (SerialBuf, sizeof (SerialBuf)))) {
+    FastbootPublishVar ("serialno", SerialBuf);
+    FastbootPublishVar ("canoe-device-identity", "platform-usb-serial-v1");
+  }
   FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
   FastbootPublishVar ("canoe-boot-volume", "fat16-container-v1");
 

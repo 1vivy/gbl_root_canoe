@@ -244,7 +244,11 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
   }
 
   /* Build the descriptor for fastboot */
-  BuildDefaultDescriptors (&DevDesc, &Descriptors, &SSDevDesc, &SSDescriptors);
+  Status = BuildDefaultDescriptors (&DevDesc, &Descriptors, &SSDevDesc, &SSDescriptors);
+  if (EFI_ERROR (Status)) {
+    SfbReportStatus (L"Fastboot USB identity or descriptors unavailable", Status);
+    return Status;
+  }
   UsbSpeedDataSize = sizeof (UsbMaxSupportSpeed);
   Status = gRT->GetVariable ((CHAR16 *)L"UsbfnMaxSpeed",
                              &gQcomTokenSpaceGuid,
