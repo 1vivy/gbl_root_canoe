@@ -224,6 +224,7 @@ fn header_inspection_rejects_untrusted_malformed_inputs() {
     let mut overflowing_footer = vec![0; 320];
     let footer = &mut overflowing_footer[256..];
     footer[0..4].copy_from_slice(b"AVBf");
+    footer[4..8].copy_from_slice(&1u32.to_be_bytes());
     footer[20..28].copy_from_slice(&u64::MAX.to_be_bytes());
     footer[28..36].copy_from_slice(&256u64.to_be_bytes());
     assert_eq!(

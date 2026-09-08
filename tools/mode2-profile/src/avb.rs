@@ -5,7 +5,6 @@ use thiserror::Error;
 use crate::profile::Profile;
 
 pub(crate) const HEADER_SIZE: usize = 256;
-pub(crate) const FOOTER_SIZE: usize = 64;
 const RELEASE_STRING_OFFSET: usize = 128;
 const RELEASE_STRING_SIZE: usize = 48;
 const PROPERTY_TAG: u64 = 0;
@@ -558,31 +557,9 @@ fn resolve_check_image(image: &[u8]) -> Result<&[u8], DeriveError> {
     if image.starts_with(b"AVB0") {
         return Ok(image);
     }
-    let footer_start = image
-        .len()
-        .checked_sub(FOOTER_SIZE)
-        .ok_or(DeriveError::NoFooter)?;
-    let footer = image.get(footer_start..).ok_or(DeriveError::NoFooter)?;
-    if footer.get(0..4) != Some(b"AVBf") {
-        return Err(DeriveError::NoFooter);
-    }
-    let vbmeta_offset = usize::try_from(be_u64(footer, 20).ok_or(DeriveError::BadFooter)?)
-        .map_err(|_| DeriveError::VbmetaPastImage)?;
-    let vbmeta_size = usize::try_from(be_u64(footer, 28).ok_or(DeriveError::BadFooter)?)
-        .map_err(|_| DeriveError::VbmetaPastImage)?;
-    let vbmeta_end = vbmeta_offset
-        .checked_add(vbmeta_size)
-        .ok_or(DeriveError::VbmetaPastImage)?;
-    if vbmeta_end > footer_start {
-        return Err(DeriveError::VbmetaPastImage);
-    }
-    let vbmeta = image
-        .get(vbmeta_offset..vbmeta_end)
-        .ok_or(DeriveError::VbmetaPastImage)?;
-    if vbmeta.get(0..4) != Some(b"AVB0") {
-        return Err(DeriveError::BadMagic);
-    }
-    Ok(vbmeta)
+    crate::footer::Footer::parse(image)?
+        .ok_or(DeriveError::NoFooter)?
+        .vbmeta(image)
 }
 
 fn find_chain_partition(

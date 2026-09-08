@@ -58,7 +58,9 @@ pub fn extract(image: &Path, output: &Path) -> Result<ExtractReceipt, GraftError
     crate::output::distinct(output, &[image])
         .map_err(|error| io("validate output", output, error))?;
     let image_bytes = fs::read(image).map_err(|error| io("read image", image, error))?;
-    let (vbmeta_offset, _, vbmeta_size) = read_footer(&image_bytes).ok_or(GraftError::NoFooter)?;
+    let footer = read_footer(&image_bytes)?.ok_or(GraftError::NoFooter)?;
+    let vbmeta_offset = footer.vbmeta_offset as u64;
+    let vbmeta_size = footer.vbmeta_size as u64;
     let offset = usize::try_from(vbmeta_offset).map_err(|_| GraftError::RangeInvalid)?;
     let size = usize::try_from(vbmeta_size).map_err(|_| GraftError::RangeInvalid)?;
     let footer_offset = image_bytes
@@ -99,11 +101,17 @@ pub fn graft(source: &Path, target: &Path, output: &Path) -> Result<GraftReceipt
             "target image is too small for vbmeta and footer".to_owned(),
         ));
     }
-    let original_size = match read_footer(&target_bytes) {
-        Some(footer) => usize::try_from(footer.0).map_err(|_| {
-            GraftError::Invalid("target original size exceeds host limits".to_owned())
-        })?,
-        None => target_bytes.len() - vbmeta.len() - FOOTER_BYTES,
+    let original_size = match read_footer(&target_bytes)? {
+        Some(footer) => footer.original_image_size,
+        None => {
+            let start = target_bytes.len() - vbmeta.len() - FOOTER_BYTES;
+            if target_bytes[start..].iter().any(|byte| *byte != 0) {
+                return Err(GraftError::Invalid(
+                    "image has no free trailing space for verification data; prepare it for the target partition size first".into(),
+                ));
+            }
+            start
+        }
     };
     let footer_offset = target_bytes.len() - FOOTER_BYTES;
     if original_size > footer_offset || vbmeta.len() > footer_offset - original_size {
@@ -129,16 +137,12 @@ pub fn graft(source: &Path, target: &Path, output: &Path) -> Result<GraftReceipt
     })
 }
 
-pub(crate) fn read_footer(bytes: &[u8]) -> Option<(u64, u64, u64)> {
-    let footer = bytes.get(bytes.len().checked_sub(FOOTER_BYTES)?..)?;
-    if &footer[..4] != FOOTER_MAGIC {
-        return None;
-    }
-    Some((
-        be64(&footer[12..20]),
-        be64(&footer[20..28]),
-        be64(&footer[28..36]),
-    ))
+fn read_footer(bytes: &[u8]) -> Result<Option<mode2_profile::footer::Footer>, GraftError> {
+    mode2_profile::footer::Footer::parse(bytes).map_err(|error| match error {
+        mode2_profile::DeriveError::BadMagic => GraftError::BadMagic,
+        mode2_profile::DeriveError::VbmetaPastImage => GraftError::RangeInvalid,
+        other => GraftError::Invalid(other.to_string()),
+    })
 }
 
 fn write_footer(footer: &mut [u8], original_size: usize, offset: usize, size: usize) {
@@ -151,9 +155,13 @@ fn write_footer(footer: &mut [u8], original_size: usize, offset: usize, size: us
 }
 
 fn verify_output(bytes: &[u8], original_size: usize, vbmeta_size: usize) -> Result<(), GraftError> {
-    let Some((actual_original, offset, actual_size)) = read_footer(bytes) else {
-        return Err(GraftError::Invalid("output has no AVB footer".to_owned()));
-    };
+    let footer = read_footer(bytes)?
+        .ok_or_else(|| GraftError::Invalid("output has no AVB footer".to_owned()))?;
+    let (actual_original, offset, actual_size) = (
+        footer.original_image_size as u64,
+        footer.vbmeta_offset as u64,
+        footer.vbmeta_size as u64,
+    );
     if actual_original != original_size as u64
         || offset != original_size as u64
         || actual_size != vbmeta_size as u64
@@ -171,12 +179,6 @@ fn verify_output(bytes: &[u8], original_size: usize, vbmeta_size: usize) -> Resu
         ));
     }
     Ok(())
-}
-
-fn be64(bytes: &[u8]) -> u64 {
-    u64::from_be_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    ])
 }
 
 fn put_be32(bytes: &mut [u8], value: u32) {

@@ -2,8 +2,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::avb::{
-    BuildProperties, DeriveError, FOOTER_SIZE, HEADER_SIZE, ParsedProperties, VbmetaHeader, be_u64,
-    check_vbmeta_layout, inspect_header_properties, parse_header,
+    BuildProperties, DeriveError, ParsedProperties, VbmetaHeader, check_vbmeta_layout,
+    inspect_header_properties, parse_header,
 };
 
 /// Header-level evidence available without deriving a complete GM2P profile.
@@ -53,23 +53,10 @@ fn resolve_vbmeta_header(image: &[u8]) -> Result<&[u8], DeriveError> {
     if image.starts_with(b"AVB0") {
         return Ok(image);
     }
-    if image.len() < FOOTER_SIZE {
+    if image.len() < crate::footer::SIZE {
         return Err(DeriveError::TooSmall);
     }
-    let footer_start = image.len() - FOOTER_SIZE;
-    let footer = &image[footer_start..];
-    if footer.get(0..4) != Some(b"AVBf") {
-        return Err(DeriveError::BadFooter);
-    }
-    let vbmeta_offset = usize::try_from(be_u64(footer, 20).ok_or(DeriveError::BadFooter)?)
-        .map_err(|_| DeriveError::VbmetaPastImage)?;
-    let vbmeta_size = usize::try_from(be_u64(footer, 28).ok_or(DeriveError::BadFooter)?)
-        .map_err(|_| DeriveError::VbmetaPastImage)?;
-    let vbmeta_end = vbmeta_offset
-        .checked_add(vbmeta_size)
-        .ok_or(DeriveError::VbmetaPastImage)?;
-    if vbmeta_size < HEADER_SIZE || vbmeta_end > footer_start {
-        return Err(DeriveError::VbmetaPastImage);
-    }
-    Ok(&image[vbmeta_offset..vbmeta_end])
+    crate::footer::Footer::parse(image)?
+        .ok_or(DeriveError::BadFooter)?
+        .vbmeta(image)
 }

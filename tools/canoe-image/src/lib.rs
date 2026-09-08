@@ -8,6 +8,7 @@ pub mod build_tools;
 pub mod cli;
 pub mod graft;
 mod output;
+pub mod partition;
 mod process;
 pub mod vbmeta_inspect;
 pub mod vendorboot;

@@ -1,6 +1,7 @@
 //! Safe host-side GM2P profile and preferred-mode primitives.
 
 mod avb;
+pub mod footer;
 mod header_evidence;
 mod profile;
 
