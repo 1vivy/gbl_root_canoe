@@ -1,5 +1,6 @@
-//! Persist-side container staging through the OS ext4 adapter. Legacy boot roots
-//! are never inputs. Publishing the final name is a separate reviewed operation.
+//! Prepare persist edits on an owned offline image through the ext4 adapter.
+//! Live source writes belong to the reviewed volume transaction, not the helper.
+//! Legacy boot roots are never inputs.
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::Stdio;
@@ -37,14 +38,17 @@ fn helper_output(helper: &Path, source: &Path, operation: &str, path: &str) -> i
     Ok(result.stdout)
 }
 
-/// Fully write and verify a new, caller-owned staging file on an unmounted
-/// persist filesystem. Failure retains that file for recovery; it is never
-/// automatically replaced or promoted to `/efisp.fat`.
-pub fn stage(source: &Path, helper: &Path, staging_name: &str) -> io::Result<Allocation> {
+/// Low-level staging inside an owned offline persist image. Production
+/// provisioning uses prepare_activation and the reviewed volume transaction.
+pub fn stage_empty_image(
+    source: &Path,
+    helper: &Path,
+    staging_name: &str,
+) -> io::Result<Allocation> {
     let workspace = tempfile::tempdir()?;
     let image_path = workspace.path().join("staging.fat");
     crate::boot_volume::create_staging(&image_path)?;
-    stage_image(source, helper, staging_name, &image_path).map(|receipt| receipt.allocation)
+    stage_in_image(source, helper, staging_name, &image_path).map(|receipt| receipt.allocation)
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -57,13 +61,18 @@ pub struct StagedVolume {
 
 /// Stage the complete prepared boot volume, retaining the exact identity that
 /// a separate activation review must bind. Never populate it from legacy files.
-pub fn stage_image(
+pub fn stage_in_image(
     source: &Path,
     helper: &Path,
     staging_name: &str,
     image_path: &Path,
 ) -> io::Result<StagedVolume> {
     use sha2::{Digest, Sha256};
+    if !std::fs::symlink_metadata(source)?.is_file() {
+        return Err(io::Error::other(
+            "ext4 allocation requires a private persist image; live devices must use reviewed activation",
+        ));
+    }
     let suffix = staging_name
         .strip_prefix(".canoe-boot-volume-")
         .ok_or_else(|| io::Error::other("invalid container staging name"))?;
@@ -124,4 +133,96 @@ pub fn stage_image(
         sha256: format!("{:x}", Sha256::digest(&image)),
         allocation,
     })
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct PreparedActivation {
+    /// Durable before/after images and the reviewed transaction record.
+    pub recovery: std::path::PathBuf,
+    pub volume: StagedVolume,
+}
+
+/// Prepare first allocation and final-name publication on a private persist
+/// image. The source is read only throughout this function. Callers retain the
+/// same exclusive source ownership until apply or explicitly revalidate later.
+pub fn prepare_activation(
+    source: &mut (impl std::io::Read + std::io::Seek),
+    target: &str,
+    helper: &Path,
+    recovery_root: &Path,
+    prepared_fat: &Path,
+) -> io::Result<PreparedActivation> {
+    use crate::boot_volume_transaction as tx;
+    use std::io::SeekFrom;
+    let bytes = source.seek(SeekFrom::End(0))?;
+    let before = tx::read_image(source, bytes)?;
+    let work = tempfile::Builder::new()
+        .prefix("activation-")
+        .tempdir_in(recovery_root)?;
+    let shadow = work.path().join("persist.img");
+    std::fs::write(&shadow, &before)?;
+    let probe = crate::process::command(helper)
+        .arg("inspect")
+        .arg(&shadow)
+        .args(["--path", "/efisp.fat"])
+        .output()?;
+    if !probe.status.success() {
+        return Err(io::Error::other(format!(
+            "persist preflight: {}",
+            String::from_utf8_lossy(&probe.stderr).trim()
+        )));
+    }
+    let state: serde_json::Value = serde_json::from_slice(&probe.stdout)?;
+    if state.get("path_exists").and_then(|v| v.as_bool()) != Some(false) {
+        return Err(io::Error::other(
+            "boot-volume-exists: use installed-volume maintenance; existing efisp.fat is never replaced by provisioning",
+        ));
+    }
+    let name = format!(
+        ".canoe-boot-volume-{}",
+        work.path()
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or_else(|| io::Error::other("invalid staging directory name"))?
+    );
+    let mut volume = stage_in_image(&shadow, helper, &name, prepared_fat)?;
+    let renamed = crate::process::command(helper)
+        .arg("rename")
+        .arg(&shadow)
+        .arg(&volume.path)
+        .arg("/efisp.fat")
+        .output()?;
+    if !renamed.status.success() {
+        return Err(io::Error::other(format!(
+            "persist activation preparation: {}",
+            String::from_utf8_lossy(&renamed.stderr).trim()
+        )));
+    }
+    let readback = helper_output(helper, &shadow, "read", "/efisp.fat")?;
+    use sha2::{Digest, Sha256};
+    if readback.len() as u64 != volume.bytes
+        || format!("{:x}", Sha256::digest(&readback)) != volume.sha256
+    {
+        return Err(io::Error::other(
+            "activated boot-volume image failed readback",
+        ));
+    }
+    volume.path = "/efisp.fat".to_owned();
+    volume.allocation =
+        serde_json::from_slice(&helper_output(helper, &shadow, "allocation", "/efisp.fat")?)?;
+    if !volume.allocation.initialized || volume.allocation.bytes != CONTAINER_BYTES {
+        return Err(io::Error::other(
+            "activated boot-volume allocation is incomplete",
+        ));
+    }
+    let mut after_file = crate::file_identity::open_readonly(&shadow)?;
+    let after = tx::read_image(&mut after_file, bytes)?;
+    let recovery = tx::prepare_image(
+        recovery_root,
+        target,
+        &before,
+        &after,
+        tx::Format::Ext4Persist,
+    )?;
+    Ok(PreparedActivation { recovery, volume })
 }

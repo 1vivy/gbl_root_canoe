@@ -36,9 +36,12 @@ fn stage_is_initialized_verified_and_preserves_legacy_and_unrelated_files() {
         "/calibration",
         b"unrelated persist content",
     );
-    let allocation =
-        canoe_bootmgr::boot_volume_persist::stage(&source, &helper, ".canoe-boot-volume-test")
-            .unwrap();
+    let allocation = canoe_bootmgr::boot_volume_persist::stage_empty_image(
+        &source,
+        &helper,
+        ".canoe-boot-volume-test",
+    )
+    .unwrap();
     assert_eq!(
         allocation.extents.iter().map(|e| e.blocks).sum::<u64>() * allocation.block_size,
         32 * 1024 * 1024
@@ -61,8 +64,12 @@ fn stage_is_initialized_verified_and_preserves_legacy_and_unrelated_files() {
     }
     let before = fs::read(&source).unwrap();
     assert!(
-        canoe_bootmgr::boot_volume_persist::stage(&source, &helper, ".canoe-boot-volume-test")
-            .is_err()
+        canoe_bootmgr::boot_volume_persist::stage_empty_image(
+            &source,
+            &helper,
+            ".canoe-boot-volume-test"
+        )
+        .is_err()
     );
     assert!(
         fs::read(&source).unwrap() == before,
@@ -90,16 +97,21 @@ fn insufficient_space_and_bad_names_leave_persist_unchanged() {
     let source = fixture::ext4_image(work.path(), "persist.img", 40 * 1024 * 1024);
     let helper = fixture::helper_path();
     let before = fs::read(&source).unwrap();
-    let error =
-        canoe_bootmgr::boot_volume_persist::stage(&source, &helper, ".canoe-boot-volume-test")
-            .unwrap_err();
+    let error = canoe_bootmgr::boot_volume_persist::stage_empty_image(
+        &source,
+        &helper,
+        ".canoe-boot-volume-test",
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("insufficient"), "{error}");
     for name in [
         "efisp.fat",
         ".canoe-boot-volume-../efisp",
         ".canoe-boot-volume-",
     ] {
-        assert!(canoe_bootmgr::boot_volume_persist::stage(&source, &helper, name).is_err());
+        assert!(
+            canoe_bootmgr::boot_volume_persist::stage_empty_image(&source, &helper, name).is_err()
+        );
     }
     assert!(
         fs::read(source).unwrap() == before,
@@ -162,7 +174,7 @@ fn prepared_canonical_fat_generation_is_staged_byte_for_byte() {
     let backend = Backend::fat_image(&image, &recovery).unwrap();
     let config = ConfigDocument::parse(b"version 1\ngeneration 1\nmode 1\n\nentry android-a\n title Android\n image boot_a.efi\n mode 1\n role active\n").unwrap();
     backend.write_config(&config).unwrap();
-    let receipt = canoe_bootmgr::boot_volume_persist::stage_image(
+    let receipt = canoe_bootmgr::boot_volume_persist::stage_in_image(
         &source,
         &helper,
         ".canoe-boot-volume-prepared",

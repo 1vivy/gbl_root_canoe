@@ -100,13 +100,12 @@ impl FatImage {
             }
             let directory = transaction::prepare(&self.recovery_root, &target, &original, &next)
                 .map_err(fail)?;
-            transaction::recover(file_mut(&mut owned), &target, &directory, Direction::Apply)
-                .map_err(|e| {
-                    fail(io::Error::new(
-                        e.kind(),
-                        format!("{e}; recovery: {}", directory.display()),
-                    ))
-                })?;
+            transaction::apply(file_mut(&mut owned), &target, &directory).map_err(|e| {
+                fail(io::Error::new(
+                    e.kind(),
+                    format!("{e}; recovery: {}", directory.display()),
+                ))
+            })?;
         }
         Ok(value)
     }
