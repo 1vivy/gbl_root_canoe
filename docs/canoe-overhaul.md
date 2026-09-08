@@ -86,81 +86,55 @@ exploration is required in addition to focused tests. Old raw VHDX tests do not
 prove mounted FAT acceptance. Commit locally in each affected repository; do
 not push. Physical-phone writes/reboots/slot changes/format need separate consent.
 
-## Implementation progress
+## Implementation and validation
 
-- Reviewed USB backing-flush changes checkpointed as `65b66aa9`; producer
-  `canoe-msd` is at `82b1a78`.
-- Initial component extraction compiles: the public CLI has config/BLS commands;
-  the application worker is `canoe-boot-manager/native/canoe-manager`. Config and
-  file publication are shared. The interactive `canoe` wrapper is retired.
-- Linux mounted FAT CLI tests pass, including preserved unrelated files, refused
-  traversal and read-only publication failure. Worker native tests, Windows
-  cross-check, GUI 515 tests/typecheck/build, Tauri 32 tests and module bootstrap
-  checks pass. This is not full mounted-volume application acceptance.
-- `canoe-image` now owns image preparation and inspection. The application
-  supplies reviewed helpers through a resolver; standalone commands resolve only
-  needed helpers. Image outputs reject input aliases and use unique temporary
-  files. Worker/image tests and Windows cross-check pass.
-- `canoe-provision` creates a build-time FAT template and provisions mounted
-  ext4/offline persist images through native allocation or unchanged libext2fs.
-  The worker shares the primitive while retaining its readback/receipts. Tests
-  cover preserved legacy/unrelated files, existing/attached refusals, initialized
-  extents and clean filesystem checks.
-- The USB producer now follows LUN removability; BDS marks the contained FAT
-  removable and preserves the physical parent. Producer identity/flush/eject
-  tests, PE relocation verification, BDS host tests and a fresh BDS build pass.
-  A real Windows removable USB FAT fixture also passes automatic native mount,
-  volume-GUID CLI writes, preservation, rejected traversal, native flush/lock/
-  dismount/eject and independent detached readback/fsck. Application ownership
-  and deployment integration are still pending.
-- Removed the unused raw FAT reconstruction backend, its whole-FAT recovery
-  format and obsolete raw FAT fixture routes. Persist provisioning retains its
-  separate partition recovery. The only remaining runtime FAT library use is
-  read-only logfs evidence inspection, not boot-root maintenance.
-- Full mounted FAT integration, loader/BLS artifact
-  commands and application workflow consolidation remain in progress.
-- Windows native volume ownership now resolves a retained USB disk to its whole
-  FAT volume GUID and validates geometry. Export release flushes, locks and
-  dismounts the filesystem before backing flush/eject. The real owned USB
-  fixture passes worker writes, busy-file refusal, retry after closing the file,
-  native eject and detached readback/fsck. Guided deployment/UAC integration
-  remains outstanding.
-- The worker's ext4 directory backend has been removed. Native source operations
-  now use the mounted filesystem on Windows and owned vfat/loop lifetimes on
-  Linux/Android. Real Linux fixtures cover JSONL source changes, install, tools,
-  unchanged-volume preflight refusal, busy unmount, duplicate attachment and
-  source drift. A source-built Android worker passes in the existing Cuttlefish
-  KSU guest with SELinux enforcing, followed by independent FAT readback/fsck.
-  Loop attachment checks now use kernel backing inode identity, not sysfs path
-  strings. Explicit detach closes a stale-attachment timing gap between requests.
-  The old GUI/module export/provisioning callers still need integration.
-- The Windows app last inspected reports b3. Do not launch a mixed intermediate
-  package as b4; replace it only with the integrated, checked b4 build.
+The component extraction and caller conversion are implemented. `canoe-bootmgr`
+operates on supplied mounted roots and shares confined file/configuration code
+with the manager; `canoe-image` and `canoe-provision` are separate commands.
+Deployment, bootstrap continuation, preparation, uninstall and recovery use one
+native application operation engine. Retired write verbs reject requests before
+device access. Recovery records live outside persist and module extraction.
 
-- Mounted core operations now retain directory capabilities through cap-std 4.0.3
-  and cap-fs-ext. Component opens reject symlinks, aliases and ambiguous FAT
-  casing; bounded reads and staged publication cannot escape an opened root
-  when its original path is replaced. This uses maintained OS filesystem
-  primitives, not a private path-resolution implementation. Core/worker suites,
-  actual Linux mounted worker fixtures, Windows native USB CLI and worker
-  lock/eject fixtures, and Android KSU SELinux-enforcing loop fixtures pass.
-  Prepared loader/BLS publication and application orchestration remain pending.
+BDS uses the contained FAT root, explicit default saves and validated previous
+configuration fallback. A deliberate BLS-only configuration remains valid and
+does not resurrect deleted entries from the previous config. Read and close
+errors propagate. Legacy ext4 directories remain untouched and are covered by
+the reinstall documentation. The USB producer's source-built binary and its
+relocations are verified and pinned; BDS has been rebuilt from current sources.
 
-- The standalone mounted CLI now installs prepared ARM64 loader triplets and
-  complete BLS image sets. Publication uses the confined directory layer, shared
-  PE/GM2P/TZ-map parsers, explicit replacement and entry-last BLS ordering.
-  No signing-policy gate, snapshot, mode change or automatic backup rotation is
-  part of these commands. The manager BLS adapter shares prepared bytes and
-  retains its application rollback policy, including reporting rollback errors.
-  Core, worker, sidecar-parser suites and Windows cross-check pass.
+Actual Windows USB evaluation covers native FAT mounting, GUI UAC consent,
+policy save, busy-volume refusal, flush/dismount/eject and detached readback.
+The full native uninstall engine also runs against a fixed raw persist USB LUN
+backed by ext4, using unchanged libext2fs only on its private offline copy.
+USBSTOR's unsupported optional alignment property now selects conservative
+64 KiB transfers; invalid metadata and unrelated I/O errors still fail. Both
+selected ABL writes, raw efisp clearing, container removal, unrelated persist
+contents and a clean filesystem were verified independently. A forced disconnect
+retains completed partition receipts and reports cleanup as unfinished; retry
+completes the same operation and independent filesystem checks pass.
 
-- BDS now offers an explicit default-entry/mode save on the contained FAT root.
-  Ordinary row selection remains one-shot, and removable media cannot persist
-  a default. Saves preserve unrelated config text, stage and flush files, and
-  publish validated `canoe.cfg.prev` before replacing the current name. Core
-  commands use the same current/previous selection contract; permission and I/O
-  errors never trigger fallback. Host firmware tests cover every mutation
-  boundary, short writes, missing/malformed current files and unrelated content.
-  Rust core/worker suites and real Windows native FAT CLI fixtures pass. A fresh
-  canonical BDS compile/relink also passes from these sources. Integrated
-  application/installer orchestration and full package acceptance remain outstanding.
+Actual Linux GUI evaluation passes native FAT policy save, independent readback
+and USB release. Full uninstall also passes with both selected ABL targets,
+real fixed USB persist storage, container removal and independent filesystem checks. Native mounted-worker tests also cover source replacement,
+confinement, busy unmount and attachment lifetimes.
+
+The actual packaged standard KSU installer covers manager-only selection,
+held-key release, cancellation, first deployment and module-only updates.
+The WebUI preparation shortcut writes only the selected vendor_boot image and
+preserves the installed Mode 2 entry. Android uninstall verifies its selected
+ABL, clears raw efisp, removes the FAT container, and preserves unrelated persist
+files, other images and the manager module. OTA source/mode defaults and native
+DocumentsUI imports were inspected in the running WebUI.
+
+KSU Next now has its own pinned kernel (33214), not just its manager on a standard
+KSU kernel. It boots with SELinux enforcing, supplies root to an ordinary adb
+shell and passes packaged timeout, held-key manager-only, cancellation and
+first-deployment checks. This test-only x86 dispatcher build does not change the
+host kernel or the ARM64 release.
+
+All four package inventories pass architecture, current WebUI, shared EFI and
+desktop helper-pin checks. The application's `e2e/RELEASE-READINESS.md` records
+actual coverage and its limits. KSU Next also reaches actual recovery after
+verified uninstall without formatting. Guest
+results do not claim Qualcomm boot execution or KeyMint decryption coverage.
+No physical-phone writes are part of this evaluation.
