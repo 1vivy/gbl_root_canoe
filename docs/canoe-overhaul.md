@@ -138,3 +138,12 @@ actual coverage and its limits. KSU Next also reaches actual recovery after
 verified uninstall without formatting. Guest
 results do not claim Qualcomm boot execution or KeyMint decryption coverage.
 No physical-phone writes are part of this evaluation.
+
+The final acceptance audit also exercises an actual packaged Next installer
+write failure after container creation and boot-file publication. Its durable
+record is visible in WebUI after the aborted extraction is gone; reviewed Revert
+restores the operation, removes its new container and preserves original
+partition hashes and unrelated persist. All seven privileged mounted lifecycle
+checks pass on current sources. The application's `e2e/OVERHAUL-ACCEPTANCE.md`
+maps the retained requirements to direct guest or shared-engine evidence and
+records their hardware limits.
