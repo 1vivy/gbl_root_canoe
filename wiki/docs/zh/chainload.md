@@ -1,88 +1,14 @@
-# 链式启动第三方 UEFI 栈
+# EFI 与 Linux 链式加载
 
-BDS 是只读的 UEFI 选择器。它会扫描保留卷上的已知 EFI 加载器与 BLS Type #1 启动项，
-并启动用户选择的项目。普通启动项仍执行 `LoadImage` 后接 `StartImage`，并逐字节交出
-该行的 `options`；BLS `linux` 行还会向 EFI stub 内核发布 initrd 与设备树。BDS 不是
-通用操作系统 boot manager，不解析 Android boot 镜像或原始固件描述符，也不携带载荷
-加载器。
+BDS 通过 LoadImage/StartImage 启动普通 EFI 应用；BLS Linux 启动项可为 EFI-stub
+内核提供 initrd 与设备树。Mode 1/2 hook 仅用于设备启动根目录中的受管理 Android 加载器。
 
-因此，任何要链式启动的内容都必须是**一个 UEFI 应用**。
+镜像放在已挂载 efisp.fat 根目录或普通 FAT 介质中。配置与 BLS 的镜像路径从卷根开始，
+不添加旧版 efisp 前缀。options 原样传给载荷。CLI 使用 --artifact 目标路径=源文件，
+先发布镜像，再发布启动项；应用负责额外的快照、读回与恢复。
 
-```text
-entry mu
-  title Mu-Silicium (infiniti)
-  image mu/place.efi
-  options \efisp\mu\Mu-infiniti.bin
-```
-
-`image` 是那个 PE。`options` 是该 PE 自己的参数语法所需要的内容——BDS 既不解析也
-不校验。参见[`canoe.cfg` 契约](./canoe-cfg.md)，尤其要注意 `options` 中的路径为何
-需要带 `\efisp`，而 `image` 不需要。
-
-上例中的 `place.efi` 位于 `canoe-uefi-handoff` 附属项目。它的参数只有一个路径：它所
-进入的 blob 是 Project Mu 的 boot shim 加固件描述符，而 shim 的头部已经携带加载基址
-与窗口大小，因此不需要手抄十六进制数。早先的设计接受 `<path> <base> <size>`；四个
-设备周期中有两个耗在把这些数字和路径前缀弄对上，这正是现存设计不再索取它们的原因。
-
-## BLS Type #1 启动项
-
-BLS 为可启动文件提供第二套声明命名空间。每个 `loader/entries/<name>.conf` 文件对应
-一个 Type #1 启动项，并且必须包含且只包含一个 `linux` 或 `efi` 键。`linux` 行指向
-EFI stub 内核，可以再指定一个 `initrd`、一个 `devicetree` 和命令行 `options`；`efi`
-行指向普通 UEFI 应用，`options` 会作为不透明的 LoadOptions 传递。为兼容发行版文件，
-未知的标准 BLS 键会保留；格式错误、镜像缺失以及不支持的重复字段会被跳过。
-
-**Entries** 路由把发现的 BLS 行作为未受管理的证据显示。
-`bls.show` 读取；CLI 可以用 `bls.stage` 及 SHA-256 校验暂存启动项：
-
-```bash
-# 本地启动根目录：
-sha256sum vmlinuz-canoe initramfs-canoe
-canoe-bootmgr --boot-root /path/to/efisp bls stage \
-  --name canoe-linux.conf --entry ./canoe-linux.conf \
-  --artifact ./vmlinuz-canoe,vmlinuz-canoe,<KERNEL_SHA256> \
-  --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
-
-# 直接 ext4 镜像或导出的块设备：
-canoe-bootmgr --source <ext4-image-or-block-device> bls stage \
-  --name canoe-linux.conf --entry ./canoe-linux.conf \
-  --artifact ./vmlinuz-canoe,vmlinuz-canoe,<KERNEL_SHA256> \
-  --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
-```
-
-完整的注释示例见[`examples/pmos.conf`](./examples/pmos.conf)。
-
-`--artifact` 格式为 `SOURCE,DESTINATION,SHA256`；每个目标都必须被解析后的 BLS 文件
-引用，摘要必须是 64 个十六进制字符。操作会在复制前和复制中校验源文件，只有全部文件
-通过后才写入 `loader/entries/<name>.conf`，失败时回滚整个集合。`--source` 与
-`--ext4-image` 选择直接 ext4 后端；`--boot-root` 选择本地目录，不能与它们组合。
-
-### 两个路径命名空间
-
-两套声明语法相对于不同的根目录命名路径：
-
-| 声明 | 路径值 | persist ext4 解析结果 | FAT 解析结果 |
-| --- | --- | --- | --- |
-| `canoe.cfg` `image` | `mu/place.efi` | `\efisp\mu\place.efi` | `\mu\place.efi` |
-| `canoe.cfg` `options` | 载荷拥有的不透明值 | 原样传递；载荷路径从 `\` 开始 | 原样传递；载荷路径从 `\` 开始 |
-| BLS `linux`/`efi`/`initrd`/`devicetree` | 相对路径或带 `/` 的路径 | 加上 `\efisp\...` 前缀 | 卷根下的 `\...` |
-
-因此，放在 `persist/efisp/loader/entries` 的 BLS 文件可以写 `linux /vmlinuz-canoe`，
-BDS 会打开 `\efisp\vmlinuz-canoe`。同一启动根目录中的 Canoe 行则写成不带前缀的
-`image mu/place.efi`。普通行的 `options` 属于被启动的载荷；如果载荷位于 persist，
-其中的路径必须包含 `\efisp`。
-
-### 发现与无人值守默认项
-
-BDS 将发现的 BLS 行追加在配置的 `canoe.cfg` 行之后。无人值守默认解析器只有在发现的
-BLS `efi` 或 `linux` 行位于不可移动的设备启动根目录，且 `default bls:<stem>` 指向
-该 stem 时才接受它。USB 上的 BLS 行仍不能作为无人值守默认项。目标缺失或不可读时，
-BDS 显示现有提示，绝不会回退到另一个启动项。
-
-要交互式启动 BLS 行，请在启动采样窗口内按住**音量上**，选中该行后按电源。若要重复
-进行无人值守测试，可把小型 wrapper UEFI 应用作为普通 `canoe.cfg` 行并设为默认；
-wrapper 再选择或链式启动 BLS 文件。BLS 行始终是直通启动，不使用 Mode 1/2 hook 或
-受管理附属文件。
+设备启动根目录上的 BLS 行可作为默认项，外部可移动介质不能。普通选择为一次性启动，
+显式 Save as default 才保存。参见[完整说明](../chainload.md)及[命令](../commands.md)。
 
 ## 为什么 BDS 不再提供载荷加载器
 

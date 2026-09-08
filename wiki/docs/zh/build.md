@@ -35,7 +35,7 @@ SHA-256 并嵌入构建结果；缺少文件、文件不是普通文件、不可
 都会使 Tauri 构建失败。Linux 所需名称为：
 
 ```text
-canoe-bootmgr-x86_64-unknown-linux-gnu
+canoe-manager-x86_64-unknown-linux-gnu
 canoe-ext4-x86_64-unknown-linux-gnu
 extractfv-x86_64-unknown-linux-gnu
 patch_abl-x86_64-unknown-linux-gnu
@@ -47,7 +47,7 @@ abl_tzmap-x86_64-unknown-linux-gnu
 
 ```bash
 APP=/absolute/path/to/canoe-boot-manager
-for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+for name in canoe-manager canoe-bootmgr canoe-image canoe-provision canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
   cp "targets/toolkit_linux/build/toolkit/bin/$name" \
     "$APP/src-tauri/binaries/${name}-x86_64-unknown-linux-gnu"
 done
@@ -60,7 +60,7 @@ Linux 的 `fastboot` 不会暂存到 `src-tauri/binaries`：运行时从继承�
 Windows GNU 所需名称为：
 
 ```text
-canoe-bootmgr-x86_64-pc-windows-gnu.exe
+canoe-manager-x86_64-pc-windows-gnu.exe
 canoe-ext4-x86_64-pc-windows-gnu.exe
 extractfv-x86_64-pc-windows-gnu.exe
 patch_abl-x86_64-pc-windows-gnu.exe
@@ -75,7 +75,7 @@ AdbWinUsbApi-x86_64-pc-windows-gnu.dll
 
 ```bash
 APP=/absolute/path/to/canoe-boot-manager
-for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+for name in canoe-manager canoe-bootmgr canoe-image canoe-provision canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
   cp "targets/toolkit_windows/build/toolkit/bin/$name.exe" \
     "$APP/src-tauri/binaries/${name}-x86_64-pc-windows-gnu.exe"
 done
@@ -95,7 +95,7 @@ sidecar：Tauri 会在编译前验证每个必需输入。
 九个 MSVC fixture 名称如下：
 
 ```text
-canoe-bootmgr-x86_64-pc-windows-msvc.exe
+canoe-manager-x86_64-pc-windows-msvc.exe
 canoe-ext4-x86_64-pc-windows-msvc.exe
 extractfv-x86_64-pc-windows-msvc.exe
 patch_abl-x86_64-pc-windows-msvc.exe
@@ -268,171 +268,12 @@ UEFI_REBUILD=1 make target_toolkit_linux
 如果最终包是 Windows、Android 或模块，请使用对应的包目标。不要为每个包
 分别强制重建。
 
-## 主机命令界面
+## 命令组件
 
-主机工具包以 GUI 为首选。根目录包含启动器和命令行客户端，`bin/` 包含桌面
-应用及其 sidecar：
-
-```text
-canoe-boot-manager.sh       # Linux GUI 启动器
-canoe-boot-manager.bat      # Windows GUI 启动器
-canoe                       # Linux 命令行客户端
-canoe.exe                   # Windows 命令行客户端
-bin/canoe-boot-manager      # Linux 桌面二进制
-bin/canoe-boot-manager.exe  # Windows 桌面二进制
-bin/canoe-bootmgr           # 启动根目录写入器 sidecar
-```
-
-命令行客户端仍适合自动化，而且不需要 WebKitGTK 或 WebView2：
-
-```text
-canoe
-canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] [--from-mode 0|1|2] \
-              [--acknowledge CODE]... \
-              [--vendor-boot IMG] [--allow-new-signer]
-canoe entry|config|default|bls|slot|source ...
-canoe -h | --help | --version
-canoe --non-interactive <command> ...
-```
-
-不带参数时，`canoe` 启动交互式五路由操作界面。`--non-interactive` 会被接受
-并丢弃，以保持兼容；`entry|config|default|bls|slot|source` 子命令会原样
-转发给 `canoe-bootmgr`。
-
-使用以下命令构建原生主机命令行客户端：
-
-```bash
-cargo build --locked --release --manifest-path tools/canoe/Cargo.toml
-```
-
-构建 Windows GNU 目标时使用 rustup target 和 MinGW linker：
-
-```bash
-CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
-  cargo build --locked --release --target x86_64-pc-windows-gnu \
-  --manifest-path tools/canoe/Cargo.toml
-```
-
-## `canoe-bootmgr build`
-
-`canoe-bootmgr build` 是电脑端和设备端共同使用的单一载荷派生编排器。完整
-构建命令为：
-
-```text
-canoe-bootmgr build --abl <ABL_IMAGE> --vbmeta <VBMETA_IMAGE> --staged <DIR> \
-                    [--tools <DIR>] [--keep-unpatched <PATH>] [--patch-log <PATH>]
-```
-
-它先将 ABL 提取到工作目录，运行
-`extractfv -o <workdir> -v <abl>`，并要求存在 `<workdir>/LinuxLoader.efi`。
-随后运行 `patch_abl <workdir>/LinuxLoader.efi <staged>/boot.efi`，要求输出
-非空；接着运行
-`mode2_profile derive --vbmeta <vbmeta> --out <staged>/boot.efi.gm2p` 及其
-`validate`。最后运行
-`abl_tzmap derive <workdir>/LinuxLoader.efi -o <staged>/boot.efi.tzmap --allow-incomplete`，
-再用 `--allow-zero-digest` 对该附属文件和提取出的 loader 执行验证与核验。
-恰好 256 字节。成功时，暂存目录中恰好有 `boot.efi`、
-`boot.efi.gm2p` 和 `boot.efi.tzmap`。
-
-四个 worker 二进制仍各自独立：`extractfv`、`patch_abl`、`mode2_profile` 和
-`abl_tzmap`。`--keep-unpatched` 会复制提取出的 loader，`--patch-log` 会
-记录捕获的 `patch_abl` 输出。出现 `Warning: Failed to patch ABL GBL` 不算
-构建失败：回执会报告 `gbl_patched: false`，且附属文件描述原厂配对。
-
-如需无副作用的 worker 探测（不需要 vbmeta，也不生成附属文件或暂存输出），
-使用：
-
-```text
-canoe-bootmgr build --abl <ABL_IMAGE> --probe [--tools <DIR>]
-```
-
-工具按以下顺序解析：`--tools <DIR>`、`$CANOE_TOOLS_DIR`、运行中的
-`canoe-bootmgr` 所在目录，最后是 `PATH`。缺少工具时会报错并指出工具名称。
-任一步骤失败都会删除三个暂存输出，以及本次调用创建的 `--keep-unpatched`
-或 `--patch-log` 文件。
-
-`canoe build` 只是这个统一编排器的电脑端便利入口，不再维护独立的派生
-实现。默认读取 `images/abl.img` 与 `images/vbmeta.img`；`--abl` 与
-`--vbmeta` 会先将提供文件复制到这些规范路径，再开始派生。镜像必须与正在
-启动的固件匹配。
-
-`canoe install` 会校验并为必需的活动槽位提交启动根目录。省略 `--mode` 时会继承
-已保存的模式。通过 `canoe install` 明确变更模式时，必须同时提供
-`--mode 0|1|2`、`--from-mode 0|1|2`，并对 `mode.plan` 要求的每个确认重复传入
-`--acknowledge <CODE>`。直接使用 `canoe-bootmgr` 时，已有受管理行还可用
-`--id <ENTRY_ID>`；新行仍使用 `--from-mode`。如果计划需要镜像证据，还要提供
-`--current-vbmeta`、`--target-vbmeta` 和 `--target-image`；这些是证据输入，不是
-隐式刷写载荷。省略 `--boot-root` 时，主机通过 BDS 的
-`fastboot oem mass-storage:persist` 导出访问启动根目录；提供 `--boot-root` 时，
-它应指向已挂载的 `persist/efisp`。`--vendor-boot IMG` 为选定槽位创建已修补副本，
-并报告对应 fastboot 刷写命令；不会修改源文件。`--allow-new-signer` 允许在切换到或
-切换回 Custom ROM 时出现预期的签名变化。
-
-## 主机派生工具
-
-Linux 与 Android 包含 `extractfv`、`patch_abl`、`mode2_profile` 和 `abl_tzmap`；
-Windows 包含对应的 `.exe`。`mode2_profile` 提供 120 字节 KeyMint profile
-的 `derive` 与 `validate`。`abl_tzmap` 从未修补 ABL 派生并验证 256 字节
-`GTZM` 映射，也接受不完整的逆向证据。
-
-Mode 1 graft 准备是 Deploy → Prepare 中的可选任务。它枚举所选 VBMETA 的链描述符，
-并在提供分区写入前验证生成的镜像；应用没有独立页面。`vendor_boot` 功能是固定偏移
-的原地命令行修改，本项目不附带 boot-image 二进制。
-
-## 生成匹配的配对
-
-将匹配的原厂镜像放在：
-
-```text
-images/abl.img
-images/vbmeta.img
-```
-
-然后执行：
-
-```bash
-./canoe build
-```
-
-结果是已修补的 `boot.efi`、精确 120 字节的 `boot.efi.gm2p` 和 256 字节的
-`boot.efi.tzmap`。映射从未修补 ABL 派生。安装事务会一起复制所需文件；提交
-失败时会回滚整棵树。
-
-## Bootloader 前置条件
-
-原始 fastboot 操作由操作员负责。如果已安装的 ABL 不带 GBL 漏洞，请先刷入
-较旧的易受攻击原厂镜像，再刷入 BDS：
-
-```bash
-fastboot flash abl <vulnerable>.img
-fastboot flash efisp BDS.efi
-```
-
-当前 ABL 已带漏洞时省略第一条命令。不要刷写 `persist`；它是保存启动根目录
-与厂商数据的 live ext4 文件系统。
-
-## Windows 工具包与 ext4 helper
-
-Windows 压缩包附带 GUI 启动器、`canoe-boot-manager.exe`、原生 `canoe.exe`、
-`fastboot.exe` 和 `canoe-ext4.exe`。不需要安装 Python，也不再捆绑解释器。
-无需盘符、文件系统驱动或挂载：`canoe.exe install --slot <A|B>` 会请求
-`canoe-bootmgr source detect --json` 获取导出源，并对原始
-`\\.\PhysicalDrive<N>` 源执行启动根事务。
-
-要从源码构建 Windows ext4 helper，请提供 e2fsprogs 和 zlib：
-
-```bash
-E2FSPROGS_SRC=/path/to/e2fsprogs ZLIB_PREFIX=/path/to/zlib \
-  tools/canoe-ext4/build-windows.sh
-```
-
-如果缺少 `canoe-ext4.exe`，打包会失败；不会提供占位文件或静默回退。手动
-探测原始磁盘可运行：
-
-```text
-canoe-ext4.exe inspect \\\.\PhysicalDrive<N>
-```
+当前命令为 canoe-bootmgr（已挂载目录）、canoe-image（镜像准备）和 canoe-provision（容器）。
+应用侧 canoe-manager 负责部署和 OS 适配。旧 canoe 与 Android build.sh 已移除。
+Windows 常规 FAT 操作用原生文件系统，离线 ext4 操作用未修改的 libext2fs，无需 Ext4Windows/WinFsp。
+具体构建与打包边界参见[构建指南](../build.md)和[命令指南](../commands.md)。
 
 ## `patch_abl` 修改内容
 
@@ -456,7 +297,7 @@ canoe-ext4.exe inspect \\\.\PhysicalDrive<N>
 构建；它声明 `compatible = "oneplus,infiniti"` 与 `dr_mode = "peripheral"`，
 没有 `stdout-path`，且禁用 `uart7`/`uart18`。arm64 defconfig 具体启用
 `EFI=y`/`EFI_STUB=y`，使用未压缩 `Image`。`persist` 下 H3 BLS 路径为
-`\\efisp\\vmlinuz-canoe`、`\\efisp\\initramfs-canoe` 和
-`\\efisp\\dtbs\\kaanapali-oneplus-infiniti.dtb`；标记端点为
+`\\vmlinuz-canoe`、`\\initramfs-canoe` 和
+`\\dtbs\\kaanapali-oneplus-infiniti.dtb`；标记端点为
 `telnet 192.168.42.1:2323`。完整来源与准备脚本位于 `.work/device-series`，
 不属于仓库源码。

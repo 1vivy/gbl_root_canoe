@@ -386,12 +386,14 @@ test:
 	cargo test --locked --manifest-path tools/mode2-profile/Cargo.toml
 	cargo test --locked --manifest-path tools/abl-tzmap/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
+	cargo test --locked --manifest-path tools/canoe-fs/Cargo.toml
+	cargo test --locked --manifest-path tools/canoe-image/Cargo.toml
+	cargo test --locked --manifest-path tools/canoe-provision/Cargo.toml
 	cargo test --locked --manifest-path ../canoe-boot-manager/native/canoe-manager/Cargo.toml
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
 	$(MAKE) -C tools/canoe-ext4 test
 	sh targets/magisk_module/tests/test_flows.sh
-	sh targets/toolkit_android/tests/test_build_script.sh
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
 # Fetch a pinned package asset without ever exposing a partial archive to

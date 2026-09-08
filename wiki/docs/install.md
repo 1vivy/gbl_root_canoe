@@ -1,390 +1,89 @@
-# Installation Guide
+# Install Canoe
 
-Canoe has two host-facing programs in every desktop toolkit:
+Use Canoe Boot Manager on Linux or Windows, or its WebUI in KernelSU. The
+application and the module installer use the same native deployment engine.
+The standalone commands are described in [Command-line tools](./commands.md).
 
-- `bin/canoe-boot-manager` is the GUI-first desktop application. Launch it with
-  `canoe-boot-manager.sh` on Linux or `canoe-boot-manager.bat` on Windows.
-- `canoe` (`canoe.exe` on Windows) is the command-line client. It remains
-  available for scripts and for systems where the GUI runtime is unavailable.
+## Storage
 
-The desktop application is a Svelte 5 + Vite app. It speaks the JSON wire
-protocol and delegates boot-root changes to `canoe-bootmgr`; it is not a second
-writer. The Android module serves the same app build through KernelSU. It is not
-a separate Android-only page.
-
-## Host requirements
-
-The GUI uses the platform WebView runtime:
-
-- **Linux:** install `webkit2gtk-4.1`, `javascriptcoregtk-4.1`, and
-  `libsoup-3.0` before running `./canoe-boot-manager.sh`. The GUI will not
-  start without these libraries.
-- **Windows:** install the Microsoft WebView2 runtime. It is present by
-  default on current Windows 11; install it separately on Windows systems that
-  do not include it. The GUI will not start without WebView2. The GUI itself
-  stays unprivileged; its helper requests Administrator only when the first
-  protected raw-disk operation is needed. Because the binary is not code-signed,
-  the UAC prompt shows an unknown publisher. The Windows package builds, but
-  GUI runtime behavior is unverified here because there is no Windows machine
-  and Wine has no UAC. The `canoe.exe` client in the same archive needs no
-  WebView2 runtime; run it from an elevated prompt for protected raw-disk work.
-
-On both platforms, the authorized helper is reused until you quit the app,
-including across source changes and intervening local work. No password is
-stored, local artifacts remain owned by your ordinary user, and writes still
-require their own confirmation. If the authorized helper unexpectedly ends,
-quit and reopen the app before another protected operation.
-
-The CLI has none of these GUI dependencies. A host that has neither the Linux
-WebKit libraries nor WebView2 can still use `./canoe` or `canoe.exe` and the
-`canoe-bootmgr` command-line interface.
-
-The toolkit also includes `bin/canoe-bootmgr`, the single boot-root writer, and
-the helper binaries used by its build and install commands. The desktop binary
-is kept beside that sidecar because the Tauri application resolves its sidecar
-next to the application executable. Do not move either file out of `bin/`.
-
-## Boot-root layout
-
-GBL Root Canoe keeps a signed, vulnerable ABL in `abl`, a raw `BDS.efi` in
-`efisp`, and one or two current patched loader triplets in `persist/efisp`.
-The BDS reads `canoe.cfg` from that boot root and chainloads the selected entry;
-it never writes storage.
-
-The boot root contains:
-
-| File | Purpose |
-| --- | --- |
-| `canoe.cfg` | Boot policy, managed entries, and generation number |
-| `boot_a.efi` + sidecars | Patched ABL for installed slot A |
-| `boot_b.efi` + sidecars | Patched ABL for installed slot B |
-| `boot_backup.efi` + sidecars | Previous generation of the last-updated slot, when present |
-| `tools/` | EFI tools exposed by the BDS menu |
-
-Each managed loader has a `.gm2p` profile (exactly 120 bytes) and a `.tzmap`
-map (exactly 256 bytes). New installs do not write the retired `boot.efi`
-name. A complete legacy `boot.efi` triplet is migrated to the explicit target
-slot, while an incomplete legacy set is quarantined; see
-[`canoe.cfg`](./canoe-cfg.md).
-
-The `persist` filesystem is normally exposed at `/mnt/vendor/persist` by
-Android and at `/persist` by recovery. Its `efisp/` directory is the boot root.
-Do not flash `persist`: it is a live filesystem that also holds vendor data.
-
-## Prerequisites before the first install
-
-The ABL in the active `abl` partition must contain the GBL vulnerability. If it
-does not, the operator must first flash an older vulnerable stock ABL. The
-operator also flashes `BDS.efi` to raw `efisp`:
-
-```bash
-fastboot flash abl <vulnerable>.img       # only when the current ABL is fixed
-fastboot flash efisp BDS.efi
-```
-
-The source `abl.img` and `vbmeta.img` used to derive a staged triplet must
-describe one matching stock firmware pair. The vulnerable ABL left in the
-partition may be older than that pair.
-
-For a USB export, `canoe-ext4` (libext2fs) opens the raw ext4 source directly,
-takes its exclusive lock, performs journal recovery before mutation, writes a
-bounded transaction, and closes it cleanly. No host filesystem layer is used,
-and the helper refuses a source that another writer already owns. The only
-host permission required is permission to open the source device.
-
-## The five supported scenarios
-
-### 1. Host first install
-
-This is the first installation from a Linux or Windows computer. It has two
-halves with different fastboot sessions.
-
-#### Half one: stock fastbootd
-
-The first half uses **stock fastbootd** — the userspace fastboot a fresh
-unlocked device provides, entered from Android with `adb reboot fastboot` (or
-from the bootloader's own fastboot with `fastboot reboot fastboot`). This is
-fastbootd's only role here: flash the vulnerable ABL and `BDS.efi` to `abl_a`/
-`abl_b` and `efisp` for the fresh install. ABL and other critical partitions
-are not flashable from the bootloader's fastboot, so there is no alternative
-session for this half; `fastboot getvar is-userspace` answers `yes` in the right
-one.
-
-The device then boots into the BDS, which presents **Super Fastboot**.
-
-#### Half two: Super Fastboot and the host
-
-Super Fastboot is BDS's own fastboot session. It waives ABL's
-critical-partition status, so flashing works from here; partitions inside
-`super` remain the exception. The device must already be in Super Fastboot
-before the native host surface runs.
-
-Launch the GUI from the toolkit directory:
+The boot chain is:
 
 ```text
-Linux:   ./canoe-boot-manager.sh
-Windows: canoe-boot-manager.bat
+signed vulnerable ABL → raw efisp:BDS.efi → persist/efisp.fat → selected loader
 ```
 
-The command-line equivalent remains available:
+`efisp` is a raw partition containing BDS. `efisp.fat` is a fully initialized
+32 MiB FAT16 file inside ext4 persist. Provisioning requires a further 8 MiB of
+free space. Its mounted root contains `canoe.cfg`, per-slot loader triplets,
+EFI tools and any manually installed BLS entries. No GPT change is needed.
 
-```text
-Linux:   ./canoe
-Windows: canoe.exe
-```
+The old `/persist/efisp` directory is ignored and preserved. There is no import
+or automatic migration. Users of gbl-chainload or Canoe 6.3.5 and earlier
+must [reinstall and recreate entries](./reinstall.md).
 
-The interactive GUI and CLI wait for `images/abl.img` and `images/vbmeta.img`,
-read the active slot from `current-slot` when the BDS publishes it, and ask
-which slot is active only with an older BDS that does not publish that variable.
-They then request:
+## Desktop
 
-```text
-fastboot oem mass-storage:persist
-```
+Launch `canoe-boot-manager.sh` on Linux or `canoe-boot-manager.bat` on Windows.
+Linux needs WebKitGTK 4.1 and its normal runtime dependencies; Windows needs
+WebView2. Keep the packaged application and its helpers together. The GUI
+requests privileges for protected device access and retains the authorized
+helper for the session.
 
-After the export, the command-line wrapper asks
-`canoe-bootmgr source detect --json` for candidates and selects the first
-readable, unmounted block row with identity `1209:ca0e` (or compatibility
-identity `05c6:f000`). The desktop app instead validates and attaches the
-exact raw node returned by its `fastboot.export` operation; it does not rescan
-for a different disk. No drive letter or host filesystem directory is created.
-`canoe-bootmgr` routes all boot-root reads and writes through `canoe-ext4`; the
-helper creates `/efisp` when it is missing and the boot manager commits the
-selected slot triplet, configuration, sidecars, and rollback as one
-transaction:
+1. Start Deploy and answer the installation-history question **before** any
+   initial ABL/BDS writes. A newly flashed efisp cannot establish whether the
+   phone previously used another EFISP mod.
+2. For a first installation, enter Android **Fastbootd**. Select a compatible
+   vulnerable ABL and firmware ABL for recovery. Optionally select the previous
+   BDS image for recovery; otherwise recovery of this initial step clears raw
+   efisp. Review the active-slot and raw-efisp targets before applying.
+3. Restart when ready. An unpopulated boot root normally enters Super Fastboot
+   automatically. If it does not, open the BDS menu and choose Super Fastboot.
+   The app verifies the initial writes there before continuing preparation.
+4. Prepare the selected slot's loader and boot images, choose the intended mode,
+   and review the data assessment and every write. Apply when satisfied.
+5. Reboot only after completion. Formatting, when required, is a separate action
+   in recovery; Canoe never formats automatically.
 
-```bash
-canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --slot a
-```
+Initial writes and the later deployment share one saved operation. Closing the
+app does not discard its receipts. Incomplete operations offer retry and,
+where recovery inputs are available, reviewed Revert.
 
-`canoe install` omits `--mode` to inherit the persisted mode. An explicit mode
-change through this wrapper must include `--mode 0|1|2`,
-`--from-mode 0|1|2`, and a repeated `--acknowledge <CODE>` for every
-acknowledgement required by `mode.plan`. The direct `canoe-bootmgr` interface
-also accepts `--id <ENTRY_ID>` for an existing managed row; a new row uses
-`--from-mode`. If image evidence is needed, pass `--current-vbmeta`,
-`--target-vbmeta`, and `--target-image`; these are evidence inputs, not
-implicit flash payloads.
-The writer evaluates `mode.plan` before mutating the boot root; a refusal or
-missing acknowledgement leaves it untouched.
+Desktop slot selection is manual: A, B, or Both. Each selected slot has its own
+preparation. Both-slot deployment writes the inactive slot before the active
+slot. This is for manual reconciliation, not a system-OTA shortcut. An image
+from another slot is not offered as an ordinary source; choose a file when
+needed.
 
-Use `--boot-root <persist>/efisp` only when a local directory is deliberately
-provided for tests or an operator-managed workflow. For an image or raw block
-source, use the boot manager's direct backend instead:
+## KernelSU first setup and updates
 
-```bash
-canoe-bootmgr --boot-root /path/to/efisp install \
-  --staged /path/to/staged --slot a
-canoe-bootmgr --source /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a
-canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a
-```
+During a first module installation, volume keys offer **Install manager only**,
+**Deploy Canoe now**, or cancellation. Release each key between presses. A
+selection timeout leaves a manager-only installation. Module updates do not
+implicitly deploy or change partitions.
 
-For a mode change on an existing row, add `--mode 1 --id <ENTRY_ID>` and the
-reviewed evidence plus repeated acknowledgements, for example:
+Deploy now executes the newly extracted tools from the module installation
+path. It prepares the active slot from its on-slot images and offers Mode 1/2,
+explicit custom recovery, and applicable vendor_boot preparation. Required
+images are inspected before writes. If grafting or donor input is missing,
+read the specific reason and choose manager-only installation or cancellation.
+Full installation in the activated WebUI supports native Android file pickers.
 
-```bash
-canoe-bootmgr --boot-root /path/to/efisp install \
-  --staged /path/to/staged --slot a --mode 1 --id android-a \
-  --current-vbmeta <CURRENT_VBMETA> --target-vbmeta <TARGET_VBMETA> \
-  --target-image <TARGET_IMAGE> \
-  --acknowledge <CODE_1> --acknowledge <CODE_2>
-```
+The final installer review lists the slot, mode, targets, image identities and
+userdata assessment. Only its explicit Apply choice writes. Recovery records
+remain in `/data/adb/canoe-manager/operations`, outside installer temporary files
+and the manager module.
 
-`--ext4-image` is an alias for `--source`; the two direct-source forms accept
-an ext4 image or block device and cannot be combined with `--boot-root`.
-`--slot a|b` is required for a direct install unless the caller deliberately
-uses the inactive-slot form with known active metadata and
-`--i-know-inactive-status`. An unknown slot is refused.
+For an installed system, use [OTA preparation](./ota.md), the General boot-image
+shortcut, or [Uninstall Canoe](./uninstall.md). Installing or updating only the
+manager does not require a data format.
 
-Both direct-source forms always use `/efisp` inside the persist volume, never
-the filesystem root. Installation creates `/efisp` if it is missing and reuses
-it if it already exists. Inspection alone does not create it, and misplaced
-root-level files are not adopted, moved, or deleted. A `--boot-root` value still
-names the boot-root directory itself.
+## Image and data compatibility
 
-Super Fastboot publishes these fastboot variables:
+A source ABL used to derive a loader is separate from the vulnerable ABL flashed
+to the partition. Each `.efi` has matching `.gm2p` and `.tzmap` sidecars. Do not
+mix generations. A parsed signing key does not establish OEM provenance or
+firmware suitability.
 
-| Variable | Value and meaning |
-| --- | --- |
-| `canoe-bds` | The project version. Its presence is the definitive signal that the device is running Super Fastboot. |
-| `current-slot` | `a` or `b`. It is absent when the GPT marks neither slot or both slots. |
-
-### 2. Host update
-
-Run the same host command for a new matching firmware generation, selecting the
-slot whose loader is being installed:
-
-```bash
-canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --slot b
-```
-
-The selected slot's existing triplet is copied to `boot_backup.efi` with
-matching sidecars before the new triplet is committed. The `android-backup` row
-exists while that previous generation is valid. `android-a` and `android-b`
-rows are written only for slots with valid installed triplets; hand-added rows
-remain verbatim. A managed install does not invent a `default`; use
-`canoe-bootmgr default set` when one is wanted.
-
-### 3. KernelSU module install
-
-Install the module on a rooted device. The module's `customize.sh` is only a
-bootstrap: it derives and stores the language preference, displays the device
-facts it read, sets payload permissions, and installs the static WebUI. It does
-not ask mode questions, read or write a boot partition, change the boot root, or
-reboot the device. The bundled ABL repository is package data for the WebUI's
-`abl.lookup` provider, not a shell-side downloader or writer.
-
-Open the WebUI after installation. It is the same Svelte app shipped for the
-desktop surface, built from the same `dist/` output.
-The WebUI opens in the stored `lang.txt`/`user_lang` language and provides the
-language switch for any later change.
-The WebUI precaptures its partition facts, plans the required session and
-operations, and then drives
-`block.read`, `block.write`, `system.reboot`, and `canoe-bootmgr` for the
-on-device adapter. `canoe-bootmgr` remains the only boot-root and partition
-writer; the module installer itself performs no partition write.
-
-### 4. KernelSU update or post-OTA install
-
-After the system updater finishes, stay in the current system and, **before
-rebooting**, open the module WebUI and press **Install to inactive slot**. The
-action requires target-slot metadata, derives and installs only the loader
-triplet for the slot that will boot next, refreshes its matching sidecars, and
-updates the managed row for that slot. It refuses unknown metadata and never
-relabels or silently falls back to the running slot.
-
-If the action is forgotten, the new slot retains its stock ABL. The GBL exploit
-is absent there, so the BDS is not loaded and the device boots stock and
-unhooked. Nothing is bricked. Run **Install to inactive slot** and reboot again;
-this recovery needs no slot switch. The other slot is the slot you were running
-moments ago, so its health is known-good in this scenario. Canoe does not
-provide a slot-switch action; if you choose to boot back to the other slot, you
-must switch the active slot yourself outside Canoe (for example with
-`fastboot set_active`).
-
-A managed Mode 2 profile belongs to the installed generation. It is refreshed
-only by the explicit action; the system updater does not refresh it. There is
-no OTA watcher in this release.
-
-If the WebUI offers supplied derivation images, they must be exact, non-empty
-files matching the installed firmware generation; they are never flash
-payloads.
-
-### 5. Locked-bootloader temporary root
-
-For a temporary root on a locked device, use the Android toolkit's
-`resources/build.sh`. It invokes the same `canoe-bootmgr build` orchestrator
-for the active slot and then the bundled local-directory backend:
-
-```sh
-su -c sh ./build.sh --mode 0
-su -c sh ./build.sh --mode 1 --acknowledge P-FORMAT
-su -c sh ./build.sh --mode 1 --acknowledge P-FORMAT --abl /path/abl.img --vbmeta /path/vbmeta.img
-```
-
-Only Mode 0 and Mode 1 are accepted by this wrapper. Mode 1 requires the
-explicit `P-FORMAT` acknowledgement. The selected VBMETA is passed to the
-policy gate as read-only target evidence; it is never an implicit flash
-payload. The wrapper changes only the boot root tree, validates every generated
-file, removes the complete staged set on failure, and performs no partition
-write. For a previously prepared staging directory, the equivalent script-side
-command is:
-
-```sh
-canoe-bootmgr --boot-root /mnt/vendor/persist/efisp install \
-  --staged /path/to/staged --slot a
-```
-
-The `--boot-root` form is the local-directory backend; use `--source` or
-`--ext4-image` for a direct ext4 image or block source instead. The boot
-manager owns the transaction and configuration rows. The operator owns the raw
-fastboot operation that put the vulnerable ABL and `BDS.efi` in place.
-
-## Matching images and signer changes
-
-`images/abl.img` and `images/vbmeta.img` must be stock files for the firmware
-being booted. A successful Mode 2 derivation means only that `vbmeta` parsed and
-contains a signature and public-key blob. No tool here can prove which key is
-the OEM's. The automatic protection is limited to detecting whether the public
-key digest changed since the last installed generation.
-
-A signer change is expected when moving to or from a custom ROM. The host asks
-for `--allow-new-signer` before accepting it; the device module allows the
-explicitly supplied `vbmeta` path and otherwise keeps the safe mode selection.
-
-## Windows host tools
-
-The Windows archive bundles the GUI launcher and `bin/canoe-boot-manager.exe`,
-the CLI `canoe.exe`, `canoe-bootmgr.exe`, `canoe-ext4.exe`, and the
-platform-tools fastboot executable. No Python installation or bundled
-interpreter is needed. The GUI additionally requires WebView2 as described
-above; `canoe.exe` and the helper tools do not.
-
-The helper operates on the raw source selected by export discovery:
-
-```text
-canoe-ext4.exe inspect \\.\PhysicalDrive<N>
-```
-
-No drive letter or third-party filesystem driver is used. If the package cannot
-provide `canoe-ext4.exe`, packaging fails; there is no placeholder or silent
-fallback. The helper may be built with `tools/canoe-ext4/build-windows.sh` on a
-host with MinGW, e2fsprogs sources, and zlib, then supplied to the package build.
-
-This is deliberate, not a Windows limitation to work around: no Canoe operation
-on any host mounts persist. Writes go through the userspace ext4 helper against
-the raw exported source, so Windows gives up nothing by lacking a mount. A
-persist partition carries no `efisp` directory before the first install; the
-install transaction creates it (and every parent of every staged path) rather
-than expecting one. For manual inspection or repair outside the app, point the
-same helper at the raw drive — `canoe-ext4.exe inspect \\.\PhysicalDrive<N>` —
-never at a mounted letter.
-
-## First run and Super Fastboot
-
-### First-run behavior
-
-An empty, absent, unreachable, or unusable boot root counts as first run. BDS
-shows a first-run screen with **Enter boot menu (Volume Up)** and **Enter Super
-Fastboot (default)**. The cursor starts on Super Fastboot and the screen waits
-two seconds; timeout, Volume Down, and Power keep the Super Fastboot default.
-Volume Up explicitly opens the normal menu, where per-slot and other discovered
-rows can be inspected before installation.
-
-The BDS menu provides **USB Mass Storage** and **Reboot to Recovery** along with
-the discovered/configured rows. USB Mass Storage exports one partition at a time;
-`persist` is the partition containing `efisp`.
-
-See [`usage.md`](./usage.md) for the menu and fastboot controls and
-[`mass-storage.md`](./mass-storage.md) for the direct-source host procedure.
-
-After a first Mode 1 installation, format data from the device menu:
-
-```text
-Main menu -> Reboot to Recovery -> FORMAT DATA
-```
-
-Mode 1 projects a locked DeviceInfo view to the OS. The TEE can refuse the data
-key for userdata written under the previous state, so old data is unreadable
-either way. `canoe.cfg` carries `devinfo-repair asneeded`; formatting makes the
-new state coherent.
-
-## Policy and source commands
-
-Policy changes go through the single boot-root writer:
-
-```bash
-canoe config set-policy --menu-mode silent --key-window-ms 1200 \
-  --menu-timeout-s 5
-canoe default set android-a
-canoe default set bls:pmos
-canoe source detect --json
-```
-
-`default set bls:<stem>` refuses a stem that `bls list` cannot discover.
-`source detect` is read-only and privilege-free for enumeration; it reports
-`needs_privilege` when opening a source requires elevation.
+See the [format-data matrix](./format-data.md). Missing boot evidence is
+**Unknown**, not proof that formatting is required. AVB failures need correct
+images and verification data; formatting does not repair them.

@@ -73,8 +73,8 @@ set_perm "$MODPATH/lang.txt" 0 0 0644
 # is authoritative for that id. The app passes the resolved path as local_repo
 # and falls back to remote lookup only when the bundled directory is absent.
 
-# No partition reader, partition writer, reboot, mode policy, or boot-root
-# transaction is allowed here.  The WebUI owns all of those operations.
+# Input presentation follows. The native worker owns preparation and the
+# reviewed writes, shared with WebUI; shell never implements partition writes.
 ui_print ""
 ui_print "Canoe Boot Manager"
 if [ "$user_lang" = "zh" ]; then

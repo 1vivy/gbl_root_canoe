@@ -20,6 +20,9 @@ export default defineConfig({
               items: [
                 { text: 'Intro', link: '/intro' },
                 { text: 'Install', link: '/install' },
+                { text: 'Reinstall older mods', link: '/reinstall' },
+                { text: 'Command-line tools', link: '/commands' },
+                { text: 'Format-data matrix', link: '/format-data' },
                 { text: 'OTA', link: '/ota' },
                 { text: 'Usage', link: '/usage' },
                 { text: 'Uninstall', link: '/uninstall' },

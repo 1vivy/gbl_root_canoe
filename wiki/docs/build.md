@@ -10,8 +10,8 @@ the app checkout first; its one static `dist/` is consumed twice:
 - the Tauri desktop shell packages the same app for Linux or Windows; and
 - the KernelSU module serves the same files as its Android WebUI.
 
-The app speaks the JSON wire protocol. `canoe-bootmgr` remains the only writer
-of the boot root, and the Tauri shell starts it as a sidecar.
+The app speaks the JSON wire protocol to its `canoe-manager` sidecar. Mounted-root
+commands and image producers remain shared libraries outside the application workflows.
 
 ### Build the app repository
 
@@ -37,7 +37,7 @@ and embeds its SHA-256; a missing, non-regular, non-executable, or mismatched
 target input fails the Tauri build. The Linux names are:
 
 ```text
-canoe-bootmgr-x86_64-unknown-linux-gnu
+canoe-manager-x86_64-unknown-linux-gnu
 canoe-ext4-x86_64-unknown-linux-gnu
 extractfv-x86_64-unknown-linux-gnu
 patch_abl-x86_64-unknown-linux-gnu
@@ -50,7 +50,7 @@ names:
 
 ```bash
 APP=/absolute/path/to/canoe-boot-manager
-for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+for name in canoe-manager canoe-bootmgr canoe-image canoe-provision canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
   cp "targets/toolkit_linux/build/toolkit/bin/$name" \
     "$APP/src-tauri/binaries/${name}-x86_64-unknown-linux-gnu"
 done
@@ -63,7 +63,7 @@ then opens and seals that selected external input for the session.
 The Windows GNU names are:
 
 ```text
-canoe-bootmgr-x86_64-pc-windows-gnu.exe
+canoe-manager-x86_64-pc-windows-gnu.exe
 canoe-ext4-x86_64-pc-windows-gnu.exe
 extractfv-x86_64-pc-windows-gnu.exe
 patch_abl-x86_64-pc-windows-gnu.exe
@@ -78,7 +78,7 @@ Stage the Windows GNU inputs from the toolkit's private runtime adjacency:
 
 ```bash
 APP=/absolute/path/to/canoe-boot-manager
-for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+for name in canoe-manager canoe-bootmgr canoe-image canoe-provision canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
   cp "targets/toolkit_windows/build/toolkit/bin/$name.exe" \
     "$APP/src-tauri/binaries/${name}-x86_64-pc-windows-gnu.exe"
 done
@@ -99,7 +99,7 @@ validates every required input before compiling.
 For reference, the nine MSVC fixture names are:
 
 ```text
-canoe-bootmgr-x86_64-pc-windows-msvc.exe
+canoe-manager-x86_64-pc-windows-msvc.exe
 canoe-ext4-x86_64-pc-windows-msvc.exe
 extractfv-x86_64-pc-windows-msvc.exe
 patch_abl-x86_64-pc-windows-msvc.exe
@@ -187,7 +187,7 @@ root that this default assumes, so a worktree build must pass the explicit
 absolute `CANOE_APP_LINUX_BIN` or `CANOE_APP_WINDOWS_BIN` path.
 
 The app binary is copied to `bin/canoe-boot-manager` (or `.exe`) next to
-`bin/canoe-bootmgr`. The launchers in the toolkit root resolve that adjacency:
+`bin/canoe-manager`. The launchers in the toolkit root resolve that adjacency:
 `canoe-boot-manager.sh` on Linux and `canoe-boot-manager.bat` on Windows.
 
 The GNU-target Tauri build also emits `WebView2Loader.dll` beside the Windows
@@ -299,186 +299,27 @@ UEFI_REBUILD=1 make target_toolkit_linux
 Use the matching package target when the final package is Windows, Android, or
 the module. Do not force a separate rebuild for each package.
 
-## Host command surface
+## Command components and packaging
 
-The host toolkit is GUI-first. Its root contains the launcher and CLI; `bin/`
-contains the desktop app, sidecar, and five derivation helpers:
+The [command guide](./commands.md) describes the current CLI. The interactive
+`canoe` program and Android build.sh wrapper are retired. Build the command
+crates under `tools/canoe-bootmgr`, `tools/canoe-image`, `tools/canoe-provision`,
+and the sibling application's `native/canoe-manager` worker with locked Cargo
+manifests. `tools/canoe-fs` shares confined file I/O without application policy.
 
-```text
-canoe-boot-manager.sh       # Linux GUI launcher
-canoe-boot-manager.bat      # Windows GUI launcher
-canoe                       # Linux CLI
-canoe.exe                   # Windows CLI
-bin/canoe-boot-manager      # Linux desktop binary
-bin/canoe-boot-manager.exe  # Windows desktop binary
-bin/canoe-bootmgr           # boot-root writer sidecar
-```
+The application sidecar is `canoe-manager`, not the mounted-root CLI. Package
+its native dependencies beside it. Windows uses native FAT access and the
+unchanged libext2fs helper only for offline ext4 provisioning/removal:
 
-The CLI remains useful for automation and does not require WebKitGTK or
-WebView2:
-
-```text
-canoe
-canoe build [--abl IMG] [--vbmeta IMG]
-canoe install [--boot-root PATH] --slot A|B [--mode 0|1|2] [--from-mode 0|1|2] \
-              [--acknowledge CODE]... \
-              [--vendor-boot IMG] [--allow-new-signer]
-canoe entry|config|default|bls|slot|source ...
-canoe -h | --help | --version
-canoe --non-interactive <command> ...
-```
-
-With no arguments, `canoe` starts the interactive five-route operator surface.
-`--non-interactive` is accepted and discarded for compatibility. The
-`entry|config|default|bls|slot|source` verbs are forwarded verbatim to
-`canoe-bootmgr`.
-
-Build the native host CLI with:
-
-```bash
-cargo build --locked --release --manifest-path tools/canoe/Cargo.toml
-```
-
-For its Windows GNU target, use the rustup target and MinGW linker:
-
-```bash
-CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
-  cargo build --locked --release --target x86_64-pc-windows-gnu \
-  --manifest-path tools/canoe/Cargo.toml
-```
-
-## `canoe-bootmgr build`
-
-`canoe-bootmgr build` is the single payload-derivation orchestrator used by
-host and device callers. A full build is:
-
-```text
-canoe-bootmgr build --abl <ABL_IMAGE> --vbmeta <VBMETA_IMAGE> --staged <DIR> \
-                    [--tools <DIR>] [--keep-unpatched <PATH>] [--patch-log <PATH>]
-```
-
-It extracts the ABL into a work directory, runs
-`extractfv -o <workdir> -v <abl>`, and requires `<workdir>/LinuxLoader.efi`.
-It then runs `patch_abl <workdir>/LinuxLoader.efi <staged>/boot.efi`, requiring
-a non-empty output, followed by
-`mode2_profile derive --vbmeta <vbmeta> --out <staged>/boot.efi.gm2p` and its
-`validate` command. Finally it runs
-`abl_tzmap derive <workdir>/LinuxLoader.efi -o <staged>/boot.efi.tzmap --allow-incomplete`,
-then validates and verifies that sidecar against the extracted loader with
-`--allow-zero-digest`. The profile must be exactly 120 bytes and the map
-exactly 256 bytes. On success, the staging directory contains exactly
-`boot.efi`, `boot.efi.gm2p`, and `boot.efi.tzmap`.
-
-The four worker binaries remain separate: `extractfv`, `patch_abl`,
-`mode2_profile`, and `abl_tzmap`. `--keep-unpatched` copies the extracted
-loader, and `--patch-log` records the captured `patch_abl` output. A
-`Warning: Failed to patch ABL GBL` line is not a build error: the receipt
-reports `gbl_patched: false`, and the sidecars describe the stock pair.
-
-For a side-effect-free worker probe (no vbmeta, sidecars, or staged outputs),
-use:
-
-```text
-canoe-bootmgr build --abl <ABL_IMAGE> --probe [--tools <DIR>]
-```
-
-Tools resolve in this order: `--tools <DIR>`, `$CANOE_TOOLS_DIR`, the directory
-containing the running `canoe-bootmgr`, then `PATH`. A missing tool is an error
-naming that tool. Any failure removes all three staged outputs and any
-`--keep-unpatched` or `--patch-log` file created by that invocation.
-
-`canoe build` is the host convenience surface for this same orchestrator; it
-does not maintain a separate derivation implementation. By default it reads
-`images/abl.img` and `images/vbmeta.img`; `--abl` and `--vbmeta` copy supplied
-files into those canonical locations before deriving. The images must match
-the firmware being booted.
-
-`canoe install` validates and commits the staged boot root for the required
-active slot. Omit `--mode` to inherit the persisted mode. An explicit mode
-change through `canoe install` must include `--mode 0|1|2`,
-`--from-mode 0|1|2`, and a repeated `--acknowledge <CODE>` for each
-acknowledgement required by `mode.plan`. The direct `canoe-bootmgr` interface
-also accepts `--id <ENTRY_ID>` for an existing managed row; a new row still
-uses `--from-mode`. If the plan needs image evidence, provide
-`--current-vbmeta`, `--target-vbmeta`, and `--target-image`; these are evidence
-inputs, not implicit flash payloads. Without `--boot-root`, the host reaches
-the boot root through the BDS `fastboot oem mass-storage:persist` export. A
-provided `--boot-root` points to an already mounted `persist/efisp` directory.
-`--vendor-boot IMG` creates a patched copy for the selected slot and reports
-the corresponding fastboot flash; the source image is never modified.
-`--allow-new-signer` permits an expected signer change when moving to or from a
-custom ROM.
-
-## Host derivation tools
-
-The Linux and Android packages contain `extractfv`, `patch_abl`, `mode2_profile`,
-and `abl_tzmap`. The Windows package contains their `.exe` forms.
-`mode2_profile` provides `derive` and `validate` for the 120-byte KeyMint
-profile. `abl_tzmap` derives and validates the 256-byte `GTZM` map from the
-unpatched ABL and accepts incomplete reverse-engineering evidence.
-
-Mode 1 graft preparation is an optional task inside Deploy → Prepare. It
-enumerates the selected VBMETA's chain descriptors and verifies generated
-images before a partition write is offered. No separate app route is used.
-The `vendor_boot` feature is a fixed-offset, in-place cmdline amendment; no
-boot-image binary is bundled.
-
-## Build a matching pair
-
-Place matching stock images at:
-
-```text
-images/abl.img
-images/vbmeta.img
-```
-
-Then run:
-
-```bash
-./canoe build
-```
-
-The result is a patched `boot.efi`, its exact 120-byte `boot.efi.gm2p`, and a
-256-byte `boot.efi.tzmap`. The map is derived from the unpatched ABL. The
-installation transaction copies all required files together and rolls the tree
-back if a commit fails.
-
-## Bootloader prerequisite
-
-The operator owns the raw fastboot step. If the installed ABL does not contain
-the GBL vulnerability, flash an older vulnerable stock image, then flash BDS:
-
-```bash
-fastboot flash abl <vulnerable>.img
-fastboot flash efisp BDS.efi
-```
-
-Omit the first command when the installed ABL is already vulnerable. Never
-flash `persist`; it is a live ext4 filesystem containing the boot root and
-vendor data.
-
-## Windows package and ext4 helper
-
-The Windows archive bundles the GUI launcher, `canoe-boot-manager.exe`, the
-native `canoe.exe`, `fastboot.exe`, and `canoe-ext4.exe`. No Python installation
-or bundled interpreter is needed. No drive letter, filesystem driver, or mount
-is involved: `canoe.exe install --slot <A|B>` asks
-`canoe-bootmgr source detect --json` for the exported source and runs the
-boot-root transaction against the raw `\\.\PhysicalDrive<N>` source.
-
-To build the Windows ext4 helper from source, provide e2fsprogs and zlib:
-
-```bash
+```sh
 E2FSPROGS_SRC=/path/to/e2fsprogs ZLIB_PREFIX=/path/to/zlib \
   tools/canoe-ext4/build-windows.sh
 ```
 
-Packaging fails if `canoe-ext4.exe` is absent; there is no placeholder or
-silent fallback. To inspect a raw disk by hand:
-
-```text
-canoe-ext4.exe inspect \\.\PhysicalDrive<N>
-```
+No Ext4Windows/WinFsp driver or e2fsprogs fork is required. Validate Windows
+imports, native UAC/USB behavior and detached readback; compilation alone does
+not establish those behaviors. Android harness builds use x86_64; the shipped
+module uses ARM64. Both must contain current native tools and the same WebUI.
 
 ## What `patch_abl` changes
 
@@ -504,8 +345,8 @@ The board DTS is
 It declares `compatible = "oneplus,infiniti"` and `dr_mode = "peripheral"`;
 there is no `stdout-path`, and `uart7`/`uart18` are disabled. The arm64
 defconfig materializes `EFI=y` and `EFI_STUB=y`; use an uncompressed `Image`.
-H3 BLS paths under `persist` are `\\efisp\\vmlinuz-canoe`,
-`\\efisp\\initramfs-canoe`, and
-`\\efisp\\dtbs\\kaanapali-oneplus-infiniti.dtb`. The marker endpoint is
+H3 BLS paths under `persist` are `\\vmlinuz-canoe`,
+`\\initramfs-canoe`, and
+`\\dtbs\\kaanapali-oneplus-infiniti.dtb`. The marker endpoint is
 `telnet 192.168.42.1:2323`. Full provenance and the preparation script remain
 under `.work/device-series`; they are not repository source files.

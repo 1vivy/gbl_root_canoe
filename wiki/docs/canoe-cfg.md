@@ -1,18 +1,15 @@
 # `canoe.cfg` — the boot-root contract
 
-`canoe.cfg` is the BDS menu state for 7.x. In 7.0.0-b4 the boot policy is
-explicit: fresh installs default to Silent mode, while the writer and BDS share
-the grammar below. The BDS only reads this file; `canoe-bootmgr` is the shared
-programmatic writer. The owner can also hand-edit the file and add ordinary
-EFI payloads under `persist/efisp`; no registration database or exclusive
-workspace is required. The raw `efisp` partition contains only `BDS.efi`.
+`canoe.cfg` is the persisted BDS menu configuration. The mounted-root CLI,
+application and explicit BDS Save as default action share this format. Normal
+menu selections remain one-shot. The raw `efisp` partition contains BDS only.
 
 ## Location and syntax
 
 | View | Path |
 | --- | --- |
-| Android or recovery | `/mnt/vendor/persist/efisp/canoe.cfg` or `/persist/efisp/canoe.cfg` |
-| BDS on the `persist` volume | `\efisp\canoe.cfg` |
+| Mounted `persist/efisp.fat` | `<mount>/canoe.cfg` |
+| BDS container filesystem | `\canoe.cfg` |
 
 Every `image` path is relative to the boot root. The file uses 7-bit printable
 ASCII, `LF` or `CRLF`, and at most 8192 bytes. At most 24 entries are accepted.
@@ -112,95 +109,29 @@ third-party stack has to ship to be launchable. `place.efi` comes from the
 `canoe-uefi-handoff` side project and takes a single path, because the blob it
 enters describes its own load base and window size.
 
-### The two path namespaces
+### Paths
 
-`image` and a launched image's own `options` path do not resolve the same way,
-and mixing them up is the one mistake that makes a correct entry fail.
-
-`image` is resolved by the BDS, which prepends the volume's boot root. On the
-ext4 `persist` partition that boot root is the `\efisp` directory, so
-`image mu/place.efi` loads `\efisp\mu\place.efi`. On a FAT volume the boot root
-is the volume root, so the same value loads `\mu\place.efi`. FAT of any width
-counts: this device ships no FAT32 partition at all, and a stick formatted FAT16
-is an ordinary boot volume.
-
-`options` is handed over untouched, and the launched image opens any path in it
-against the raw filesystem root of the volume it was itself loaded from. It
-knows nothing about the boot root. A payload staged in `persist/efisp/mu` must
-therefore be written `\efisp\mu\...`; the same payload on a FAT stick is written
-`\mu\...`.
-
-This was confirmed on hardware: a row whose `options` named the FAT-style
-`\mu\Mu-infiniti.fd` reported `Not Found`, while `image mu/…` resolved through
-the boot root in the same launch.
-
-Any load base and window size in `options` belong to the payload, not to Canoe.
-For a Mu-Silicium build they are the `[uefi_fd]` `base` and `size` from that
-device's `Resources/Configs/<codename>.toml`, which match the `UEFI_FD` row of
-its `MemoryMapLib.c`; for a Project-Aloha config they are `StackBase` and
-`StackSize`. The values above are OnePlus 15 (`infiniti`).
+The container filesystem root is the boot root. `image mu/place.efi` resolves
+to `\mu\place.efi`. BLS image paths also resolve there. `options` is passed
+untouched to the payload; if the payload opens a file on this volume, its path
+starts at the same filesystem root. Do not add the legacy `\efisp` prefix.
+Payload-specific memory addresses/options remain the payload's responsibility.
 
 ## Managed A/B triplets
 
-The 7.0.0-b4 writer manages one complete triplet per installed slot:
+Each installed slot has `boot_a.efi` or `boot_b.efi`, with a matching 120-byte
+`.gm2p` and 256-byte `.tzmap`. Do not mix sidecars between generations. The
+application prepares selected slots independently and publishes matching rows.
+The small CLI's `loader install` and `entry set` are separate explicit commands.
 
-| Slot | ID | Title written by `canoe-bootmgr` | Image | Sidecars |
-| --- | --- | --- | --- | --- |
-| A | `android-a` | `Android A` | `boot_a.efi` | `boot_a.efi.gm2p`, `boot_a.efi.tzmap` |
-| B | `android-b` | `Android B` | `boot_b.efi` | `boot_b.efi.gm2p`, `boot_b.efi.tzmap` |
-| Previous generation | `android-backup` | `Android (previous)` | `boot_backup.efi` | `boot_backup.efi.gm2p`, `boot_backup.efi.tzmap` |
+`role active` is functional metadata: BDS compares its slot claim with the
+actual active slot and withholds unattended launch on a mismatch. Do not label
+an unknown slot as active.
 
-`boot_a.efi` and `boot_b.efi` are independent managed loaders. Their `.gm2p`
-sidecar is exactly 120 bytes and their `.tzmap` sidecar is exactly 256 bytes;
-each sidecar must belong to the loader beside it. The backup triplet has the
-same sidecar sizes.
-
-The writer emits `android-a` and `android-b` only for slots that have a valid
-installed triplet. It never creates an empty placeholder row for the other slot.
-The installed active slot is marked `role active`; another installed slot is
-`role inactive`. `android-backup` exists only while `boot_backup.efi` and both
-matching sidecars form a valid previous generation. The installer refreshes
-managed rows and does not invent a `default`; set one explicitly with
-`canoe-bootmgr default set <entry-id>` or the protocol `default.set` operation.
-
-Hand-added rows are preserved verbatim. A row whose image is absent is not
-invented or compacted by the writer; BDS simply skips it until the image exists.
-Managed row IDs are reserved for the writer, so a hand-written row using
-`android-a`, `android-b`, or `android-backup` is replaced on the next managed
-install.
-
-The `active` role is functional metadata, not presentation. BDS compares a slot
-claim in an active row with the GPT active slot. If they disagree it marks the
-row `SlotMismatch`, and withholds unattended launch when that row is the
-configured default. Re-run an install with the correct explicit slot to repair
-the label. An install with an unknown slot is refused: use `--slot a` or
-`--slot b`; `--inactive` additionally requires known active-slot metadata and its
-explicit safety acknowledgement.
-
-## A/B generation lifecycle and legacy migration
-
-An install updates the selected slot in place. Before committing the new
-triplet, `canoe-bootmgr` copies that slot's existing triplet to `boot_backup.efi`
-with its matching sidecars. Thus `boot_backup.efi` is the previous generation of
-the last-updated slot, not a permanent third slot. If the selected slot had no
-valid triplet, the backup triplet is removed. A `--both` install updates both
-slots in a defined transaction; the final backup is still the previous
-generation of the last slot updated.
-
-The singular `boot.efi` name is retired from new installs. For migration, the
-writer accepts a complete legacy `boot.efi` triplet and copies it to the explicit
-target slot when that slot has no valid triplet, then removes the legacy files. A
-valid legacy triplet is removed without copying when the target already has a
-valid triplet; an incomplete legacy set is quarantined. After migration, only the
-per-slot names and (when present) `boot_backup.efi` remain. The old `boot.efi`
-name is retained only as a BDS compatibility probe for pre-b2 roots; it is not a
-current managed install destination.
-
-After an OTA, keep the device in the running system and use the module's
-**Install to Inactive Slot / OTA** action before rebooting. It must receive target
-slot metadata, install only that inactive slot, and refuse to relabel or fall
-back to the running slot. If it is skipped, the new slot has no managed loader
-and boots stock; no configuration row can make a stock ABL load BDS.
+Recovery snapshots belong to saved application operations outside the boot
+root. There is no implicit backup rotation or migration of ext4 `efisp/`.
+`boot_backup.efi` and the old `boot.efi` name remain firmware compatibility
+names, not automatically imported generations. See [reinstallation](./reinstall.md).
 
 ## Sidecars and modes
 
@@ -209,10 +140,9 @@ sidecars interpreted by BDS. Per-image sidecars on hand-added rows are not
 honoured. A row with one of the managed paths on removable media is still a
 passthrough row; managed policy is for the device boot root only.
 
-Mode 0 is a hook-free passthrough. Mode 1 projects the locked DeviceInfo view
+Mode 0 is honest-unlocked, with the universal efisp recursion guard. Mode 1 projects the locked DeviceInfo view
 and enables the normal managed hooks. Mode 2 additionally uses the matching
-profile for that managed loader. A menu mode is a session-only override for the
-next launch; it is never written to this file. A per-entry mode applies to that
+profile for that managed loader. A menu mode is a one-shot override unless explicitly saved using Save as default. A per-entry mode applies to that
 entry, with global `mode` as the fallback.
 
 A successful Mode 2 derivation means only that `vbmeta` parsed and carries a
@@ -272,7 +202,11 @@ error. BDS probes the known managed paths `boot.efi` (pre-b2 compatibility),
 `boot_a.efi`, `boot_b.efi`, and `boot_backup.efi`, then shows the menu rather
 than launching unattended when configuration is missing. An empty or
 unreachable boot root with none of those paths is first run: BDS shows the
-first-run screen with **Enter Super Fastboot** and **Enter Super Fastboot
+first-run screen with **Enter boot menu** and **Enter Super Fastboot
 (default)**. Press **VOL UP during boot** to reach the menu and inspect
 discovered rows; timeout, VOL DOWN, and Power preserve the
 **Enter Super Fastboot (default)** path.
+
+A missing or malformed current configuration can use the validated
+`canoe.cfg.prev`. Permission and I/O failures do not trigger fallback. Saving
+publishes the previous configuration before replacing the current file.

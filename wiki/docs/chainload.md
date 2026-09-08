@@ -1,105 +1,26 @@
-# Chainloading a third-party UEFI stack
+# Chainloading EFI and Linux payloads
 
-BDS is a read-only UEFI selector. It scans retained volumes for well-known EFI
-loaders and BLS Type #1 entries, and starts the selected one. For a plain row,
-that remains `LoadImage` followed by `StartImage`, with the row's `options`
-handed over byte for byte; a BLS `linux` row additionally publishes its initrd
-and device tree to an EFI-stub kernel. BDS is not a general operating-system
-boot manager, does not parse Android boot images or raw firmware descriptors,
-and does not carry payload loaders.
+BDS loads ordinary EFI applications through LoadImage/StartImage. BLS Linux
+entries additionally publish an initrd and device tree for an EFI-stub kernel.
+Managed Mode 1/2 hooks and sidecars apply only to managed Android loaders in the
+owned device boot root. Other EFI/BLS payloads are passthrough.
 
-So the contract for anything you want to chainload is short: **it must be a UEFI
-application**.
+Place files in the mounted efisp.fat root or ordinary removable FAT media.
+Configuration image paths and BLS image paths resolve from that filesystem
+root. Options are passed unchanged to the payload; its paths also start there.
+Do not prefix paths with the old ext4 efisp directory.
 
-```text
-entry mu
-  title Mu-Silicium (infiniti)
-  image mu/place.efi
-  options \efisp\mu\Mu-infiniti.bin
-```
+Install a complete BLS set with the [mounted-root CLI](./commands.md), using
+`--artifact BOOT_ROOT_PATH=SOURCE_FILE` for every referenced image. The command
+checks formats and publishes images before the entry. Application-managed
+operations provide their own snapshots/readback/recovery. An example BLS file
+is [pmos.conf](./examples/pmos.conf).
 
-`image` is the PE. `options` is whatever that PE's own argument grammar wants —
-BDS neither parses nor validates it. See the [`canoe.cfg` contract](./canoe-cfg.md),
-and in particular why the `options` path carries `\efisp` while `image` does not.
-
-That example is `place.efi`, which lives in the `canoe-uefi-handoff` side
-project. Its argument is a path and nothing else: the blob it enters is a
-Project Mu boot shim followed by the descriptor, and the shim's header already
-carries the load base and window size, so there is no hex for anyone to
-transcribe. An earlier design took `<path> <base> <size>`; two of four device
-cycles were lost to getting those numbers and their prefix right, which is why
-the surviving design does not ask for them.
-
-## BLS Type #1 entries
-
-BLS provides a second declaration namespace for bootable artifacts. Each
-`loader/entries/<name>.conf` file is one Type #1 row and must contain exactly one
-`linux` or `efi` key. A `linux` row names an EFI-stub kernel and may name one
-`initrd`, one `devicetree`, and command-line `options`; an `efi` row names an
-ordinary UEFI application and uses `options` as its opaque LoadOptions. Unknown
-standard BLS keys are retained for compatibility, while malformed entries,
-missing images, and unsupported duplicate fields are skipped.
-
-The **Entries** route displays discovered BLS rows as unmanaged evidence.
-The app uses `bls.list`/`bls.show` for reads; the CLI can stage a row with
-`bls.stage` and SHA-256 verification:
-
-```bash
-# A local boot-root directory:
-sha256sum vmlinuz-canoe initramfs-canoe
-canoe-bootmgr --boot-root /path/to/efisp bls stage \
-  --name canoe-linux.conf --entry ./canoe-linux.conf \
-  --artifact ./vmlinuz-canoe,vmlinuz-canoe,<KERNEL_SHA256> \
-  --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
-
-# A direct ext4 image or exported block source:
-canoe-bootmgr --source <ext4-image-or-block-device> bls stage \
-  --name canoe-linux.conf --entry ./canoe-linux.conf \
-  --artifact ./vmlinuz-canoe,vmlinuz-canoe,<KERNEL_SHA256> \
-  --artifact ./initramfs-canoe,initramfs-canoe,<INITRD_SHA256>
-```
-
-A complete, commented entry to copy from lives at
-[`examples/pmos.conf`](./examples/pmos.conf).
-
-`--artifact` is `SOURCE,DESTINATION,SHA256`; every destination must be
-referenced by the parsed BLS file, and every digest must be 64 hexadecimal
-characters. The operation verifies the source before and during the copy,
-writes `loader/entries/<name>.conf` only after all artifacts pass, and rolls back
-the whole set on failure. `--source` and `--ext4-image` select the direct ext4
-backend; `--boot-root` selects a local directory and cannot be combined with
-them.
-
-### The two path namespaces
-
-The two declaration grammars name paths relative to different roots:
-
-| Declaration | Path value | Persist ext4 resolution | FAT resolution |
-| --- | --- | --- | --- |
-| `canoe.cfg` `image` | `mu/place.efi` | `\efisp\mu\place.efi` | `\mu\place.efi` |
-| `canoe.cfg` `options` | payload-owned opaque value | passed unchanged; a payload path starts at `\` | passed unchanged; a payload path starts at `\` |
-| BLS `linux`/`efi`/`initrd`/`devicetree` | relative or leading-`/` path | prefixed to `\efisp\...` | volume-root `\...` |
-
-Thus a BLS file staged in `persist/efisp/loader/entries` can say
-`linux /vmlinuz-canoe`, and BDS opens `\efisp\vmlinuz-canoe`. A Canoe row staged
-in the same boot root says `image mu/place.efi` without the prefix. The path in a
-plain row's `options` belongs to the launched payload and must include `\efisp`
-when that payload lives on persist.
-
-### Discovery and unattended defaults
-
-BDS appends discovered BLS rows after configured `canoe.cfg` rows. The
-unattended default resolver accepts a discovered BLS `efi` or `linux` row only
-when it is on the non-removable device boot root and `default bls:<stem>` names
-that discovered stem. A USB-hosted BLS row remains ineligible. An absent or
-unreadable target produces the existing notice and never falls through to a
-different row.
-
-To launch a BLS row interactively, hold **VOL UP** during the startup sampling
-window, choose the row, and press Power. For repeatable unattended tests, add a
-small wrapper UEFI application as a plain `canoe.cfg` row and make that wrapper
-the default; the wrapper can select or chain to the BLS artifacts. BLS rows are
-always passthrough: Mode 1/2 hooks and managed sidecars do not apply.
+The default may name a discovered BLS row on the owned device boot root, such
+as `bls:pmos`. A missing or unreadable default opens the menu instead of silently
+launching another row. External removable media cannot supply an unattended
+default for the device boot root. Ordinary selections remain one-shot; the
+explicit Save as default action persists the choice.
 
 ## Why BDS ships no payload loaders
 
