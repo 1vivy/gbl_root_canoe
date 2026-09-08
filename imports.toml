@@ -19,7 +19,7 @@ id = "msd-variant"
 kind = "artifact"
 why = "Calibrated canoe USB mass-storage DXE compiled by the canoe-msd repository."
 path = "submodules/uefi/blobs/canoe-usbmsd.efi"
-sha256 = "528d393ff505c5dc66e9bfbdaa31fdd5206ee40d8df8c24d512e98cb027095c9"
+sha256 = "f40cd851526179a1a02f34f99b9a2d3c886c548c90622f176d2f2542d4f4994d"
 bytes = 57344
 [import.producer]
 repo = "https://github.com/1vivy/canoe-msd.git"

@@ -14,7 +14,7 @@ The boot root is a 32 MiB FAT16 container on ext4 persist. BDS mounts it, loads
 per-slot EFI/GM2P/TZ-map triplets and offers ordinary EFI/BLS entries. Explicit
 Save as default persists a choice; normal menu selection remains one-shot.
 
-Canoe Boot Manager is one desktop/WebUI application. Its native worker also
+The 7.0.0-b4 release surface uses Canoe Boot Manager, one desktop/WebUI application. Its native worker also
 serves the KSU installer and owns deployment assessment, review, readback,
 receipts, retry and recovery. Small standalone commands manage a supplied
 mounted root (`canoe-bootmgr`), prepare images (`canoe-image`) and provision the
