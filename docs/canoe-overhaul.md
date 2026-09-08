@@ -101,7 +101,12 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   supplies reviewed helpers through a resolver; standalone commands resolve only
   needed helpers. Image outputs reject input aliases and use unique temporary
   files. Worker/image tests and Windows cross-check pass.
-- Provision extraction, full mounted FAT integration, loader/BLS artifact
+- `canoe-provision` creates a build-time FAT template and provisions mounted
+  ext4/offline persist images through native allocation or unchanged libext2fs.
+  The worker shares the primitive while retaining its readback/receipts. Tests
+  cover preserved legacy/unrelated files, existing/attached refusals, initialized
+  extents and clean filesystem checks.
+- Full mounted FAT integration, loader/BLS artifact
   commands and application workflow consolidation remain in progress.
 - The Windows app last inspected reports b3. Do not launch a mixed intermediate
   package as b4; replace it only with the integrated, checked b4 build.

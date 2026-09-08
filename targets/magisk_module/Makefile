@@ -127,6 +127,14 @@ submodule_canoe_image: copy_resources
 	$(ANDROID_LINKER_VAR)="$(ANDROID_CLANG)" cargo build --locked --release --target $(ANDROID_TARGET) --manifest-path ../../tools/canoe-image/Cargo.toml
 	test -f ../../tools/canoe-image/target/$(ANDROID_TARGET)/release/canoe-image
 	cp ../../tools/canoe-image/target/$(ANDROID_TARGET)/release/canoe-image ./build/module/bin/canoe-image
+submodule_canoe_provision: copy_resources
+	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for canoe-provision"; exit 1; }
+	test -x "$(ANDROID_CLANG)" || { echo "Android NDK clang is unavailable"; exit 1; }
+	CC_$(ANDROID_TARGET_ENV)="$(ANDROID_CLANG)" \
+	AR_$(ANDROID_TARGET_ENV)="$(ANDROID_AR)" \
+	$(ANDROID_LINKER_VAR)="$(ANDROID_CLANG)" cargo build --locked --release --target $(ANDROID_TARGET) --manifest-path ../../tools/canoe-provision/Cargo.toml
+	test -f ../../tools/canoe-provision/target/$(ANDROID_TARGET)/release/canoe-provision
+	cp ../../tools/canoe-provision/target/$(ANDROID_TARGET)/release/canoe-provision ./build/module/bin/canoe-provision
 canoe_manager: copy_resources
 	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for canoe-manager"; exit 1; }
 	test -x "$(ANDROID_CLANG)" || { echo "Android NDK clang is unavailable"; exit 1; }
@@ -138,6 +146,6 @@ canoe_manager: copy_resources
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/module/bin/extractfv
-build: webui_dist submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_image canoe_manager submodule_ablfvextractor
+build: webui_dist submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_image submodule_canoe_provision canoe_manager submodule_ablfvextractor
 	# zip
 	cd build/module && zip -r ../module_android.zip ./

@@ -70,6 +70,14 @@ submodule_canoe_image: copy_resources
 	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/canoe-image/Cargo.toml
 	test -f ../../tools/canoe-image/target/aarch64-linux-android/release/canoe-image
 	cp ../../tools/canoe-image/target/aarch64-linux-android/release/canoe-image ./build/toolkit/bin/canoe-image
+submodule_canoe_provision: copy_resources
+	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for canoe-provision"; exit 1; }
+	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
+	CC_aarch64_linux_android="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" \
+	AR_aarch64_linux_android="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" \
+	CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" cargo build --locked --release --target aarch64-linux-android --manifest-path ../../tools/canoe-provision/Cargo.toml
+	test -f ../../tools/canoe-provision/target/aarch64-linux-android/release/canoe-provision
+	cp ../../tools/canoe-provision/target/aarch64-linux-android/release/canoe-provision ./build/toolkit/bin/canoe-provision
 canoe_manager: copy_resources
 	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for canoe-manager"; exit 1; }
 	test -x "$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" || { echo "Android NDK clang is unavailable"; exit 1; }
@@ -81,6 +89,6 @@ canoe_manager: copy_resources
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/toolkit/bin/extractfv
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_image canoe_manager submodule_ablfvextractor
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_image submodule_canoe_provision canoe_manager submodule_ablfvextractor
 	# zip
 	cd build/toolkit && zip -r ../toolkit_android.zip ./
