@@ -95,6 +95,7 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *f, EXT4_IMAGE_MAP **out)
   (*out)->Parent = &Parent;
   (*out)->MediaId = 5;
   (*out)->Count = 1;
+  for (UINTN I = 0; I < 24; I++) (*out)->Identity[I] = (UINT8)I;
   (*out)->Ranges[0] = (EXT4_IMAGE_RANGE){0, 0, EXT4_IMAGE_BYTES};
   return EFI_SUCCESS;
 }
@@ -242,6 +243,10 @@ int main (void)
   Bytes[515] = 0xff;
   assert (SfbContainerMount () == EFI_SUCCESS);
   assert (SfbIsContainerVolume (Virtual) && Connected && Published);
+  assert (SfbContainerMatchesIdentity ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYX"));
+  assert (!SfbContainerMatchesIdentity ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYA"));
+  assert (!SfbContainerMatchesIdentity ("AAECAwQFBgcICQoLDA0ODxAREhMUFRY"));
+  assert (!SfbContainerMatchesIdentity ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXx"));
   {
     UINTN before = Maps;
     assert (SfbContainerMount () == EFI_SUCCESS);
@@ -264,6 +269,7 @@ int main (void)
     EFI_BLOCK_IO_PROTOCOL *Usb = NULL;
     assert (SfbContainerUsbBegin (&Usb) == EFI_SUCCESS);
     assert (Usb != NULL && !Published && !Connected);
+    assert (!SfbContainerMatchesIdentity ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYX"));
     assert (SfbContainerDisplayDisk () == NULL);
     assert (SfbContainerMount () == EFI_ACCESS_DENIED);
     assert (SfbContainerUnmount () == EFI_ACCESS_DENIED);

@@ -11,4 +11,8 @@ BOOLEAN SfbIsContainerVolume (EFI_HANDLE Handle);
 EFI_STATUS SfbContainerUsbBegin (EFI_BLOCK_IO_PROTOCOL **Disk);
 EFI_STATUS SfbContainerUsbEnd (BOOLEAN GadgetReleased);
 EFI_BLOCK_IO_PROTOCOL *SfbContainerDisplayDisk (VOID);
+/* Exact 32-character base64url encoding of the retained map's 24-byte identity.
+ * The map remains owned through USB begin; raw persist cannot be exported in
+ * that lifetime. Ordinary manual exports do not require an identity token. */
+BOOLEAN SfbContainerMatchesIdentity (CONST CHAR8 *Token);
 #endif

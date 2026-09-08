@@ -228,6 +228,11 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *Protocol, EXT4_IMAGE_MAP **Out) {
   else {
     C->Map->Parent = P->BlockIo;
     C->Map->MediaId = OriginalMediaId;
+    CopyMem (C->Map->Identity, P->SuperBlock.s_uuid, 16);
+    for (I = 0; I < 4; I++) {
+      C->Map->Identity[16 + I] = (UINT8)(File->InodeNum >> (I * 8));
+      C->Map->Identity[20 + I] = (UINT8)(File->Inode->i_generation >> (I * 8));
+    }
     *Out = C->Map;
   }
   FreePool (C);

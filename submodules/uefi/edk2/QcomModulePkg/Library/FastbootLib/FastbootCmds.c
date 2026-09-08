@@ -2392,6 +2392,8 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     Target = L"persist";
   } else if (AsciiStrCmp (Arg, "mass-storage:boot-root") == 0) {
     Target = L"boot-root";
+  } else if (AsciiStrnCmp (Arg, "mass-storage:boot-root:", 23) == 0) {
+    Target = L"boot-root";
   } else if (AsciiStrCmp (Arg, "mass-storage:logfs") == 0) {
     Target = L"logfs";
   } else {
@@ -2413,6 +2415,11 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
   }
   if (EFI_ERROR (Status) || BlockIo == NULL) {
     FastbootFail ("mass-storage partition not found");
+    return;
+  }
+  if (StrCmp (Target, L"boot-root") == 0 && Arg[22] == ':' &&
+      !SfbContainerMatchesIdentity (Arg + 23)) {
+    FastbootFail ("boot container changed since review");
     return;
   }
 

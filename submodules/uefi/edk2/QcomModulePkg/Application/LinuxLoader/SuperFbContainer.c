@@ -19,6 +19,24 @@ STATIC EFI_DEVICE_PATH_PROTOCOL *mPath;
 STATIC EFI_GUID mContainerGuid = {
     0xf1086281, 0xc184, 0x47f7, {0xbb, 0xae, 0x30, 0x61, 0x1f, 0x90, 0xe2, 0xa4}};
 
+BOOLEAN SfbContainerMatchesIdentity (CONST CHAR8 *Token)
+{
+  STATIC CONST CHAR8 Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  UINTN I, O = 0;
+  if (Token == NULL || mUsbOwned || mMap == NULL || mHandle == NULL)
+    return FALSE;
+  for (I = 0; I < sizeof (mMap->Identity); I += 3)
+  {
+    UINT32 V = ((UINT32)mMap->Identity[I] << 16) |
+               ((UINT32)mMap->Identity[I + 1] << 8) | mMap->Identity[I + 2];
+    UINTN J;
+    for (J = 0; J < 4; J++, O++)
+      if (Token[O] != Alphabet[(V >> (18 - J * 6)) & 63])
+        return FALSE;
+  }
+  return Token[O] == '\0';
+}
+
 BOOLEAN SfbIsContainerVolume (EFI_HANDLE Handle)
 {
   return !mUsbOwned && mHandle != NULL && Handle == mHandle && mDisk.Active;

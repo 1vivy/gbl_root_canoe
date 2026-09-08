@@ -59,6 +59,11 @@ int main(void) {
  reset();assert(!Ext4HasGdtCsum(&P));P.FeaturesRoCompat=EXT4_FEATURE_RO_COMPAT_GDT_CSUM;assert(Ext4HasGdtCsum(&P));
  reset();assert(Ext4MapImage(&F.Protocol,&m)==EFI_SUCCESS);assert(m->Count==1);assert(m->Ranges[0].Physical==512*4096);assert(m->Ranges[0].Bytes==EXT4_IMAGE_BYTES);FreePool(m);
  reset();P.SuperBlock.s_state=0;rejected();
+ reset();memset(P.SuperBlock.s_uuid, 0x41, 16);F.InodeNum=0x13121110;Inode.i_generation=0x17161514;
+ assert(Ext4MapImage(&F.Protocol,&m)==EFI_SUCCESS);
+ for(UINTN I=0;I<16;I++) assert(m->Identity[I]==0x41);
+ for(UINTN I=16;I<24;I++) assert(m->Identity[I]==I);
+ FreePool(m);
  reset();extent()->ee_len=0x8001;rejected();
  reset();extent()->ee_block=1;rejected();
  reset();extent()->ee_start_lo=4;rejected();

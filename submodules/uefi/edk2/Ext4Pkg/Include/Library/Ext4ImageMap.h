@@ -14,6 +14,9 @@ typedef struct {
 typedef struct {
   EFI_BLOCK_IO_PROTOCOL *Parent;
   UINT32 MediaId;
+  /* UUID bytes, little-endian inode number and generation. No C padding is
+   * included in the 24-byte export identity. */
+  UINT8 Identity[24];
   UINTN Count;
   EXT4_IMAGE_RANGE Ranges[EXT4_IMAGE_MAX_EXTENTS];
 } EXT4_IMAGE_MAP;
