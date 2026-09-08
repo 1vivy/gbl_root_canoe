@@ -1677,6 +1677,12 @@ static options_t parse_options(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    /* read/write/sync carry arbitrary firmware bytes over redirected streams. */
+    if (_setmode(_fileno(stdin), _O_BINARY) == -1 ||
+        _setmode(_fileno(stdout), _O_BINARY) == -1)
+        fail(EXIT_IO, "cannot set binary standard streams");
+#endif
     initialize_ext2_error_table();
     options_t options = parse_options(argc, argv);
     const char *command = argv[options.command_index];

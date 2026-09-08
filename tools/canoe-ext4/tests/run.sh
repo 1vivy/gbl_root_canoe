@@ -125,6 +125,10 @@ if [ -n "$WINDOWS_BIN" ]; then
     code=$?
     set -e
     assert_eq 0 "$code" 'Windows dirty image with recovery'
+    printf '\000\012\015\032\377binary\012' > "$TMP/windows-binary.in"
+    wine "$WINDOWS_BIN" --recover write "$windows_dirty" /persist/binary.bin < "$TMP/windows-binary.in" >/dev/null
+    wine "$WINDOWS_BIN" read "$windows_dirty" /persist/binary.bin > "$TMP/windows-binary.out"
+    cmp "$TMP/windows-binary.in" "$TMP/windows-binary.out" || fail 'Windows binary streams changed image bytes'
     windows_recovery_log=$(<"$TMP/windows-dirty-recovery.err")
     assert_contains "$windows_recovery_log" 'journal_recovery=completed' \
         'Windows journal recovery marker'
