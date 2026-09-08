@@ -11,5 +11,6 @@ pub mod config;
 mod config_ops;
 mod config_parse;
 mod config_render;
+pub mod confined;
 pub mod fs_commit;
 pub mod version;

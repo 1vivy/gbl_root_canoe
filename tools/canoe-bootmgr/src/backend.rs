@@ -1,7 +1,4 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use thiserror::Error;
@@ -64,127 +61,91 @@ pub trait BootRoot {
 #[derive(Debug, Clone)]
 pub struct LocalDir {
     root: PathBuf,
+    directory: Option<std::sync::Arc<crate::confined::Root>>,
 }
-
 impl LocalDir {
     pub fn for_discovery(root: &Path) -> Result<Self, BackendError> {
         if !root.exists() && root.parent().is_some_and(|parent| parent.is_dir()) {
             return Ok(Self {
-                root: root.to_path_buf(),
+                root: root.to_owned(),
+                directory: None,
             });
         }
         Self::new(root)
     }
-
     pub fn new(root: impl AsRef<Path>) -> Result<Self, BackendError> {
-        let root = root.as_ref().to_path_buf();
-        let metadata = fs::metadata(&root).map_err(|source| BackendError::Io {
+        let root = root.as_ref().to_owned();
+        let directory = crate::confined::Root::open(&root).map_err(|source| BackendError::Io {
             operation: "stat",
             path: root.clone(),
             source,
         })?;
-        if !metadata.is_dir() {
-            return Err(BackendError::Io {
-                operation: "open",
-                path: root,
-                source: std::io::Error::new(std::io::ErrorKind::NotADirectory, "not a directory"),
-            });
-        }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            directory: Some(std::sync::Arc::new(directory)),
+        })
     }
-
-    fn bls_directory(&self) -> PathBuf {
-        self.root.join("loader").join("entries")
+    pub fn files(&self) -> Result<&crate::confined::Root, BackendError> {
+        self.directory.as_deref().ok_or_else(|| BackendError::Io {
+            operation: "stat",
+            path: self.root.clone(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "boot root is not created"),
+        })
     }
-
-    fn bls_path(&self, name: &str) -> Result<PathBuf, BackendError> {
+    fn bls_path(&self, name: &str) -> Result<String, BackendError> {
         if !crate::boot_path::safe_component(name) || !name.to_ascii_lowercase().ends_with(".conf")
         {
             return Err(BackendError::InvalidBlsName(name.to_owned()));
         }
-        Ok(self.bls_directory().join(name))
+        Ok(format!("loader/entries/{name}"))
+    }
+    fn io(&self, operation: &'static str, path: &str, source: std::io::Error) -> BackendError {
+        BackendError::Io {
+            operation,
+            path: self.root.join(path),
+            source,
+        }
     }
 }
-
 impl BootRoot for LocalDir {
     fn root(&self) -> &Path {
         &self.root
     }
-
     fn read_config(&self) -> Result<Option<ConfigDocument>, BackendError> {
-        let path = self.root.join("canoe.cfg");
-        let bytes = match fs::read(&path) {
+        let Some(directory) = &self.directory else {
+            return Ok(None);
+        };
+        let bytes = match directory.read("canoe.cfg", crate::config::MAX_BYTES) {
             Ok(bytes) => bytes,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => {
-                return Err(BackendError::Io {
-                    operation: "read",
-                    path,
-                    source,
-                });
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(self.io("read config", "canoe.cfg", e)),
         };
         Ok(Some(ConfigDocument::parse(&bytes)?))
     }
-
     fn write_config(&self, config: &ConfigDocument) -> Result<(), BackendError> {
-        let bytes = config.serialize()?;
-        let destination = self.root.join("canoe.cfg");
-        atomic_replace(&self.root, &destination, &bytes)
+        self.files()?
+            .write("canoe.cfg", &config.serialize()?, true)
+            .map_err(|e| self.io("commit config", "canoe.cfg", e))
     }
-
     fn list_bls(&self) -> Result<Vec<BlsFile>, BackendError> {
-        let directory = self.bls_directory();
-        let iterator = match fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(source) => {
-                return Err(BackendError::Io {
-                    operation: "read directory",
-                    path: directory,
-                    source,
-                });
-            }
+        let directory = self.files()?;
+        let names = match directory.names("loader/entries") {
+            Ok(names) => names,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(self.io("list BLS entries", "loader/entries", e)),
         };
-        let mut names = Vec::new();
-        for item in iterator {
-            let item = item.map_err(|source| BackendError::Io {
-                operation: "read directory entry",
-                path: directory.clone(),
-                source,
-            })?;
-            let path = item.path();
-            if item
-                .file_type()
-                .map_err(|source| BackendError::Io {
-                    operation: "stat",
-                    path: path.clone(),
-                    source,
-                })?
-                .is_file()
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("conf"))
-            {
-                if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                    names.push(name.to_owned());
-                }
-            }
-        }
-        names.sort_unstable();
         Ok(names
             .into_iter()
+            .filter(|name| name.to_ascii_lowercase().ends_with(".conf"))
             .filter_map(|name| self.read_bls(&name).ok())
             .collect())
     }
-
     fn read_bls(&self, name: &str) -> Result<BlsFile, BackendError> {
         let path = self.bls_path(name)?;
-        let bytes = fs::read(&path).map_err(|source| BackendError::Io {
-            operation: "read",
-            path,
-            source,
-        })?;
+        let bytes = self
+            .files()?
+            .read(&path, crate::bls::MAX_BYTES)
+            .map_err(|e| self.io("read BLS entry", &path, e))?;
         Ok(BlsFile {
             name: name.to_owned(),
             entry: BlsEntry::parse(&bytes)?,
@@ -193,46 +154,23 @@ impl BootRoot for LocalDir {
 }
 
 pub fn atomic_replace(root: &Path, destination: &Path, bytes: &[u8]) -> Result<(), BackendError> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| BackendError::Clock)?
-        .as_nanos();
-    let temporary = root.join(format!(
-        ".canoe.cfg.tmp.{}.{}",
-        std::process::id(),
-        timestamp
-    ));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|source| BackendError::Io {
-                operation: "create temporary config",
-                path: temporary.clone(),
-                source,
-            })?;
-        file.write_all(bytes).map_err(|source| BackendError::Io {
-            operation: "write temporary config",
-            path: temporary.clone(),
-            source,
+    let error = |source| BackendError::Io {
+        operation: "publish boot-root file",
+        path: destination.to_owned(),
+        source,
+    };
+    let relative = destination
+        .strip_prefix(root)
+        .ok()
+        .and_then(Path::to_str)
+        .ok_or_else(|| {
+            error(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "destination is not under boot root",
+            ))
         })?;
-        file.sync_all().map_err(|source| BackendError::Io {
-            operation: "sync temporary config",
-            path: temporary.clone(),
-            source,
-        })?;
-        drop(file);
-        crate::fs_commit::publish_file(&temporary, destination, true).map_err(|source| {
-            BackendError::Io {
-                operation: "commit config",
-                path: destination.to_path_buf(),
-                source,
-            }
-        })
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    crate::confined::Root::open(root)
+        .map_err(error)?
+        .write(relative, bytes, true)
+        .map_err(error)
 }

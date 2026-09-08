@@ -136,3 +136,12 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   The old GUI/module export/provisioning callers still need integration.
 - The Windows app last inspected reports b3. Do not launch a mixed intermediate
   package as b4; replace it only with the integrated, checked b4 build.
+
+- Mounted core operations now retain directory capabilities through cap-std 4.0.3
+  and cap-fs-ext. Component opens reject symlinks, aliases and ambiguous FAT
+  casing; bounded reads and staged publication cannot escape an opened root
+  when its original path is replaced. This uses maintained OS filesystem
+  primitives, not a private path-resolution implementation. Core/worker suites,
+  actual Linux mounted worker fixtures, Windows native USB CLI and worker
+  lock/eject fixtures, and Android KSU SELinux-enforcing loop fixtures pass.
+  Prepared loader/BLS publication and application orchestration remain pending.

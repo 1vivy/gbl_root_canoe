@@ -3,6 +3,85 @@
 use std::io;
 use std::path::Path;
 
+/// Publish sibling names anchored to a retained directory. Unlike a path check
+/// followed by a plain open/rename, this retains the directory's identity.
+pub fn publish_relative(
+    directory: &cap_std::fs::Dir,
+    source: &str,
+    destination: &str,
+    replace: bool,
+) -> io::Result<()> {
+    if !crate::boot_path::safe_component(source)
+        || !crate::boot_path::safe_component(destination)
+        || source == destination
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "publication requires distinct simple sibling names",
+        ));
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use std::{ffi::CString, os::fd::AsRawFd};
+        let source = CString::new(source)?;
+        let destination = CString::new(destination)?;
+        let fd = directory.as_raw_fd();
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                fd,
+                source.as_ptr(),
+                fd,
+                destination.as_ptr(),
+                if replace { 0 } else { libc::RENAME_NOREPLACE },
+            )
+        };
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        crate::confined::sync_directory(directory)
+    }
+    #[cfg(windows)]
+    {
+        use std::{
+            ffi::OsString,
+            os::windows::{ffi::OsStringExt, io::AsRawHandle},
+            path::PathBuf,
+        };
+        use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+        let file = directory.try_clone()?.into_std_file();
+        let mut buffer = vec![0u16; 32768];
+        let count = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                0,
+            )
+        };
+        if count == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if count as usize >= buffer.len() {
+            return Err(io::Error::other(
+                "directory path exceeds Windows path limit",
+            ));
+        }
+        let parent = PathBuf::from(OsString::from_wide(&buffer[..count as usize]));
+        // cap-std opens Windows directories without FILE_SHARE_DELETE; retain
+        // that handle through the platform's write-through namespace commit.
+        publish_file(&parent.join(source), &parent.join(destination), replace)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android", windows)))]
+    {
+        let _ = directory;
+        let _ = replace;
+        Err(io::Error::other(
+            "anchored publication unsupported on this OS",
+        ))
+    }
+}
+
 pub fn publish_file(source: &Path, destination: &Path, replace: bool) -> io::Result<()> {
     if source.parent() != destination.parent() {
         return Err(io::Error::new(

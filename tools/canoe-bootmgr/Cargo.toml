@@ -20,6 +20,8 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 clap = { version = "4.5", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
+cap-std = "4"
+cap-fs-ext = "4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
