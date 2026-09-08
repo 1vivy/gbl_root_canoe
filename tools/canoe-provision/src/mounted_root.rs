@@ -12,7 +12,8 @@ use std::{
 };
 
 pub use crate::mounted_identity::Identity;
-fn identity(file: &File) -> io::Result<Identity> {
+/// Inspect the incarnation of this retained ext4 handle.
+pub fn identity(file: &File) -> io::Result<Identity> {
     let info = filesystem(file)?;
     let metadata = file.metadata()?;
     let mut generation: libc::c_long = 0;

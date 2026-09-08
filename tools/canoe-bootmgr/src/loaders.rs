@@ -35,13 +35,15 @@ pub struct PreparedLoader {
     gm2p: Vec<u8>,
     tzmap: Vec<u8>,
 }
+pub fn validate_efi(bytes: &[u8]) -> Result<(), Error> {
+    if bytes.len() > MAX_IMAGE_BYTES { return Err(Error::Invalid("EFI image exceeds boot volume size".into())); }
+    abl_tzmap::pe::PeImage::parse(bytes)
+        .map(|_| ())
+        .map_err(|e| Error::Invalid(format!("invalid ARM64 EFI image: {e}")))
+}
 impl PreparedLoader {
     pub fn new(loader: Vec<u8>, gm2p: Vec<u8>, tzmap: Vec<u8>) -> Result<Self, Error> {
-        if loader.len() > MAX_IMAGE_BYTES {
-            return Err(Error::Invalid("loader exceeds boot volume size".into()));
-        }
-        abl_tzmap::pe::PeImage::parse(&loader)
-            .map_err(|e| Error::Invalid(format!("invalid prepared ARM64 loader: {e}")))?;
+        validate_efi(&loader)?;
         mode2_profile::Profile::decode(&gm2p)
             .map_err(|e| Error::Invalid(format!("invalid GM2P profile: {e}")))?;
         // The map digest describes the original ABL, not the patched PE. Do

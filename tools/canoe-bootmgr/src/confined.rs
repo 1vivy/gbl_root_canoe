@@ -19,6 +19,11 @@ impl Root {
             directory: Dir::open_ambient_dir(path, cap_std::ambient_authority())?,
         })
     }
+    /// Clone the retained directory capability for OS-specific metadata queries.
+    /// Callers must not turn it into an ambient path for later file operations.
+    pub fn directory_handle(&self) -> io::Result<std::fs::File> {
+        Ok(self.directory.try_clone()?.into_std_file())
+    }
     fn directory(&self, components: &[&str], create: bool) -> io::Result<Dir> {
         let mut dir = self.directory.try_clone()?;
         for component in components {
