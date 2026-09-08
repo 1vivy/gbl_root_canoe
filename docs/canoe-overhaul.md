@@ -119,5 +119,11 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   read-only logfs evidence inspection, not boot-root maintenance.
 - Full mounted FAT integration, loader/BLS artifact
   commands and application workflow consolidation remain in progress.
+- Windows native volume ownership now resolves a retained USB disk to its whole
+  FAT volume GUID and validates geometry. Export release flushes, locks and
+  dismounts the filesystem before backing flush/eject. The real owned USB
+  fixture passes worker writes, busy-file refusal, retry after closing the file,
+  native eject and detached readback/fsck. Guided deployment/UAC integration
+  remains outstanding.
 - The Windows app last inspected reports b3. Do not launch a mixed intermediate
   package as b4; replace it only with the integrated, checked b4 build.
