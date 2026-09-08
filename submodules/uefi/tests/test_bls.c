@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBootPath.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -361,9 +362,26 @@ TestOverflowOnASecondaryPathRejectsTheEntry (void)
   assert (strcmp (gEntry.Image, "\\k") == 0);
 }
 
+static void
+TestSharedBootPaths (void)
+{
+  FILE *File = fopen ("fixtures/boot-paths.tsv", "r");
+  char Line[512];
+  assert (File != NULL);
+  while (fgets (Line, sizeof (Line), File) != NULL) {
+    size_t Length = strlen (Line);
+    assert (Length >= 3 && Line[1] == '\t' && Line[Length - 1] == '\n');
+    Line[--Length] = 0;
+    assert (!!SfbBootPathValid (Line + 2, Length - 2) == (Line[0] == '1'));
+  }
+  assert (!ferror (File));
+  fclose (File);
+}
+
 int
 main (void)
 {
+  TestSharedBootPaths ();
   TestOrdinaryLinuxEntry ();
   TestImageKeysAreExclusive ();
   TestSecondInitrdIsIgnoredAndCounted ();

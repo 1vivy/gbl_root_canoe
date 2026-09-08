@@ -117,9 +117,7 @@ impl LocalDir {
     }
 
     fn bls_path(&self, name: &str) -> Result<PathBuf, BackendError> {
-        if name.is_empty()
-            || name.contains(['/', '\\'])
-            || !name.to_ascii_lowercase().ends_with(".conf")
+        if !crate::boot_path::safe_component(name) || !name.to_ascii_lowercase().ends_with(".conf")
         {
             return Err(BackendError::InvalidBlsName(name.to_owned()));
         }

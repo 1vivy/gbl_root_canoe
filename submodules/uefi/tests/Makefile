@@ -70,14 +70,16 @@ test_boot_root: \
 
 # Pure canoe.cfg parser: no EDK2 types at all, so it builds against stdint.
 test_config: test_config.c \
-	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c
-	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $^
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBootPath.h
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $(filter %.c,$^)
 
 # Pure Boot Loader Specification Type #1 parser: same shape as test_config,
 # no EDK2 types, so it builds against stdint.
 test_bls: test_bls.c \
-	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.c
-	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $^
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBootPath.h
+	$(CC) $(CFLAGS) -DSFB_HOST_BUILD -o $@ $(filter %.c,$^)
 
 HOOK_DIR := ../edk2/QcomModulePkg/Application/LinuxLoader/Hook
 HOOK_INCLUDES := \

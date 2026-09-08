@@ -117,28 +117,15 @@ fn referenced_paths(entry: &BlsEntry) -> HashSet<String> {
 }
 
 fn simple_name(name: &str) -> Result<String, ArtifactError> {
-    if name.is_empty()
-        || name.contains(['/', '\\'])
-        || !name.to_ascii_lowercase().ends_with(".conf")
-    {
+    if !crate::boot_path::safe_component(name) || !name.to_ascii_lowercase().ends_with(".conf") {
         return Err(ArtifactError::Invalid(format!("invalid BLS name: {name}")));
     }
     Ok(name.to_owned())
 }
 
 fn relative_path(value: &str) -> Result<String, ArtifactError> {
-    let value = value.replace('\\', "/");
-    let value = value.strip_prefix('/').unwrap_or(&value);
-    if value.is_empty()
-        || value
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
-    {
-        return Err(ArtifactError::Invalid(format!(
-            "invalid artifact destination: {value}"
-        )));
-    }
-    Ok(value.to_owned())
+    crate::boot_path::relative(value)
+        .ok_or_else(|| ArtifactError::Invalid(format!("invalid artifact destination: {value}")))
 }
 
 fn parse_digest(value: &str) -> Result<[u8; 32], ArtifactError> {

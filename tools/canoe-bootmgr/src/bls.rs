@@ -84,10 +84,9 @@ pub fn normalize_path(value: &str) -> Result<String, BlsError> {
     if value.is_empty() || !printable(value) {
         return Err(BlsError::Invalid("path must be printable ASCII".to_owned()));
     }
-    let mut path = value.replace('/', "\\");
-    if !path.starts_with('\\') {
-        path.insert(0, '\\');
-    }
+    let relative = crate::boot_path::relative(value)
+        .ok_or_else(|| BlsError::Invalid("invalid boot-root-relative path".to_owned()))?;
+    let path = format!("\\{}", relative.replace('/', "\\"));
     if path.len() > MAX_PATH_CHARS {
         return Err(BlsError::Invalid(format!(
             "path exceeds {MAX_PATH_CHARS} characters"

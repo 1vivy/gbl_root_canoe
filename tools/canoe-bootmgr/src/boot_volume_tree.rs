@@ -15,29 +15,7 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-fn safe_name(name: &str) -> bool {
-    let stem = name.split('.').next().unwrap_or("").to_uppercase();
-    let reserved = matches!(
-        stem.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
-    ) || ["COM", "LPT"].iter().any(|prefix| {
-        stem.strip_prefix(prefix).is_some_and(|suffix| {
-            matches!(
-                suffix,
-                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
-            )
-        })
-    });
-    if reserved {
-        return false;
-    }
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && !name.contains(['/', '\\', ':', '\0', '<', '>', '"', '|', '?', '*'])
-        && !name.ends_with(['.', ' '])
-        && !name.chars().any(char::is_control)
-}
+use crate::boot_path::safe_component as safe_name;
 
 struct Budget {
     entries: usize,

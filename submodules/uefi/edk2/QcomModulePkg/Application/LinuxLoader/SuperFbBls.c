@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "SuperFbBootPath.h"
 #include "SuperFbBls.h"
 
 /* Keeps the translation unit legal when the feature is compiled out. */
@@ -163,7 +164,7 @@ SfbBlsCopyPath (char *Out, SFB_UINTN Chars, const char *Text, SFB_UINTN Length)
   SFB_UINTN Index;
   SFB_UINTN Offset = 0;
 
-  if (Length == 0) {
+  if (!SfbBootPathValid (Text, Length)) {
     return FALSE;
   }
 

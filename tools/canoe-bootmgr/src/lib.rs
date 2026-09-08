@@ -9,6 +9,7 @@ pub mod bls;
 mod bls_parse;
 mod bls_render;
 pub mod boot_evidence;
+mod boot_path;
 pub mod boot_volume;
 pub mod boot_volume_tree;
 pub mod boot_volume_persist;

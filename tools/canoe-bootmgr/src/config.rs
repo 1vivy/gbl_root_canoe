@@ -245,21 +245,11 @@ pub(crate) fn validate_mode(value: u8) -> Result<(), ConfigError> {
 }
 
 pub(crate) fn canonical_image(value: &str) -> Result<String, ConfigError> {
-    let folded = value.replace('\\', "/");
-    let trimmed = folded.strip_prefix('/').unwrap_or(&folded);
-    if trimmed.is_empty() || trimmed.len() > MAX_PATH_CHARS || !printable(trimmed) {
-        return Err(ConfigError::Invalid(format!(
-            "invalid boot-root-relative image path: {value:?}"
-        )));
-    }
-    if trimmed
-        .split('/')
-        .any(|part| part.is_empty() || part == "." || part == "..")
-    {
-        return Err(ConfigError::Invalid(format!(
-            "invalid boot-root-relative image path: {value:?}"
-        )));
-    }
+    let trimmed = crate::boot_path::relative(value)
+        .filter(|path| path.len() <= MAX_PATH_CHARS)
+        .ok_or_else(|| {
+            ConfigError::Invalid(format!("invalid boot-root-relative image path: {value:?}"))
+        })?;
     Ok(trimmed.to_owned())
 }
 

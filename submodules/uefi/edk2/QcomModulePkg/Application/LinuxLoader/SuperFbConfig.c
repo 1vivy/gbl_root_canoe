@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "SuperFbBootPath.h"
 #include "SuperFbConfig.h"
 
 /* Keeps the translation unit legal when the feature is compiled out. */
@@ -230,45 +231,10 @@ SfbCfgFoldPath (const char *Text,
   SFB_UINTN Index;
   SFB_UINTN Count = 0;
   SFB_UINTN Start;
-  SFB_UINTN ComponentStart;
-
-  Start = 0;
-  if (Start < Length && (Text[Start] == '/' || Text[Start] == '\\')) {
-    Start++;
-  }
-  if (Start >= Length) {
+  if (!SfbBootPathValid (Text, Length)) {
     return FALSE;
   }
-  if (Text[Length - 1] == '/' || Text[Length - 1] == '\\') {
-    return FALSE;
-  }
-
-  /* Component walk over the un-normalised text: a separator of either flavour
-   * ends a component. */
-  ComponentStart = Start;
-  for (Index = Start; Index <= Length; Index++) {
-    SFB_BOOLEAN AtEnd = (SFB_BOOLEAN)(Index == Length);
-    SFB_UINTN   Bytes;
-
-    if (!AtEnd && Text[Index] != '/' && Text[Index] != '\\') {
-      continue;
-    }
-    Bytes = Index - ComponentStart;
-    if (Bytes == 0) {
-      return FALSE;
-    }
-    if (Bytes == 1 && Text[ComponentStart] == '.') {
-      return FALSE;
-    }
-    if (Bytes == 2 && Text[ComponentStart] == '.' &&
-        Text[ComponentStart + 1] == '.') {
-      return FALSE;
-    }
-    if (AtEnd) {
-      break;
-    }
-    ComponentStart = Index + 1;
-  }
+  Start = (Text[0] == '/' || Text[0] == '\\') ? 1 : 0;
 
   if (Chars < 3) {
     return FALSE;
