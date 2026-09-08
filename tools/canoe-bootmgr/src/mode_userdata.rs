@@ -121,6 +121,29 @@ pub(crate) fn assess(
         reasons.push(reason("R4", "An existing-install signing comparison needs an attributable previous effective identity. Fresh installation has no previous Canoe profile to compare; missing launch evidence does not establish a format requirement."));
     }
 
+    // Stable projected/verified signing identity is the practical Mode 1/2
+    // binding guard. Missing optional AVB version properties do not negate it.
+    // Keep source attribution, true Mode 0 boundaries and observed downgrades.
+    let stable_binding = (bootstrap || (prior_canoe && matches!(from_mode, Some(1 | 2))))
+        && matches!(target_mode, 1 | 2)
+        && matches!((current, target), (Some(a), Some(b)) if provenance_compatible(a, b) == Some(true));
+    if stable_binding && !known_risk {
+        let mut reasons = vec![reason(
+            "R4",
+            "The effective signing identity is unchanged within the locked Mode 1/2 presentation. No format is required by this transition; changed OTA vbmeta contents or signatures do not change that binding. Boot-chain AVB checks still apply.",
+        )];
+        if matches!((current, target), (Some(a), Some(b)) if keymint_relationship(a, b).is_none()) {
+            reasons.push(reason(
+                "R3",
+                "Version compatibility is not fully verified because some version or security-patch properties are unavailable. No downgrade was identified in the comparable values; missing fields do not establish a format requirement.",
+            ));
+        }
+        return UserdataAssessment {
+            requirement: UserdataRequirement::NotRequired,
+            reasons,
+        };
+    }
+
     if reasons.is_empty() {
         UserdataAssessment {
             requirement: UserdataRequirement::NotRequired,

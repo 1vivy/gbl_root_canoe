@@ -229,34 +229,6 @@ pub fn plan_for_source(
         prior_canoe,
         locked_bootstrap,
     )?;
-    // No version transition is introduced by retaining Mode 1 with exactly the
-    // same signed vbmeta. Do not equate missing header properties, matching
-    // signers alone, or a Mode 2 projected profile with identical inputs.
-    if from_mode == Some(1)
-        && target_mode == 1
-        && prior_canoe
-        && target_image.is_none()
-        && plan.userdata.requirement == UserdataRequirement::Unknown
-        && plan
-            .userdata
-            .reasons
-            .iter()
-            .all(|reason| reason.rule == "R3")
-        && matches!((current_vbmeta, target_vbmeta), (Some(a), Some(b)) if identical_vbmeta(a, b))
-    {
-        plan.userdata = UserdataAssessment {
-            requirement: UserdataRequirement::NotRequired,
-            reasons: vec![UserdataReason {
-                rule: "R3".into(),
-                reason: "Mode 1 and the signed vbmeta bytes are unchanged. This operation introduces no data-binding or image-version transition; boot-image AVB checks still apply.".into(),
-            }],
-        };
-        plan.outcome = ModeOutcome {
-            status: "ready",
-            reason: None,
-        };
-        plan.vbmeta.relationship = Some("same-or-higher");
-    }
     if target_mode == 1 && from_mode != Some(1) {
         if let Some(precondition) = plan
             .preconditions
@@ -273,18 +245,6 @@ pub fn plan_for_source(
         }
     }
     Ok(plan)
-}
-
-fn identical_vbmeta(a: &Path, b: &Path) -> bool {
-    use std::io::Read;
-    fn read(path: &Path) -> std::io::Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        fs::File::open(path)?
-            .take(8 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)?;
-        Ok(bytes)
-    }
-    matches!((read(a), read(b)), (Ok(a), Ok(b)) if !a.is_empty() && a.len() <= 8 * 1024 * 1024 && a == b)
 }
 
 fn inspect_target_image(

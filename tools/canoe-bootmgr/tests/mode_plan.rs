@@ -70,7 +70,7 @@ fn userdata_is_not_required_when_rollback_drops_but_images_match() {
 
     assert_eq!(plan.vbmeta.relationship, Some("same-or-higher"));
     assert_eq!(plan.userdata.requirement, UserdataRequirement::NotRequired);
-    assert!(has_rule(&plan, "R2"));
+    assert!(has_rule(&plan, "R4"));
     assert!(!has_precondition(&plan, "P-FORMAT"));
 }
 
@@ -249,7 +249,7 @@ fn fresh_install_does_not_invent_a_previous_canoe_identity() {
 }
 
 #[test]
-fn unchanged_signed_mode_one_does_not_require_missing_version_properties() {
+fn matching_signer_does_not_require_identical_vbmeta_bytes_or_all_version_properties() {
     use canoe_bootmgr::mode_plan::plan_for_source;
     let source = tempfile::NamedTempFile::new().unwrap();
     let mut bytes = std::fs::read("tests/fixtures/vbmeta-inspect-happy.img").unwrap();
@@ -299,6 +299,79 @@ fn unchanged_signed_mode_one_does_not_require_missing_version_properties() {
     std::fs::write(&target, bytes).unwrap();
     assert_eq!(
         plan(Some(1), 1, true, &target).userdata.requirement,
-        UserdataRequirement::Unknown
+        UserdataRequirement::NotRequired
     );
+}
+
+#[test]
+fn same_signer_matrix_keeps_version_uncertainty_separate_from_formatting() {
+    for from in [1, 2] {
+        for to in [1, 2] {
+            let mut source = complete_evidence(2, "effective-key");
+            source.build_properties = HeaderBuildProperties::default();
+            let mut target = source.clone();
+            target.rollback_index += 1;
+            let plan = plan_transition(
+                Some(from),
+                to,
+                Some(source.clone()),
+                Some(target.clone()),
+                true,
+            )
+            .unwrap();
+            assert_eq!(plan.userdata.requirement, UserdataRequirement::NotRequired);
+            assert_eq!(plan.vbmeta.relationship, None);
+            assert!(
+                plan.userdata
+                    .reasons
+                    .iter()
+                    .any(|r| r.reason.contains("not fully verified"))
+            );
+            assert!(!has_precondition(&plan, "P-FORMAT"));
+
+            source.build_properties.boot_security_patch = Some("2026-08-01".into());
+            target.build_properties.boot_security_patch = Some("2026-09-01".into());
+            let upgrade = plan_transition(
+                Some(from),
+                to,
+                Some(source.clone()),
+                Some(target.clone()),
+                true,
+            )
+            .unwrap();
+            assert_eq!(
+                upgrade.userdata.requirement,
+                UserdataRequirement::NotRequired
+            );
+
+            target.build_properties.boot_security_patch = Some("2026-07-01".into());
+            let downgrade = plan_transition(
+                Some(from),
+                to,
+                Some(source.clone()),
+                Some(target.clone()),
+                true,
+            )
+            .unwrap();
+            assert_eq!(downgrade.userdata.requirement, UserdataRequirement::May);
+
+            target.public_key_sha256 = Some("different-effective-key".into());
+            let changed = plan_transition(
+                Some(from),
+                to,
+                Some(source.clone()),
+                Some(target.clone()),
+                true,
+            )
+            .unwrap();
+            assert_eq!(changed.userdata.requirement, UserdataRequirement::Must);
+            assert!(has_precondition(&changed, "P-FORMAT"));
+
+            target.public_key_sha256 = None;
+            target.build_properties = HeaderBuildProperties::default();
+            let missing =
+                plan_transition(Some(from), to, Some(source), Some(target), true).unwrap();
+            assert_eq!(missing.userdata.requirement, UserdataRequirement::Unknown);
+        }
+    }
 }
