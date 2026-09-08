@@ -1,1 +1,1 @@
-{"operation":"protocol.version","ok":true,"app_version":"0.1.0","protocol_version":1,"capabilities":["reviewed-identity","tools.inventory","mode-userdata-assessment-v2","image-zero-v1","whole-partition-write-v1"]}
+{"operation":"protocol.version","ok":true,"app_version":"0.1.0","protocol_version":1,"capabilities":["bootroot-cleanup-v1","ksu-bootstrap-v1","reviewed-identity","tools.inventory","mode-userdata-assessment-v2","image-zero-v1","whole-partition-write-v1"]}

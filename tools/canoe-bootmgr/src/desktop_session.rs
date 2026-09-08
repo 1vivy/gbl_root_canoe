@@ -63,6 +63,7 @@ pub(crate) fn request_requires_source(request: &JsonRequest) -> bool {
         | JsonRequest::SlotStatus { .. }
         | JsonRequest::Install { .. }
         | JsonRequest::OtaApply { .. }
+        | JsonRequest::BootRootCleanup { .. }
         | JsonRequest::ToolsUpdate { .. } => true,
         JsonRequest::ModePlan { id, .. } => id.is_some(),
         JsonRequest::ProtocolVersion
@@ -151,7 +152,11 @@ fn authorize_privileged(request: &JsonRequest, source: Option<&Path>) -> Result<
 
 fn request_boot_root_source(request: &JsonRequest) -> Option<&Path> {
     match request {
-        JsonRequest::Install {
+        JsonRequest::BootRootCleanup {
+            boot_root_source: Some(source),
+            ..
+        }
+        | JsonRequest::Install {
             boot_root_source: Some(source),
             ..
         }
@@ -163,7 +168,11 @@ fn request_boot_root_source(request: &JsonRequest) -> Option<&Path> {
             boot_root_source: Some(source),
             ..
         } => Some(source),
-        JsonRequest::ProtocolVersion
+        JsonRequest::BootRootCleanup {
+            boot_root_source: None,
+            ..
+        }
+        | JsonRequest::ProtocolVersion
         | JsonRequest::Build { .. }
         | JsonRequest::AblVerify { .. }
         | JsonRequest::ImageDigest { .. }

@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::{Ext4Dir, Ext4Error, KNOWN_FILES, Listed};
 use crate::bls::BlsEntry;
@@ -87,7 +86,7 @@ impl Ext4Dir {
             .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
         let entries_dir = self.remote("/loader/entries");
         self.ensure_remote_components(&entries_dir)?;
-        let output = Command::new(&self.helper)
+        let output = crate::process::command(&self.helper)
             .args(["list", source, entries_dir.as_str()])
             .output()
             .map_err(|error| io("list BLS files", Path::new(&entries_dir), error))?;

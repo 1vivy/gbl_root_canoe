@@ -88,6 +88,10 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(name = "bootstrap")]
+    Bootstrap(crate::bootstrap::BootstrapArgs),
+    #[command(name = "bootroot-cleanup")]
+    BootRootCleanup(crate::bootroot_cleanup::CleanupArgs),
     /// Report the application and wire protocol versions.
     #[command(name = "protocol-version")]
     ProtocolVersion,

@@ -168,3 +168,55 @@ fn efisp_file_is_rejected_without_writing_elsewhere() {
         before
     );
 }
+
+#[test]
+fn reviewed_cleanup_removes_the_complete_boot_tree_and_preserves_persist() {
+    let volume = PersistImage::new();
+    volume.put("/vendor-owner.txt", b"private vendor contents\n");
+    volume.put("/efisp/unknown/deep/leftover.bin", b"\x00\n\r\x1a\xff");
+    volume.put("/efisp/boot_a.efi", b"loader\n");
+    let backend = Backend::ext4_with_helper(&volume.image, &volume.helper).unwrap();
+    let review = canoe_bootmgr::bootroot_cleanup::cleanup(
+        &backend,
+        &canoe_bootmgr::bootroot_cleanup::CleanupArgs {
+            expected_sha256: None,
+            backup: None,
+            boot_root_source: None,
+        },
+    )
+    .unwrap();
+    let data = serde_json::to_value(review).unwrap();
+    assert!(
+        data["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "unknown/deep/leftover.bin")
+    );
+    let backup = volume.directory.path().join("recovery");
+    let command = canoe_bootmgr::bootroot_cleanup::CleanupArgs {
+        expected_sha256: Some(data["sha256"].as_str().unwrap().into()),
+        backup: Some(backup.clone()),
+        boot_root_source: None,
+    };
+    canoe_bootmgr::bootroot_cleanup::cleanup(&backend, &command).unwrap();
+    canoe_bootmgr::bootroot_cleanup::cleanup(&backend, &command).unwrap();
+    assert_eq!(
+        fs::read(backup.join("unknown/deep/leftover.bin")).unwrap(),
+        b"\x00\n\r\x1a\xff"
+    );
+    assert_eq!(
+        volume.read("/vendor-owner.txt").stdout,
+        b"private vendor contents\n"
+    );
+    let listed = Command::new(&volume.helper)
+        .arg("list")
+        .arg(&volume.image)
+        .arg("/efisp")
+        .output()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&listed.stdout).unwrap(),
+        serde_json::json!([])
+    );
+}

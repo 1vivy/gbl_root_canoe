@@ -13,6 +13,15 @@ mod wire_command;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "verb")]
 pub enum JsonRequest {
+    #[serde(rename = "bootroot.cleanup")]
+    BootRootCleanup {
+        #[serde(default)]
+        expected_sha256: Option<String>,
+        #[serde(default)]
+        backup: Option<PathBuf>,
+        #[serde(default)]
+        boot_root_source: Option<PathBuf>,
+    },
     #[serde(rename = "protocol.version")]
     ProtocolVersion,
     #[serde(rename = "build")]

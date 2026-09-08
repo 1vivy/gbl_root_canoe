@@ -176,14 +176,9 @@ make_fixture missing-acknowledgement
 work="$TMP/missing-acknowledgement"
 TEST_SLOT=_b run_build "$work" --mode 0 >"$work/initial.log"
 cp "$work/bootroot/canoe.cfg" "$work/before.cfg"
-if TEST_SLOT=_b run_build "$work" >"$work/output.log" 2>&1; then
-  fail 'mode 1 without the required format acknowledgement was accepted'
-fi
-grep -F 'P-FORMAT' "$work/output.log" >/dev/null || \
-  fail 'mode 1 refusal did not name the missing format acknowledgement'
-cmp -s "$work/before.cfg" "$work/bootroot/canoe.cfg" || \
-  fail 'unacknowledged mode change changed config'
-pass 'known mode 0 to 1 transition requires the explicit format acknowledgement'
+TEST_SLOT=_b run_build "$work" >"$work/output.log" 2>&1 || fail 'unknown source transition was incorrectly forced to format'
+grep -A3 -F 'entry android-b' "$work/bootroot/canoe.cfg" | grep -F 'mode 1' >/dev/null || fail 'mode 1 was not installed'
+pass 'destination mode alone is not evidence of the source userdata binding'
 
 make_fixture defaults
 work="$TMP/defaults"

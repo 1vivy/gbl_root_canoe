@@ -32,6 +32,16 @@ pub fn json_error(code: &str, message: &str) -> Result<Vec<u8>, serde_json::Erro
 
 pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
     let text = match success {
+        Success::Bootstrap { summary, token, .. } => format!("{summary}\nCONFIRM={token}"),
+        Success::BootRootCleanup {
+            sha256,
+            files,
+            removed,
+            ..
+        } => format!(
+            "Canoe boot root: {} entries; sha256={sha256}; removed={removed}",
+            files.len()
+        ),
         Success::ProtocolVersion {
             app_version,
             protocol_version,

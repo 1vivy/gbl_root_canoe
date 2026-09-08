@@ -1,6 +1,6 @@
 use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use super::{Ext4Dir, Ext4Error};
 
@@ -10,7 +10,7 @@ impl Ext4Dir {
         args: &[&str],
         input: Option<&[u8]>,
     ) -> Result<Vec<u8>, Ext4Error> {
-        let mut command = Command::new(&self.helper);
+        let mut command = crate::process::command(&self.helper);
         command
             .args(args)
             .stdout(Stdio::piped())
@@ -58,7 +58,7 @@ impl Ext4Dir {
     pub(super) fn read_path(&self, path: &str) -> Result<Option<Vec<u8>>, Ext4Error> {
         let target = self.remote(path);
         self.ensure_remote_components(&target)?;
-        let output = Command::new(&self.helper)
+        let output = crate::process::command(&self.helper)
             .args([
                 "read",
                 self.source

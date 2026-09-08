@@ -23,6 +23,8 @@ assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3" ;; esac; }
 mkdir -p "$MOD/bin" "$MOD/webroot" "$MOD/efisp/tools" "$BY_NAME" \
   "$BOOT_ROOT/tools" "$ABL_REPO"
 cp "$ROOT/targets/magisk_module/module/customize.sh" "$MOD/customize.sh"
+# This suite covers package-only setup; native deployment is exercised through the guest installer.
+printf 'canoe_install_flow() { :; }\n' > "$MOD/install-flow.sh"
 printf 'abl-a-before\n' > "$BY_NAME/abl_a"
 printf 'abl-b-before\n' > "$BY_NAME/abl_b"
 printf 'efisp-before\n' > "$BY_NAME/efisp"
@@ -147,7 +149,7 @@ assert_contains "$(cat "$UI_LOG")" 'Installing this module alone does not requir
   'module installation was not distinguished from boot-chain deployment'
 assert_contains "$(cat "$UI_LOG")" 'Reboot when KernelSU requests module activation' \
   'activation guidance was not displayed'
-assert_contains "$(cat "$UI_LOG")" '此步骤仅安装管理界面和工具' \
+assert_contains "$(cat "$UI_LOG")" '仅安装管理界面和工具时不会更改启动分区' \
   'Chinese activation guidance is absent'
 pass 'bootstrap explains module activation separately from boot-chain deployment'
 echo 'all module bootstrap fixtures passed'

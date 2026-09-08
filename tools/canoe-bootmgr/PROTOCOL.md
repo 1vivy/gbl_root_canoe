@@ -253,3 +253,35 @@ comparison lacks attributable evidence. Restoring the previous compatible state
 is an alternative to adopting a new binding. Formatting is not an AVB/graft fix
 and does not bypass anti-rollback. Mode 2 supports custom ROMs; no stock-ROM-only
 restriction is inferred from signer identity.
+
+### Reviewed boot-root cleanup and KSU bootstrap
+
+`bootroot-cleanup-v1` adds `bootroot.cleanup`. With no `expected_sha256` it
+returns a sorted boot-root inventory and its SHA256 without mutation. Apply
+requires that reviewed digest and an explicit external `backup` directory.
+`boot_root_source` binds desktop requests to the selected persist export;
+Android uses the mounted local `persist/efisp` directory. Parent persist files
+are outside the cleanup boundary. Symlinks and special files are refused.
+The backup is verified before deletion. A retry after interrupted deletion
+accepts only unchanged survivors of the complete reviewed backup. The empty
+`efisp` directory may remain; no Canoe files remain in it.
+
+The response is `{ok:true, operation:"bootroot.cleanup", sha256, files, removed}`.
+Uninstall callers restore and read back selected stock ABL targets (inactive
+before active), then zero and read back the full raw efisp partition, before
+requesting this cleanup. Sources are explicitly supplied firmware images;
+neither a snapshot nor a matching signer establishes stock-image suitability.
+
+`ksu-bootstrap-v1` advertises the Android-only CLI orchestration:
+`--boot-root /mnt/vendor/persist/efisp bootstrap --module-root MODPATH
+--state-dir RECOVERY_DIR --mode 1|2 [--custom-recovery] [--patch-vendor-boot]`.
+It prepares current-slot inputs, builds and validates artifacts, assesses
+userdata compatibility, and prints a review plus `CONFIRM=<sha256>`.
+Repeating it with `--confirm <sha256>` verifies that plan, input partitions,
+and all prepared artifacts before applying canonical operations. Recovery
+records, full partition snapshots, a pending step, and receipts remain in the
+external state directory. Existing configuration or a recorded partial run
+requires explicit recovery/maintenance instead of implicit reinstallation.
+No reboot or userdata format is performed. This command runs the extracted
+module tools directly and requires persist to be mounted. Shell scripts only
+collect volume-key choices and display the backend review.

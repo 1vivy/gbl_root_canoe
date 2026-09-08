@@ -1,7 +1,5 @@
 #!/system/bin/sh
-# Canoe's module installer is deliberately a bootstrap.  Magisk has already
-# unpacked the payload and WebUI before this script runs; all boot-chain
-# decisions and mutations belong to the WebUI through canoe-bootmgr.
+# Package setup and input presentation; native canoe-bootmgr owns deployment.
 
 if [ -z "${MODPATH:-}" ]; then
   ui_print "Canoe module path is unavailable"
@@ -43,13 +41,13 @@ if [ "$user_lang" = "zh" ]; then
   T_VERIFY="- 正在验证设备型号"
   T_DEVICE_OK="- 设备验证完成："
   T_PERM="- 正在设置权限"
-  T_EFISP_TITLE="确保你的内核没有Baseband Guard，设备BL锁已经解锁"
+  T_EFISP_TITLE="确保你的内核没有Baseband Guard"
   T_SOC="确保你的设备是8gen5/8elitegen5"
 else
   T_VERIFY="- Verifying device model"
   T_DEVICE_OK="- Device verified:"
   T_PERM="- Setting permissions"
-  T_EFISP_TITLE="Ensure kernel has no Baseband Guard and BL bootloader is unlocked"
+  T_EFISP_TITLE="Ensure kernel has no Baseband Guard"
   T_SOC="Ensure device is 8gen5 / 8elitegen5"
 fi
 
@@ -80,16 +78,18 @@ set_perm "$MODPATH/lang.txt" 0 0 0644
 ui_print ""
 ui_print "Canoe Boot Manager"
 if [ "$user_lang" = "zh" ]; then
-  ui_print "- 此步骤仅安装管理界面和工具，不修改启动分区或手机数据。"
+  ui_print "- 仅安装管理界面和工具时不会更改启动分区，不修改启动分区或手机数据。"
   ui_print "- 按 KernelSU 提示重启以激活模块，然后打开 WebUI。"
   ui_print "- 更新激活前仍可见的 WebUI 可能属于旧版本。"
-  ui_print "- 首次部署、模式选择和 OTA 准备均在 WebUI 中完成。"
+  ui_print "- 完整安装、模式选择和 OTA 准备也可在 WebUI 中完成。"
   ui_print "- 安装本模块本身不需要格式化数据。"
 else
-  ui_print "- This step installs the manager and tools; it does not change boot partitions or phone data."
+  ui_print "- Installing the manager alone does not change boot partitions or phone data."
   ui_print "- Reboot when KernelSU requests module activation, then open the WebUI."
   ui_print "- A WebUI visible before an update activates may still be the previous version."
-  ui_print "- Complete first deployment, mode selection, or OTA preparation in the WebUI."
+  ui_print "- Full installation, mode selection, and OTA preparation are also available in WebUI."
   ui_print "- Installing this module alone does not require formatting data."
 fi
-exit 0
+[ -f "$MODPATH/install-flow.sh" ] || abort "Install flow is missing"
+. "$MODPATH/install-flow.sh"
+return 0

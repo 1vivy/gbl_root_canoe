@@ -15,6 +15,15 @@ use crate::wire::JsonRequest;
 impl JsonRequest {
     pub fn into_command(self) -> Command {
         match self {
+            Self::BootRootCleanup {
+                expected_sha256,
+                backup,
+                boot_root_source,
+            } => Command::BootRootCleanup(crate::bootroot_cleanup::CleanupArgs {
+                expected_sha256,
+                backup,
+                boot_root_source,
+            }),
             Self::ProtocolVersion => Command::ProtocolVersion,
             Self::Build {
                 abl,

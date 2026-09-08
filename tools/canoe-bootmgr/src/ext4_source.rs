@@ -3,7 +3,6 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::{BOOT_ROOT_DIR, Ext4Error, io};
 
@@ -115,7 +114,7 @@ pub(super) fn probe_boot_root(source: &Path, helper: &Path) -> Result<(), Ext4Er
     let source_arg = source
         .to_str()
         .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
-    let output = Command::new(helper)
+    let output = crate::process::command(helper)
         .args(["list", source_arg, BOOT_ROOT_DIR])
         .output()
         .map_err(|error| io("probe boot root", Path::new(BOOT_ROOT_DIR), error))?;

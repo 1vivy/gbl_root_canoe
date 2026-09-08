@@ -15,6 +15,19 @@ use crate::vendorboot::PatchReceipt;
 #[derive(Debug, Serialize)]
 #[serde(tag = "operation")]
 pub enum Success {
+    #[serde(rename = "bootstrap")]
+    Bootstrap {
+        ok: bool,
+        summary: String,
+        token: String,
+    },
+    #[serde(rename = "bootroot.cleanup")]
+    BootRootCleanup {
+        ok: bool,
+        sha256: String,
+        files: Vec<String>,
+        removed: bool,
+    },
     #[serde(rename = "protocol.version")]
     ProtocolVersion {
         ok: bool,

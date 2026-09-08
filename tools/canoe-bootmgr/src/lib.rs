@@ -44,6 +44,7 @@ mod mode_enforcement;
 pub mod operations;
 #[cfg(feature = "cli")]
 pub mod output;
+mod process;
 pub use slot_transaction::{InstallInput, InstallReceipt};
 pub mod mode_plan;
 mod mode_plan_types;
@@ -231,3 +232,8 @@ pub fn verify_tzmap(
 ) -> Result<(), BuildError> {
     build::verify_tzmap(tools_dir, sidecar, abl, allow_zero_digest)
 }
+
+#[cfg(feature = "cli")]
+pub mod bootroot_cleanup;
+#[cfg(feature = "cli")]
+pub mod bootstrap;

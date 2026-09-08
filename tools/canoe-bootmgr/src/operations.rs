@@ -4,6 +4,8 @@ use crate::backend::Backend;
 use crate::cli::{Command, Success};
 
 const PROTOCOL_CAPABILITIES: &[&str] = &[
+    "bootroot-cleanup-v1",
+    "ksu-bootstrap-v1",
     "reviewed-identity",
     "tools.inventory",
     "mode-userdata-assessment-v2",
@@ -32,6 +34,14 @@ pub fn execute(cli: &crate::cli::Cli) -> Result<Success, AppError> {
     let Some(command) = cli.command.as_ref() else {
         return Err(AppError::Request("a command is required".to_owned()));
     };
+    if let Command::Bootstrap(args) = command {
+        return crate::bootstrap::run(
+            cli.boot_root
+                .as_deref()
+                .ok_or_else(|| AppError::Request("bootstrap requires --boot-root".into()))?,
+            args,
+        );
+    }
     if matches!(command, Command::ProtocolVersion) {
         return Ok(protocol_version());
     }
@@ -93,8 +103,10 @@ fn backend_for_cli(
     Ok((backend, guard))
 }
 fn allows_uncreated_local_root(command: &Command) -> bool {
-    matches!(command, Command::Slot { .. } | Command::Install(_))
-        || matches!(command, Command::ModePlan(args) if args.id.is_none())
+    matches!(
+        command,
+        Command::Slot { .. } | Command::Install(_) | Command::BootRootCleanup(_)
+    ) || matches!(command, Command::ModePlan(args) if args.id.is_none())
 }
 
 fn backend_for_request(
@@ -138,6 +150,7 @@ fn backend_for_cli_request(
 
 fn request_boot_root_source(command: &Command) -> Option<&Path> {
     match command {
+        Command::BootRootCleanup(args) => args.boot_root_source.as_deref(),
         Command::Install(args) => args.boot_root_source.as_deref(),
         Command::OtaApply(args) => args.boot_root_source.as_deref(),
         Command::ToolsUpdate(args) => args.boot_root_source.as_deref(),
@@ -158,6 +171,10 @@ fn backend_from_request_source(
 
 fn execute_command(backend: &Backend, command: &Command) -> Result<Success, AppError> {
     match command {
+        Command::Bootstrap(_) => Err(AppError::Request(
+            "bootstrap requires the explicit Android CLI entry point".into(),
+        )),
+        Command::BootRootCleanup(args) => crate::bootroot_cleanup::cleanup(backend, args),
         Command::ProtocolVersion => Ok(protocol_version()),
         Command::Build(args) => operations_build::build(args),
         Command::AblVerify(args) => operations_build::abl_verify(args),

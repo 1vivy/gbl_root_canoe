@@ -11,7 +11,19 @@ impl Ext4Dir {
     }
 
     pub(super) fn sync_temp(&self, root: &Path, expected_root: &Path) -> Result<(), Ext4Error> {
-        let manifest = super::ext4_delta::sync_manifest(self, root, expected_root)?;
+        self.sync_tree(root, expected_root, false)
+    }
+    pub(super) fn sync_tree(
+        &self,
+        root: &Path,
+        expected_root: &Path,
+        complete: bool,
+    ) -> Result<(), Ext4Error> {
+        let manifest = if complete {
+            super::ext4_delta::complete_manifest(self, root, expected_root)?
+        } else {
+            super::ext4_delta::sync_manifest(self, root, expected_root)?
+        };
         if manifest.is_empty() {
             return Ok(());
         }

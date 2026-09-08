@@ -3,7 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -267,7 +267,7 @@ fn is_executable(path: &Path) -> bool {
 }
 
 pub fn run(tool: &Path, args: &[OsString]) -> Result<ToolOutput, ToolError> {
-    let output = Command::new(tool)
+    let output = crate::process::command(tool)
         .args(args)
         .output()
         .map_err(|source| ToolError::Spawn {
@@ -283,7 +283,7 @@ pub fn run_with_timeout(
     timeout: Duration,
 ) -> Result<ToolOutput, ToolError> {
     let tool_name = tool.display().to_string();
-    let mut child = Command::new(tool)
+    let mut child = crate::process::command(tool)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

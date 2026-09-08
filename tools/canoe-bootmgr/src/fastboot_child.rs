@@ -49,11 +49,8 @@ impl ReapedChild {
         stderr: Stdio,
         cleanup: Cleanup,
     ) -> io::Result<Self> {
-        let child = std::process::Command::new(fastboot)
-            .args(args)
-            .stdout(stdout)
-            .stderr(stderr)
-            .spawn()?;
+        let mut command = crate::process::command(fastboot);
+        let child = command.args(args).stdout(stdout).stderr(stderr).spawn()?;
         Ok(Self {
             child: Some(child),
             reaped: false,

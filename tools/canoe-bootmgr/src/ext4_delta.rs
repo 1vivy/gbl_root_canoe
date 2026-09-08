@@ -7,6 +7,7 @@ use super::{Ext4Dir, Ext4Error};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ExpectedState {
+    Directory,
     Absent,
     File,
     Unobserved,
@@ -15,6 +16,7 @@ enum ExpectedState {
 impl ExpectedState {
     const fn manifest_code(self) -> u8 {
         match self {
+            Self::Directory => b'd',
             Self::Absent => b'a',
             Self::File => b'f',
             Self::Unobserved => b'u',
@@ -57,7 +59,23 @@ pub(super) fn sync_manifest(
     root: &Path,
     expected_root: &Path,
 ) -> Result<Vec<u8>, Ext4Error> {
-    let paths = sync_paths(root, expected_root)?;
+    manifest(backend, root, expected_root, false)
+}
+
+pub(super) fn complete_manifest(
+    backend: &Ext4Dir,
+    root: &Path,
+    expected_root: &Path,
+) -> Result<Vec<u8>, Ext4Error> {
+    manifest(backend, root, expected_root, true)
+}
+fn manifest(
+    backend: &Ext4Dir,
+    root: &Path,
+    expected_root: &Path,
+    complete: bool,
+) -> Result<Vec<u8>, Ext4Error> {
+    let paths = sync_paths(root, expected_root, complete)?;
     let mut manifest = Vec::new();
     for path in paths {
         let target = backend.remote(&path.logical);
@@ -84,14 +102,18 @@ fn append_hex(output: &mut Vec<u8>, bytes: &[u8]) {
     }
 }
 
-fn sync_paths(root: &Path, expected_root: &Path) -> Result<Vec<SyncPath>, Ext4Error> {
+fn sync_paths(
+    root: &Path,
+    expected_root: &Path,
+    complete: bool,
+) -> Result<Vec<SyncPath>, Ext4Error> {
     let mut candidates = BTreeSet::new();
-    collect_file_paths(root, root, &mut candidates)?;
-    collect_file_paths(expected_root, expected_root, &mut candidates)?;
+    collect_file_paths(root, root, &mut candidates, complete)?;
+    collect_file_paths(expected_root, expected_root, &mut candidates, complete)?;
 
     let mut paths = BTreeMap::new();
     for logical in candidates {
-        if let Some(path) = sync_path(root, expected_root, logical)? {
+        if let Some(path) = sync_path(root, expected_root, logical, complete)? {
             paths.insert(path.logical.clone(), path);
         }
     }
@@ -103,6 +125,7 @@ fn sync_path(
     root: &Path,
     expected_root: &Path,
     logical: String,
+    complete: bool,
 ) -> Result<Option<SyncPath>, Ext4Error> {
     let relative = logical.trim_start_matches('/');
     let desired_path = root.join(relative);
@@ -116,14 +139,21 @@ fn sync_path(
     {
         return Ok(None);
     }
-    if desired != TempState::File && expected != TempState::File {
+    if desired != TempState::File
+        && expected != TempState::File
+        && (!complete || desired == expected)
+    {
         return Ok(None);
     }
 
     Ok(Some(SyncPath {
         logical,
         desired: desired_state(desired),
-        expected: expected_state(expected),
+        expected: if complete && expected == TempState::Directory {
+            ExpectedState::Directory
+        } else {
+            expected_state(expected)
+        },
     }))
 }
 
@@ -229,6 +259,7 @@ fn collect_file_paths(
     root: &Path,
     current: &Path,
     paths: &mut BTreeSet<String>,
+    complete: bool,
 ) -> Result<(), Ext4Error> {
     let entries =
         fs::read_dir(current).map_err(|source| io("read temporary directory", current, source))?;
@@ -239,10 +270,12 @@ fn collect_file_paths(
             .file_type()
             .map_err(|source| io("stat temporary entry", &path, source))?;
         if file_type.is_dir() {
-            collect_file_paths(root, &path, paths)?;
-            continue;
+            collect_file_paths(root, &path, paths, complete)?;
+            if !complete {
+                continue;
+            }
         }
-        if !file_type.is_file() {
+        if !file_type.is_file() && !file_type.is_dir() {
             return Err(Ext4Error::Operation(format!(
                 "unsupported temporary ext4 entry type: {}",
                 path.display()
