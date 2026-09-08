@@ -68,13 +68,17 @@ fn fat12_fat16_fat32_readback_never_changes_media() {
         let mut image = tempfile::NamedTempFile::new().unwrap();
         image.as_file().set_len(size).unwrap();
         fatfs::format_volume(
-            image.as_file_mut(),
+            &mut fatfs::StdIoWrapper::new(image.as_file_mut()),
             fatfs::FormatVolumeOptions::new().fat_type(fat_type),
         )
         .unwrap();
         image.seek(SeekFrom::Start(0)).unwrap();
         {
-            let fs = fatfs::FileSystem::new(image.as_file_mut(), fatfs::FsOptions::new()).unwrap();
+            let fs = fatfs::FileSystem::new(
+                fatfs::StdIoWrapper::new(image.as_file_mut()),
+                fatfs::FsOptions::new(),
+            )
+            .unwrap();
             let dir = fs.root_dir().create_dir("canoe").unwrap();
             let mut file = dir.create_file("last-boot").unwrap();
             file.write_all(&record()).unwrap();

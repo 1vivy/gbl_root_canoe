@@ -63,7 +63,7 @@ pub fn create_staging(path: &Path) -> io::Result<VolumeInfo> {
         file.write_all(&zeros)?;
     }
     file.seek(SeekFrom::Start(0))?;
-    fatfs::format_volume(&mut file, format_options())?;
+    fatfs::format_volume(&mut fatfs::StdIoWrapper::new(&mut file), format_options())?;
     file.sync_all()?;
     drop(file);
     inspect(&mut File::open(path)?)
@@ -139,7 +139,9 @@ mod tests {
             assert!(path.metadata().unwrap().blocks() * 512 >= CONTAINER_BYTES);
         }
         let mut file = File::open(&path).unwrap();
-        let fs = fatfs::FileSystem::new(&mut file, fatfs::FsOptions::new()).unwrap();
+        let fs =
+            fatfs::FileSystem::new(fatfs::StdIoWrapper::new(&mut file), fatfs::FsOptions::new())
+                .unwrap();
         assert_eq!(fs.fat_type(), fatfs::FatType::Fat16);
         assert_eq!(fs.root_dir().iter().count(), 0);
         fs.unmount().unwrap();

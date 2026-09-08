@@ -46,7 +46,9 @@ tempfile = "3"
 mode2_profile = { path = "../mode2-profile" }
 lz4 = "1"
 flate2 = "1"
-fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc"] }
+# Pinned upstream: 0.3.6 emits invalid LFN records for dot directory entries.
+# Keep the independent dosfstools interoperability check when changing this pin.
+fatfs = { git = "https://github.com/rafalh/rust-fatfs", rev = "2aefc2a027ce94ed0671752814dac203f0450e11", default-features = false, features = ["std", "alloc", "lfn", "unicode"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -68,18 +68,20 @@ pub fn extract(image: &[u8], destination: &Path) -> io::Result<()> {
     }
     let mut cursor = Cursor::new(image.to_vec());
     boot_volume::inspect(&mut cursor)?;
-    let volume =
-        fatfs::FileSystem::new(cursor, fatfs::FsOptions::new().update_accessed_date(false))?;
+    let volume = fatfs::FileSystem::new(
+        fatfs::StdIoWrapper::new(cursor),
+        fatfs::FsOptions::new().update_accessed_date(false),
+    )?;
     let mut budget = Budget {
         entries: 0,
         bytes: 0,
     };
     extract_dir(&volume.root_dir(), destination, 0, &mut budget)?;
-    volume.unmount()
+    volume.unmount().map_err(Into::into)
 }
 
-fn extract_dir<T: fatfs::ReadWriteSeek>(
-    directory: &fatfs::Dir<'_, T>,
+fn extract_dir<T: fatfs::ReadWriteSeek + fatfs::IoBase<Error = io::Error>>(
+    directory: &fatfs::Dir<'_, T, fatfs::DefaultTimeProvider, fatfs::LossyOemCpConverter>,
     destination: &Path,
     depth: usize,
     budget: &mut Budget,
@@ -121,10 +123,16 @@ fn extract_dir<T: fatfs::ReadWriteSeek>(
 /// directory after canonical install/config operations have finished.
 pub fn build(source: &Path) -> io::Result<Vec<u8>> {
     let mut cursor = Cursor::new(vec![0u8; CONTAINER_BYTES as usize]);
-    fatfs::format_volume(&mut cursor, boot_volume::format_options())?;
+    fatfs::format_volume(
+        &mut fatfs::StdIoWrapper::new(&mut cursor),
+        boot_volume::format_options(),
+    )?;
     cursor.set_position(0);
     {
-        let volume = fatfs::FileSystem::new(&mut cursor, fatfs::FsOptions::new())?;
+        let volume = fatfs::FileSystem::new(
+            fatfs::StdIoWrapper::new(&mut cursor),
+            fatfs::FsOptions::new(),
+        )?;
         let mut budget = Budget {
             entries: 0,
             bytes: 0,
@@ -136,9 +144,9 @@ pub fn build(source: &Path) -> io::Result<Vec<u8>> {
     Ok(cursor.into_inner())
 }
 
-fn populate_dir<T: fatfs::ReadWriteSeek>(
+fn populate_dir<T: fatfs::ReadWriteSeek + fatfs::IoBase<Error = io::Error>>(
     source: &Path,
-    directory: &fatfs::Dir<'_, T>,
+    directory: &fatfs::Dir<'_, T, fatfs::DefaultTimeProvider, fatfs::LossyOemCpConverter>,
     depth: usize,
     budget: &mut Budget,
 ) -> io::Result<()> {

@@ -164,10 +164,10 @@ pub fn read_logfs(path: &Path) -> BootEvidence {
     let result = (|| {
         let file = File::open(path)?;
         let fs = fatfs::FileSystem::new(
-            ReadOnly {
+            fatfs::StdIoWrapper::new(ReadOnly {
                 inner: file,
                 remaining: 16 * 1024 * 1024,
-            },
+            }),
             fatfs::FsOptions::new().update_accessed_date(false),
         )?;
         let mut record = fs.root_dir().open_file("canoe/last-boot")?;
