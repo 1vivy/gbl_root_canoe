@@ -2,16 +2,25 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+// A sibling test's fork can briefly inherit the writable descriptor used by
+// fs::copy, causing ETXTBSY when this fixture executes its copied binary. Keep
+// creation and all child executions inside one fixture lease.
+static FIXTURE_LOCK: Mutex<()> = Mutex::new(());
 
 struct Fixture {
     root: PathBuf,
+    _lease: MutexGuard<'static, ()>,
 }
 
 impl Fixture {
     fn new() -> Self {
+        let lease = FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("clock")
@@ -27,7 +36,10 @@ impl Fixture {
         fs::write(root.join("efisp/boot.efi.gm2p"), gm2p).expect("gm2p");
         fs::write(root.join("efisp/boot.efi.tzmap"), vec![0_u8; 256]).expect("tzmap");
         fs::write(root.join("efisp/tools/reboot.efi"), b"tool").expect("tool");
-        Self { root }
+        Self {
+            root,
+            _lease: lease,
+        }
     }
 
     fn run(&self, args: &[&str]) -> Output {
