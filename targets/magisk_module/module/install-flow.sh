@@ -48,10 +48,10 @@ canoe_choose() {
 canoe_install_flow() {
   # Updates activate the new manager normally; servicing stays an explicit WebUI operation.
   if [ -x /data/adb/modules/fake_bl_efisp/bin/canoe-manager ]; then
-    ui_print "- Manager update only. Service Canoe through WebUI after activation."
+    ui_print "- Manager update only. Service CANOE-BDS through WebUI after activation."
     return
   fi
-  canoe_choose "Canoe first setup" "Install manager only" "Deploy Canoe now" "Cancel module installation"
+  canoe_choose "CANOE-BDS first setup" "Install manager only" "Deploy CANOE-BDS now" "Cancel module installation"
   case "$canoe_choice" in
     1|timeout) return ;;
     3) abort "Module installation cancelled" ;;
@@ -73,7 +73,7 @@ canoe_install_flow() {
   canoe_review=$TMPDIR/canoe-review.txt
   if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --mode "$canoe_mode" $canoe_custom $canoe_patch $canoe_history > "$canoe_review" 2>&1; then
     cat "$canoe_review"
-    ui_print "- Deployment was not started. No Canoe partitions were written."
+    ui_print "- Deployment was not started. No CANOE-BDS partitions were written."
     canoe_choose "Continue setup" "Install manager only; complete Full installation in WebUI after reboot" "Cancel module installation"
     [ "$canoe_choice" != 2 ] || abort "Module installation cancelled"
     return
@@ -86,7 +86,7 @@ canoe_install_flow() {
   if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
     ui_print "- Deployment did not complete. Open General -> Saved operations in WebUI for retry or recovery."
     ui_print "- Recovery records: /data/adb/canoe-manager/operations"
-    abort "Canoe deployment failed; completed writes remain recorded"
+    abort "CANOE-BDS deployment failed; completed writes remain recorded"
   fi
 }
 canoe_install_flow

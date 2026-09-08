@@ -3,4 +3,4 @@ name=Canoe Boot Manager
 version=7.0.0-b4
 versionCode=17
 author=1vivy
-description=Manage Canoe boot entries, loaders, EFI tools, and inactive-slot OTA preparation through the WebUI.
+description=Manage CANOE-BDS boot entries, loaders, EFI tools, and inactive-slot OTA preparation through the WebUI.

@@ -2,7 +2,7 @@
 # Package setup and input presentation; native canoe-manager owns deployment.
 
 if [ -z "${MODPATH:-}" ]; then
-  ui_print "Canoe module path is unavailable"
+  ui_print "Canoe Boot Manager module path is unavailable"
   abort "MODPATH is unavailable"
 fi
 

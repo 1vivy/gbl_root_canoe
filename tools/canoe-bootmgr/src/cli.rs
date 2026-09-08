@@ -7,7 +7,7 @@ use crate::backend::{BootRoot, LocalDir};
 use crate::config::{ConfigDocument, DeviceInfoRepair, EntryRequest, MenuMode, PolicyUpdate, Role};
 
 #[derive(Debug, Parser)]
-#[command(name = "canoe-bootmgr", version = crate::version::VERSION, about = "Manage a mounted Canoe boot root")]
+#[command(name = "canoe-bootmgr", version = crate::version::VERSION, about = "Manage a mounted CANOE-BDS boot root")]
 pub struct Cli {
     /// Mounted FAT boot-root directory. Mounting and device access are external.
     #[arg(long, global = true, default_value = ".")]
