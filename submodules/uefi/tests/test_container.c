@@ -19,7 +19,7 @@ static EFI_BLOCK_IO_PROTOCOL Parent, *Published;
 static EFI_SIMPLE_FILE_SYSTEM_PROTOCOL Fs;
 static EFI_FILE_PROTOCOL Root, File;
 static EFI_DEVICE_PATH_PROTOCOL Path;
-static BOOLEAN Connected, Busy, FailFlush, Missing, BadFat;
+static BOOLEAN Connected, Busy, ParentBusy, FailFlush, Missing, BadFat;
 static UINTN Maps, Opens, ParentDisconnects;
 static UINT8 Bytes[128 * 1024];
 VOID *EFIAPI CopyMem (VOID *a, CONST VOID *b, UINTN n) { return memcpy (a, b, n); }
@@ -164,6 +164,8 @@ static EFI_STATUS EFIAPI disconnect (EFI_HANDLE h, EFI_HANDLE driver, EFI_HANDLE
   {
     assert (h == Persist);
     ParentDisconnects++;
+    if (ParentBusy)
+      return EFI_ACCESS_DENIED;
   }
   return EFI_SUCCESS;
 }
@@ -258,6 +260,31 @@ int main (void)
   assert (SfbContainerUnmount () == EFI_SUCCESS);
   assert (!Published && !SfbIsContainerVolume (Virtual) && ParentDisconnects >= 3);
   assert (SfbContainerUnmount () == EFI_SUCCESS);
+  {
+    EFI_BLOCK_IO_PROTOCOL *Usb = NULL;
+    assert (SfbContainerUsbBegin (&Usb) == EFI_SUCCESS);
+    assert (Usb != NULL && !Published && !Connected);
+    assert (SfbContainerDisplayDisk () == NULL);
+    assert (SfbContainerMount () == EFI_ACCESS_DENIED);
+    assert (SfbContainerUnmount () == EFI_ACCESS_DENIED);
+    assert (SfbContainerUsbEnd (FALSE) == EFI_ACCESS_DENIED);
+    assert (Usb->FlushBlocks (Usb) == EFI_SUCCESS);
+    FailFlush = TRUE;
+    assert (SfbContainerUsbEnd (TRUE) == EFI_DEVICE_ERROR);
+    assert (SfbContainerMount () == EFI_ACCESS_DENIED);
+    FailFlush = FALSE;
+    ParentBusy = TRUE;
+    assert (SfbContainerUsbEnd (TRUE) == EFI_ACCESS_DENIED);
+    /* The virtual disk has already been freed. Retain ownership until the
+     * parent's ext4 cache is released; retry must not touch the freed map. */
+    assert (SfbContainerMount () == EFI_ACCESS_DENIED);
+    assert (SfbContainerUnmount () == EFI_ACCESS_DENIED);
+    assert (SfbContainerDisplayDisk () == NULL);
+    ParentBusy = FALSE;
+    assert (SfbContainerUsbEnd (TRUE) == EFI_SUCCESS);
+    assert (SfbContainerMount () == EFI_SUCCESS);
+    assert (SfbContainerUnmount () == EFI_SUCCESS);
+  }
   puts ("PASS container lifecycle: exact path, invalid FAT, reuse, busy/flush handoff refusal, "
         "retry and cache teardown");
   return 0;

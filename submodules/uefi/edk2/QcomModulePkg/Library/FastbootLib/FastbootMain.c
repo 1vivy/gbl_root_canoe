@@ -78,6 +78,7 @@ found at
  *  IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "../../Application/LinuxLoader/SuperFbMsdLease.h"
 #include <Uefi.h>
 #include <Library/DebugLib.h>
 #include <Library/Debug.h>
@@ -185,6 +186,7 @@ SfbUsbControllerInit (VOID)
       0x4e44,
       {0x8c, 0x78, 0x9c, 0x9e, 0x5b, 0x53, 0xd, 0x36}};
 
+  if (!SfbMsdLeaseIdle ()) return EFI_ACCESS_DENIED;
   Status = gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK, DummyNotify,
                                NULL, &InitUsbControllerGuid, &UsbConfigEvt);
   if (EFI_ERROR (Status)) {
@@ -320,6 +322,7 @@ FastbootUsbReconnect (VOID)
 {
   EFI_STATUS Status;
 
+  if (!SfbMsdLeaseIdle ()) return EFI_ACCESS_DENIED;
   if (Fbd.UsbDeviceProtocol == NULL) {
     return EFI_NOT_STARTED;
   }

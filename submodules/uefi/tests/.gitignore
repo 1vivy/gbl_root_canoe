@@ -13,6 +13,7 @@ test_boot_root
 test_image_map
 test_image_disk
 test_container
+test_msd_lease
 test_fat
 test_hooks
 test_launch

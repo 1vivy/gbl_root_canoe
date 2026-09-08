@@ -2,7 +2,13 @@
 #ifndef SUPER_FB_CONTAINER_H
 #define SUPER_FB_CONTAINER_H
 #include <Uefi.h>
+#include <Protocol/BlockIo.h>
 EFI_STATUS SfbContainerMount (VOID);
 EFI_STATUS SfbContainerUnmount (VOID);
 BOOLEAN SfbIsContainerVolume (EFI_HANDLE Handle);
+/* Begin removes the public FAT/Block I/O handle before returning USB's private
+ * disk pointer. End requires confirmed gadget stop AND LUN release. */
+EFI_STATUS SfbContainerUsbBegin (EFI_BLOCK_IO_PROTOCOL **Disk);
+EFI_STATUS SfbContainerUsbEnd (BOOLEAN GadgetReleased);
+EFI_BLOCK_IO_PROTOCOL *SfbContainerDisplayDisk (VOID);
 #endif

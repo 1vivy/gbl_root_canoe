@@ -104,6 +104,7 @@ found at
 #include "../../Application/LinuxLoader/SuperFbLog.h"
 #include "../../Application/LinuxLoader/Hook/SuperFbDevInfo.h"
 #include "../../Application/LinuxLoader/SuperFbBootRoot.h"
+#include "../../Application/LinuxLoader/SuperFbContainer.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -2389,6 +2390,8 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
   if (AsciiStrCmp (Arg, "mass-storage") == 0 ||
       AsciiStrCmp (Arg, "mass-storage:persist") == 0) {
     Target = L"persist";
+  } else if (AsciiStrCmp (Arg, "mass-storage:boot-root") == 0) {
+    Target = L"boot-root";
   } else if (AsciiStrCmp (Arg, "mass-storage:logfs") == 0) {
     Target = L"logfs";
   } else {
@@ -2401,7 +2404,13 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
    * can still answer FAIL; SfbExportPartitionByName resolves again because it
    * is also the non-interactive public entry point used by other callers.
    */
-  Status = SfbFindPartitionByName (Target, &BlockIo);
+  if (StrCmp (Target, L"boot-root") == 0) {
+    Status = SfbStartFatStack ();
+    if (!EFI_ERROR (Status)) Status = SfbContainerMount ();
+    BlockIo = SfbContainerDisplayDisk ();
+  } else {
+    Status = SfbFindPartitionByName (Target, &BlockIo);
+  }
   if (EFI_ERROR (Status) || BlockIo == NULL) {
     FastbootFail ("mass-storage partition not found");
     return;
@@ -2894,6 +2903,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   FastbootPublishVar ("product", FullProduct);
 
   FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
+  FastbootPublishVar ("canoe-boot-volume", "fat16-container-v1");
 
   /* Keep this one formatter as the append point for retry_a/retry_b. The
    * observation remains unknown until the verified-boot preflight has read a

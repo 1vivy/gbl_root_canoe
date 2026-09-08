@@ -19,6 +19,7 @@
 #include "SuperFbMassStorage.h"
 #include "SuperFbMenu.h"
 #include "SuperFbContainer.h"
+#include "SuperFbMsdLease.h"
 #include "SuperFbLog.h"
 
 #include <FastbootLib/FastbootMain.h>
@@ -173,8 +174,8 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
 {
   EFI_STATUS            Status;
   EFI_STATUS            QueryStatus;
-  EFI_STATUS            StopStatus;
-  EFI_STATUS            ReleaseStatus;
+  EFI_STATUS            CleanupStatus;
+  BOOLEAN               Container;
   EFI_STATUS            FirstHandlerError = EFI_SUCCESS;
   EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
   SFB_USB_MSD_PROTOCOL *Msd = NULL;
@@ -195,6 +196,9 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    * The USB stack is this session's one external prerequisite; settle it
    * before any driver state is touched.
    */
+  Status = SfbMsdLeaseFinish ();
+  if (EFI_ERROR (Status)) return Status;
+  Container = (BOOLEAN)(StrCmp (Name, L"boot-root") == 0);
   Status = SfbContainerUnmount ();
   if (EFI_ERROR (Status)) return Status;
   SfbMassStorageEnsureUsbStack ();
@@ -205,7 +209,8 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
    * child handle hanging off them, and the ensure reconnected the tree; a
    * Block I/O looked up before either step would be a freed interface.
    */
-  Status = SfbFindPartitionByName (Name, &BlockIo);
+  Status = Container ? SfbContainerMount () : SfbFindPartitionByName (Name, &BlockIo);
+  if (Container) BlockIo = SfbContainerDisplayDisk ();
   if (EFI_ERROR (Status) || BlockIo == NULL) {
     DEBUG ((EFI_D_ERROR,
             "SFB: MARK msc-target target=%a status=%r\n",
@@ -233,7 +238,7 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
     }
   }
 
-  QueryStatus = Msd->QueryMaxLun (Msd, &MaxLun);
+  QueryStatus = Msd->QueryMaxLun == NULL ? EFI_UNSUPPORTED : Msd->QueryMaxLun (Msd, &MaxLun);
   if (EFI_ERROR (QueryStatus)) {
     MaxLun = 0;
   }
@@ -244,12 +249,19 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
           Bundled ? "bundled" : "platform",
           (UINT32)MaxLun, Msd->Revision, QueryStatus));
 
-  Status = Msd->AssignBlkIoHandle (Msd, BlockIo, 0);
+  if (Msd->AssignBlkIoHandle == NULL || Msd->StopDevice == NULL ||
+      Msd->StartDevice == NULL || Msd->EventHandler == NULL) return EFI_UNSUPPORTED;
+  if (Container) {
+    Status = SfbContainerUsbBegin (&BlockIo);
+    if (EFI_ERROR (Status)) return Status;
+  }
+  Status = SfbMsdLeaseAssign (Msd, BlockIo, Container ? SfbContainerUsbEnd : NULL);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR,
             "SFB: MARK msc-lun target=%a lun=0 published=0 status=%r\n",
             (Tag != NULL) ? Tag : "?", Status));
-    return Status;
+    CleanupStatus = SfbMsdLeaseFinish ();
+    return EFI_ERROR (CleanupStatus) ? CleanupStatus : Status;
   }
   DEBUG ((EFI_D_INFO,
           "SFB: MARK msc-lun target=%a lun=0 published=1 status=%r\n",
@@ -287,13 +299,11 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
      * reporting failure. Stop it before releasing the LUN so a failed start
      * cannot leave fastboot or the partition in a half-owned state.
      */
-    StopStatus = Msd->StopDevice (Msd);
-    ReleaseStatus = Msd->AssignBlkIoHandle (Msd, NULL, 0);
+    CleanupStatus = SfbMsdLeaseFinish ();
     DEBUG ((EFI_D_ERROR,
-            "SFB: MARK msc-session target=%a status=%r stop=%r "
-            "lun-release=%r\n",
-            (Tag != NULL) ? Tag : "?", Status, StopStatus, ReleaseStatus));
-    return Status;
+            "SFB: MARK msc-session target=%a status=%r cleanup=%r\n",
+            (Tag != NULL) ? Tag : "?", Status, CleanupStatus));
+    return EFI_ERROR (CleanupStatus) ? CleanupStatus : Status;
   }
   DEBUG ((EFI_D_INFO,
           "SFB: MARK msc-link target=%a taken=1 status=%r\n",
@@ -357,8 +367,7 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
     }
   }
 
-  StopStatus = Msd->StopDevice (Msd);
-  ReleaseStatus = Msd->AssignBlkIoHandle (Msd, NULL, 0);
+  CleanupStatus = SfbMsdLeaseFinish ();
 
   /*
    * Drain on the way out as well as on the way in. Volume Down itself is
@@ -378,13 +387,13 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
     Status = Cancelled ? EFI_ABORTED : EFI_SUCCESS;
   }
   DEBUG ((EFI_D_INFO,
-          "SFB: MARK msc-session target=%a status=%r ending=%a stop=%r "
-          "lun-release=%r polls=%u notready=%u errors=%u handler=%r\n",
+          "SFB: MARK msc-session target=%a status=%r ending=%a cleanup=%r "
+          "polls=%u notready=%u errors=%u handler=%r\n",
           (Tag != NULL) ? Tag : "?", Status,
           HostEjected ? "host-eject" : (Cancelled ? "volume-down" : "gave-up"),
-          StopStatus, ReleaseStatus,
+          CleanupStatus,
           Polls, NotReady, Errors, FirstHandlerError));
-  return Status;
+  return EFI_ERROR (CleanupStatus) ? CleanupStatus : Status;
 }
 
 STATIC
@@ -457,7 +466,7 @@ SfbMassStorageConfirmPersist (VOID)
 }
 
 typedef struct {
-  SFB_MASS_STORAGE_TARGET Targets[2];
+  SFB_MASS_STORAGE_TARGET Targets[3];
   UINTN                   Count;
   SFB_MENU_TEMPLATE      *Template;
 } SFB_MASS_STORAGE_MENU_CONTEXT;
@@ -467,6 +476,7 @@ EFI_STATUS
 SfbRefreshMassStorageMenu (IN VOID *Context)
 {
   STATIC CONST SFB_MASS_STORAGE_TARGET Probe[] = {
+    { L"boot-root", "boot-root", NULL },
     { L"persist", "persist", NULL },
     { L"logfs",   "logfs",   NULL }
   };
@@ -482,8 +492,12 @@ SfbRefreshMassStorageMenu (IN VOID *Context)
   for (Index = 0; Index < ARRAY_SIZE (Probe); Index++) {
     EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
 
-    if (EFI_ERROR (SfbFindPartitionByName (Probe[Index].Name, &BlockIo)) ||
-        BlockIo == NULL) {
+    if (StrCmp (Probe[Index].Name, L"boot-root") == 0) {
+      if (!EFI_ERROR (SfbContainerMount ())) BlockIo = SfbContainerDisplayDisk ();
+    } else {
+      (VOID)SfbFindPartitionByName (Probe[Index].Name, &BlockIo);
+    }
+    if (BlockIo == NULL) {
       continue;
     }
     State->Targets[State->Count] = Probe[Index];
@@ -583,7 +597,9 @@ SfbExportPartitionByName (IN CONST CHAR16 *Target)
     return EFI_INVALID_PARAMETER;
   }
 
-  if (StrCmp (Target, L"persist") == 0) {
+  if (StrCmp (Target, L"boot-root") == 0) {
+    Tag = "boot-root";
+  } else if (StrCmp (Target, L"persist") == 0) {
     Tag = "persist";
   } else if (StrCmp (Target, L"logfs") == 0) {
     Tag = "logfs";

@@ -11,6 +11,7 @@
 #include <Protocol/DevicePath.h>
 
 STATIC SFB_IMAGE_DISK mDisk;
+STATIC BOOLEAN mUsbOwned;
 STATIC EXT4_IMAGE_MAP *mMap;
 STATIC EFI_HANDLE mHandle;
 STATIC EFI_HANDLE mPersist;
@@ -20,7 +21,7 @@ STATIC EFI_GUID mContainerGuid = {
 
 BOOLEAN SfbIsContainerVolume (EFI_HANDLE Handle)
 {
-  return mHandle != NULL && Handle == mHandle && mDisk.Active;
+  return !mUsbOwned && mHandle != NULL && Handle == mHandle && mDisk.Active;
 }
 STATIC UINT16 Le16 (CONST UINT8 *P) { return (UINT16)(P[0] | (P[1] << 8)); }
 STATIC UINT32 Le32 (CONST UINT8 *P) { return (UINT32)Le16 (P) | ((UINT32)Le16 (P + 2) << 16); }
@@ -57,7 +58,7 @@ STATIC EFI_STATUS CheckFat (VOID)
   return EFI_SUCCESS;
 }
 
-EFI_STATUS SfbContainerUnmount (VOID)
+STATIC EFI_STATUS UnmountInternal (VOID)
 {
   EFI_STATUS Status;
   if (mHandle != NULL)
@@ -109,6 +110,8 @@ EFI_STATUS SfbContainerMount (VOID)
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs = NULL;
   EFI_DEVICE_PATH_PROTOCOL *ParentPath;
   VENDOR_DEVICE_PATH Node;
+  if (mUsbOwned)
+    return EFI_ACCESS_DENIED;
   if (mHandle != NULL)
   {
     Status = gBS->HandleProtocol (mHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
@@ -211,4 +214,61 @@ Failed:
       return Cleanup;
   }
   return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
+}
+
+EFI_BLOCK_IO_PROTOCOL *SfbContainerDisplayDisk (VOID)
+{
+  return !mUsbOwned && mHandle != NULL ? &mDisk.Block : NULL;
+}
+
+EFI_STATUS SfbContainerUsbBegin (EFI_BLOCK_IO_PROTOCOL **Disk)
+{
+  EFI_STATUS Status;
+  if (Disk == NULL)
+    return EFI_INVALID_PARAMETER;
+  *Disk = NULL;
+  if (mUsbOwned)
+    return EFI_ACCESS_DENIED;
+  Status = SfbContainerMount ();
+  if (EFI_ERROR (Status))
+    return Status;
+  Status = gBS->DisconnectController (mHandle, NULL, NULL);
+  if (EFI_ERROR (Status) && Status != EFI_NOT_FOUND)
+    return Status;
+  Status = mDisk.Block.FlushBlocks (&mDisk.Block);
+  if (EFI_ERROR (Status))
+    return Status;
+  Status = gBS->UninstallMultipleProtocolInterfaces (
+      mHandle, &gEfiBlockIoProtocolGuid, &mDisk.Block, &gEfiDevicePathProtocolGuid, mPath, NULL);
+  if (EFI_ERROR (Status))
+    return Status;
+  mHandle = NULL;
+  FreePool (mPath);
+  mPath = NULL;
+  mUsbOwned = TRUE;
+  *Disk = &mDisk.Block;
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS SfbContainerUsbEnd (BOOLEAN GadgetReleased)
+{
+  EFI_STATUS Status;
+  if (!mUsbOwned)
+    return EFI_NOT_STARTED;
+  if (!GadgetReleased)
+    return EFI_ACCESS_DENIED;
+  if (mMap != NULL)
+  {
+    Status = mDisk.Block.FlushBlocks (&mDisk.Block);
+    if (EFI_ERROR (Status)) return Status;
+  }
+  Status = UnmountInternal ();
+  if (!EFI_ERROR (Status)) mUsbOwned = FALSE;
+  return Status;
+}
+
+EFI_STATUS SfbContainerUnmount (VOID)
+{
+  if (mUsbOwned) return EFI_ACCESS_DENIED;
+  return UnmountInternal ();
 }

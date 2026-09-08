@@ -88,6 +88,7 @@
 	SuperFbFat.c
 	SuperFbImageDisk.c
 	SuperFbContainer.c
+	SuperFbMsdLease.c
 	SuperFbEntries.c
 	SuperFbMenu.c
 	SuperFbMenuScaffold.c
