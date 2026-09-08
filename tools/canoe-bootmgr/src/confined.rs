@@ -8,12 +8,20 @@ use std::{
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
+#[path = "confined_stage.rs"]
+mod staged;
+pub use staged::StagedFile;
 
 #[derive(Debug)]
 pub struct Root {
     directory: Dir,
 }
 impl Root {
+    pub fn try_clone(&self) -> io::Result<Self> {
+        Ok(Self {
+            directory: self.directory.try_clone()?,
+        })
+    }
     pub fn open(path: &Path) -> io::Result<Self> {
         Ok(Self {
             directory: Dir::open_ambient_dir(path, cap_std::ambient_authority())?,

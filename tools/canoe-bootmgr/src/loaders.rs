@@ -36,7 +36,9 @@ pub struct PreparedLoader {
     tzmap: Vec<u8>,
 }
 pub fn validate_efi(bytes: &[u8]) -> Result<(), Error> {
-    if bytes.len() > MAX_IMAGE_BYTES { return Err(Error::Invalid("EFI image exceeds boot volume size".into())); }
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(Error::Invalid("EFI image exceeds boot volume size".into()));
+    }
     abl_tzmap::pe::PeImage::parse(bytes)
         .map(|_| ())
         .map_err(|e| Error::Invalid(format!("invalid ARM64 EFI image: {e}")))
