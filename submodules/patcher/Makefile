@@ -46,4 +46,4 @@ test: tests/test_libavb_force_success.c tests/test_fastboot_lock_gates.c
 
 build_windows:
 	mkdir -p build
-	x86_64-w64-mingw32-gcc $(CFLAGS) -o build/patch_abl.exe $(SRCS)
+	x86_64-w64-mingw32-gcc $(CFLAGS) -Wl,--no-insert-timestamp -o build/patch_abl.exe $(SRCS)

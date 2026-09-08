@@ -51,7 +51,7 @@ webui_dist: copy_resources
 	trap - EXIT HUP INT TERM; \
 	rm -rf "$$tmp"
 # Refresh the checked-in last-known-good archive from a local checkout of the
-# app, and print the digest to paste into version.mk. The tar flags are what
+# app, and update imports.toml plus its generated Make inputs. The tar flags are what
 # make the digest stable: without them every regeneration embeds a new mtime
 # and owner, and a pin that changes on every run pins nothing.
 # The format must be USTAR: that is what the app's own `dist-tarball` publisher
@@ -71,6 +71,7 @@ webui-pin:
 		--format=ustar -C "$(CANOE_WEBUI_SRC)/dist" -cf - . \
 		| gzip -n -9 > "$$out"; \
 	echo "CANOE_WEBUI_SHA256 = $$(sha256sum "$$out" | cut -d' ' -f1)"
+	$(MAKE) -C "$(CANOE_ROOT_DIR)" import-pin ID=webui
 submodule_uefi: copy_resources
 	# Build the EDK2 tree at most once per workspace, and at most once per
 	# invocation. `make build` in submodules/uefi relinks LinuxLoader with
