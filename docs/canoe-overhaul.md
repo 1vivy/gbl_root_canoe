@@ -109,7 +109,10 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
 - The USB producer now follows LUN removability; BDS marks the contained FAT
   removable and preserves the physical parent. Producer identity/flush/eject
   tests, PE relocation verification, BDS host tests and a fresh BDS build pass.
-  Native Windows mounted-USB acceptance remains to be exercised.
+  A real Windows removable USB FAT fixture also passes automatic native mount,
+  volume-GUID CLI writes, preservation, rejected traversal, native flush/lock/
+  dismount/eject and independent detached readback/fsck. Application ownership
+  and deployment integration are still pending.
 - Full mounted FAT integration, loader/BLS artifact
   commands and application workflow consolidation remain in progress.
 - The Windows app last inspected reports b3. Do not launch a mixed intermediate
