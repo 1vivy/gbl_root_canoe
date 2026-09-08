@@ -5,10 +5,8 @@
  * that both the firmware and the host regression tests build against, so the
  * parser has no EDK2 dependency and no I/O: callers hand it the file bytes.
  *
- * The BDS is a reader. Nothing here writes, and there is deliberately no
- * serializer: `canoe.cfg` is authored by the host tool or the on-device module,
- * both of which have real read-write access to persist, and neither of which is
- * this loader.
+ * The pure edit function preserves unrelated lines while changing an explicit
+ * default and its entry mode. Filesystem publication lives in ConfigStore.
  *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -146,5 +144,13 @@ SfbConfigEntryMode (
  * "" for SfbConfigRoleOther. Never NULL. */
 const char *
 SfbConfigRoleSuffix (SFB_CONFIG_ROLE Role);
+
+/* Edit an existing valid configuration, preserving unrelated lines. Target is
+ * a config entry id or bls:<stem>. For BLS, Mode is ignored. No boot or format
+ * assessment is implied by this explicit firmware preference change. */
+SFB_BOOLEAN
+SfbConfigEditDefault (const char *Bytes, SFB_UINTN Size,
+                      const char *Target, SFB_UINT8 Mode,
+                      char *Output, SFB_UINTN *OutputSize);
 
 #endif /* __SUPER_FB_CONFIG_H__ */

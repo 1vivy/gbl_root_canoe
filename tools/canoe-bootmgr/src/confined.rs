@@ -58,15 +58,22 @@ impl Root {
         }
         let mut file = parent.open_with(name, &options)?;
         let metadata = file.metadata()?;
-        if !metadata.is_file() || metadata.len() > limit as u64 {
-            return Err(invalid(
-                "boot-root file is not regular or exceeds its format limit",
+        if !metadata.is_file() {
+            return Err(invalid("boot-root file is not regular"));
+        }
+        if metadata.len() > limit as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "boot-root file exceeds its format limit",
             ));
         }
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
         (&mut file).take(limit as u64 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > limit {
-            return Err(invalid("boot-root file grew past its format limit"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "boot-root file grew past its format limit",
+            ));
         }
         Ok(bytes)
     }

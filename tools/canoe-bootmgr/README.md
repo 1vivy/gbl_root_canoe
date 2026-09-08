@@ -39,3 +39,9 @@ atomic filesystem operation: errors stop the command and earlier publications
 remain. The manager owns review, snapshots, readback and operation recovery.
 File operations retain a confined directory handle; do not keep a library root
 alive while attempting to unmount or eject its filesystem.
+
+Configuration saves retain a validated `canoe.cfg.prev` before replacing
+`canoe.cfg`. Both the command and BDS prefer the current file and use the previous
+file only when the current file is missing or malformed. Filesystem I/O and
+permission errors remain errors. This small firmware fallback is independent
+of the manager's operation snapshots and recovery receipts.

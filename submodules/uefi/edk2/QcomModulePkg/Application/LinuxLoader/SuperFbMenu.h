@@ -37,7 +37,7 @@
 #define SFB_BOOT_FILE_PATH  L"\\EFI\\BOOT\\BOOTAA64.EFI"
 #define SFB_DESC_FILE_PATH  L"\\EFI\\DESC"
 
-/* Declarative menu state on the boot root. Read once per boot, never written.
+/* Declarative menu state on the boot root. Only explicit preference saves write.
  * Absent or unparseable, the loader probes the boot root for the managed
  * loader names instead. */
 #define SFB_CONFIG_FILE_PATH  L"\\canoe.cfg"
@@ -102,6 +102,7 @@ typedef enum {
   /* Session-only boot policy override. Applies to the next launch and is never
    * written anywhere: the persisted policy is `mode` in canoe.cfg. */
   SfbEntryMode,
+  SfbEntrySaveDefault,
   /* Export one partition to a host as USB mass storage. */
   SfbEntryMassStorage,
   /* Boot Loader Specification Type #1 entries, discovered on removable media or
@@ -173,6 +174,8 @@ typedef struct {
    * command line, initrd and DTB live there rather than here: SFB_MENU_STATE
    * embeds 32 of these by value and the payload is ~900 bytes each. */
   UINT8                     BlsIndex;
+  /* Stable contained-volume config id or bls:stem; empty for other media. */
+  CHAR8                     DefaultTarget[5 + SFB_CONFIG_BLS_STEM_CHARS];
 } SFB_BOOT_ENTRY;
 
 typedef struct {
@@ -199,6 +202,7 @@ typedef struct {
    * from ~18 KB to ~31 KB, and stored every entry twice for no reader.
    */
   BOOLEAN                ConfigValid;
+  BOOLEAN                ConfigPrevious;
   UINT32                 ConfigGeneration;
   SFB_CONFIG_MENU_MODE   MenuMode;
   UINT32                 KeyWindowMs;
@@ -488,7 +492,8 @@ SfbGetVolumeLabel (IN EFI_FILE_PROTOCOL *Root,
  * the callers treat as "no configured policy" rather than as an error.
  */
 EFI_STATUS
-SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume);
+SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume,
+                   OUT BOOLEAN *Previous OPTIONAL);
 
 
 VOID

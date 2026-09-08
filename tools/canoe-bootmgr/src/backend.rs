@@ -50,6 +50,19 @@ pub struct BlsFile {
     pub entry: BlsEntry,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigSource {
+    Current,
+    Previous,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoadedConfig {
+    pub config: ConfigDocument,
+    pub source: ConfigSource,
+}
+
 pub trait BootRoot {
     fn root(&self) -> &Path;
     fn read_config(&self) -> Result<Option<ConfigDocument>, BackendError>;
@@ -92,12 +105,47 @@ impl LocalDir {
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "boot root is not created"),
         })
     }
-    fn bls_path(&self, name: &str) -> Result<String, BackendError> {
-        if !crate::boot_path::safe_component(name) || !name.to_ascii_lowercase().ends_with(".conf")
-        {
-            return Err(BackendError::InvalidBlsName(name.to_owned()));
+    fn config_bytes(&self, path: &str) -> Result<Option<Vec<u8>>, BackendError> {
+        let Some(directory) = &self.directory else {
+            return Ok(None);
+        };
+        match directory.read(path, crate::config::MAX_BYTES) {
+            Ok(bytes) => {
+                ConfigDocument::parse(&bytes)?;
+                Ok(Some(bytes))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                Err(ConfigError::Invalid(e.to_string()).into())
+            }
+            Err(e) => Err(self.io("read config", path, e)),
         }
-        Ok(format!("loader/entries/{name}"))
+    }
+    /// Prefer the current configuration. Only missing/malformed content may
+    /// fall back; permissions, symlinks and filesystem I/O errors stay errors.
+    pub fn load_config(&self) -> Result<Option<LoadedConfig>, BackendError> {
+        let current = self.config_bytes("canoe.cfg");
+        match current {
+            Ok(Some(bytes)) => Ok(Some(LoadedConfig {
+                config: ConfigDocument::parse(&bytes)?,
+                source: ConfigSource::Current,
+            })),
+            Ok(None) | Err(BackendError::Config(_)) => match self.config_bytes("canoe.cfg.prev") {
+                Ok(Some(bytes)) => Ok(Some(LoadedConfig {
+                    config: ConfigDocument::parse(&bytes)?,
+                    source: ConfigSource::Previous,
+                })),
+                Ok(None) => match current {
+                    Err(e) => Err(e),
+                    _ => Ok(None),
+                },
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        }
+    }
+    fn bls_path(&self, name: &str) -> Result<String, BackendError> {
+        crate::artifacts::bls_path(name).map_err(|_| BackendError::InvalidBlsName(name.to_owned()))
     }
     fn io(&self, operation: &'static str, path: &str, source: std::io::Error) -> BackendError {
         BackendError::Io {
@@ -112,19 +160,23 @@ impl BootRoot for LocalDir {
         &self.root
     }
     fn read_config(&self) -> Result<Option<ConfigDocument>, BackendError> {
-        let Some(directory) = &self.directory else {
-            return Ok(None);
-        };
-        let bytes = match directory.read("canoe.cfg", crate::config::MAX_BYTES) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(self.io("read config", "canoe.cfg", e)),
-        };
-        Ok(Some(ConfigDocument::parse(&bytes)?))
+        Ok(self.load_config()?.map(|loaded| loaded.config))
     }
     fn write_config(&self, config: &ConfigDocument) -> Result<(), BackendError> {
+        let bytes = config.serialize()?;
+        ConfigDocument::parse(&bytes)?;
+        // Save only a validated current generation. A failed previous save
+        // must never replace a good fallback with malformed current bytes.
+        match self.config_bytes("canoe.cfg") {
+            Ok(Some(previous)) => self
+                .files()?
+                .write("canoe.cfg.prev", &previous, true)
+                .map_err(|e| self.io("preserve previous config", "canoe.cfg.prev", e))?,
+            Ok(None) | Err(BackendError::Config(_)) => (),
+            Err(e) => return Err(e),
+        }
         self.files()?
-            .write("canoe.cfg", &config.serialize()?, true)
+            .write("canoe.cfg", &bytes, true)
             .map_err(|e| self.io("commit config", "canoe.cfg", e))
     }
     fn list_bls(&self) -> Result<Vec<BlsFile>, BackendError> {

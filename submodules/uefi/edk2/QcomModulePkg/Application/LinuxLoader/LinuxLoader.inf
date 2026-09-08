@@ -85,6 +85,9 @@
 	SuperFbBootRoot.c
 	SuperFbConfig.h
 	SuperFbConfig.c
+	SuperFbConfigStore.h
+	SuperFbConfigStore.c
+	SuperFbConfigSave.c
 	SuperFbFat.c
 	SuperFbImageDisk.c
 	SuperFbContainer.c

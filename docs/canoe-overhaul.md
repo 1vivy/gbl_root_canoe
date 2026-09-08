@@ -153,3 +153,14 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   part of these commands. The manager BLS adapter shares prepared bytes and
   retains its application rollback policy, including reporting rollback errors.
   Core, worker, sidecar-parser suites and Windows cross-check pass.
+
+- BDS now offers an explicit default-entry/mode save on the contained FAT root.
+  Ordinary row selection remains one-shot, and removable media cannot persist
+  a default. Saves preserve unrelated config text, stage and flush files, and
+  publish validated `canoe.cfg.prev` before replacing the current name. Core
+  commands use the same current/previous selection contract; permission and I/O
+  errors never trigger fallback. Host firmware tests cover every mutation
+  boundary, short writes, missing/malformed current files and unrelated content.
+  Rust core/worker suites and real Windows native FAT CLI fixtures pass. A fresh
+  canonical BDS compile/relink also passes from these sources. Integrated
+  application/installer orchestration and full package acceptance remain outstanding.

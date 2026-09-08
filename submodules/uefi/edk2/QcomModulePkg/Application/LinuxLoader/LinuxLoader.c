@@ -224,7 +224,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
      * effective on the same boot that authored it. A missing config retains
      * the documented defaults.
      */
-    Status = SfbLoadBootConfig (&Config, &ConfigVolume);
+    Status = SfbLoadBootConfig (&Config, &ConfigVolume, NULL);
     ConfigAvailable = (BOOLEAN)!EFI_ERROR (Status);
     (VOID)ConfigVolume;
     if (ConfigAvailable) {

@@ -1,8 +1,8 @@
 /*
  * Boot entry list and launching for the super-fastboot boot menu.
  *
- * The menu is a reader: all state comes from canoe.cfg on the boot root, and
- * this module never writes a file or block device.
+ * Menu discovery reads the contained boot root. Explicit preference saves are
+ * handled by ConfigStore; ordinary selection never writes configuration.
  *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -10,6 +10,7 @@
 
 #include "SuperFbMenu.h"
 #include "SuperFbContainer.h"
+#include "SuperFbConfigStore.h"
 #include "SuperFbLog.h"
 #include "SuperFbBootRoot.h"
 
@@ -55,69 +56,46 @@ SfbAsciiToUnicode (IN CONST CHAR8 *Ascii, OUT CHAR16 *Unicode, IN UINTN Chars)
 }
 
 EFI_STATUS
-SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume)
+SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume,
+                   OUT BOOLEAN *Previous OPTIONAL)
 {
   EFI_STATUS Status;
   EFI_HANDLE *Volumes = NULL;
   UINTN VolumeCount = 0;
   UINTN Index;
-
-  if (Config == NULL || Volume == NULL) {
-    return EFI_INVALID_PARAMETER;
-  }
+  BOOLEAN UsedPrevious = FALSE;
+  if (Config == NULL || Volume == NULL) { return EFI_INVALID_PARAMETER; }
   ZeroMem (Config, sizeof (*Config));
   *Volume = NULL;
-
+  if (Previous != NULL) { *Previous = FALSE; }
   Status = SfbLocateVolumes (&Volumes, &VolumeCount);
-  if (EFI_ERROR (Status) || Volumes == NULL) {
-    return EFI_NOT_FOUND;
-  }
-
+  if (EFI_ERROR (Status) || Volumes == NULL) { return EFI_NOT_FOUND; }
   for (Index = 0; Index < VolumeCount; Index++) {
     EFI_FILE_PROTOCOL *Root = NULL;
-    CHAR16 ConfigPath[SFB_PATH_CHARS];
     CHAR8 *Buffer;
-    UINTN BytesRead = 0;
-
-    Status = SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
-                          SFB_CONFIG_FILE_PATH, ConfigPath,
-                          ARRAY_SIZE (ConfigPath));
-    if (EFI_ERROR (Status) ||
-        EFI_ERROR (SfbOpenVolumeRoot (Volumes[Index], &Root)) ||
-        Root == NULL) {
-      continue;
+    UINTN BytesRead;
+    if (!SfbIsContainerVolume (Volumes[Index])) { continue; }
+    Status = SfbOpenVolumeRoot (Volumes[Index], &Root);
+    if (EFI_ERROR (Status) || Root == NULL) {
+      FreePool (Volumes);
+      return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
     }
-    if (!SfbFileExists (Root, ConfigPath)) {
-      Root->Close (Root);
-      continue;
-    }
-
-    Buffer = AllocateZeroPool (SFB_LIST_MAX_BYTES + 1);
+    Buffer = AllocateZeroPool (SFB_CONFIG_MAX_BYTES + 1);
     if (Buffer == NULL) {
       Root->Close (Root);
-      *Volume = Volumes[Index];
       FreePool (Volumes);
       return EFI_OUT_OF_RESOURCES;
     }
-    Status = SfbReadFileBytes (Root, ConfigPath, Buffer, SFB_LIST_MAX_BYTES,
-                               &BytesRead);
-    Root->Close (Root);
-    if (EFI_ERROR (Status)) {
-      FreePool (Buffer);
-      *Volume = Volumes[Index];
-      FreePool (Volumes);
-      return Status;
-    }
     *Volume = Volumes[Index];
-    Status = SfbConfigParse (Buffer, BytesRead, Config)
-             ? EFI_SUCCESS : EFI_COMPROMISED_DATA;
-    DEBUG ((EFI_D_INFO, "SFB: canoe.cfg volume=%u status=%r\n",
-            (UINT32)Index, Status));
+    Status = SfbReadStoredConfig (Root, Buffer, &BytesRead, Config, &UsedPrevious);
+    Root->Close (Root);
+    if (Previous != NULL) { *Previous = UsedPrevious; }
+    DEBUG ((EFI_D_INFO, "SFB: config volume=%u previous=%u status=%r\n",
+            (UINT32)Index, (UINT32)UsedPrevious, Status));
     FreePool (Buffer);
     FreePool (Volumes);
     return Status;
   }
-
   FreePool (Volumes);
   return EFI_NOT_FOUND;
 }
@@ -138,9 +116,9 @@ SfbRootHasUsableConfig (IN EFI_FILE_PROTOCOL *Root,
   UINTN         BytesRead = 0;
   UINTN         Index;
   BOOLEAN       Usable = FALSE;
+  BOOLEAN       Previous;
 
-  if (Root == NULL || RootPrefix == NULL || ConfigPath == NULL ||
-      !SfbFileExists (Root, ConfigPath)) {
+  if (Root == NULL || RootPrefix == NULL || ConfigPath == NULL) {
     return FALSE;
   }
 
@@ -156,9 +134,8 @@ SfbRootHasUsableConfig (IN EFI_FILE_PROTOCOL *Root,
     return FALSE;
   }
 
-  if (!EFI_ERROR (SfbReadFileBytes (Root, ConfigPath, Buffer,
-                                    SFB_LIST_MAX_BYTES, &BytesRead)) &&
-      SfbConfigParse (Buffer, BytesRead, Config)) {
+  if (!EFI_ERROR (SfbReadStoredConfig (Root, Buffer, &BytesRead, Config,
+                                      &Previous))) {
     for (Index = 0; Index < Config->Count; Index++) {
       CHAR16 Relative[SFB_PATH_CHARS];
       CHAR16 ImagePath[SFB_PATH_CHARS];
@@ -873,9 +850,13 @@ SfbScanBlsEntries (IN OUT SFB_MENU_STATE *Menu,
     Slot->Passthrough = TRUE;
     Slot->BlsIndex = (UINT8)Menu->Count;
     CopyMem (&mSfbBlsPayload[Menu->Count], &Parsed, sizeof (Parsed));
-    (void)SfbBlsStemFromName (List[Index].Name,
-                              mSfbBlsPayload[Menu->Count].Stem,
-                              SFB_BLS_STEM_CHARS);
+    if (SfbBlsStemFromName (List[Index].Name,
+                            mSfbBlsPayload[Menu->Count].Stem,
+                            SFB_BLS_STEM_CHARS) && SfbIsContainerVolume (Volume)) {
+      CopyMem (Slot->DefaultTarget, "bls:", 4);
+      AsciiStrCpyS (Slot->DefaultTarget + 4, sizeof (Slot->DefaultTarget) - 4,
+                    mSfbBlsPayload[Menu->Count].Stem);
+    }
 
     DEBUG ((EFI_D_INFO,
             "SFB: MARK bls-entry file='%s' kind=%u image='%s' rejected=%u\n",
@@ -1073,6 +1054,8 @@ SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
     Slot->Mode = (SFB_BOOT_MODE)SfbConfigEntryMode (
                                   Config, &Config->Entry[ConfigIndex]);
     Slot->ModeFromConfig = TRUE;
+    AsciiStrCpyS (Slot->DefaultTarget, sizeof (Slot->DefaultTarget),
+                  Config->Entry[ConfigIndex].Id);
     Slot->Role = Config->Entry[ConfigIndex].Role;
     /*
      * An `options` value rides in the same out-of-line payload table the
@@ -1334,7 +1317,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
 
   SfbBootMark (L"menu:config");
 
-  Status = SfbLoadBootConfig (&Config, &ConfigVolume);
+  Status = SfbLoadBootConfig (&Config, &ConfigVolume, &Menu->ConfigPrevious);
   if (!EFI_ERROR (Status)) {
     Menu->ConfigValid = TRUE;
     Menu->ConfigGeneration = Config.Generation;
@@ -1378,7 +1361,9 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
                  ((Menu->ConfigValid &&
                    (Menu->RejectedLines != 0 || Config.DefaultSpecified))
                     ? 1 : 0) +
-                 (Menu->SlotMismatch ? 1 : 0);
+                 (Menu->SlotMismatch ? 1 : 0) +
+                 (Menu->ConfigPrevious ? 1 : 0) +
+                 (Menu->ConfigValid ? 1 : 0);
   while (Menu->Count > SFB_MAX_ENTRIES - ReservedRows) {
     Menu->Count--;
     SfbFreeEntry (&Menu->Entry[Menu->Count]);
@@ -1400,6 +1385,12 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
     SfbAppendBuiltIn (Menu, SfbEntryBack, Rejected);
   }
 
+  if (Menu->ConfigPrevious) {
+    SfbAppendBuiltIn (Menu, SfbEntryBack, L"Using previous saved configuration");
+  }
+  if (Menu->ConfigValid) {
+    SfbAppendBuiltIn (Menu, SfbEntrySaveDefault, L"Save a default entry and mode");
+  }
   if (Menu->SlotMismatch) {
     SfbAppendBuiltIn (Menu, SfbEntryBack, L"Config slot role is stale");
   }

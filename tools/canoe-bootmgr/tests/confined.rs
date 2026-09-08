@@ -15,7 +15,7 @@ fn resolves_one_case_variant_and_rejects_ambiguous_or_aliased_names() {
     let mut config = backend.read_config().unwrap().unwrap();
     config.generation += 1;
     backend.write_config(&config).unwrap();
-    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
     assert_eq!(
         fs::read(root.path().join("CANOE.CFG")).unwrap(),
         config.serialize().unwrap()

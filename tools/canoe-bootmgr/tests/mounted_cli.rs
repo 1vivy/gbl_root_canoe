@@ -53,8 +53,8 @@ fn mounted_entry_commands_need_no_device_or_deployment_evidence() {
     assert_eq!(config.generation, 2);
     assert_eq!(
         fs::read_dir(root.path()).unwrap().count(),
-        1,
-        "a config command creates no recovery journal"
+        2,
+        "only current and previous firmware configuration are created"
     );
 }
 

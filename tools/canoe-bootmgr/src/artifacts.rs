@@ -124,7 +124,12 @@ impl PreparedBls {
     }
 }
 pub fn bls_path(name: &str) -> Result<String, Error> {
-    if !name.is_ascii()
+    let folded = name.to_ascii_lowercase();
+    let valid_stem = folded
+        .strip_suffix(".conf")
+        .is_some_and(crate::config::valid_bls_stem);
+    if !valid_stem
+        || !name.is_ascii()
         || !crate::boot_path::safe_component(name)
         || !name.to_ascii_lowercase().ends_with(".conf")
     {

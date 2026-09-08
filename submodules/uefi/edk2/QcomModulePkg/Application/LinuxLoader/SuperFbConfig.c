@@ -713,3 +713,146 @@ SfbConfigParse (
   Config->Valid = TRUE;
   return TRUE;
 }
+
+/* Explicit preference editing. Keep the original text around unknown keys,
+ * comments and unrelated entries; parsing into a smaller firmware struct and
+ * serializing that struct would silently erase future/host-owned fields. */
+static SFB_BOOLEAN
+SfbCfgAppend (char *Output, SFB_UINTN Capacity, SFB_UINTN *Used,
+               const char *Bytes, SFB_UINTN Size)
+{
+  SFB_UINTN Index;
+  if (*Used > Capacity || Size > Capacity - *Used) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Size; Index++) {
+    Output[(*Used)++] = Bytes[Index];
+  }
+  return TRUE;
+}
+
+static SFB_UINTN
+SfbCfgDecimal (SFB_UINT32 Value, char *Output)
+{
+  char Reverse[10];
+  SFB_UINTN Count = 0;
+  SFB_UINTN Index;
+  do {
+    Reverse[Count++] = (char)('0' + Value % 10u);
+    Value /= 10u;
+  } while (Value != 0);
+  for (Index = 0; Index < Count; Index++) {
+    Output[Index] = Reverse[Count - Index - 1];
+  }
+  return Count;
+}
+
+SFB_BOOLEAN
+SfbConfigEditDefault (const char *Bytes, SFB_UINTN Size,
+                      const char *Target, SFB_UINT8 Mode,
+                      char *Output, SFB_UINTN *OutputSize)
+{
+  SFB_CONFIG Config;
+  SFB_UINTN Capacity;
+  SFB_UINTN Used = 0;
+  SFB_UINTN Index;
+  SFB_UINT32 Generation;
+  char Id[SFB_CONFIG_ID_CHARS];
+  char Stem[SFB_CONFIG_BLS_STEM_CHARS];
+  char Digits[10];
+  SFB_UINTN DigitCount;
+  SFB_BOOLEAN IsBls;
+  SFB_BOOLEAN InEntry = FALSE;
+  SFB_BOOLEAN Selected = FALSE;
+  SFB_BOOLEAN Found = FALSE;
+  const char *Cursor;
+  const char *Limit;
+  const char *Begin;
+  const char *End;
+
+  if (OutputSize == NULL) {
+    return FALSE;
+  }
+  Capacity = *OutputSize;
+  *OutputSize = 0;
+  if (Bytes == NULL || Target == NULL || Output == NULL || Bytes == Output ||
+      Size > SFB_CONFIG_MAX_BYTES || Mode > SFB_CONFIG_MODE_MAX ||
+      !SfbConfigParse (Bytes, Size, &Config) ||
+      Config.Generation == 0xffffffffu ||
+      !SfbCfgParseDefault (Target, SfbCfgLength (Target), Id, Stem, &IsBls)) {
+    return FALSE;
+  }
+  if (Capacity > SFB_CONFIG_MAX_BYTES) {
+    Capacity = SFB_CONFIG_MAX_BYTES;
+  }
+  if (!IsBls) {
+    for (Index = 0; Index < Config.Count; Index++) {
+      if (SfbCfgEquals (Config.Entry[Index].Id, Id)) {
+        Found = TRUE;
+      }
+    }
+    if (!Found) {
+      return FALSE;
+    }
+  }
+  Generation = Config.Generation + 1;
+  DigitCount = SfbCfgDecimal (Generation, Digits);
+  Cursor = Bytes;
+  Limit = Bytes + Size;
+  while (Cursor < Limit) {
+    const char *Raw = Cursor;
+    const char *KeyEnd;
+    const char *Value;
+    SFB_BOOLEAN EntryLine;
+    if (!SfbCfgNextLine (&Cursor, Limit, &Begin, &End)) {
+      break;
+    }
+    SfbCfgSplit (Begin, End, &KeyEnd, &Value);
+    EntryLine = SfbCfgKeyIs (Begin, KeyEnd, "entry");
+    if (EntryLine) {
+      InEntry = TRUE;
+      Selected = (SFB_BOOLEAN)(!IsBls && SfbCfgKeyIs (Value, End, Id));
+    }
+    if ((!InEntry && (SfbCfgKeyIs (Begin, KeyEnd, "generation") ||
+                       SfbCfgKeyIs (Begin, KeyEnd, "default"))) ||
+        (Selected && SfbCfgKeyIs (Begin, KeyEnd, "mode"))) {
+      continue;
+    }
+    if (!SfbCfgAppend (Output, Capacity, &Used, Raw,
+                       (SFB_UINTN)(Cursor - Raw))) {
+      return FALSE;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "version") || (EntryLine && Selected)) {
+      if (Used != 0 && Output[Used - 1] != '\n' &&
+          !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) {
+        return FALSE;
+      }
+      if (EntryLine) {
+        char ModeLine[] = " mode 0\n";
+        ModeLine[6] = (char)('0' + Mode);
+        if (!SfbCfgAppend (Output, Capacity, &Used, ModeLine, 8)) {
+          return FALSE;
+        }
+      } else if (!SfbCfgAppend (Output, Capacity, &Used, "generation ", 11) ||
+                  !SfbCfgAppend (Output, Capacity, &Used, Digits, DigitCount) ||
+                  !SfbCfgAppend (Output, Capacity, &Used, "\ndefault ", 9) ||
+                  !SfbCfgAppend (Output, Capacity, &Used, Target,
+                                 SfbCfgLength (Target)) ||
+                  !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) {
+        return FALSE;
+      }
+    }
+  }
+  if (!SfbConfigParse (Output, Used, &Config) ||
+      Config.Generation != Generation ||
+      (IsBls && (!Config.DefaultIsBls ||
+                  !SfbCfgEquals (Config.DefaultBlsStem, Stem))) ||
+      (!IsBls && (Config.DefaultIndex >= Config.Count ||
+                   !SfbCfgEquals (Config.Entry[Config.DefaultIndex].Id, Id) ||
+                   SfbConfigEntryMode (&Config,
+                      &Config.Entry[Config.DefaultIndex]) != Mode))) {
+    return FALSE;
+  }
+  *OutputSize = Used;
+  return TRUE;
+}

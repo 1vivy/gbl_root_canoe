@@ -4,6 +4,7 @@
 # "CPU ISA level is lower than required" before executing a single assertion.
 test_bls
 test_config
+test_config_store
 test_deviceinfo
 test_devinfo
 test_slot_retries

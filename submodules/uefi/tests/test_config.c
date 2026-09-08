@@ -473,9 +473,39 @@ TestOptionsArePassedThroughVerbatim (void)
   }
 }
 
+static void
+TestExplicitDefaultEdit (void)
+{
+  const char Input[] = "# retained comment\nversion 1\ngeneration 7\n"
+    "default a\nmode 1\nfuture-policy retained\nentry a\n title A\n image boot_a.efi\n"
+    " mode 1\nentry b\n title B\n image boot_b.efi\n mode 2\n options untouched=1\n";
+  char Output[SFB_CONFIG_MAX_BYTES + 1];
+  SFB_UINTN Size = SFB_CONFIG_MAX_BYTES;
+  assert (SfbConfigEditDefault (Input, strlen (Input), "a", 2, Output, &Size));
+  Output[Size] = 0;
+  assert (strstr (Output, "# retained comment\n") != NULL);
+  assert (strstr (Output, "future-policy retained\n") != NULL);
+  assert (strstr (Output, "entry b\n title B\n image boot_b.efi\n mode 2\n options untouched=1\n") != NULL);
+  assert (SfbConfigParse (Output, Size, &gConfig));
+  assert (gConfig.Generation == 8 && gConfig.DefaultIndex == 0);
+  assert (gConfig.Entry[0].Mode == 2 && gConfig.Mode == 1);
+  Size = SFB_CONFIG_MAX_BYTES;
+  assert (SfbConfigEditDefault (Input, strlen (Input), "bls:linux", 0, Output, &Size));
+  assert (SfbConfigParse (Output, Size, &gConfig));
+  assert (gConfig.DefaultIsBls && strcmp (gConfig.DefaultBlsStem, "linux") == 0);
+  assert (gConfig.Entry[0].Mode == 1 && gConfig.Entry[1].Mode == 2);
+  Size = SFB_CONFIG_MAX_BYTES;
+  assert (!SfbConfigEditDefault (Input, strlen (Input), "missing", 1, Output, &Size));
+  assert (Size == 0);
+  Size = 10;
+  assert (!SfbConfigEditDefault (Input, strlen (Input), "a", 1, Output, &Size));
+  assert (Size == 0);
+}
+
 int
 main (void)
 {
+  TestExplicitDefaultEdit ();
   TestVersionIsMandatory ();
   TestDefaultsWhenOmitted ();
   TestPerEntryModePrecedence ();

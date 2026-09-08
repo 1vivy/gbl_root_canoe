@@ -690,6 +690,10 @@ SfbReadFileBytes(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path,
   if (EFI_ERROR (mReadStatus)) {
     return mReadStatus;
   }
+  if (SfbStrEndsWith (Path, L"canoe.cfg.prev") ||
+      (SfbStrEndsWith (Path, L"canoe.cfg") && !mBootRootConfigPresent)) {
+    return EFI_NOT_FOUND;
+  }
   if (mBlsFixtureEnabled && SfbStrEndsWith (Path, L".conf")) {
     Data = mBlsFixture;
     DataBytes = mBlsFixtureBytes;
@@ -1531,7 +1535,7 @@ TestConfigEntries(void)
   mBootRootConfigPresent = TRUE;
   mBootRootManagedPresent = TRUE;
   mFileDevicePathAvailable = TRUE;
-  assert(SfbLoadBootConfig (&Config, &Volume) == EFI_SUCCESS);
+  assert(SfbLoadBootConfig (&Config, &Volume, NULL) == EFI_SUCCESS);
   assert(Volume == mVolume);
   assert(Config.Valid && Config.Count == 1);
 
@@ -2593,13 +2597,13 @@ SfbVolumeRootPrefix(IN EFI_HANDLE Volume)
 BOOLEAN
 SfbIsContainerVolume(IN EFI_HANDLE Volume)
 {
-  return (BOOLEAN)(Volume == mVolume && mBootRootIsExt4);
+  return (BOOLEAN)(Volume == mVolume);
 }
 
 BOOLEAN
 SfbVolumeIsExt4(IN EFI_HANDLE Volume)
 {
-  return (BOOLEAN)(Volume == mVolume && mBootRootIsExt4);
+  return (BOOLEAN)(Volume == mVolume);
 }
 
 SFB_SLOT
@@ -2812,6 +2816,7 @@ SfbShowBootingScreen(IN CONST CHAR16 *Name,
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbTzMap.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbManagedPath.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfigStore.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenuScaffold.c"

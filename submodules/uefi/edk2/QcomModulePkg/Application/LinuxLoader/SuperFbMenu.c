@@ -10,6 +10,8 @@
 
 #include "SuperFbMenu.h"
 #include "SuperFbLaunchPolicy.h"
+#include "SuperFbContainer.h"
+#include "SuperFbConfigStore.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -566,6 +568,125 @@ SfbExitMainMenu (IN VOID *Context)
   SfbFreeMenu (&State->Menu);
 }
 
+typedef struct {
+  CONST SFB_BOOT_ENTRY *Entry;
+  SFB_BOOT_MODE Mode;
+  BOOLEAN Saved;
+} SFB_SAVE_CONFIRM_CONTEXT;
+
+STATIC SFB_MENU_ACTION
+SfbHandleSaveConfirmation (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  SFB_SAVE_CONFIRM_CONTEXT *State = (SFB_SAVE_CONFIRM_CONTEXT *)Context;
+  EFI_FILE_PROTOCOL *Root = NULL;
+  EFI_STATUS Status;
+  UINTN CancelRow = State->Entry->Passthrough ? 1 : 4;
+  UINT8 Mode;
+  (VOID)Key;
+  if (Row >= CancelRow) { return SfbMenuActionExit; }
+  Mode = Row == 0 ? (UINT8)State->Mode : (UINT8)(Row - 1);
+  if (!SfbIsContainerVolume (State->Entry->Volume) ||
+      State->Entry->DefaultTarget[0] == '\0') {
+    Status = EFI_INVALID_PARAMETER;
+  } else {
+    Status = SfbOpenVolumeRoot (State->Entry->Volume, &Root);
+    if (!EFI_ERROR (Status) && Root != NULL) {
+      Status = SfbStoreConfigDefault (Root, State->Entry->DefaultTarget, Mode);
+      Root->Close (Root);
+    } else if (!EFI_ERROR (Status)) {
+      Status = EFI_DEVICE_ERROR;
+    }
+  }
+  State->Saved = (BOOLEAN)!EFI_ERROR (Status);
+  SfbReportStatus (State->Saved ? L"Default saved" : L"Could not save default", Status);
+  return SfbMenuActionExit;
+}
+
+STATIC VOID
+SfbConfirmSaveDefault (IN CONST SFB_BOOT_ENTRY *Entry, IN SFB_BOOT_MODE Mode)
+{
+  SFB_MENU_ROW ManagedRows[] = {
+    { L"Save with the configured mode", L" " },
+    { L"Save with Mode 0 - Honest unlocked", L" " },
+    { L"Save with Mode 1 - Android locked", L" " },
+    { L"Save with Mode 2 - Profile spoof", L" " },
+    { L"Cancel", L" " }
+  };
+  STATIC SFB_MENU_ROW OtherRows[] = {
+    { L"Save as default", L" " }, { L"Cancel", L" " }
+  };
+  CHAR16 ConfiguredLabel[96];
+  SFB_SAVE_CONFIRM_CONTEXT State;
+  SFB_MENU_TEMPLATE Template;
+  ZeroMem (&State, sizeof (State));
+  ZeroMem (&Template, sizeof (Template));
+  State.Entry = Entry;
+  State.Mode = Entry->ModeFromConfig ? Entry->Mode : Mode;
+  UnicodeSPrint (ConfiguredLabel, sizeof (ConfiguredLabel), L"Save with %s",
+                 SfbBootModeLabel (State.Mode));
+  ManagedRows[0].Text = ConfiguredLabel;
+  Template.Title = Entry->Desc;
+  Template.Subtitle = Entry->Passthrough ? L"Save this entry for future boots?" :
+    L"Changing between Mode 0 and Mode 1/2 requires formatting phone data.";
+  Template.Footer = L"This saves a preference. It never boots or formats the phone.";
+  Template.Rows = Entry->Passthrough ? OtherRows : ManagedRows;
+  Template.RowCount = Entry->Passthrough ? ARRAY_SIZE (OtherRows) : ARRAY_SIZE (ManagedRows);
+  Template.Cursor = Template.RowCount - 1;
+  Template.Navigate = TRUE;
+  Template.Context = &State;
+  Template.Handler = SfbHandleSaveConfirmation;
+  (VOID)SfbRunMenu (&Template);
+}
+
+typedef struct {
+  CONST SFB_MENU_STATE *Menu;
+  UINTN Map[SFB_MAX_ENTRIES];
+  UINTN Count;
+} SFB_SAVE_MENU_CONTEXT;
+
+STATIC SFB_MENU_ACTION
+SfbHandleSaveChoice (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  SFB_SAVE_MENU_CONTEXT *State = (SFB_SAVE_MENU_CONTEXT *)Context;
+  (VOID)Key;
+  if (Row < State->Count) {
+    SfbConfirmSaveDefault (&State->Menu->Entry[State->Map[Row]], State->Menu->Mode);
+  }
+  return SfbMenuActionExit;
+}
+
+STATIC VOID
+SfbRunSaveDefaultMenu (IN CONST SFB_MENU_STATE *Menu)
+{
+  SFB_SAVE_MENU_CONTEXT State;
+  SFB_MENU_TEMPLATE Template;
+  SFB_MENU_ROW Rows[SFB_MAX_ENTRIES + 1];
+  UINTN Index;
+  ZeroMem (&State, sizeof (State));
+  ZeroMem (&Template, sizeof (Template));
+  State.Menu = Menu;
+  for (Index = 0; Index < Menu->Count; Index++) {
+    CONST SFB_BOOT_ENTRY *Entry = &Menu->Entry[Index];
+    if (Entry->DefaultTarget[0] == '\0' || Entry->IsUsb ||
+        !SfbIsContainerVolume (Entry->Volume)) { continue; }
+    State.Map[State.Count] = Index;
+    Rows[State.Count].Text = Entry->Desc;
+    Rows[State.Count++].Marker = L" ";
+  }
+  Rows[State.Count].Text = L"Back";
+  Rows[State.Count].Marker = L" ";
+  Template.Title = L"Save as default";
+  Template.Subtitle = L"Choose an entry stored on this phone.";
+  Template.Footer = L"Vol Up/Down: move   Power: select";
+  Template.Rows = Rows;
+  Template.RowCount = State.Count + 1;
+  Template.Cursor = State.Count;
+  Template.Navigate = TRUE;
+  Template.Context = &State;
+  Template.Handler = SfbHandleSaveChoice;
+  (VOID)SfbRunMenu (&Template);
+}
+
 STATIC
 SFB_MENU_ACTION
 SfbHandleMainMenuRow (IN VOID *Context,
@@ -602,6 +723,9 @@ SfbHandleMainMenuRow (IN VOID *Context,
   case SfbEntryFastboot:
     State->EnterFastboot = TRUE;
     return SfbMenuActionExit;
+  case SfbEntrySaveDefault:
+    SfbRunSaveDefaultMenu (&State->Menu);
+    return SfbMenuActionRebuild;
   case SfbEntryMode:
     SfbRunModeMenu (&State->CurrentMode);
     return SfbMenuActionRebuild;
