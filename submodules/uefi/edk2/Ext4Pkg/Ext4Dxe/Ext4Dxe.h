@@ -934,7 +934,7 @@ Ext4HasGdtCsum (
   IN CONST EXT4_PARTITION *Partition
   )
 {
-  return Ext4HasRoCompat (Partition, EXT4_FEATURE_RO_COMPAT_METADATA_CSUM);
+  return Ext4HasRoCompat (Partition, EXT4_FEATURE_RO_COMPAT_GDT_CSUM);
 }
 
 /* Header bounds must be validated before the checksum locates its tail. */

@@ -56,6 +56,7 @@ static void rejected(void) {
 }
 int main(void) {
  EXT4_IMAGE_MAP *m;
+ reset();assert(!Ext4HasGdtCsum(&P));P.FeaturesRoCompat=EXT4_FEATURE_RO_COMPAT_GDT_CSUM;assert(Ext4HasGdtCsum(&P));
  reset();assert(Ext4MapImage(&F.Protocol,&m)==EFI_SUCCESS);assert(m->Count==1);assert(m->Ranges[0].Physical==512*4096);assert(m->Ranges[0].Bytes==EXT4_IMAGE_BYTES);FreePool(m);
  reset();P.SuperBlock.s_state=0;rejected();
  reset();extent()->ee_len=0x8001;rejected();
