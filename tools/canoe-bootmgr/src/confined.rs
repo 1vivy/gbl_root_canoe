@@ -100,6 +100,7 @@ impl Root {
     /// Stage bytes, flush, then publish through the retained destination
     /// directory. No readback workflow or automatic operation rollback lives here.
     pub fn write(&self, path: &str, bytes: &[u8], replace: bool) -> io::Result<()> {
+        self.check_write(path, replace)?;
         let (directory, name) = self.parent(path, true)?;
         match directory.symlink_metadata(&name) {
             Ok(meta) if !meta.is_file() => {
@@ -144,6 +145,35 @@ impl Root {
             let _ = directory.remove_file(&temporary);
         }
         result
+    }
+    /// Read-only destination validation. The write repeats checks after
+    /// staging; this does not promise exclusion of external filesystem writers.
+    pub fn check_write(&self, path: &str, replace: bool) -> io::Result<()> {
+        let (directory, name) = match self.parent(path, false) {
+            Ok(value) => value,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        match directory.symlink_metadata(name) {
+            Ok(meta) if !meta.is_file() => Err(invalid("destination is not a regular file")),
+            Ok(_) if !replace => Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "destination already exists",
+            )),
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+    /// Remove only the named regular file. Never follow a link or recursively
+    /// remove a directory supplied by a caller.
+    pub fn remove(&self, path: &str) -> io::Result<()> {
+        let (directory, name) = self.parent(path, false)?;
+        if !directory.symlink_metadata(&name)?.is_file() {
+            return Err(invalid("removal target is not a regular file"));
+        }
+        directory.remove_file(name)?;
+        sync_directory(&directory)
     }
 }
 fn invalid(message: &str) -> io::Error {

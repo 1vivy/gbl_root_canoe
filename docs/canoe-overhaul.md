@@ -145,3 +145,11 @@ not push. Physical-phone writes/reboots/slot changes/format need separate consen
   actual Linux mounted worker fixtures, Windows native USB CLI and worker
   lock/eject fixtures, and Android KSU SELinux-enforcing loop fixtures pass.
   Prepared loader/BLS publication and application orchestration remain pending.
+
+- The standalone mounted CLI now installs prepared ARM64 loader triplets and
+  complete BLS image sets. Publication uses the confined directory layer, shared
+  PE/GM2P/TZ-map parsers, explicit replacement and entry-last BLS ordering.
+  No signing-policy gate, snapshot, mode change or automatic backup rotation is
+  part of these commands. The manager BLS adapter shares prepared bytes and
+  retains its application rollback policy, including reporting rollback errors.
+  Core, worker, sidecar-parser suites and Windows cross-check pass.

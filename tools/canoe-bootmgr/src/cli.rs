@@ -37,6 +37,10 @@ pub enum Command {
         #[command(subcommand)]
         command: BlsCommand,
     },
+    Loader {
+        #[command(subcommand)]
+        command: LoaderCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -104,6 +108,50 @@ pub enum BlsCommand {
         #[arg(long)]
         name: String,
     },
+    /// Copy all referenced images, then publish the BLS entry.
+    Install {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        entry: PathBuf,
+        /// Repeat for each image as BOOT_ROOT_PATH=SOURCE_FILE.
+        #[arg(long, value_parser = artifact_pair)]
+        artifact: Vec<(String, PathBuf)>,
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Remove the entry only; its image files remain available.
+    Remove {
+        #[arg(long)]
+        name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LoaderCommand {
+    /// Validate and publish a prepared boot.efi, .gm2p and .tzmap triplet.
+    Install {
+        #[arg(long, value_parser = crate::loaders::Slot::parse)]
+        slot: crate::loaders::Slot,
+        #[arg(long)]
+        from: PathBuf,
+        #[arg(long)]
+        replace: bool,
+    },
+    /// Validate the installed triplet and show its signing identity.
+    Show {
+        #[arg(long, value_parser = crate::loaders::Slot::parse)]
+        slot: crate::loaders::Slot,
+    },
+}
+fn artifact_pair(value: &str) -> Result<(String, PathBuf), String> {
+    let (destination, source) = value
+        .split_once('=')
+        .ok_or("expected BOOT_ROOT_PATH=SOURCE_FILE")?;
+    if source.is_empty() || crate::boot_path::relative(destination).is_none() {
+        return Err("expected a valid boot-root destination and source file".into());
+    }
+    Ok((destination.into(), source.into()))
 }
 
 pub struct Output {
@@ -122,8 +170,38 @@ pub fn execute(cli: &Cli) -> Result<Output, Box<dyn std::error::Error>> {
         return Ok(match command {
             BlsCommand::List => json!({"ok": true, "entries": root.list_bls()?}),
             BlsCommand::Show { name } => json!({"ok": true, "entry": root.read_bls(name)?}),
+            BlsCommand::Install { name, entry, artifact, replace } => {
+                use crate::artifacts::{PreparedBls, read_input, MAX_IMAGE_BYTES};
+                let entry = read_input(entry, crate::bls::MAX_BYTES)?;
+                let artifacts = artifact.iter().map(|(destination, source)|
+                    Ok((destination.clone(), read_input(source, MAX_IMAGE_BYTES)?)))
+                    .collect::<Result<Vec<_>, crate::artifacts::Error>>()?;
+                let prepared = PreparedBls::new(name, &entry, artifacts)?;
+                prepared.publish(root.files()?, *replace)?;
+                json!({"ok": true, "name": name, "files": prepared.files().iter().map(|(path,_)| path).collect::<Vec<_>>()})
+            }
+            BlsCommand::Remove { name } => {
+                root.files()?.remove(&crate::artifacts::bls_path(name)?)?;
+                json!({"ok": true, "removed": name})
+            }
         }
         .into());
+    }
+    if let Command::Loader { command } = &cli.command {
+        use crate::loaders::PreparedLoader;
+        return Ok(match command {
+            LoaderCommand::Install { slot, from, replace } => {
+                PreparedLoader::read(from)?.publish(root.files()?, *slot, *replace)?;
+                json!({"ok": true, "slot": slot, "loader": slot.filename()})
+            }
+            LoaderCommand::Show { slot } => {
+                let loader = PreparedLoader::installed(root.files()?, *slot)?;
+                let profile = loader.profile();
+                let signer: String = profile.pubkey_digest.iter().map(|b| format!("{b:02x}")).collect();
+                json!({"ok": true, "slot": slot, "loader": slot.filename(), "signer_sha256": signer,
+                    "system_version": profile.system_version, "system_patch_level": profile.system_spl})
+            }
+        }.into());
     }
     let mut config = root.read_config()?.unwrap_or_else(ConfigDocument::empty);
     let result = match &cli.command {
@@ -197,7 +275,7 @@ pub fn execute(cli: &Cli) -> Result<Output, Box<dyn std::error::Error>> {
             config.set_default(target)?;
             json!({"ok": true, "generation": config.generation, "default": config.default})
         }
-        Command::Bls { .. } => unreachable!("BLS reads handled above"),
+        Command::Bls { .. } | Command::Loader { .. } => unreachable!("file commands handled above"),
     };
     root.write_config(&config)?;
     Ok(result.into())

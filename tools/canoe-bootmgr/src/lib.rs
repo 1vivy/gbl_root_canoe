@@ -1,5 +1,6 @@
 //! Mounted boot-root primitives. Device transport, provisioning and guided
 //! deployment belong to their callers; these operations only work on files.
+pub mod artifacts;
 pub mod backend;
 pub mod bls;
 mod bls_parse;
@@ -13,4 +14,5 @@ mod config_parse;
 mod config_render;
 pub mod confined;
 pub mod fs_commit;
+pub mod loaders;
 pub mod version;

@@ -13,9 +13,14 @@ path = "src/lib.rs"
 [[bin]]
 name = "mode2_profile"
 path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap"]
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"], optional = true }
 sha2 = "0.10"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }

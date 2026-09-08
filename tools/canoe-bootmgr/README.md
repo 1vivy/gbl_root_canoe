@@ -18,6 +18,24 @@ run a recovery workflow, or discover dependencies. The application's separate
 `canoe-manager` worker owns those workflows and uses this same configuration
 library.
 
-This is the first extraction checkpoint. Prepared-loader and BLS artifact
-installation are being moved to this interface; do not use the old all-in-one
-backend command reference for the new CLI.
+Prepared image operations use explicit sources and never discover devices:
+
+```sh
+canoe-bootmgr --boot-root /mnt/canoe loader install --slot a --from ./prepared
+canoe-bootmgr --boot-root /mnt/canoe loader show --slot a
+canoe-bootmgr --boot-root /mnt/canoe bls install --name linux.conf --entry linux.conf \
+  --artifact linux/Image=./Image --artifact linux/initrd=./initrd
+canoe-bootmgr --boot-root /mnt/canoe bls remove --name linux.conf
+```
+
+Use `--replace` explicitly to replace existing loader/BLS files. Loader commands
+validate ARM64 PE, GM2P and TZ-map formats with the shared image parsers. They do
+not create entries, change modes, infer a signing-key waiver or rotate backups.
+BLS removal removes only its entry. Installation requires all referenced images,
+rejects case collisions and reserved Canoe paths, and publishes the entry last.
+
+Each file is staged and flushed before publication. Several files are not one
+atomic filesystem operation: errors stop the command and earlier publications
+remain. The manager owns review, snapshots, readback and operation recovery.
+File operations retain a confined directory handle; do not keep a library root
+alive while attempting to unmount or eject its filesystem.
