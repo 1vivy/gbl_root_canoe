@@ -30,6 +30,7 @@ mod fastboot_control;
 
 #[path = "fastboot_export.rs"]
 mod fastboot_export;
+pub(crate) use fastboot_export::flush_retained;
 #[path = "fastboot_fetch.rs"]
 mod fastboot_fetch;
 #[path = "fastboot_flash.rs"]

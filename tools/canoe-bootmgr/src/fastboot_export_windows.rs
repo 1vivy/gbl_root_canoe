@@ -15,7 +15,6 @@ use windows_sys::Win32::System::IO::DeviceIoControl;
 
 use crate::fastboot::FastbootError;
 
-const CDB_LENGTH: u8 = 6;
 const SENSE_LENGTH: usize = 32;
 const TIMEOUT_SECONDS: u32 = 3;
 // CTL_CODE(FILE_DEVICE_CONTROLLER, 0x405, METHOD_BUFFERED, FILE_READ_ACCESS | FILE_WRITE_ACCESS).
@@ -129,13 +128,19 @@ where
 }
 
 fn eject_request() -> Result<ScsiRequest, FastbootError> {
+    command_request(&crate::fastboot::start_stop_unit_cdb(true, false))
+}
+
+fn command_request(cdb: &[u8]) -> Result<ScsiRequest, FastbootError> {
+    if cdb.is_empty() || cdb.len() > 16 {
+        return Err(command_error("invalid SCSI command length"));
+    }
     let pass_length = u16::try_from(size_of::<ScsiPassThroughDirect>())
         .map_err(|_| command_error("SCSI pass-through header is too large"))?;
     let sense_offset = u32::try_from(size_of::<ScsiPassThroughDirect>())
         .map_err(|_| command_error("SCSI sense offset does not fit Windows ABI"))?;
-    let cdb = crate::fastboot::start_stop_unit_cdb(true, false);
     let mut padded_cdb = [0_u8; 16];
-    padded_cdb[..cdb.len()].copy_from_slice(&cdb);
+    padded_cdb[..cdb.len()].copy_from_slice(cdb);
     Ok(ScsiRequest {
         pass: ScsiPassThroughDirect {
             length: pass_length,
@@ -143,7 +148,7 @@ fn eject_request() -> Result<ScsiRequest, FastbootError> {
             path_id: 0,
             target_id: 0,
             lun: 0,
-            cdb_length: CDB_LENGTH,
+            cdb_length: cdb.len() as u8,
             sense_info_length: u8::try_from(SENSE_LENGTH)
                 .map_err(|_| command_error("SCSI sense buffer is too large"))?,
             data_in: SCSI_IOCTL_DATA_UNSPECIFIED,
@@ -155,6 +160,21 @@ fn eject_request() -> Result<ScsiRequest, FastbootError> {
         },
         sense: [0_u8; SENSE_LENGTH],
     })
+}
+
+fn flush_with_issue(mut issue: impl FnMut(&mut ScsiRequest) -> io::Result<()>) -> io::Result<()> {
+    let mut request =
+        command_request(&[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0]).map_err(io::Error::other)?;
+    issue(&mut request)?;
+    if request.pass.scsi_status != 0 {
+        return Err(io::Error::other(scsi_failure_detail(&request)));
+    }
+    Ok(())
+}
+
+pub(super) fn flush_retained(file: &std::fs::File) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    flush_with_issue(|request| issue_device_io(file.as_raw_handle(), request))
 }
 
 fn issue_device_io(handle: HANDLE, request: &mut ScsiRequest) -> io::Result<()> {
@@ -191,12 +211,12 @@ fn scsi_failure_detail(request: &ScsiRequest) -> String {
     }
     if sense.is_empty() {
         format!(
-            "SCSI eject returned status=0x{:02x}",
+            "SCSI command returned status=0x{:02x}",
             request.pass.scsi_status
         )
     } else {
         format!(
-            "SCSI eject returned status=0x{:02x}, sense={sense}",
+            "SCSI command returned status=0x{:02x}, sense={sense}",
             request.pass.scsi_status
         )
     }
@@ -274,5 +294,36 @@ mod tests {
         let error = physical_drive_path(Path::new(r"\\?\Device\HarddiskVolume1"))
             .expect_err("unsupported namespace");
         assert!(matches!(error, FastbootError::Command { .. }));
+    }
+}
+
+#[cfg(test)]
+mod flush_tests {
+    use super::*;
+    #[test]
+    fn explicit_flush_propagates_transport_and_scsi_failures() {
+        flush_with_issue(|request| {
+            assert_eq!(request.pass.cdb_length, 10);
+            assert_eq!(request.pass.cdb[..10], [0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(request.pass.data_transfer_length, 0);
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            flush_with_issue(|_| Err(io::Error::other("USB disconnected")))
+                .unwrap_err()
+                .to_string()
+                .contains("USB disconnected")
+        );
+        assert!(
+            flush_with_issue(|request| {
+                request.pass.scsi_status = 2;
+                request.sense[0] = 0x70;
+                Ok(())
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("status=0x02")
+        );
     }
 }

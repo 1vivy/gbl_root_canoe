@@ -19,11 +19,11 @@ id = "msd-variant"
 kind = "artifact"
 why = "Calibrated canoe USB mass-storage DXE compiled by the canoe-msd repository."
 path = "submodules/uefi/blobs/canoe-usbmsd.efi"
-sha256 = "7ffbee7c7677fb28905ffd5fd468852c80bb182fac0e67f3479a1fa82b921514"
+sha256 = "528d393ff505c5dc66e9bfbdaa31fdd5206ee40d8df8c24d512e98cb027095c9"
 bytes = 57344
 [import.producer]
 repo = "https://github.com/1vivy/canoe-msd.git"
-command = "make patch BLOB=... OUT=... CALIBRATION=...; imported from HEAD 96581e6 with a dirty tree and no tags"
+command = "BOOT_MXF=/path/to/vendor EDK2=/path/to/edk2 pkg/scripts/build.sh; backing-flush source build; verified identity and 142 relocated data pointers"
 
 [[import]]
 id = "gpt-slot-reset-fixture"

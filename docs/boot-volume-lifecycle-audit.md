@@ -209,3 +209,43 @@ publishes a newly created empty VHDX, never modifies an existing disk image.
 CLI/JSON source selection, capability negotiation and deployment orchestration
 still need to select this backend explicitly. None of these checks establish
 that the current packaged app has switched away from the legacy persist path.
+
+## Windows automount finding
+
+The user confirmed that the normal FAT USB export must remain mountable for
+use outside the GUI. Windows cannot mount a FAT image merely stored inside
+ext4 persist; the concern is the explicitly exported FAT LUN. A proposed host
+extent-mapping route through persist was rejected as unnecessary complexity;
+no such mapped host writer has been implemented.
+
+For managed GUI operations, acquire the specific export's Windows volume,
+exclude open filesystem users, flush/dismount it, and retain offline disk
+ownership through writes and retry/recovery. A direct FAT LUN can be mounted
+before the privileged helper acquires it. Existing files or OS metadata created
+before preflight must be preserved, and reconnect/source drift must trigger
+fresh validation instead of assuming the original bytes survived. An owned,
+mountable 512-sector FAT fixture is still needed: the existing 4K raw fixtures
+prove block operations, not Windows automount behavior or busy-volume handling.
+Keep normal mounting available outside this managed operation lifecycle.
+
+The same audit found the vendor USB driver acknowledged SCSI SYNCHRONIZE CACHE
+without calling backing Block I/O. Producer commit `82b1a78` fixes that dispatch
+with checked source staging and a shared `CanoeMsdFlushLun`. Host tests cover
+missing/disabled media, absent flush support, failed flush and successful retry
+while retaining the LUN association. The rebuilt AArch64 PE passed its identity
+check and 142 relocated data slots (84 distinct targets) were verified against
+the ELF relocation addends. All three integrated blob copies match SHA-256
+`528d393ff505c5dc66e9bfbdaa31fdd5206ee40d8df8c24d512e98cb027095c9`.
+UEFI host tests and a fresh canonical BDS build pass.
+
+The native raw transport also explicitly sends SYNCHRONIZE CACHE(10) on the
+retained USB handle after the OS flush; it does not rely on host caching policy
+to generate that command. Virtual-disk test seams use their native disk flush,
+so they do not prove this USB command traverses the physical gadget. The
+packaged USB/UAC harness must still exercise that boundary and flush failures.
+
+`make version-check` currently rejects old generated package archives carrying
+an earlier BDS, while import digests pass. Rebuild packages after Windows volume ownership
+and Android integration are complete; do not label the mixed output
+release-ready. The open Windows toolkit at `manual-aa54464` reports 7.0.0-b3;
+it has not yet been replaced by a completed b4 package.

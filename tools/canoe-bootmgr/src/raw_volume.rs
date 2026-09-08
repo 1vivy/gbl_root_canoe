@@ -51,7 +51,7 @@ fn verify_expected(identity: &RawIdentity, expected: Option<&RawIdentity>) -> io
 }
 
 pub struct RawVolume {
-    io: SectorIo<File>,
+    io: SectorIo<RawFile>,
     identity: RawIdentity,
     _guard: DeviceGuard,
 }
@@ -72,6 +72,11 @@ impl RawVolume {
         #[cfg(any(target_os = "linux", windows))]
         {
             let (file, identity) = platform::open(node, connection, expected, fixture)?;
+            let file = RawFile {
+                file,
+                node: node.to_owned(),
+                fixture,
+            };
             let io = SectorIo::new(file, identity.bytes, identity.sector_bytes)?;
             Ok(Self {
                 io,
@@ -128,5 +133,40 @@ impl Seek for RawVolume {
 impl VolumeIo for RawVolume {
     fn sync(&mut self) -> io::Result<()> {
         self.io.sync()
+    }
+}
+
+// The fixture uses the virtual disk driver's native flush. A production USB
+// export additionally sends an explicit SCSI flush on the same retained handle.
+struct RawFile {
+    file: File,
+    node: std::path::PathBuf,
+    fixture: bool,
+}
+impl Read for RawFile {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        self.file.read(out)
+    }
+}
+impl Write for RawFile {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.file.write(bytes)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.sync()
+    }
+}
+impl Seek for RawFile {
+    fn seek(&mut self, at: SeekFrom) -> io::Result<u64> {
+        self.file.seek(at)
+    }
+}
+impl VolumeIo for RawFile {
+    fn sync(&mut self) -> io::Result<()> {
+        self.file.sync_all()?;
+        if !self.fixture {
+            crate::fastboot::flush_retained(&self.file, &self.node)?;
+        }
+        Ok(())
     }
 }

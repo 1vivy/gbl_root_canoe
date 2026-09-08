@@ -131,6 +131,26 @@ pub(crate) fn end_export(_guard: &DeviceGuard, node: &Path) -> Result<(), Fastbo
     }
 }
 
+/// Flush through the already retained USB handle. An OS file flush alone can
+/// omit SYNCHRONIZE CACHE when the device's mode pages claim no write cache.
+pub(crate) fn flush_retained(file: &std::fs::File, node: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        issue_scsi_linux(file, node, [0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+            .map_err(std::io::Error::other)
+    }
+    #[cfg(windows)]
+    {
+        let _ = node;
+        windows::flush_retained(file)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    {
+        let _ = (file, node);
+        Err(std::io::Error::other("raw USB flush is unsupported"))
+    }
+}
+
 // Opening a removable disk can make the OS issue PREVENT MEDIUM REMOVAL.
 // Release that lock on the same handle before asking the device to eject.
 #[cfg(any(target_os = "linux", windows))]
@@ -162,10 +182,10 @@ fn end_export_linux(node: &Path) -> Result<(), FastbootError> {
 }
 
 #[cfg(target_os = "linux")]
-fn issue_scsi_linux(
+fn issue_scsi_linux<const N: usize>(
     file: &std::fs::File,
     node: &Path,
-    mut cdb: [u8; 6],
+    mut cdb: [u8; N],
 ) -> Result<(), FastbootError> {
     use std::os::fd::AsRawFd;
     const SG_IO: libc::c_ulong = 0x2285;
