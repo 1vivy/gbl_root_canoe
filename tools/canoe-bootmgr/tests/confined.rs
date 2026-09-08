@@ -49,6 +49,7 @@ fn refuses_symlinks_and_keeps_writes_bound_to_the_opened_root() {
             .is_err()
     );
     assert!(backend.list_bls().is_err());
+    assert!(backend.files().unwrap().child("loader").is_err());
     assert!(
         backend
             .files()
@@ -80,4 +81,9 @@ fn refuses_traversal_nonreplacement_and_oversized_files() {
     assert!(root.write("../outside", b"no", true).is_err());
     assert!(root.read("folder/keep", 2).is_err());
     assert_eq!(root.read("folder/keep", 8).unwrap(), b"original");
+    assert_eq!(
+        root.child("folder").unwrap().read("keep", 8).unwrap(),
+        b"original"
+    );
+    assert!(root.child("../outside").is_err());
 }

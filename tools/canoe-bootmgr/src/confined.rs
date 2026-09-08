@@ -38,6 +38,14 @@ impl Root {
         }
         Ok(dir)
     }
+    /// Retain an existing child directory without following any component link.
+    pub fn child(&self, path: &str) -> io::Result<Self> {
+        let path =
+            crate::boot_path::relative(path).ok_or_else(|| invalid("invalid child directory"))?;
+        Ok(Self {
+            directory: self.directory(&path.split('/').collect::<Vec<_>>(), false)?,
+        })
+    }
     fn parent(&self, path: &str, create: bool) -> io::Result<(Dir, String)> {
         let path =
             crate::boot_path::relative(path).ok_or_else(|| invalid("invalid boot-root path"))?;
