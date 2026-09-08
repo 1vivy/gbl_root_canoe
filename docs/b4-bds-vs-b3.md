@@ -78,6 +78,11 @@ firmware restore images remain relevant until the new path is confirmed.
 5. Populate a reviewed loader triplet and entry, validate explicit default saving,
    then test managed boot and actual data access under the intended mode.
 
-No step above has been performed on the physical phone as part of this handoff.
-Current compile/contract/guest proof is recorded in `docs/canoe-overhaul.md` and
-the sibling app's `e2e/OVERHAUL-ACCEPTANCE.md`.
+On 2026-09-08, the user supplied the phone running b4 for Linux read-only checks.
+Version/slot/identity probes and three full raw persist export/read/eject cycles
+passed; the final persist hash matched the initial fastboot capture. Missing
+`efisp.fat` was confirmed and boot-root export refused without losing Fastboot.
+No agent boot, flash, provisioning or format command was issued. Detailed results
+and remaining observations are in the sibling app's
+`docs/b4-physical-readonly-2026-09-08.md`. Compile/contract/guest proof is recorded
+in `docs/canoe-overhaul.md` and the app's `e2e/OVERHAUL-ACCEPTANCE.md`.
