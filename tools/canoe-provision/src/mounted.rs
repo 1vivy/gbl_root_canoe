@@ -80,10 +80,17 @@ pub fn require_unattached_file(file: &File) -> io::Result<()> {
         let node = format!("/dev/block/loop{number}");
         #[cfg(not(target_os = "android"))]
         let node = format!("/dev/loop{number}");
-        let device = OpenOptions::new()
+        let device = match OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(node)?;
+            .open(node)
+        {
+            Ok(device) => device,
+            // A different mount owner can detach between the sysfs walk
+            // and open. ENXIO means that loop device no longer exists.
+            Err(e) if e.raw_os_error() == Some(libc::ENXIO) => continue,
+            Err(e) => return Err(e),
+        };
         // loop_info64 is 232 bytes with five u64 fields first. The kernel writes
         // the remaining fixed-size ABI fields into the initialized tail.
         let mut status = [0u64; 29];
