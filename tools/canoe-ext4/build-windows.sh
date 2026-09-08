@@ -68,6 +68,6 @@ LIB_FLAGS="$BUILD/lib/ext2fs/journal.o $BUILD/lib/ext2fs/revoke.o $BUILD/lib/ext
 # the linked journal replay path.  windows_io_manager implements the callbacks
 # replay requires: read, write, set block size, and flush.
 "$CC" -static -static-libgcc -std=c11 -O2 -Wall -Wextra -Werror -D_FILE_OFFSET_BITS=64 \
-    $INCLUDE_FLAGS -o "$OUT" "$ROOT/canoe-ext4.c" $LIB_FLAGS \
+    $INCLUDE_FLAGS -o "$OUT" "$ROOT/canoe-ext4.c" "$ROOT/windows-io.c" $LIB_FLAGS \
     $ZLIB_FLAGS -lz -lws2_32
 printf 'Built %s\n' "$OUT"

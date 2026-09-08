@@ -38,6 +38,12 @@
 #include <ext2fs/ext2fs.h>
 #include <ext2fs/ext3_extents.h>
 
+#ifdef _WIN32
+#include "windows-io.h"
+#undef default_io_manager
+#define default_io_manager canoe_windows_io_manager
+#endif
+
 #define EXIT_OK 0
 #define EXIT_USAGE 2
 #define EXIT_UNSUPPORTED 3
@@ -119,14 +125,7 @@ static void fail_rc(int code, const char *operation, errcode_t rc) {
 
 static int host_pread(int fd, void *buf, size_t count, off_t offset) {
 #ifdef _WIN32
-    __int64 old = _lseeki64(fd, 0, SEEK_CUR);
-    if (old < 0 || _lseeki64(fd, offset, SEEK_SET) < 0)
-        return -1;
-    int got = _read(fd, buf, (unsigned int)count);
-    int saved = errno;
-    (void)_lseeki64(fd, old, SEEK_SET);
-    errno = saved;
-    return got;
+    return canoe_windows_pread((HANDLE)_get_osfhandle(fd), buf, count, (unsigned long long)offset);
 #else
     ssize_t got = pread(fd, buf, count, offset);
     if (got > INT_MAX)
