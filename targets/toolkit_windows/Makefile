@@ -1,10 +1,11 @@
+CANOE_MANAGER_SRC ?= $(abspath ../../../canoe-boot-manager/native/canoe-manager)
 include ../../version.mk
 include ../../imports.mk
 
-.PHONY: clean copy_resources submodule_uefi submodule_patcher \
+.PHONY: canoe_manager clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_ablfvextractor submodule_vbmetafixer \
-	canoe canoe_app platform_tools ext4_tools build
+	canoe_manager canoe_app platform_tools ext4_tools build
 
 ROOT_DIR := $(abspath ../..)
 
@@ -63,6 +64,10 @@ submodule_canoe_bootmgr: copy_resources
 	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
 	test -f ../../tools/canoe-bootmgr/target/x86_64-pc-windows-gnu/release/canoe-bootmgr.exe
 	cp ../../tools/canoe-bootmgr/target/x86_64-pc-windows-gnu/release/canoe-bootmgr.exe ./build/toolkit/bin/canoe-bootmgr.exe
+canoe_manager: copy_resources
+	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path "$(CANOE_MANAGER_SRC)/Cargo.toml"
+	test -f "$(CANOE_MANAGER_SRC)/target/x86_64-pc-windows-gnu/release/canoe-manager.exe"
+	cp "$(CANOE_MANAGER_SRC)/target/x86_64-pc-windows-gnu/release/canoe-manager.exe" ./build/toolkit/bin/canoe-manager.exe
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_windows
 	cp ../../submodules/ablfvextractor/build/extractfv.exe ./build/toolkit/bin/extractfv.exe
@@ -76,11 +81,6 @@ submodule_vbmetafixer: copy_resources
 		   [ ! -f build/toolkit_win/bin/vbmetabackup.exe ]; then $(MAKE) build_windows; fi
 	cp ../../tools/vbmetafixer/build/toolkit_win/bin/vbmetaport.exe ./build/toolkit/bin/vbmetaport.exe
 	cp ../../tools/vbmetafixer/build/toolkit_win/bin/vbmetabackup.exe ./build/toolkit/bin/vbmetabackup.exe
-canoe: copy_resources
-	CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path ../../tools/canoe/Cargo.toml
-	test -f ../../tools/canoe/target/x86_64-pc-windows-gnu/release/canoe.exe
-	cp ../../tools/canoe/target/x86_64-pc-windows-gnu/release/canoe.exe ./build/toolkit/canoe.exe
-	chmod +x ./build/toolkit/canoe.exe
 platform_tools: copy_resources
 	$(MAKE) -C "$(ROOT_DIR)" fetch-verified \
 		FETCH_URL="$(PLATFORM_TOOLS_URL)" \
@@ -122,5 +122,5 @@ canoe_app: copy_resources
 	mkdir -p build/toolkit/bin
 	cp "$(CANOE_APP_WINDOWS_BIN)" ./build/toolkit/bin/canoe-boot-manager.exe
 	cp "$(CANOE_WEBVIEW2_LOADER_WINDOWS)" ./build/toolkit/bin/WebView2Loader.dll
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor submodule_vbmetafixer canoe platform_tools ext4_tools canoe_app
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr canoe_manager submodule_ablfvextractor submodule_vbmetafixer platform_tools ext4_tools canoe_app
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./

@@ -3,7 +3,7 @@
 use std::io;
 use std::path::Path;
 
-pub(crate) fn publish_file(source: &Path, destination: &Path, replace: bool) -> io::Result<()> {
+pub fn publish_file(source: &Path, destination: &Path, replace: bool) -> io::Result<()> {
     if source.parent() != destination.parent() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -15,8 +15,7 @@ pub(crate) fn publish_file(source: &Path, destination: &Path, replace: bool) -> 
         if replace {
             std::fs::rename(source, destination)?;
         } else {
-            std::fs::hard_link(source, destination)?;
-            std::fs::remove_file(source)?;
+            rename_without_replacement(source, destination)?;
         }
         std::fs::File::open(
             destination
@@ -53,6 +52,40 @@ pub(crate) fn publish_file(source: &Path, destination: &Path, replace: bool) -> 
             "durable file publication unsupported on this platform",
         ))
     }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn rename_without_replacement(source: &Path, destination: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let source = CString::new(source.as_os_str().as_bytes())?;
+    let destination = CString::new(destination.as_os_str().as_bytes())?;
+    // FAT cannot create hard links. This is one namespace operation and does
+    // not turn an existence check followed by rename into an overwrite race.
+    // SAFETY: both path buffers remain NUL-terminated and alive for the syscall.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn rename_without_replacement(_source: &Path, _destination: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "no-replace publication unsupported on this OS",
+    ))
 }
 
 #[cfg(windows)]

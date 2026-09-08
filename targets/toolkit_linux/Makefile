@@ -1,9 +1,10 @@
+CANOE_MANAGER_SRC ?= $(abspath ../../../canoe-boot-manager/native/canoe-manager)
 include ../../version.mk
 
-.PHONY: clean copy_resources submodule_uefi submodule_patcher \
+.PHONY: canoe_manager clean copy_resources submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_canoe_ext4 submodule_ablfvextractor \
-	submodule_vbmetafixer canoe canoe_app build
+	submodule_vbmetafixer canoe_manager canoe_app build
 
 ROOT_DIR := $(abspath ../..)
 CANOE_APP_LINUX_BIN ?= $(ROOT_DIR)/../canoe-boot-manager/src-tauri/target/release/canoe-boot-manager
@@ -59,6 +60,10 @@ submodule_canoe_bootmgr: copy_resources
 	cargo build --locked --release --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
 	test -x ../../tools/canoe-bootmgr/target/release/canoe-bootmgr
 	cp ../../tools/canoe-bootmgr/target/release/canoe-bootmgr ./build/toolkit/bin/canoe-bootmgr
+canoe_manager: copy_resources
+	cargo build --locked --release --manifest-path "$(CANOE_MANAGER_SRC)/Cargo.toml"
+	test -x "$(CANOE_MANAGER_SRC)/target/release/canoe-manager"
+	cp "$(CANOE_MANAGER_SRC)/target/release/canoe-manager" ./build/toolkit/bin/canoe-manager
 submodule_canoe_ext4: copy_resources
 	$(MAKE) -C ../../tools/canoe-ext4 static
 	test -x ../../tools/canoe-ext4/canoe-ext4-static
@@ -77,11 +82,6 @@ submodule_vbmetafixer: copy_resources
 		   [ ! -f build/toolkit/bin/vbmetabackup ]; then $(MAKE) clean build; fi
 	cp ../../tools/vbmetafixer/build/toolkit/bin/vbmetaport ./build/toolkit/bin/vbmetaport
 	cp ../../tools/vbmetafixer/build/toolkit/bin/vbmetabackup ./build/toolkit/bin/vbmetabackup
-canoe: copy_resources
-	cargo build --locked --release --manifest-path ../../tools/canoe/Cargo.toml
-	test -x ../../tools/canoe/target/release/canoe
-	cp ../../tools/canoe/target/release/canoe ./build/toolkit/canoe
-	chmod +x ./build/toolkit/canoe
 canoe_app: copy_resources
 	@test -x "$(CANOE_APP_LINUX_BIN)" || { \
 		echo "canoe-boot-manager Linux binary is required; run 'cd ../canoe-boot-manager && bunx tauri build --no-bundle --ci' or set CANOE_APP_LINUX_BIN=/absolute/path/to/canoe-boot-manager (required from a git worktree)" >&2; \
@@ -89,6 +89,6 @@ canoe_app: copy_resources
 	}
 	cp "$(CANOE_APP_LINUX_BIN)" ./build/toolkit/bin/canoe-boot-manager
 	chmod +x ./build/toolkit/bin/canoe-boot-manager
-build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor submodule_vbmetafixer canoe canoe_app
+build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor submodule_vbmetafixer canoe_manager canoe_app
 	# zip
 	cd build/toolkit && zip -r ../toolkit_linux.zip ./

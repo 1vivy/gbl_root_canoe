@@ -1,8 +1,9 @@
+CANOE_MANAGER_SRC ?= $(abspath ../../../canoe-boot-manager/native/canoe-manager)
 CANOE_ROOT_DIR := $(abspath ../..)
 include ../../version.mk
 include ../../imports.mk
 
-.PHONY: clean copy_resources webui_dist webui-pin submodule_uefi submodule_patcher \
+.PHONY: canoe_manager clean copy_resources webui_dist webui-pin submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_ablfvextractor build
 
@@ -118,9 +119,17 @@ submodule_canoe_bootmgr: copy_resources
 	$(ANDROID_LINKER_VAR)="$(ANDROID_CLANG)" cargo build --locked --release --target $(ANDROID_TARGET) --manifest-path ../../tools/canoe-bootmgr/Cargo.toml
 	test -f ../../tools/canoe-bootmgr/target/$(ANDROID_TARGET)/release/canoe-bootmgr
 	cp ../../tools/canoe-bootmgr/target/$(ANDROID_TARGET)/release/canoe-bootmgr ./build/module/bin/canoe-bootmgr
+canoe_manager: copy_resources
+	test -n "$(NDK_PATH)" || { echo "NDK_PATH is required for canoe-manager"; exit 1; }
+	test -x "$(ANDROID_CLANG)" || { echo "Android NDK clang is unavailable"; exit 1; }
+	CC_$(ANDROID_TARGET_ENV)="$(ANDROID_CLANG)" \
+	AR_$(ANDROID_TARGET_ENV)="$(ANDROID_AR)" \
+	$(ANDROID_LINKER_VAR)="$(ANDROID_CLANG)" cargo build --locked --release --target $(ANDROID_TARGET) --manifest-path "$(CANOE_MANAGER_SRC)/Cargo.toml"
+	test -f "$(CANOE_MANAGER_SRC)/target/$(ANDROID_TARGET)/release/canoe-manager"
+	cp "$(CANOE_MANAGER_SRC)/target/$(ANDROID_TARGET)/release/canoe-manager" ./build/module/bin/canoe-manager
 submodule_ablfvextractor: copy_resources
 	cd ../../submodules/ablfvextractor && make build_android
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/module/bin/extractfv
-build: webui_dist submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor
+build: webui_dist submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr canoe_manager submodule_ablfvextractor
 	# zip
 	cd build/module && zip -r ../module_android.zip ./

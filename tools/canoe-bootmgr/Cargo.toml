@@ -4,11 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
-description = "Canoe boot-root configuration and entry manager"
-
-[lib]
-name = "canoe_bootmgr"
-path = "src/lib.rs"
+description = "Manage a mounted Canoe boot root"
 
 [[bin]]
 name = "canoe-bootmgr"
@@ -17,40 +13,20 @@ required-features = ["cli"]
 
 [features]
 default = ["cli"]
-cli = ["dep:clap"]
-# Harness-only seams: CANOE_BLOCK_BY_NAME_ROOT redirects partition nodes to a
-# directory of regular files and CANOE_BLOCK_WRITE_FAULT injects the block
-# write test faults. Never enabled in a shipped build.
-test-seams = []
+cli = ["dep:clap", "dep:serde_json"]
 
 [dependencies]
-clap = { version = "4.5", features = ["derive"], optional = true }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 thiserror = "2"
-windows-sys = { version = "0.61", features = [
-    "Win32_Foundation",
-    "Win32_Devices_DeviceAndDriverInstallation",
-    "Win32_Storage_FileSystem",
-    "Win32_System_Console",
-    "Win32_System_IO",
-    "Win32_System_Ioctl",
-    "Win32_System_JobObjects",
-    "Win32_System_SystemServices",
-    "Win32_System_Threading",
-    "Win32_Security",
-]}
-sha2 = "0.10"
-wait-timeout = "0.2"
-tempfile = "3"
-mode2_profile = { path = "../mode2-profile" }
-lz4 = "1"
-flate2 = "1"
-# Pinned upstream: 0.3.6 emits invalid LFN records for dot directory entries.
-# Keep the independent dosfstools interoperability check when changing this pin.
-fatfs = { git = "https://github.com/rafalh/rust-fatfs", rev = "2aefc2a027ce94ed0671752814dac203f0450e11", default-features = false, features = ["std", "alloc", "lfn", "unicode"] }
+clap = { version = "4.5", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-nix = { version = "0.29", features = ["signal", "fs"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"

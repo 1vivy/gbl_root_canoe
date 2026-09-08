@@ -44,7 +44,7 @@ impl Role {
         }
     }
 
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Active => "active",
             Self::Inactive => "inactive",
@@ -73,7 +73,7 @@ impl MenuMode {
         }
     }
 
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Silent => "silent",
             Self::Menu => "menu",
@@ -99,7 +99,7 @@ impl DeviceInfoRepair {
         }
     }
 
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::AsNeeded => "asneeded",
             Self::Never => "never",
@@ -235,7 +235,7 @@ pub(crate) fn validate_title(value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-pub(crate) fn validate_mode(value: u8) -> Result<(), ConfigError> {
+pub fn validate_mode(value: u8) -> Result<(), ConfigError> {
     if value > 2 {
         return Err(ConfigError::Invalid(
             "entry mode must be 0, 1 or 2".to_owned(),

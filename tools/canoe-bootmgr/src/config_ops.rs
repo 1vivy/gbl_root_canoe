@@ -153,8 +153,8 @@ impl ConfigDocument {
         self.bump_generation()
     }
 
-    /// Apply a mode after the caller has evaluated `mode.plan`.
-    pub fn set_mode_planned(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
+    /// Apply an explicit mode to an existing configuration entry.
+    pub fn set_mode(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
         validate_mode(mode)?;
         if self.generation == MAX_GENERATION {
             return Err(ConfigError::Invalid(

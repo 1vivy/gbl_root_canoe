@@ -78,8 +78,8 @@ bump:
 		printf 'Invalid VERSION_CODE: %s\n' "$$version_code" >&2; \
 		exit 2; \
 	}; \
-	mkdir -p tools/canoe/src; \
-	trap 'rm -f version.mk.tmp imports.mk.tmp tools/canoe/src/version.rs.tmp targets/magisk_module/module/module.prop.tmp README.md.tmp README_zh.md.tmp wiki/docs/canoe-cfg.md.tmp wiki/docs/zh/canoe-cfg.md.tmp wiki/docs/release.md.tmp wiki/docs/zh/release.md.tmp' EXIT HUP INT TERM; \
+	mkdir -p tools/canoe-bootmgr/src; \
+	trap 'rm -f version.mk.tmp imports.mk.tmp tools/canoe-bootmgr/src/version.rs.tmp targets/magisk_module/module/module.prop.tmp README.md.tmp README_zh.md.tmp wiki/docs/canoe-cfg.md.tmp wiki/docs/zh/canoe-cfg.md.tmp wiki/docs/release.md.tmp wiki/docs/zh/release.md.tmp' EXIT HUP INT TERM; \
 	printf '%s\n' \
 		'# Single source of truth for Canoe versions.' \
 		'# `make bump` regenerates every derived file.' \
@@ -113,11 +113,11 @@ bump:
 		'//!' \
 		'//! `make version-check` verifies that this generated module stays synchronized.' \
 		'' \
-		"pub const VERSION: &str = \"$$version\";" > tools/canoe/src/version.rs.tmp; \
-	if ! cmp -s tools/canoe/src/version.rs.tmp tools/canoe/src/version.rs; then \
-		mv tools/canoe/src/version.rs.tmp tools/canoe/src/version.rs; \
+		"pub const VERSION: &str = \"$$version\";" > tools/canoe-bootmgr/src/version.rs.tmp; \
+	if ! cmp -s tools/canoe-bootmgr/src/version.rs.tmp tools/canoe-bootmgr/src/version.rs; then \
+		mv tools/canoe-bootmgr/src/version.rs.tmp tools/canoe-bootmgr/src/version.rs; \
 	else \
-		rm tools/canoe/src/version.rs.tmp; \
+		rm tools/canoe-bootmgr/src/version.rs.tmp; \
 	fi; \
 	sed -e "s/^version=.*/version=$$version/" \
 		-e "s/^versionCode=.*/versionCode=$$version_code/" \
@@ -279,14 +279,14 @@ version-check:
 			fail=1; \
 		fi; \
 	fi; \
-	if [ -f tools/canoe/src/version.rs ]; then \
-		actual="$$(awk -F= '$$1 == "pub const VERSION: &str " { value=$$2; gsub(/["; ]/, "", value); print value; found=1 } END { if (!found) print "<missing>" }' tools/canoe/src/version.rs)"; \
+	if [ -f tools/canoe-bootmgr/src/version.rs ]; then \
+		actual="$$(awk -F= '$$1 == "pub const VERSION: &str " { value=$$2; gsub(/["; ]/, "", value); print value; found=1 } END { if (!found) print "<missing>" }' tools/canoe-bootmgr/src/version.rs)"; \
 	else \
 		actual='<missing>'; \
 	fi; \
 	if [ "$$actual" != "$$version" ]; then \
 		printf 'version mismatch: %s expected %s actual %s\n' \
-			'tools/canoe/src/version.rs' "$$version" "$$actual"; \
+			'tools/canoe-bootmgr/src/version.rs' "$$version" "$$actual"; \
 		fail=1; \
 	fi; \
 	if [ -f targets/magisk_module/module/module.prop ]; then \
@@ -386,7 +386,7 @@ test:
 	cargo test --locked --manifest-path tools/mode2-profile/Cargo.toml
 	cargo test --locked --manifest-path tools/abl-tzmap/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
-	cargo test --locked --manifest-path tools/canoe/Cargo.toml
+	cargo test --locked --manifest-path ../canoe-boot-manager/native/canoe-manager/Cargo.toml
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
 	$(MAKE) -C tools/canoe-ext4 test

@@ -8,9 +8,6 @@ use thiserror::Error;
 
 use crate::bls::{BlsEntry, BlsError};
 use crate::config::{ConfigDocument, ConfigError};
-#[path = "backend_dispatch.rs"]
-mod backend_dispatch;
-pub use backend_dispatch::Backend;
 
 #[derive(Debug, Error)]
 pub enum BackendError {
@@ -26,23 +23,8 @@ pub enum BackendError {
     Bls(#[from] BlsError),
     #[error("BLS file name is not a simple .conf name: {0}")]
     InvalidBlsName(String),
-    #[error("ext4 backend: {0}")]
-    Ext4(String),
-    #[error("ext4 backend: {0}")]
-    Ext4Typed(#[source] crate::ext4::Ext4Error),
-    #[error("backend transaction: {0}")]
-    Transaction(String),
-    #[error("boot volume: {0}")]
-    BootVolume(#[source] std::io::Error),
     #[error("clock is before the Unix epoch")]
     Clock,
-}
-
-/// Distinguishes an operation error from extraction, population or sync failure.
-#[derive(Debug)]
-pub(crate) enum BackendActionError<E> {
-    Backend(BackendError),
-    Action(E),
 }
 
 impl BackendError {
@@ -56,17 +38,10 @@ impl BackendError {
             Self::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
                 "permission-denied"
             }
-            Self::Ext4Typed(error) => error.protocol_code(),
-            Self::BootVolume(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                "permission-denied"
-            }
-            Self::BootVolume(_) => "boot-volume",
             Self::Io { .. }
             | Self::Config(_)
             | Self::Bls(_)
             | Self::InvalidBlsName(_)
-            | Self::Ext4(_)
-            | Self::Transaction(_)
             | Self::Clock => "operation",
         }
     }
@@ -92,7 +67,7 @@ pub struct LocalDir {
 }
 
 impl LocalDir {
-    pub(crate) fn for_discovery(root: &Path) -> Result<Self, BackendError> {
+    pub fn for_discovery(root: &Path) -> Result<Self, BackendError> {
         if !root.exists() && root.parent().is_some_and(|parent| parent.is_dir()) {
             return Ok(Self {
                 root: root.to_path_buf(),
@@ -217,11 +192,7 @@ impl BootRoot for LocalDir {
     }
 }
 
-pub(crate) fn atomic_replace(
-    root: &Path,
-    destination: &Path,
-    bytes: &[u8],
-) -> Result<(), BackendError> {
+pub fn atomic_replace(root: &Path, destination: &Path, bytes: &[u8]) -> Result<(), BackendError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| BackendError::Clock)?

@@ -1,7 +1,7 @@
 //! Logical boot-volume paths, independent of host OS paths. Explicit input
 //! files are not logical paths and must not pass through this policy.
 
-pub(crate) fn safe_component(name: &str) -> bool {
+pub fn safe_component(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or("").to_uppercase();
     let reserved = matches!(
         stem.as_str(),
@@ -25,7 +25,7 @@ pub(crate) fn safe_component(name: &str) -> bool {
 
 /// Accept one optional volume-root separator; never interpret drive letters,
 /// UNC paths, parent components, Windows devices, or alternate data streams.
-pub(crate) fn relative(value: &str) -> Option<String> {
+pub fn relative(value: &str) -> Option<String> {
     if !value.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
         return None;
     }

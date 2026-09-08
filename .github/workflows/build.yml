@@ -9,9 +9,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gbl_root_canoe
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        path: gbl_root_canoe
 
     - name: Check out Canoe Boot Manager
       id: checkout_boot_manager
@@ -74,9 +79,9 @@ jobs:
         # only contains .gitkeep. Tauri externalBin requires every
         # target-triple sidecar before it will build, so stage each helper from
         # the backend toolkit's explicitly named output.
-        make -C targets/toolkit_linux submodule_canoe_bootmgr
-        cp targets/toolkit_linux/build/toolkit/bin/canoe-bootmgr \
-          "$app/src-tauri/binaries/canoe-bootmgr-x86_64-unknown-linux-gnu"
+        make -C targets/toolkit_linux canoe_manager
+        cp targets/toolkit_linux/build/toolkit/bin/canoe-manager \
+          "$app/src-tauri/binaries/canoe-manager-x86_64-unknown-linux-gnu"
         make -C targets/toolkit_linux submodule_canoe_ext4
         cp targets/toolkit_linux/build/toolkit/bin/canoe-ext4 \
           "$app/src-tauri/binaries/canoe-ext4-x86_64-unknown-linux-gnu"
@@ -103,11 +108,11 @@ jobs:
         cp /tmp/zlib/libz.a /tmp/zlib-mingw/lib/
         E2FSPROGS_SRC=/tmp/e2fsprogs ZLIB_PREFIX=/tmp/zlib-mingw bash tools/canoe-ext4/build-windows.sh
 
-        make -C targets/toolkit_windows submodule_canoe_bootmgr
-        cp targets/toolkit_windows/build/toolkit/bin/canoe-bootmgr.exe \
-          "$app/src-tauri/binaries/canoe-bootmgr-x86_64-pc-windows-gnu.exe"
+        make -C targets/toolkit_windows canoe_manager
+        cp targets/toolkit_windows/build/toolkit/bin/canoe-manager.exe \
+          "$app/src-tauri/binaries/canoe-manager-x86_64-pc-windows-gnu.exe"
         make -C targets/toolkit_windows ext4_tools \
-          CANOE_EXT4_WINDOWS="$GITHUB_WORKSPACE/tools/canoe-ext4/canoe-ext4.exe"
+          CANOE_EXT4_WINDOWS="$GITHUB_WORKSPACE/gbl_root_canoe/tools/canoe-ext4/canoe-ext4.exe"
         cp targets/toolkit_windows/build/toolkit/bin/canoe-ext4.exe \
           "$app/src-tauri/binaries/canoe-ext4-x86_64-pc-windows-gnu.exe"
         make -C targets/toolkit_windows submodule_ablfvextractor
@@ -188,8 +193,8 @@ jobs:
         test -f artifacts/toolkit_windows/bin/extractfv.exe
         test -x artifacts/toolkit_android/bin/extractfv
         test -x artifacts/magisk_module/bin/extractfv
-        test -x artifacts/toolkit_linux/canoe
-        test -f artifacts/toolkit_windows/canoe.exe
+        test -x artifacts/toolkit_linux/bin/canoe-manager
+        test -f artifacts/toolkit_windows/bin/canoe-manager.exe
         test -f artifacts/toolkit_android/build.sh
         test -f artifacts/magisk_module/customize.sh
         test -x artifacts/toolkit_linux/bin/canoe-boot-manager
@@ -323,7 +328,7 @@ jobs:
           *"ELF 64-bit"*"x86-64"*) ;;
           *) echo "unexpected Linux canoe-bootmgr: $linux_bootmgr_type"; exit 1 ;;
         esac
-        linux_canoe_type="$(file -b artifacts/toolkit_linux/canoe)"
+        linux_canoe_type="$(file -b artifacts/toolkit_linux/bin/canoe-manager)"
         case "$linux_canoe_type" in
           *"ELF 64-bit"*"x86-64"*) ;;
           *) echo "unexpected Linux canoe: $linux_canoe_type"; exit 1 ;;
@@ -333,7 +338,7 @@ jobs:
           *"PE32+ executable"*"x86-64"*) ;;
           *) echo "unexpected Windows canoe-bootmgr: $windows_bootmgr_type"; exit 1 ;;
         esac
-        windows_canoe_type="$(file -b artifacts/toolkit_windows/canoe.exe)"
+        windows_canoe_type="$(file -b artifacts/toolkit_windows/bin/canoe-manager.exe)"
         case "$windows_canoe_type" in
           *"PE32+ executable"*"x86-64"*) ;;
           *) echo "unexpected Windows canoe: $windows_canoe_type"; exit 1 ;;
@@ -386,7 +391,7 @@ jobs:
         # Zip here, in the job that produced the tree. Artifact upload/download
         # does not preserve the executable bit, so zipping after that round-trip
         # publishes mode-644 scripts and binaries: `./canoe` fails with
-        # Permission denied and bin/* cannot be exec'd even via `bash canoe`.
+        # Permission denied for native commands in bin/.
         # A zip stores the modes itself, and uploading the zip round-trips its
         # bytes intact.
         mkdir -p release
@@ -400,17 +405,17 @@ jobs:
             echo "Python member leaked into $package archive"; exit 1
           fi
         done
-        unzip -Z1 release/toolkit_linux.zip | grep -Eq '^(\./)?canoe$' || {
-          echo "missing Linux toolkit archive member: canoe"; exit 1;
+        unzip -Z1 release/toolkit_linux.zip | grep -Eq '^(\./)?bin/canoe-manager$' || {
+          echo "missing Linux toolkit archive member: bin/canoe-manager"; exit 1;
         }
-        unzip -Z1 release/toolkit_windows.zip | grep -Eq '^(\./)?canoe\.exe$' || {
-          echo "missing Windows toolkit archive member: canoe.exe"; exit 1;
+        unzip -Z1 release/toolkit_windows.zip | grep -Eq '^(\./)?bin/canoe-manager\.exe$' || {
+          echo "missing Windows toolkit archive member: bin/canoe-manager.exe"; exit 1;
         }
 
         # The archive is the deliverable, so assert the modes inside the archive
         # rather than in the build tree they came from.
         rm -rf modecheck && unzip -q -o release/toolkit_linux.zip -d modecheck
-        for exe in canoe \
+        for exe in bin/canoe-manager \
                    bin/patch_abl bin/mode2_profile bin/abl_tzmap \
                    bin/canoe-bootmgr bin/canoe-boot-manager \
                    bin/extractfv bin/vbmetaport bin/vbmetabackup; do
@@ -421,8 +426,8 @@ jobs:
         }
         rm -rf modecheck
         rm -rf winmodecheck && unzip -q -o release/toolkit_windows.zip -d winmodecheck
-        test -x winmodecheck/canoe.exe || { echo "not executable in archive: canoe.exe"; exit 1; }
-        for exe in winmodecheck/canoe.exe winmodecheck/bin/*.exe; do
+        test -x winmodecheck/bin/canoe-manager.exe || { echo "not executable in archive: canoe.exe"; exit 1; }
+        for exe in winmodecheck/bin/*.exe; do
           test -f "$exe" || { echo "missing Windows executable: $exe"; exit 1; }
           dlls="$(x86_64-w64-mingw32-objdump -p "$exe" | grep -i 'DLL Name' || true)"
           printf '%s DLL imports:\n%s\n' "$exe" "$dlls"
@@ -440,40 +445,40 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: toolkit_linux
-        path: release/toolkit_linux.zip
+        path: gbl_root_canoe/release/toolkit_linux.zip
 
     - name: Upload Windows Toolkit
       uses: actions/upload-artifact@v4
       with:
         name: toolkit_windows
-        path: release/toolkit_windows.zip
+        path: gbl_root_canoe/release/toolkit_windows.zip
 
     - name: Upload Android Toolkit
       uses: actions/upload-artifact@v4
       with:
         name: toolkit_android
-        path: release/toolkit_android.zip
+        path: gbl_root_canoe/release/toolkit_android.zip
 
     - name: Upload Magisk Module
       uses: actions/upload-artifact@v4
       with:
         name: magisk_module
-        path: release/magisk_module.zip
+        path: gbl_root_canoe/release/magisk_module.zip
 
     - name: Upload VBMeta Fixer Linux
       uses: actions/upload-artifact@v4
       with:
         name: vbmetafixer_linux
-        path: release/vbmetafixer_linux.zip
+        path: gbl_root_canoe/release/vbmetafixer_linux.zip
 
     - name: Upload VBMeta Fixer Windows
       uses: actions/upload-artifact@v4
       with:
         name: vbmetafixer_windows
-        path: release/vbmetafixer_windows.zip
+        path: gbl_root_canoe/release/vbmetafixer_windows.zip
 
     - name: Upload VBMeta Fixer Android
       uses: actions/upload-artifact@v4
       with:
         name: vbmetafixer_android
-        path: release/vbmetafixer_android.zip
+        path: gbl_root_canoe/release/vbmetafixer_android.zip

@@ -1,5 +1,5 @@
 #!/system/bin/sh
-# Package setup and input presentation; native canoe-bootmgr owns deployment.
+# Package setup and input presentation; native canoe-manager owns deployment.
 
 if [ -z "${MODPATH:-}" ]; then
   ui_print "Canoe module path is unavailable"

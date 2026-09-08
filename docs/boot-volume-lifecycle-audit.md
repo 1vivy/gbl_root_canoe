@@ -1,5 +1,9 @@
 # Boot-volume lifecycle and path audit — 7.0.0-b4
 
+The accepted overhaul supersedes the raw FAT maintenance design below; see
+`canoe-overhaul.md`. Historical checks are evidence for individual primitives,
+not acceptance of the new application/mounted-volume architecture.
+
 This is implementation status, not release acceptance. The FAT container change
 is not yet connected end-to-end across the native backend, GUI, and packages.
 Do not ship the intermediate mixture of new firmware and legacy host paths.

@@ -47,7 +47,7 @@ canoe_choose() {
 }
 canoe_install_flow() {
   # Updates activate the new manager normally; servicing stays an explicit WebUI operation.
-  if [ -x /data/adb/modules/fake_bl_efisp/bin/canoe-bootmgr ]; then
+  if [ -x /data/adb/modules/fake_bl_efisp/bin/canoe-manager ]; then
     ui_print "- Manager update only. Service Canoe through WebUI after activation."
     return
   fi
@@ -70,7 +70,7 @@ canoe_install_flow() {
   chmod 0700 /data/adb/canoe
   canoe_state=/data/adb/canoe/install-$(date +%s)-$$
   canoe_review=$TMPDIR/canoe-review.txt
-  if ! "$MODPATH/bin/canoe-bootmgr" --boot-root /mnt/vendor/persist/efisp bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --mode "$canoe_mode" $canoe_custom $canoe_patch > "$canoe_review" 2>&1; then
+  if ! "$MODPATH/bin/canoe-manager" --boot-root /mnt/vendor/persist/efisp bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --mode "$canoe_mode" $canoe_custom $canoe_patch > "$canoe_review" 2>&1; then
     cat "$canoe_review"
     ui_print "- Deployment was not started. No Canoe partitions were written."
     canoe_choose "Continue setup" "Install manager only; complete Full installation in WebUI after reboot" "Cancel module installation"
@@ -82,7 +82,7 @@ canoe_install_flow() {
   [ "${#canoe_token}" -eq 64 ] || abort "Native install review is incomplete"
   canoe_choose "Review the targets and data assessment above" "Install manager only" "Apply this deployment" "Cancel module installation"
   case "$canoe_choice" in 2) : ;; 3) abort "Module installation cancelled" ;; *) return ;; esac
-  if ! "$MODPATH/bin/canoe-bootmgr" --boot-root /mnt/vendor/persist/efisp bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
+  if ! "$MODPATH/bin/canoe-manager" --boot-root /mnt/vendor/persist/efisp bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
     ui_print "- Deployment did not complete. Inspect recovery records: $canoe_state"
     abort "Canoe deployment failed; completed writes remain recorded"
   fi

@@ -1,6 +1,6 @@
 #!/bin/sh
 # The module installer is a bootstrap; boot-chain work is covered by the
-# canoe-bootmgr and app suites, not by a second shell implementation.
+# canoe-manager and app suites, not by a second shell implementation.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../../.." && pwd)
@@ -83,13 +83,13 @@ cat > "$TMP/reboot" <<'EOF'
 printf 'reboot invoked\n' >> "${MARKER:?}"
 exit 99
 EOF
-cat > "$TMP/canoe-bootmgr" <<'EOF'
+cat > "$TMP/canoe-manager" <<'EOF'
 #!/bin/sh
-printf 'canoe-bootmgr invoked\n' >> "${MARKER:?}"
+printf 'canoe-manager invoked\n' >> "${MARKER:?}"
 exit 99
 EOF
 chmod +x "$TMP/getprop" "$TMP/ksud" "$TMP/dd" "$TMP/blockdev" \
-  "$TMP/reboot" "$TMP/canoe-bootmgr"
+  "$TMP/reboot" "$TMP/canoe-manager"
 
 cat > "$TMP/bootstrap-wrapper.sh" <<'EOF'
 #!/bin/sh

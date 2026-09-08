@@ -1,15 +1,30 @@
-use std::process::ExitCode;
+use canoe_bootmgr::cli::{Cli, execute, human};
+use clap::Parser;
 
-fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().collect();
-    #[cfg(windows)]
-    if args.iter().any(|arg| arg == "--named-pipe") {
-        // The elevated GUI bridge communicates over its authenticated pipe.
-        // Windows Terminal may ignore ShellExecute's hidden-window hint; detach
-        // the unused console so it cannot steal focus from native file dialogs.
-        unsafe {
-            windows_sys::Win32::System::Console::FreeConsole();
+fn main() -> std::process::ExitCode {
+    let cli = Cli::parse();
+    match execute(&cli) {
+        Ok(value) => {
+            println!(
+                "{}",
+                if cli.json {
+                    value.value.to_string()
+                } else {
+                    human(&value)
+                }
+            );
+            std::process::ExitCode::SUCCESS
+        }
+        Err(error) => {
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::json!({"ok": false, "error": error.to_string()})
+                );
+            } else {
+                eprintln!("canoe-bootmgr: {error}");
+            }
+            std::process::ExitCode::FAILURE
         }
     }
-    ExitCode::from(canoe_bootmgr::run_cli(args) as u8)
 }
