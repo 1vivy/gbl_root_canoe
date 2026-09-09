@@ -37,6 +37,9 @@ jobs:
           toolchain: 1.98.0
           targets: wasm32-unknown-unknown
       - run: |
+          # Firmware CI does not use Chrome. Its unused runner repository can
+          # contain stale indexes that block unrelated Ubuntu dependencies.
+          sudo rm -f /etc/cron.daily/google-chrome /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
           sudo apt-get update
           sudo apt-get install -y build-essential dosfstools e2fsprogs liblzma-dev clang lld uuid-dev python3-pytest
       - run: make test
