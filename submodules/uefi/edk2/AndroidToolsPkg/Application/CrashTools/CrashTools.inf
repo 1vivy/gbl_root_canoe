@@ -1,0 +1,38 @@
+#/** @file
+#  CrashTools UEFI application - deliberate fault/reset triggers aimed at the
+#  Qualcomm 900e memory-debug mode, with the vendor EDL reset as the 9008
+#  control. Launched from the ABL with `fastboot boot CrashTools.efi`;
+#  never shipped in the release packages.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = CrashTools
+  FILE_GUID                      = 9D4B6E21-3A87-4C5F-B092-6E1D8A4C5F73
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = CrashToolsEntry
+
+[Sources]
+  CrashTools.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+
+[LibraryClasses]
+  AndroidToolsUi
+  BaseLib
+  BaseMemoryLib
+  CacheMaintenanceLib
+  MdTableLib
+  MemoryAllocationLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  UefiRuntimeServicesTableLib

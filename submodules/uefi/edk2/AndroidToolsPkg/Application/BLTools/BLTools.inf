@@ -20,10 +20,12 @@
 
 [Sources]
   BLTools.c
+  ../../../QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDeviceInfo.c
 
 [Packages]
   MdePkg/MdePkg.dec
   AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
 
 [LibraryClasses]
   AndroidToolsUi

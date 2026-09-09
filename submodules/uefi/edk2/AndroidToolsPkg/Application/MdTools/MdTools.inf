@@ -1,0 +1,49 @@
+#/** @file
+#  MdTools UEFI application - read-only minidump table scan/map, RAM-only
+#  table edits (region alias append, encryption_required clear), a crash
+#  test trigger, and a single logfs report writer. Launched from the ABL
+#  with `fastboot boot MdTools.efi`; never shipped in the release packages.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = MdTools
+  FILE_GUID                      = 7C2E4A18-9F35-4B6D-8E1A-3D5C7B90A2E4
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = MdToolsEntry
+
+[Sources]
+  MdTools.c
+  MdTools.h
+  MdReport.c
+  MdEdit.c
+  MdFat.c
+  MdDump.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+
+[LibraryClasses]
+  AndroidToolsUi
+  BaseLib
+  BaseMemoryLib
+  CacheMaintenanceLib
+  MdTableLib
+  MemoryAllocationLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  UefiRuntimeServicesTableLib
+
+[Protocols]
+  gEfiPartitionInfoProtocolGuid
+  gEfiPartitionRecordGuid
+  gEfiSimpleFileSystemProtocolGuid

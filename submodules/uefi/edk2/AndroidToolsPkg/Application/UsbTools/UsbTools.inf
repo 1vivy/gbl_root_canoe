@@ -1,0 +1,56 @@
+#/** @file
+#  UsbTools UEFI application - passive USB census plus an explicitly
+#  confirmed, vendor-ordered host-mode attempt with a logfs dump.
+#
+#  Copyright (c) 2026, contributors to the canoe ABL tree.
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = UsbTools
+  FILE_GUID                      = 5b7c2e91-3a4f-4d6b-9c1e-2f8a0d4e6b53
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = UsbToolsEntry
+
+[Sources]
+  UsbTools.h
+  UsbTools.c
+  UsbCensus.c
+  UsbHostTry.c
+  UsbDump.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+
+[LibraryClasses]
+  AndroidToolsUi
+  BaseLib
+  BaseMemoryLib
+  DebugLib
+  DevicePathLib
+  IoLib
+  MemoryAllocationLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+
+[Protocols]
+  gEfiBlockIoProtocolGuid
+  gEfiDriverBindingProtocolGuid
+  gEfiLoadedImageProtocolGuid
+  gEfiPartitionInfoProtocolGuid
+  gEfiPartitionRecordGuid
+  gEfiPciIoProtocolGuid
+  gEfiSecurity2ArchProtocolGuid
+  gEfiSecurityArchProtocolGuid
+  gEfiSimpleFileSystemProtocolGuid
+  gEfiUsb2HcProtocolGuid
+  gEfiUsbfnIoProtocolGuid
+  gEfiUsbIoProtocolGuid
+  gQcomUsbConfigProtocolGuid

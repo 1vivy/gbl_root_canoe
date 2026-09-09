@@ -1,5 +1,6 @@
 #/** @file
-#  ArbTools UEFI application - AVB rollback index viewer / reset.
+#  MdTableLib - content-scan discovery and RAM-only edits for the Qualcomm
+#  Sahara minidump region table (see Include/MdTable.h).
 #
 #  Copyright (c) 2026, contributors to the canoe ABL tree.
 #  SPDX-License-Identifier: BSD-3-Clause
@@ -7,30 +8,28 @@
 
 [Defines]
   INF_VERSION                    = 0x00010006
-  BASE_NAME                      = ArbTools
-  FILE_GUID                      = C418F2B9-6D73-4A51-BE08-9E5C27A0D1F6
+  BASE_NAME                      = MdTableLib
+  FILE_GUID                      = 3F7A9C42-1B58-4E6D-A921-5C0D8E2F6B47
   MODULE_TYPE                    = UEFI_APPLICATION
   VERSION_STRING                 = 0.1
-  ENTRY_POINT                    = ArbToolsEntry
+  LIBRARY_CLASS                  = MdTableLib
 
 [Sources]
-  ArbTools.c
+  MdTableMap.c
+  MdTableScan.c
+  MdTableFire.c
+  MdTableToc.c
+  MdTableEdit.c
 
 [Packages]
   MdePkg/MdePkg.dec
   AndroidToolsPkg/AndroidToolsPkg.dec
-  QcomModulePkg/QcomModulePkg.dec
 
 [LibraryClasses]
-  AndroidToolsUi
   BaseLib
   BaseMemoryLib
-  DebugLib
+  CacheMaintenanceLib
   MemoryAllocationLib
   PrintLib
-  UefiApplicationEntryPoint
   UefiBootServicesTableLib
-  UefiLib
-
-[Protocols]
-  gEfiQcomVerifiedBootProtocolGuid
+  UefiRuntimeServicesTableLib

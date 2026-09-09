@@ -18,6 +18,7 @@
 #include <Library/UefiLib.h>
 
 #include "AtDevInfo.h"
+#include "AtVerifiedBoot.h"
 #include "AndroidToolsUi.h"
 
 #ifndef ARRAY_SIZE
@@ -202,7 +203,7 @@ AtConfirmReset5x (
     /* Enforce >=1s since the previous confirmation and drop any key held over
      * from it, so each confirm is a separate deliberate action. */
     gBS->Stall (1000000);  /* 1 second */
-    gST->ConIn->Reset (gST->ConIn, FALSE);
+    AtUiResetInput ();
 
     AtUiBeginScreen (L"Reset ARB Index", NULL);
     Print (L"WARNING: this writes to the TEE and may lose keys.\r\n");
