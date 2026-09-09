@@ -8,7 +8,7 @@ This repository owns the post-authentication Canoe path:
 signed vulnerable ABL -> raw efisp:BDS.efi -> persist/efisp.fat mounted boot root -> managed loader -> Android
 ```
 
-The raw `efisp` partition is not a filesystem. It contains `BDS.efi` as a whole-partition image loaded by the vulnerable, already authenticated ABL. `persist/efisp.fat` is a 32 MiB FAT16 container inside ext4 persist. Legacy `/persist/efisp` is ignored and never imported.
+The raw `efisp` partition is not a filesystem. It contains `BDS.efi` as a whole-partition image loaded by the vulnerable, already authenticated ABL. `persist/efisp.fat` is a FAT16 container inside ext4 persist, sized in 8 MiB increments from 8 through 256 MiB. The running BDS advertises this range separately; older `fat16-container-v1` firmware supports only its 32 MiB geometry. Legacy `/persist/efisp` is ignored and never imported.
 
 `BDS.efi` is the EDK II `LinuxLoader` UEFI application. It runs in the inherited non-secure EL1 UEFI environment with XBL/ABL Boot Services alive. This is arbitrary NS-EL1 code execution, not ownership of EL2, EL3, TrustZone, XPU-protected memory, or unrestricted SMCs. The final chainloaded ABL/kernel owns `ExitBootServices`; the Canoe BDS does not call it.
 

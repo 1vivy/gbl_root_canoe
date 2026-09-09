@@ -19,8 +19,10 @@ Keep responsibilities separated:
 Never conflate these locations:
 
 - raw `efisp`: contains this whole `BDS.efi`; hide its Block I/O handle during every managed ABL launch to prevent recursive re-entry.
-- ext4 `persist/efisp.fat`: bounded 32 MiB FAT16 boot root, containing configuration, EFI images and sidecars. Legacy `persist/efisp` is ignored.
+- ext4 `persist/efisp.fat`: bounded FAT16 boot root (8–256 MiB in 8 MiB steps), containing configuration, EFI images, sidecars and the current Android handoff record. The FAT geometry and complete mapped range are validated against the actual file size; original 32 MiB containers remain supported. Legacy `persist/efisp` is ignored.
 - FAT32 removable media: separate discovery/browser roots; never inherit managed boot-root policy implicitly.
+
+`last-boot` is cleared on BDS entry, before launch, and on child return/menu/fastboot re-entry. Only a managed Android handoff publishes a checked CNLB record in the canonical container. Logfs retains debug logs only, never launch evidence. An unavailable container means no record; an accessible record that cannot be invalidated blocks managed handoff while leaving menu and Super Fastboot available.
 
 BDS may explicitly Save as default with staged config and validated previous-config fallback; ordinary selection is one-shot. Image installation and application recovery belong to host/device tools. Persist is a boot volume only through its validated `efisp.fat` container.
 
