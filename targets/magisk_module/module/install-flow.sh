@@ -46,17 +46,18 @@ canoe_choose() {
   done
 }
 canoe_install_flow() {
-  # Updates activate the new manager normally; servicing stays an explicit WebUI operation.
-  if [ -x /data/adb/modules/fake_bl_efisp/bin/canoe-manager ]; then
-    ui_print "- Manager update only. Service CANOE-BDS through WebUI after activation."
-    return
-  fi
+  # Check the staged worker for both first installs and manager updates.
   if ! "$MODPATH/bin/canoe-manager" installer supported >/dev/null 2>&1; then
     if [ "${user_lang:-en}" = zh ]; then
       ui_print "- 此 b5 版本仅安装管理器，CANOE-BDS 部署功能尚未就绪。"
     else
       ui_print "- This b5 build installs the manager only. CANOE-BDS deployment is not available yet."
     fi
+    return
+  fi
+  # Updates activate the new manager normally without offering partition writes.
+  if [ -x /data/adb/modules/fake_bl_efisp/bin/canoe-manager ]; then
+    ui_print "- Manager update only. Service CANOE-BDS through WebUI after activation."
     return
   fi
   canoe_choose "CANOE-BDS first setup" "Install manager only" "Deploy CANOE-BDS now" "Cancel module installation"

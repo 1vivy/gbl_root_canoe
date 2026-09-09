@@ -161,4 +161,24 @@ MODPATH="$MOD" UI_LOG="$UI_LOG" CONFIG_LOG="$CONFIG_LOG" MARKER="$MARKER" \
 assert_contains "$(cat "$UI_LOG")" 'CANOE-BDS 部署功能尚未就绪' 'unavailable deployment was offered'
 [ ! -e "$MARKER" ] || fail 'capability escape invoked a partition operation'
 pass 'actual install flow exits before keys or writes when deployment is unavailable'
+# Exercise the same unavailable-capability path with an installed-manager fixture.
+# Only the Android absolute location changes; the actual installer logic is retained.
+sed "s|/data/adb/modules/fake_bl_efisp/bin/canoe-manager|$TMP/installed-manager|g" \
+  "$ROOT/targets/magisk_module/module/install-flow.sh" > "$MOD/install-flow.sh"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/installed-manager"
+chmod +x "$TMP/installed-manager"
+for language in en zh; do
+  printf '%s\n' "$language" > "$MOD/lang.txt"
+  : > "$UI_LOG"
+  MODPATH="$MOD" UI_LOG="$UI_LOG" CONFIG_LOG="$CONFIG_LOG" MARKER="$MARKER" \
+    BY_NAME_DIR="$BY_NAME" PATH="$TMP:$PATH" sh "$TMP/bootstrap-wrapper.sh"
+  case "$language" in
+    en) message='CANOE-BDS deployment is not available yet' ;;
+    zh) message='CANOE-BDS 部署功能尚未就绪' ;;
+  esac
+  assert_contains "$(cat "$UI_LOG")" "$message" 'manager update bypassed deployment capability guidance'
+  case "$(cat "$UI_LOG")" in *'Service CANOE-BDS through WebUI'*) fail 'manager update promised unavailable servicing' ;; esac
+  [ ! -e "$MARKER" ] || fail 'manager update invoked a partition operation'
+done
+pass 'manager updates share the capability-gated manager-only guidance in both languages'
 echo 'all module bootstrap fixtures passed'
