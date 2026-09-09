@@ -1,7 +1,7 @@
 # canoe-provision
 
 Provision an 8–256 MiB FAT16 container at `efisp.fat` on supplied persist
-storage. The primitive defaults to 8 MiB; the manager selects a size from total persist capacity and its reviewed headroom policy. Existing valid containers retain their size, including the earlier 32 MiB layout. The command never discovers a phone, mounts filesystems, changes GPT,
+storage. The primitive defaults to 8 MiB; the manager selects a size from measured available persist space after separately reviewed legacy cleanup and its reviewed headroom policy. Existing valid containers retain their size, including the earlier 32 MiB layout. The command never discovers a phone, mounts filesystems, changes GPT,
 imports legacy entries, installs a loader, or flashes a partition.
 
 ```
