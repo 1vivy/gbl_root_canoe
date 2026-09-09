@@ -1,0 +1,13 @@
+[package]
+name = "canoe-loader-wasm-qualification"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+canoe_image = { path = "../..", default-features = false }
+canoe_bootmgr = { path = "../../../canoe-bootmgr", default-features = false }
+serde_json = "1"
+sha2 = "0.10"

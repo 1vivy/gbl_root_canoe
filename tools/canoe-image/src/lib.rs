@@ -1,3 +1,4 @@
+pub mod loader;
 #[cfg(feature = "native")]
 pub mod abl_verify;
 #[cfg(feature = "native")]
@@ -6,8 +7,6 @@ pub mod build;
 mod build_cleanup;
 #[cfg(feature = "native")]
 mod build_efisp_tools;
-#[cfg(feature = "native")]
-mod build_steps;
 #[cfg(feature = "native")]
 pub mod build_tools;
 #[cfg(feature = "cli")]

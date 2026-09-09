@@ -44,51 +44,60 @@ fn graft_preserves_inputs_and_does_not_use_predictable_temporary_files() {
     assert!(error.to_string().contains("different file"));
     assert_eq!(fs::read(&image).unwrap(), vec![0u8; 4096]);
 }
-#[cfg(unix)]
 #[test]
-fn probe_resolves_only_extractor_and_patcher_from_explicit_tools() {
-    use std::os::unix::fs::PermissionsExt;
+fn probe_and_full_build_use_shared_bytes_without_helpers() {
     let d = tempdir().unwrap();
-    for (name, script) in [
-        (
-            "extractfv",
-            "#!/bin/sh\n/bin/cp \"$4\" \"$2/LinuxLoader.efi\"\n",
-        ),
-        ("patch_abl", "#!/bin/sh\n/bin/cp \"$1\" \"$2\"\n"),
-    ] {
-        let p = d.path().join(name);
-        fs::write(&p, script).unwrap();
-        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let abl = d.path().join("abl.img");
-    fs::write(&abl, b"fixture loader").unwrap();
-    let result = cli(&[
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let abl = root.join("ablrepo/CPH2767/abl.img");
+    let vbmeta = root.join("tools/mode2-profile/tests/fixtures/vbmeta-infiniti-IN-16.0.7.201.img");
+    let missing_tools = d.path().join("no-helper-programs");
+    let probe = cli(&[
         "--json".as_ref(),
         "build".as_ref(),
         "--probe".as_ref(),
         "--abl".as_ref(),
         abl.as_os_str(),
         "--tools".as_ref(),
-        d.path().as_os_str(),
+        missing_tools.as_os_str(),
     ]);
     assert!(
-        result.status.success(),
+        probe.status.success(),
         "{}",
-        String::from_utf8_lossy(&result.stdout)
+        String::from_utf8_lossy(&probe.stdout)
     );
-    assert_eq!(fs::read(&abl).unwrap(), b"fixture loader");
-    fs::remove_file(d.path().join("patch_abl")).unwrap();
-    let result = cli(&[
+    let staged = d.path().join("prepared");
+    let full = cli(&[
         "--json".as_ref(),
         "build".as_ref(),
-        "--probe".as_ref(),
         "--abl".as_ref(),
         abl.as_os_str(),
+        "--vbmeta".as_ref(),
+        vbmeta.as_os_str(),
+        "--staged".as_ref(),
+        staged.as_os_str(),
         "--tools".as_ref(),
-        d.path().as_os_str(),
+        missing_tools.as_os_str(),
     ]);
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stdout).contains("patch_abl"));
+    assert!(
+        full.status.success(),
+        "{}",
+        String::from_utf8_lossy(&full.stdout)
+    );
+    let expected = canoe_image::loader::prepare_loader(
+        &fs::read(&abl).unwrap(),
+        &fs::read(&vbmeta).unwrap(),
+        canoe_image::loader::TzMapPolicy::ProtocolFallback,
+    )
+    .unwrap();
+    assert_eq!(fs::read(staged.join("boot.efi")).unwrap(), expected.loader);
+    assert_eq!(
+        fs::read(staged.join("boot.efi.gm2p")).unwrap(),
+        expected.gm2p
+    );
+    assert_eq!(
+        fs::read(staged.join("boot.efi.tzmap")).unwrap(),
+        expected.tzmap
+    );
 }
 
 #[test]

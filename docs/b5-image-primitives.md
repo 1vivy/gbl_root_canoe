@@ -28,14 +28,64 @@ Historical local ext4-helper integration tests now require the explicit
 `legacy-ext4-tests` feature; the retired helper is not a dependency of default b5
 CI or packages.
 
-## Not yet exposed as a browser image pipeline
+## Complete loader and boot-configuration byte APIs
 
-- Full ABL extraction uses `extractfv` and its LZMA decoder; vulnerability
-  inspection/patching calls the native `patch_abl` helper. These process boundaries
-  must become byte APIs or compiled modules before browser deployment is enabled.
-- Loader construction still coordinates those helpers and filesystem publication.
-  Its pure GM2P and TZ-map parts are available above, but the complete pipeline is
-  not browser qualified.
+`canoe_image::loader::{extract_abl, inspect_abl, prepare_loader}` now accept
+firmware ABL bytes directly. Extraction uses the bounded `abl_extract` library in
+`submodules/ablfvextractor`; LZMA is supplied by `lzma-rs`. The existing patcher C
+algorithm is compiled as `abl_patch` for both native and WASM, with logging
+removed from the library build and typed patch flags returned to callers. There
+are no runtime C helpers, filesystem calls, subprocesses or imported WASM host
+functions in this pipeline. The standalone C extractor remains a reference and
+an investigator for its additional BMP/all-PE modes.
+
+`prepare_loader(abl, vbmeta, TzMapPolicy)` returns the modified PE loader, its
+120-byte GM2P, its 256-byte TZ map, and source/patch inspection. The original ABL
+is borrowed and never becomes an implicit flash payload. The TZ map binds the
+unmodified extracted ABL digest. `RecordedEvidence` requires a committed evidence
+table for that exact source; explicit `ProtocolFallback` retains the existing
+native CLI policy and reports `tzmap_evidence: null` when appropriate. This is
+not a new sidecar format. Vulnerable boot-path detection is distinct from managed
+loader preparation: firmware without the vulnerable `efisp` path can still
+produce a valid managed loader. Container signatures are not verified by this
+structural inspection.
+
+Native `canoe-image build` and its probe call these same libraries. Existing
+file validation, staging and publication remain native concerns; `--tools` is
+accepted for interface compatibility but is no longer needed by loader building.
+A saved patch report is structured JSON instead of captured helper stdout.
+
+`canoe_bootmgr` with `default-features = false` exposes the canonical config/BLS
+parse, render and edit models plus boot-volume path validation, without mounted
+I/O. All document types support JSON roundtrips. Rendering refuses additional
+boot directives hidden in option strings or unknown-key records.
+
+Reference output hashes are committed in
+`submodules/ablfvextractor/tests/goldens.json`: all 13 bundled ABL images, the
+legacy extractor fixture, and four optional existing stock/reference images from
+the sibling `gbl-chainload`. The optional inputs are not build dependencies and
+are explicitly skipped when absent. Hashes came from the pre-refactor native
+`extractfv`, `patch_abl`, `mode2_profile`, and `abl_tzmap` commands. Both native and
+actual WASM execution matched all 18 cases on this machine. The four external
+cases include firmware without the vulnerable boot path; they still match their
+managed-loader outputs. Peak WASM linear memory for this corpus was 5,701,632
+bytes. This measured corpus result is not a guarantee for maximum-sized inputs.
+
+```sh
+cargo test --locked --manifest-path submodules/ablfvextractor/Cargo.toml
+cargo test --locked --manifest-path submodules/patcher/Cargo.toml
+cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
+cargo test --locked --manifest-path tools/canoe-image/Cargo.toml
+cargo build --locked --manifest-path tools/canoe-image/qualification/loader/Cargo.toml --target wasm32-unknown-unknown --release
+node tools/canoe-image/qualification/loader/run.mjs
+```
+
+The WASM run asserts zero imports, extracted and patched loader hashes, both
+sidecars, vulnerable-path classification, and config/BLS JSON/wire roundtrips.
+This qualifies source transformations, not device boot compatibility or a complete
+deployment. The app remains responsible for source attribution, partition sizes,
+slot-specific configuration, review, writes and readback.
+
 The vendor_boot byte API shares the unchanged header/CPIO/gzip/legacy-LZ4
 algorithm with the CLI. Its existing LZ4 dependency builds and links for WASM;
 there is no need to replace it based on its implementation language. Three
@@ -54,7 +104,7 @@ This validates the byte algorithms in a JavaScript WebAssembly engine. Browser
 worker integration, memory limits for real partition sizes and device-specific
 boot compatibility still need app/hardware qualification.
 
-These results establish native regression and WASM compilation, not browser
-runtime equivalence or physical boot compatibility. The app must exercise its
+These results establish native regression and WASM runtime equivalence for the
+listed fixtures, not physical boot compatibility. The app must exercise its
 actual WASM wrappers against the same fixtures before presenting image preparation
 as available. Physical flashing remains outside this source qualification.

@@ -17,6 +17,9 @@ cli = ["dep:clap", "native"]
 native = ["dep:canoe_fs", "dep:wait-timeout", "dep:tempfile", "dep:same-file", "mode2_profile/native"]
 
 [dependencies]
+abl_extract = { path = "../../submodules/ablfvextractor" }
+abl_patch = { path = "../../submodules/patcher" }
+abl_tzmap = { path = "../abl-tzmap", default-features = false }
 canoe_fs = { path = "../canoe-fs", optional = true }
 mode2_profile = { path = "../mode2-profile", default-features = false }
 clap = { version = "4.5", features = ["derive"], optional = true }
