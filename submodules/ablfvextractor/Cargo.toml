@@ -1,0 +1,14 @@
+[package]
+name = "abl_extract"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Bounded byte-only Qualcomm ABL PE extraction"
+
+[dependencies]
+lzma-rs = "0.3"
+thiserror = "2"
+
+[dev-dependencies]
+sha2 = "0.10"
+serde_json = "1"
