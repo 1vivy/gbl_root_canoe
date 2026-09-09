@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![cfg(all(target_os = "linux", feature = "legacy-ext4-tests"))]
 use std::{
     fs,
     io::Write,

@@ -9,13 +9,18 @@ pub use manifest::{CommandRecord, ManifestError, Semantic, TzMap, TZMAP_FLAG_ALL
 pub use evidence::{EvidenceError, Table};
 pub use scan::{ScanError, ScanResult};
 
+#[cfg(feature = "native")]
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io;
+#[cfg(feature = "native")]
+use std::io::{Read, Write};
+#[cfg(feature = "native")]
 use std::path::{Path, PathBuf};
+#[cfg(feature = "native")]
 use std::process;
 use thiserror::Error;
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "native"))]
 use std::os::unix::fs::MetadataExt;
 
 #[derive(Debug, Error)]
@@ -26,6 +31,7 @@ pub enum ScanFileError {
     Scan(#[from] ScanError),
 }
 
+#[cfg(feature = "native")]
 pub fn scan_file(input_path: &Path) -> Result<ScanResult, ScanFileError> {
     let mut file = File::open(input_path).map_err(ScanFileError::Read)?;
     let mut bytes = Vec::new();
@@ -55,6 +61,7 @@ pub enum DeriveFileError {
     MissingSemantics { missing: String },
 }
 
+#[cfg(feature = "native")]
 pub fn derive_to_file(input_path: &Path, output_path: &Path, allow_incomplete: bool) -> Result<(), DeriveFileError> {
     if input_path == output_path { return Err(DeriveFileError::SameInputAndOutput); }
     let mut input_file = match File::open(input_path) {
@@ -71,15 +78,20 @@ pub fn derive_to_file(input_path: &Path, output_path: &Path, allow_incomplete: b
         remove_output(output_path)?;
         return Err(DeriveFileError::Read(error));
     }
-    let result = match scan::scan(&bytes) {
-        Ok(result) => result,
-        Err(error) => { remove_output(output_path)?; return Err(DeriveFileError::Scan(error)); }
+    let serialized = match derive_bytes(&bytes, allow_incomplete) {
+        Ok(bytes) => bytes,
+        Err(error) => { remove_output(output_path)?; return Err(error); }
     };
+    write_manifest_atomically(output_path, &serialized).map_err(DeriveFileError::Write)
+}
+
+/// Derive a TZ map from extracted loader bytes with the same strict semantics as the CLI.
+pub fn derive_bytes(bytes: &[u8], allow_incomplete: bool) -> Result<[u8; TZMAP_SIZE], DeriveFileError> {
+    let result = scan::scan(bytes)?;
     if !allow_incomplete {
         // A sidecar with no recorded table classifies exactly what the firmware
         // already classifies without one, so refuse unless the caller opts in.
         if result.evidence.is_none() {
-            remove_output(output_path)?;
             return Err(DeriveFileError::NoEvidence { digest: hex_digest(&result.digest) });
         }
         // Defence in depth: the protocol table makes this structurally
@@ -95,16 +107,15 @@ pub fn derive_to_file(input_path: &Path, output_path: &Path, allow_incomplete: b
         .map(|(_, name)| *name)
         .collect::<Vec<_>>();
         if !missing.is_empty() {
-            remove_output(output_path)?;
             return Err(DeriveFileError::MissingSemantics { missing: missing.join(", ") });
         }
     }
     let map = TzMap::new(result.flags, result.digest, result.commands)?;
-    let serialized = map.to_bytes();
-    write_manifest_atomically(output_path, &serialized).map_err(DeriveFileError::Write)
+    Ok(map.to_bytes())
 }
 
 #[cfg(unix)]
+#[cfg(feature = "native")]
 fn input_matches_output(input_path: &Path, input_file: &File, output_path: &Path) -> Result<bool, DeriveFileError> {
     let input = input_file.metadata().map_err(DeriveFileError::Read)?;
     let output = match fs::metadata(output_path) {
@@ -117,6 +128,7 @@ fn input_matches_output(input_path: &Path, input_file: &File, output_path: &Path
 }
 
 #[cfg(not(unix))]
+#[cfg(feature = "native")]
 fn input_matches_output(input_path: &Path, _input_file: &File, output_path: &Path) -> Result<bool, DeriveFileError> {
     let input = fs::canonicalize(input_path).map_err(DeriveFileError::Read)?;
     let output = match fs::canonicalize(output_path) {
@@ -127,6 +139,7 @@ fn input_matches_output(input_path: &Path, _input_file: &File, output_path: &Pat
     Ok(input == output)
 }
 
+#[cfg(feature = "native")]
 fn remove_output(output_path: &Path) -> Result<(), DeriveFileError> {
     match fs::remove_file(output_path) {
         Ok(()) => Ok(()),
@@ -135,12 +148,14 @@ fn remove_output(output_path: &Path) -> Result<(), DeriveFileError> {
     }
 }
 
+#[cfg(feature = "native")]
 fn temporary_path(output_path: &Path, attempt: u8) -> io::Result<PathBuf> {
     let mut name = output_path.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "output path has no file name"))?.to_os_string();
     name.push(format!(".tmp.{}.{}", process::id(), attempt));
     Ok(output_path.with_file_name(name))
 }
 
+#[cfg(feature = "native")]
 pub fn write_manifest_atomically(output_path: &Path, bytes: &[u8; TZMAP_SIZE]) -> io::Result<()> {
     let mut collision = None;
     for attempt in 0..32u8 {
@@ -184,6 +199,7 @@ pub enum VerifyFileError {
     AblNotRegularFile(String),
 }
 
+#[cfg(feature = "native")]
 pub fn verify_file(
     sidecar_path: &Path,
     abl_path: &Path,
@@ -220,6 +236,7 @@ pub fn verify_file(
 }
 
 
+#[cfg(feature = "native")]
 pub fn validate_file(input_path: &Path) -> Result<TzMap, ValidateFileError> {
     let file = File::open(input_path).map_err(ValidateFileError::Read)?;
     let mut bytes = Vec::with_capacity(TZMAP_SIZE + 1);

@@ -1,5 +1,8 @@
+#[cfg(feature = "native")]
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "native")]
+use std::path::Path;
+use std::path::PathBuf;
 
 use serde::Serialize;
 use thiserror::Error;
@@ -54,11 +57,25 @@ impl GraftError {
     }
 }
 
+#[cfg(feature = "native")]
 pub fn extract(image: &Path, output: &Path) -> Result<ExtractReceipt, GraftError> {
     crate::output::distinct(output, &[image])
         .map_err(|error| io("validate output", output, error))?;
     let image_bytes = fs::read(image).map_err(|error| io("read image", image, error))?;
+    let vbmeta = extract_bytes(&image_bytes)?;
     let footer = read_footer(&image_bytes)?.ok_or(GraftError::NoFooter)?;
+    write_atomic(output, vbmeta)?;
+    Ok(ExtractReceipt {
+        output: output.display().to_string(),
+        bytes: vbmeta.len(),
+        vbmeta_offset: footer.vbmeta_offset as u64,
+        vbmeta_size: footer.vbmeta_size as u64,
+    })
+}
+
+/// Extract the referenced verification bytes without filesystem access.
+pub fn extract_bytes(image_bytes: &[u8]) -> Result<&[u8], GraftError> {
+    let footer = read_footer(image_bytes)?.ok_or(GraftError::NoFooter)?;
     let vbmeta_offset = footer.vbmeta_offset as u64;
     let vbmeta_size = footer.vbmeta_size as u64;
     let offset = usize::try_from(vbmeta_offset).map_err(|_| GraftError::RangeInvalid)?;
@@ -77,20 +94,32 @@ pub fn extract(image: &Path, output: &Path) -> Result<ExtractReceipt, GraftError
     if vbmeta.get(0..4) != Some(AVB_MAGIC) {
         return Err(GraftError::BadMagic);
     }
-    write_atomic(output, vbmeta)?;
-    Ok(ExtractReceipt {
-        output: output.display().to_string(),
-        bytes: vbmeta.len(),
-        vbmeta_offset,
-        vbmeta_size,
-    })
+    Ok(vbmeta)
 }
 
+#[cfg(feature = "native")]
 pub fn graft(source: &Path, target: &Path, output: &Path) -> Result<GraftReceipt, GraftError> {
     crate::output::distinct(output, &[source, target])
         .map_err(|error| io("validate output", output, error))?;
     let vbmeta = fs::read(source).map_err(|error| io("read source", source, error))?;
     let target_bytes = fs::read(target).map_err(|error| io("read target", target, error))?;
+    let output_bytes = graft_bytes(&vbmeta, target_bytes)?;
+    write_atomic(output, &output_bytes)?;
+    let verified = fs::read(output).map_err(|error| io("verify output", output, error))?;
+    if verified != output_bytes {
+        return Err(GraftError::Invalid(
+            "published graft differs from prepared bytes".into(),
+        ));
+    }
+    Ok(GraftReceipt {
+        output: output.display().to_string(),
+        bytes: verified.len(),
+    })
+}
+
+/// Graft verification bytes into an owned target buffer, preserving input-source bytes.
+/// The caller supplies a partition-sized image and owns publication/readback.
+pub fn graft_bytes(vbmeta: &[u8], target_bytes: Vec<u8>) -> Result<Vec<u8>, GraftError> {
     if vbmeta.len() < 256 || &vbmeta[..4] != AVB_MAGIC {
         return Err(GraftError::Invalid(
             "source is not an AVB vbmeta image".to_owned(),
@@ -121,20 +150,15 @@ pub fn graft(source: &Path, target: &Path, output: &Path) -> Result<GraftReceipt
     }
     let mut output_bytes = target_bytes;
     output_bytes[original_size..].fill(0);
-    output_bytes[original_size..original_size + vbmeta.len()].copy_from_slice(&vbmeta);
+    output_bytes[original_size..original_size + vbmeta.len()].copy_from_slice(vbmeta);
     write_footer(
         &mut output_bytes[footer_offset..],
         original_size,
         original_size,
         vbmeta.len(),
     );
-    write_atomic(output, &output_bytes)?;
-    let verified = fs::read(output).map_err(|error| io("verify output", output, error))?;
-    verify_output(&verified, original_size, vbmeta.len())?;
-    Ok(GraftReceipt {
-        output: output.display().to_string(),
-        bytes: verified.len(),
-    })
+    verify_output(&output_bytes, original_size, vbmeta.len())?;
+    Ok(output_bytes)
 }
 
 fn read_footer(bytes: &[u8]) -> Result<Option<mode2_profile::footer::Footer>, GraftError> {
@@ -188,10 +212,12 @@ fn put_be64(bytes: &mut [u8], value: u64) {
     bytes.copy_from_slice(&value.to_be_bytes());
 }
 
+#[cfg(feature = "native")]
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), GraftError> {
     crate::output::write(path, bytes).map_err(|error| io("publish output", path, error))
 }
 
+#[cfg(feature = "native")]
 fn io(operation: &'static str, path: &Path, source: std::io::Error) -> GraftError {
     GraftError::Io {
         operation,

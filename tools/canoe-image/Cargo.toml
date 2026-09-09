@@ -13,21 +13,22 @@ required-features = ["cli"]
 
 [features]
 default = ["cli"]
-cli = ["dep:clap"]
+cli = ["dep:clap", "native"]
+native = ["dep:canoe_fs", "dep:wait-timeout", "dep:tempfile", "dep:same-file", "dep:lz4", "dep:flate2", "mode2_profile/native"]
 
 [dependencies]
-canoe_fs = { path = "../canoe-fs" }
+canoe_fs = { path = "../canoe-fs", optional = true }
 mode2_profile = { path = "../mode2-profile", default-features = false }
 clap = { version = "4.5", features = ["derive"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 sha2 = "0.10"
-wait-timeout = "0.2"
-tempfile = "3"
-same-file = "1"
-lz4 = "1"
-flate2 = "1"
+wait-timeout = { version = "0.2", optional = true }
+tempfile = { version = "3", optional = true }
+same-file = { version = "1", optional = true }
+lz4 = { version = "1", optional = true }
+flate2 = { version = "1", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }

@@ -1,8 +1,10 @@
 //! Canonical geometry and creation of Canoe's boot-volume container.
 //! Creation is deliberately separate from activation on persist. It never
 //! imports a legacy boot directory, truncates an existing file, or resizes it.
+#[cfg(feature = "native")]
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+#[cfg(feature = "native")]
 use std::path::Path;
 
 use serde::Serialize;
@@ -40,6 +42,7 @@ pub fn require_capacity(available: u64, allocation_overhead: u64) -> io::Result<
 
 /// Create a staging image only. A failed image stays at the supplied staging
 /// path for its owner to diagnose/remove; no failure promotes it to efisp.fat.
+#[cfg(feature = "native")]
 pub fn create_staging(path: &Path) -> io::Result<VolumeInfo> {
     let mut file = OpenOptions::new()
         .read(true)

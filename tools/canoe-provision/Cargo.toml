@@ -14,13 +14,16 @@ required-features = ["cli"]
 
 [features]
 default = ["cli"]
-cli = ["dep:clap"]
+cli = ["dep:clap", "native"]
+native = ["dep:tempfile"]
+# Historical helper integration is opt-in; b5 does not ship that helper.
+legacy-ext4-tests = ["cli"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tempfile = "3"
+tempfile = { version = "3", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
