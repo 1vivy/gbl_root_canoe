@@ -1,14 +1,14 @@
 /*
- * The bundled mass-storage driver: carried inside this image and started on
- * demand, so an export enumerates as 1209:ca0e with INQUIRY strings "canoe"
- * / "efisp boot root" and the removable bit clear. No stock host rule
- * claims that identity, so a session needs no host-side ceremony on Linux,
- * Windows or macOS.
+ * Bundled export drivers are started on demand. Manual storage enumerates as
+ * class 08, 1209:ca0e; managed storage uses class FF, 1209:ca0f and its scoped
+ * WinUSB descriptors. INQUIRY strings are "canoe" / "efisp boot root".
+ * The removable bit follows the assigned LUN: the contained FAT image is
+ * removable, while a physical persist partition retains fixed-media identity.
  *
  * The platform's own driver is never touched: the bundled image is loaded
- * into fresh pool memory allocated for us. Every failure mode - no blob in
- * this build, refused load, refused start - degrades to the platform driver,
- * which exports under its own identity exactly as it did before.
+ * into fresh pool memory allocated for us. Manual export may fall back to the
+ * platform driver if its bundled variant cannot start. Managed export must
+ * refuse that failure rather than fall back to an OS-owned storage identity.
  *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -26,8 +26,8 @@
 
 /*
  * The bundled image, baked in at build time by
- * submodules/uefi/embed_variant.py. NULL with size 0 is a valid build: every
- * export then uses the platform driver.
+ * submodules/uefi/embed_variant.py. NULL with size 0 permits manual platform
+ * fallback; managed export remains unavailable without its bundled variant.
  */
 extern CONST UINT8  *gCanoeMsdVariant;
 extern CONST UINTN  gCanoeMsdVariantSize;
@@ -57,7 +57,8 @@ STATIC SFB_VARIANT mVariants[2];
  * the same protocol GUID the platform driver does, so the instance is
  * identified by handle diff: snapshot the handles carrying the GUID, start
  * the image, and take the handle that appears. Tried once per boot; a
- * failure latches so later exports fall back without re-paying the load.
+ * failure latches so later exports do not repeat the load attempt. The caller
+ * chooses manual platform fallback or managed-export refusal.
  */
 STATIC SFB_USB_MSD_PROTOCOL *
 VariantProtocol (BOOLEAN Managed)
