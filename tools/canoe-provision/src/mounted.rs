@@ -12,6 +12,9 @@ use std::{
 };
 
 pub fn create(root: &Path) -> io::Result<volume::VolumeInfo> {
+    create_sized(root, volume::CONTAINER_BYTES)
+}
+pub fn create_sized(root: &Path, bytes: u64) -> io::Result<volume::VolumeInfo> {
     let persist = crate::mounted_root::PersistRoot::open(root)?;
     let work = tempfile::Builder::new()
         .prefix(".canoe-boot-volume-")
@@ -19,7 +22,7 @@ pub fn create(root: &Path) -> io::Result<volume::VolumeInfo> {
     let stage = work.path().file_name().unwrap().to_str().unwrap();
     let identity = persist.create_stage(stage)?;
     // Failed stages remain named for deliberate operator recovery.
-    let result = persist.initialize_stage(stage, &identity)?;
+    let result = persist.initialize_stage_sized(stage, &identity, bytes)?;
     persist.publish_stage(stage, &identity)?;
     Ok(result)
 }

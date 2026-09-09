@@ -2,7 +2,7 @@
 //! ABI structures mirror linux/fiemap.h; no raw filesystem parser lives here.
 use crate::{
     offline::{Allocation, Extent},
-    volume::CONTAINER_BYTES,
+    volume::supported_bytes,
 };
 use std::{
     fs::File,
@@ -34,11 +34,12 @@ const _: () = assert!(std::mem::offset_of!(Map, extents) == 32);
 
 pub fn inspect(file: &File) -> io::Result<Allocation> {
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() != CONTAINER_BYTES || metadata.nlink() != 1 {
+    if !metadata.is_file() || !supported_bytes(metadata.len()) || metadata.nlink() != 1 {
         return Err(io::Error::other(
-            "container must be a single-link 32 MiB regular file",
+            "container must be a single-link supported FAT16 regular file",
         ));
     }
+    let bytes = metadata.len();
     let mut inode_flags: libc::c_long = 0;
     if unsafe { libc::ioctl(file.as_raw_fd(), libc::FS_IOC_GETFLAGS, &mut inode_flags) } != 0 {
         return Err(io::Error::last_os_error());
@@ -69,7 +70,7 @@ pub fn inspect(file: &File) -> io::Result<Allocation> {
     let mut physical = Vec::new();
     let mut next = 0;
     let mut last = false;
-    while !last && next < CONTAINER_BYTES {
+    while !last && next < bytes {
         map.start = next;
         map.length = u64::MAX - next;
         map.mapped = 0;
@@ -91,7 +92,7 @@ pub fn inspect(file: &File) -> io::Result<Allocation> {
                 .ok_or_else(|| io::Error::other("physical extent overflow"))?;
             if extent.logical != next
                 || extent.length == 0
-                || end > CONTAINER_BYTES
+                || end > bytes
                 || extent.physical == 0
                 || extent.flags & !1 != 0
                 || extent.logical % block_size != 0
@@ -103,7 +104,7 @@ pub fn inspect(file: &File) -> io::Result<Allocation> {
                 ));
             }
             last = extent.flags & 1 != 0;
-            if last && (index + 1 != map.mapped as usize || end != CONTAINER_BYTES) {
+            if last && (index + 1 != map.mapped as usize || end != bytes) {
                 return Err(io::Error::other("invalid final container extent"));
             }
             extents.push(Extent {
@@ -115,9 +116,9 @@ pub fn inspect(file: &File) -> io::Result<Allocation> {
             next = end;
         }
     }
-    if !last || next != CONTAINER_BYTES {
+    if !last || next != bytes {
         return Err(io::Error::other(
-            "container map does not cover exactly 32 MiB",
+            "container map does not cover the complete container",
         ));
     }
     physical.sort_unstable();
@@ -126,7 +127,7 @@ pub fn inspect(file: &File) -> io::Result<Allocation> {
     }
     Ok(Allocation {
         identity: None,
-        bytes: CONTAINER_BYTES,
+        bytes: bytes,
         block_size,
         initialized: true,
         extents,

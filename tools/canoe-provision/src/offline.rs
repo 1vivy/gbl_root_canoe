@@ -1,6 +1,6 @@
 //! Provisioning primitives over an explicit offline ext4 image. The caller owns
 //! device transport, snapshots and readback. libext2fs remains unchanged.
-use crate::volume::{self, CONTAINER_BYTES, PERSIST_RESERVE_BYTES};
+use crate::volume::{self, PERSIST_RESERVE_BYTES};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -81,7 +81,10 @@ impl<'a> Offline<'a> {
     }
     pub fn allocation(&self, path: &str) -> io::Result<Allocation> {
         let result: Allocation = serde_json::from_slice(&self.output("allocation", &[path])?)?;
-        if result.bytes != CONTAINER_BYTES || !result.initialized || result.extents.is_empty() {
+        if !volume::supported_bytes(result.bytes)
+            || !result.initialized
+            || result.extents.is_empty()
+        {
             return Err(io::Error::other("container allocation is incomplete"));
         }
         Ok(result)

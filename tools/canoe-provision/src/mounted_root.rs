@@ -152,18 +152,29 @@ impl PersistRoot {
         stage: &str,
         expected: &Identity,
     ) -> io::Result<volume::VolumeInfo> {
+        self.initialize_stage_sized(stage, expected, volume::CONTAINER_BYTES)
+    }
+    pub fn initialize_stage_sized(
+        &self,
+        stage: &str,
+        expected: &Identity,
+        bytes: u64,
+    ) -> io::Result<volume::VolumeInfo> {
+        if !volume::supported_bytes(bytes) {
+            return Err(io::Error::other("unsupported boot-volume size"));
+        }
         offline::validate_staging_name(stage)?;
         let mut file = self.checked(stage, expected, true)?;
-        if file.metadata()?.len() > volume::CONTAINER_BYTES {
+        if file.metadata()?.len() > bytes {
             return Err(io::Error::other("container staging size changed"));
         }
-        let allocated = file
-            .metadata()?
-            .blocks()
-            .saturating_mul(512)
-            .min(volume::CONTAINER_BYTES);
-        volume::require_capacity(self.available()?.saturating_add(allocated), 1024 * 1024)?;
-        volume::initialize(&mut file)?;
+        let allocated = file.metadata()?.blocks().saturating_mul(512).min(bytes);
+        volume::require_capacity_for(
+            self.available()?.saturating_add(allocated),
+            1024 * 1024,
+            bytes,
+        )?;
+        volume::initialize_sized(&mut file, bytes)?;
         file.sync_all()?;
         crate::allocation::inspect(&file)?;
         volume::inspect(&mut file)
@@ -181,7 +192,7 @@ impl PersistRoot {
         file.sync_all()?;
         if self.available()? < volume::PERSIST_RESERVE_BYTES {
             return Err(io::Error::other(
-                "persist no longer has the required 8 MiB reserve",
+                "persist no longer has the required 2 MiB reserve",
             ));
         }
         self.rename(stage, volume::CONTAINER_NAME)?;
