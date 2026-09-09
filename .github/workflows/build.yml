@@ -9,9 +9,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
       - run: sudo apt-get update && sudo apt-get install -y dosfstools liblzma-dev clang lld uuid-dev
       - run: make test
+      - name: Qualify portable image libraries
+        run: |
+          for crate in mode2-profile canoe-image abl-tzmap canoe-provision; do
+            cargo check --locked --manifest-path tools/$crate/Cargo.toml --no-default-features --lib --target wasm32-unknown-unknown
+          done
+          cargo build --locked --manifest-path tools/canoe-image/qualification/vendorboot/Cargo.toml --target wasm32-unknown-unknown --release
+          node tools/canoe-image/qualification/vendorboot/run.mjs
       - run: docker build -t gbl_builder .
       - name: Build CANOE-BDS and EFI tools
         run: docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc 'make -C submodules/uefi build && make -C submodules/uefi tools'
