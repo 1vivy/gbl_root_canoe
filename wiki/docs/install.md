@@ -1,83 +1,89 @@
-# Installation Guide
+# Install Canoe
 
-## Boot Flow
+Use Canoe Boot Manager on Linux or Windows, or its WebUI in KernelSU. The
+application and the module installer use the same native deployment engine.
+The standalone commands are described in [Command-line tools](./commands.md).
 
-The real ABL loads an embedded **superfastboot BDS** off the raw `efisp` partition (via the GBL vulnerability). The BDS then scans a compatible partition for boot entries and chains to the selected one.
+## Storage
 
-On this device the boot root is the `persist` partition (ext4, auto-mounted at `/mnt/vendor/persist`), under its `efisp/` directory:
+The boot chain is:
 
-| File | Purpose |
-|------|---------|
-| `boot.efi` | Cracked ABL with fake re-lock (`ANDROID` entry) |
-| `boot_backup.efi` | Previous `boot.efi` (`ANDROID_BACKUP` entry) |
-| `BOOTENTRIES` | Boot entry list, format `<name>:<path relative to efisp/>` |
+```text
+signed vulnerable ABL → raw efisp:BDS.efi → persist/efisp.fat → selected loader
+```
 
-`BDS.efi` is written raw to the `efisp` partition (not into a filesystem).
+`efisp` is a raw partition containing BDS. `efisp.fat` is a fully initialized
+32 MiB FAT16 file inside ext4 persist. Provisioning requires a further 8 MiB of
+free space. Its mounted root contains `canoe.cfg`, per-slot loader triplets,
+EFI tools and any manually installed BLS entries. No GPT change is needed.
 
-## 1. Prerequisite: GBL Vulnerability
+The old `/persist/efisp` directory is ignored and preserved. There is no import
+or automatic migration. Users of gbl-chainload or Canoe 6.3.5 and earlier
+must [reinstall and recreate entries](./reinstall.md).
 
-The ABL on the `abl` partition must contain the **GBL vulnerability** so it loads the BDS off `efisp`. If your ABL lacks it, flash an **older ABL version** that has the vulnerability to the `abl` partition first. The cracked `boot.efi` does **not** need to match the ABL on the `abl` partition.
+## Desktop
 
-## 2. Install Method
+Launch `canoe-boot-manager.sh` on Linux or `canoe-boot-manager.bat` on Windows.
+Linux needs WebKitGTK 4.1 and its normal runtime dependencies; Windows needs
+WebView2. Keep the packaged application and its helpers together. The GUI
+requests privileges for protected device access and retains the authorized
+helper for the session.
 
-| Method | Description |
-|--------|-------------|
-| **KernelSU module (Recommended)** | Automated: extracts & cracks the current ABL, lays out the boot root, and flashes the BDS |
-| **Toolkit (Manual)** | For traditional users: run `build.sh` / `build.bat` on your `abl.img`, then place files and flash manually |
+1. Start Deploy and answer the installation-history question **before** any
+   initial ABL/BDS writes. A newly flashed efisp cannot establish whether the
+   phone previously used another EFISP mod.
+2. For a first installation, enter Android **Fastbootd**. Select a compatible
+   vulnerable ABL and firmware ABL for recovery. Optionally select the previous
+   BDS image for recovery; otherwise recovery of this initial step clears raw
+   efisp. Review the active-slot and raw-efisp targets before applying.
+3. Restart when ready. An unpopulated boot root normally enters Super Fastboot
+   automatically. If it does not, open the BDS menu and choose Super Fastboot.
+   The app verifies the initial writes there before continuing preparation.
+4. Prepare the selected slot's loader and boot images, choose the intended mode,
+   and review the data assessment and every write. Apply when satisfied.
+5. Reboot only after completion. Formatting, when required, is a separate action
+   in recovery; Canoe never formats automatically.
 
-## 3. Module Install (KernelSU)
+Initial writes and the later deployment share one saved operation. Closing the
+app does not discard its receipts. Incomplete operations offer retry and,
+where recovery inputs are available, reviewed Revert.
 
-### 3.1 Fresh install
+Desktop slot selection is manual: A, B, or Both. Each selected slot has its own
+preparation. Both-slot deployment writes the inactive slot before the active
+slot. This is for manual reconciliation, not a system-OTA shortcut. An image
+from another slot is not offered as an ordinary source; choose a file when
+needed.
 
-1. Install the module via KernelSU. When prompted, press **Vol+ (YES)**.
-   The module extracts & cracks the current-slot ABL, places `boot.efi` / `BOOTENTRIES` into `/mnt/vendor/persist/efisp/`, and flashes `BDS.efi` to `efisp`.
-2. Reboot to **Recovery** and **format data**.
-   > ⚠️ The first reboot may crash — simply retry.
-3. Reinstall the module and press **Vol- (NO)** to install the OTA-update patch.
-4. Reboot the system.
+## KernelSU first setup and updates
 
-### 3.2 After an OTA
+During a first module installation, volume keys offer **Install manager only**,
+**Deploy Canoe now**, or cancellation. Release each key between presses. A
+selection timeout leaves a manager-only installation. Module updates do not
+implicitly deploy or change partitions.
 
-After each OTA, open the module WebUI and flash again to keep the BL version (re-cracks the new ABL to the inactive slot / refreshes the boot root).
+Deploy now executes the newly extracted tools from the module installation
+path. It prepares the active slot from its on-slot images and offers Mode 1/2,
+explicit custom recovery, and applicable vendor_boot preparation. Required
+images are inspected before writes. If grafting or donor input is missing,
+read the specific reason and choose manager-only installation or cancellation.
+Full installation in the activated WebUI supports native Android file pickers.
 
-## 4. Toolkit Install (Manual)
+The final installer review lists the slot, mode, targets, image identities and
+userdata assessment. Only its explicit Apply choice writes. Recovery records
+remain in `/data/adb/canoe-manager/operations`, outside installer temporary files
+and the manager module.
 
-> The toolkit is manual-install only; superfb does not provide automated installation for toolkit users.
+For an installed system, use [OTA preparation](./ota.md), the General boot-image
+shortcut, or [Uninstall Canoe](./uninstall.md). Installing or updating only the
+manager does not require a data format.
 
-1. Place your `abl.img` in the toolkit `images/` folder and run `build.sh` (Android/Linux) or `build.bat` (Windows). Outputs:
-   - `ABL.efi` — cracked ABL (fake re-lock)
-   - `ABL_original.efi` — original unpatched ABL
-   - `BDS.efi` — bundled
-2. Create the folder `/mnt/vendor/persist/efisp` (e.g. via MT Manager).
-3. Copy `ABL.efi` into it.
-4. Create `BOOTENTRIES` with:
-   ```
-   ANDROID:ABL.efi
-   ```
-5. `sync`
-6. Flash `BDS.efi` to the `efisp` partition:
-   ```
-   dd if=BDS.efi of=/dev/block/by-name/efisp bs=4M
-   ```
-   If the build log shows `Failed to patch ABL GBL`, downgrade the `abl` partition to an older ABL with the vulnerability before booting.
+## Image and data compatibility
 
-## 5. Re-lock Mode
+A source ABL used to derive a loader is separate from the vulnerable ABL flashed
+to the partition. Each `.efi` has matching `.gm2p` and `.tzmap` sidecars. Do not
+mix generations. A parsed signing key does not establish OEM provenance or
+firmware suitability.
 
-| Mode | Applicable scenario |
-|------|---------------------|
-| **True re-lock** | Devices with official unlock support (e.g. OnePlus), or international devices that passed official unlock review |
-| **Fake re-lock** | Force-unlocked devices, or devices needing official fastboot as fallback |
-
-- **Fake re-lock**: the cracked `boot.efi` already provides the fake lock.
-- **True re-lock**: boot into the BDS (Super Fastboot) and perform the re-lock operation.
-  - ✅ Some devices (e.g. Dami): re-lock does **not** wipe data.
-  - ⚠️ OnePlus: requires a **deep test unlock**; data will be lost, but root is retained.
-
-## ⚠️ Important Warnings
-
-> Before performing any operation, verify the following:
-
-- 📌 Restore any partition **other than those containing `boot`** that you modified.
-- 📌 Partitions verified by `init`: **AVB must remain enabled** — do not modify.
-- 📌 The `dtbo` partition verified by ABL **must not be modified** in true re-lock mode.
-- ❌ **Do NOT install TWRP** — it will cause **data corruption**.
+See the [format-data matrix](./format-data.md). Missing boot evidence is
+**Unknown**, not proof that formatting is required. AVB failures need correct
+images and verification data; formatting does not repair them.

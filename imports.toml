@@ -1,0 +1,126 @@
+schema = 1
+
+[[import]]
+id = "webui"
+kind = "artifact"
+why = "Checked-in Web UI archive from canoe-boot-manager; its digest currently matches the checked-in archive."
+path = "targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz"
+version = "0.1.0"
+url = "file://$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz"
+sha256 = "693bd6a50b870889924869dbd5ae0dc3ba95a01dcb94b76f00320e18b97dfa03"
+bytes = 208453
+make_prefix = "CANOE_WEBUI"
+[import.producer]
+repo = "canoe-boot-manager"
+command = "bun run build, then make -C targets/magisk_module webui-pin CANOE_WEBUI_SRC=../../../canoe-boot-manager"
+
+[[import]]
+id = "msd-variant"
+kind = "artifact"
+why = "Calibrated canoe USB mass-storage DXE compiled by the canoe-msd repository."
+path = "submodules/uefi/blobs/canoe-usbmsd.efi"
+sha256 = "f40cd851526179a1a02f34f99b9a2d3c886c548c90622f176d2f2542d4f4994d"
+bytes = 57344
+[import.producer]
+repo = "https://github.com/1vivy/canoe-msd.git"
+command = "BOOT_MXF=/path/to/vendor EDK2=/path/to/edk2 pkg/scripts/build.sh; backing-flush source build; verified identity and 142 relocated data pointers"
+
+[[import]]
+id = "gpt-slot-reset-fixture"
+kind = "artifact"
+why = "GPT slot-reset fixture image carried by the UEFI host-test suite."
+path = "submodules/uefi/tests/fixtures/gpt-slot-reset-dump.img"
+sha256 = "729547175c144eabe8819e1cef58f836322ec7799b515ca18e1b199d301222d2"
+bytes = 131072
+
+[[import]]
+id = "vbmeta-infiniti-fixture"
+kind = "artifact"
+why = "Infiniti vbmeta fixture image carried by the mode2-profile tests."
+path = "tools/mode2-profile/tests/fixtures/vbmeta-infiniti-IN-16.0.7.201.img"
+sha256 = "c7f4643515753cabfb4a993e8f6775d37c04c4cee2101840ea5ff34d0f61da60"
+bytes = 12288
+
+[[import]]
+id = "abl-extract-fixture"
+kind = "artifact"
+why = "ABL extractor fixture, byte-identical to ablrepo/myron/abl.img."
+path = "submodules/ablfvextractor/tests/001_myron_abl.elf"
+sha256 = "7ad61d97208daa71898fad89839a0268f4d7b36f94e48585f67779330a82ecce"
+bytes = 335872
+
+[[import]]
+id = "platform-tools"
+kind = "fetch"
+why = "Android platform-tools archive fetched for the Windows toolkit."
+url = "https://dl.google.com/android/repository/platform-tools_r37.0.0-win.zip"
+version = "r37.0.0"
+sha256 = "4fe305812db074cea32903a489d061eb4454cbc90a49e8fea677f4b7af764918"
+make_prefix = "PLATFORM_TOOLS"
+
+[[import]]
+id = "xz-utils"
+kind = "fetch"
+why = "XZ source fetched by the Android and Windows ABL extractor builds."
+url = "https://tukaani.org/xz/xz-5.4.5.tar.gz"
+version = "5.4.5"
+pinned = false
+
+[[import]]
+id = "edk2-vendor"
+kind = "subtree"
+why = "Squash-imported vendor edk2 source tree; local Canoe changes are intentionally maintained here."
+path = "submodules/uefi/edk2"
+exclude = ["QcomModulePkg", "AndroidToolsPkg"]
+imported_at = "2f5339b"
+local_patches = true
+[import.upstream]
+url = "https://git.codelinaro.org/clo/la/abl/tianocore/edk2"
+rev = "unknown"
+
+[[import]]
+id = "ablrepo"
+kind = "data"
+why = "Foreign per-product ABL candidates and their recorded digests and metadata."
+path = "ablrepo"
+entry_image = "abl.img"
+entry_digest = "abl.sha256"
+entry_meta = "abl.meta"
+
+[[import]]
+id = "android-efi-tools"
+kind = "satellite"
+why = "AndroidToolsPkg project versioned independently from CANOE_VERSION."
+path = "submodules/uefi/edk2/AndroidToolsPkg"
+version_key = "VERSION_STRING"
+[import.versions]
+"Application/ArbTools/ArbTools.inf" = "0.1"
+"Application/BLTools/BLTools.inf" = "0.1"
+"Application/CrashTools/CrashTools.inf" = "0.1"
+"Application/LogTools/LogTools.inf" = "0.1"
+"Application/MdTools/MdTools.inf" = "0.1"
+"Application/RebootTools/RebootTools.inf" = "0.1"
+"Application/SurfaceTools/SurfaceTools.inf" = "0.2"
+"Application/UsbTools/UsbTools.inf" = "0.1"
+"Library/AndroidToolsUi/AndroidToolsUi.inf" = "0.1"
+"Library/MdTableLib/MdTableLib.inf" = "0.1"
+
+[[import]]
+id = "desktop-app-linux"
+kind = "external"
+why = "Operator-supplied canoe-boot-manager Linux binary from a sibling checkout."
+path_var = "CANOE_APP_LINUX_BIN"
+note = "Supply the Linux binary from canoe-boot-manager; it is not committed or hashable here."
+[import.producer]
+repo = "canoe-boot-manager"
+command = "bunx tauri build --no-bundle --ci"
+
+[[import]]
+id = "desktop-app-windows"
+kind = "external"
+why = "Operator-supplied canoe-boot-manager Windows binary from a sibling checkout."
+path_var = "CANOE_APP_WINDOWS_BIN"
+note = "Supply the x86_64-pc-windows-gnu binary from canoe-boot-manager; it is not committed or hashable here."
+[import.producer]
+repo = "canoe-boot-manager"
+command = "bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci"

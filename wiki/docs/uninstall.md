@@ -1,40 +1,27 @@
-# Uninstall Guide
+# Uninstall Canoe
 
+Open **Settings → Uninstall Canoe** on desktop or in the KSU WebUI. Select a
+stock firmware ABL suitable for the active slot. **Also restore inactive slot**
+is optional and unchecked; it has a separate picker and an unchecked **Use the
+same ABL image** choice. The app cannot establish the inactive slot's firmware
+state or bootability from its signer or an old snapshot.
 
-## 1. Backup Your Data
+Review the selected targets and sources. Uninstall restores and verifies the
+inactive ABL first when selected, then the active ABL. It then wipes and
+verifies raw efisp and removes the unmounted `persist/efisp.fat` container.
+Unrelated persist contents, including legacy `efisp/`, remain untouched.
 
-Before performing any uninstall operation, make sure to **fully back up all important data** to prevent data loss.
+An error stops the operation and retains its records outside the removed
+container. Use the saved operation's validated Retry to continue. Uninstall
+uses forward recovery rather than reversing a deployment plan.
 
+Grafted images, vendor_boot patches, userdata and the KSU manager module remain
+unchanged. Remove the manager module separately when finished. After verified
+completion, **Reboot to recovery** is available if you want to format there;
+rebooting does not itself format anything.
 
-## 2. True Re-lock Requirement
+**If you intend to relock the device, make sure your phone is completely stock
+before attempting it.** Uninstall does not make the remaining system stock.
 
-If the device is in **true re-lock mode**, the bootloader **must be unlocked first** before proceeding:
-
-| Device | Unlock Method |
-|--------|---------------|
-| **Twoplus** | Deep Test Unlock |
-| **Dami** | Super Fastboot Unlock |
-
-
-## 3. Uninstall Steps
-
-1. Boot into **official fastboot** mode
-
-2. Erase the patch partition:
-
-   ```bash
-   fastboot erase efisp
-   ```
-
-3. Format and wipe user data:
-
-   ```bash
-   fastboot -w
-   ```
-
-
-## ⚠️ Important Notes
-
-- 📌 Ensure the **bootloader is unlocked** according to your device's requirements before proceeding
-- 📌 `fastboot -w` will **wipe the data partition** — confirm all important files are backed up beforehand
-- 📌 After uninstallation, the device will be restored to its **unlocked, root state**
+Revert is a separate action for incomplete recorded installations. Successful
+operations retain receipts but do not offer Revert as an uninstall shortcut.

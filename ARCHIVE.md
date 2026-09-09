@@ -1,3 +1,8 @@
+> **Superseded.** This notice covered the 6.x line. Development resumed for the
+> 7.x redesign; see [README.md](README.md) for current status. The text below is
+> kept as history because it is what the 6.x releases shipped with, and because
+> the reasoning in it is still the right reasoning for the release it described.
+
 # 📦 Archived / 已归档
 
 [English](#english) · [中文](#中文)

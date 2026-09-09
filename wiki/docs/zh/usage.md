@@ -1,69 +1,9 @@
-# Superfastboot 使用指南
+# 使用 Canoe
 
+General/Overview 显示设备状态和已保存操作；Deploy 用于准备、审阅和写入；Boot entries 管理 EFI/BLS；Settings 提供策略、语言和卸载；Diagnostics 提供观察信息及记录。
 
-## 启动相关
+Prepare Mode 1 boot images 直接进入镜像准备，默认使用活动槽验证资料并保留已安装模式，不更新加载器、BDS、工具或启动项模式。未完成操作可重试或审阅 Revert，成功收据仍可查看。
 
-- 使用临时启动 EFI 文件（无需刷入）：
+普通 BDS 菜单选择只影响本次启动。显式 Save as default 才保存偏好，并保留已验证的 canoe.cfg.prev 作为缺失/损坏配置的回退。
 
-  ```bash
-  fastboot boot xxx.efi
-  ```
-
-
-## BL 相关
-
-- 锁定 BL，**触发数据清除**：
-
-  ```bash
-  fastboot flashing lock (触发清除，原因未知)
-  ```
-
-- 解锁 BL，**不触发数据清除**：
-
-  ```bash
-  fastboot flashing unlock
-  fastboot flashing unlock_critical
-  ```
-
-> 注意：如果 TEE 状态不一致，设备会拒绝下发 data key，从而导致数据无法访问。
-
-
-## 刷写相关
-
-- 刷写分区镜像：
-
-  ```bash
-  fastboot flash <partition> <file.img>
-  ```
-
-- 擦除指定分区：
-
-  ```bash
-  fastboot erase <partition>
-  ```
-
-
-## 重启相关
-
-- 重启至引导加载器，下一次正常启动进入官方 Fastboot：
-
-  ```bash
-  fastboot reboot bootloader
-  ```
-
-- 重启至恢复模式，下一次正常启动进入 Recovery：
-
-  ```bash
-  fastboot reboot recovery
-  ```
-
-- 普通重启设备：
-
-  ```bash
-  fastboot reboot
-  ```
-
-
-## 注意事项
-
-- 开启 OEM 解锁且开机出现小白字时，**必须按音量减（Volume Down）键才能进入 Superfastboot 模式。**
+参见[完整说明](../usage.md)、[命令](../commands.md)、[旧版重装](../reinstall.md)与[数据格式化矩阵](../format-data.md)。

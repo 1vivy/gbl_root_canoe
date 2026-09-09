@@ -1,45 +1,9 @@
-# 卸载操作指南
+# 卸载 Canoe
 
+进入 Settings → Uninstall Canoe，明确选择适合活动槽固件的原厂 ABL。可选恢复非活动槽，单独选择镜像；使用同一 ABL 的选项默认不勾选。
 
-## 1. 备份数据
+依次恢复并校验所选非活动槽、活动槽 ABL，再擦除并校验原始 efisp，卸载并删除 efisp.fat。保留无关 persist 内容、旧 efisp 目录、graft 镜像、vendor_boot、用户数据与管理器模块。失败保留收据，可验证后重试。成功后可选择重启到 Recovery，再自行决定是否格式化。
 
-在进行任何卸载操作之前，务必**先完整备份重要数据**，避免数据丢失。
+**如要重新锁定设备，请先确保整台手机已完全恢复原厂状态。卸载 Canoe 不会使其他分区自动恢复原厂。** Revert 仅用于未完成操作的恢复，不是卸载快捷方式。
 
-
-## 2. 真回锁要求
-
-真回锁模式下必须**先解锁 BL**，再进行后续操作：
-
-| 设备 | 解锁方式 |
-|------|----------|
-| **Twoplus** | 深度测试解锁 |
-| **Dami** | Super Fastboot 解锁 |
-
-
-## 3. 卸载步骤
-
-1. 进入**官方 fastboot** 模式
-
-2. 擦除补丁分区：
-
-   ```bash
-   fastboot erase efisp
-   ```
-   也可以在adb shell su -c下执行
-
-   ```bash
-   adb shell su -c dd if=/dev/zero of=/dev/block/by-name/efisp
-   ```
-
-3. 格式化并清除用户数据：
-
-   ```bash
-   fastboot -w
-   ```
-
-
-## ⚠️ 注意事项
-
-- 📌 操作前请确认已按对应机型要求**完成 BL 解锁**
-- 📌 `fastboot -w` 将**清除数据分区**，请务必提前备份重要文件
-- 📌 卸载完成后，设备将恢复至**解锁root状态**
+参见[完整说明](../uninstall.md)、[命令](../commands.md)、[旧版重装](../reinstall.md)与[数据格式化矩阵](../format-data.md)。
