@@ -25,7 +25,10 @@ pub fn materialize(image: &[u8], partition_bytes: u64, kind: Kind) -> io::Result
     }
     let footer = match kind {
         Kind::Bootloader => None,
-        Kind::Android => mode2_profile::footer::Footer::parse(image).map_err(io::Error::other)?,
+        Kind::Android => {
+            crate::android::inspect(image, crate::android::Kind::Any)?;
+            mode2_profile::footer::Footer::parse(image).map_err(io::Error::other)?
+        }
     };
     let capacity = usize::try_from(partition_bytes).map_err(io::Error::other)?;
     let mut output = vec![0u8; capacity];

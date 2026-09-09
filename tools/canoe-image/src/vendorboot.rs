@@ -15,6 +15,16 @@ pub const CMDLINE_OFFSET: usize = 28;
 pub const CMDLINE_BYTES: usize = 2048;
 pub const BLACKLIST: &[u8] = b"module_blacklist=oplus_secure_guard_new";
 
+/// Validate the header, section/table ranges and fragment layout without
+/// modifying ramdisks or requiring vendor-specific guard module metadata.
+pub fn validate_bytes(bytes: &[u8]) -> Result<(), VendorBootError> {
+    if !bytes.starts_with(MAGIC) {
+        return Err(VendorBootError::InvalidHeader { message: "image has invalid magic (expected VNDRBOOT)".into() });
+    }
+    image::ramdisks(bytes)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PatchReceipt {
     pub output: String,

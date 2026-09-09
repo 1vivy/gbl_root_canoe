@@ -1,4 +1,5 @@
 pub mod loader;
+pub mod android;
 #[cfg(feature = "native")]
 pub mod abl_verify;
 #[cfg(feature = "native")]

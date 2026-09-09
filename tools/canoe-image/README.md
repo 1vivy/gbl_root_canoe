@@ -23,3 +23,19 @@ The manager application links this same library and supplies its reviewed helper
 resolver. The library knows nothing about desktop sessions, Android root, USB,
 UAC or the application's helper containment policy. Application snapshots,
 partition readback and recovery remain application responsibilities.
+
+`android::inspect(bytes, Kind)` validates boot/recovery headers 0–4 and
+vendor_boot headers 3–4, section ranges, page geometry and the selected image
+role. `InitBoot` requires the Android 13+ v4 ramdisk-only layout. Dedicated
+recovery may be ramdisk-only. Unsigned images are allowed by this structural
+check; a v4 boot signature is range-checked but never reported as authenticated.
+When an AVB footer exists, Android sections must fit before its original-payload
+boundary. `partition::materialize(..., Kind::Android)` always runs this guard
+before padding or relocating the footer.
+
+The layout follows the [AOSP boot image definitions](https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/include/bootimg/bootimg.h)
+and [generic boot partition roles](https://source.android.com/docs/core/architecture/partitions/generic-boot).
+This is separate from AVB authentication, graft-key matching, firmware suitability
+and phone-data compatibility. Synthetic format tests cover every supported header
+version; the b5 qualification also inspected the retained OP15 A/B boot, recovery
+and vendor_boot images without writing a device.
