@@ -74,7 +74,16 @@ fn validate_entry(entry: &BlsEntry) -> Result<(), BlsError> {
         }
     }
     for line in &entry.unknown {
-        if line.key.is_empty() || !printable(&line.key) || !printable(&line.value) {
+        if line.key.is_empty()
+            || line.key.starts_with('#')
+            || line.key.contains(' ')
+            || matches!(
+                line.key.as_str(),
+                "title" | "linux" | "efi" | "initrd" | "devicetree" | "options"
+            )
+            || !printable(&line.key)
+            || !printable(&line.value)
+        {
             return Err(BlsError::Invalid(
                 "unknown key is not printable ASCII".to_owned(),
             ));

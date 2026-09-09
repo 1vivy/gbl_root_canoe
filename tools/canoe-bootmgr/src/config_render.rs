@@ -87,7 +87,10 @@ fn validate_document(config: &ConfigDocument) -> Result<(), ConfigError> {
         }
         validate_mode(entry.mode)?;
         if let Some(options) = &entry.options {
-            if options.is_empty() || options.len() > MAX_OPTIONS_CHARS {
+            if options.is_empty()
+                || options.len() > MAX_OPTIONS_CHARS
+                || !crate::config::printable(options)
+            {
                 return Err(ConfigError::Invalid(
                     "entry options are too long".to_owned(),
                 ));
@@ -105,6 +108,25 @@ fn validate_document(config: &ConfigDocument) -> Result<(), ConfigError> {
 
 fn validate_raw(line: &crate::config::RawLine) -> Result<(), ConfigError> {
     if line.key.is_empty()
+        || line.key.starts_with('#')
+        || line.key.contains(' ')
+        || matches!(
+            line.key.as_str(),
+            "version"
+                | "generation"
+                | "menu-mode"
+                | "key-window"
+                | "menu-timeout"
+                | "timeout"
+                | "default"
+                | "mode"
+                | "devinfo-repair"
+                | "entry"
+                | "title"
+                | "image"
+                | "options"
+                | "role"
+        )
         || !crate::config::printable(&line.key)
         || !crate::config::printable(&line.value)
     {
