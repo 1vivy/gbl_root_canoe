@@ -49,7 +49,9 @@ pub fn select_bytes(persist_bytes: u64, headroom_percent: u32) -> io::Result<u64
 /// Check files against the selected filesystem; payload never determines size.
 pub fn require_payload_fit(files: &[u64], info: &VolumeInfo) -> io::Result<()> {
     let cluster = u64::from(info.cluster_bytes);
-    let mut needed = cluster; // tools directory
+    // Reserve enough directory entries for the manager's 32 tools at the
+    // maximum 120-character filename length, including long-name entries.
+    let mut needed = (16 * 1024u64).div_ceil(cluster) * cluster;
     for &bytes in files {
         needed = needed
             .checked_add(
@@ -151,10 +153,11 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
     let sector = u16::from_le_bytes([boot[11], boot[12]]);
     let cluster = u32::from(sector) * u32::from(boot[13]);
     let short_sectors = u16::from_le_bytes([boot[19], boot[20]]);
+    let long_sectors = u32::from_le_bytes(boot[32..36].try_into().unwrap());
     let sectors = if short_sectors != 0 {
         u32::from(short_sectors)
     } else {
-        u32::from_le_bytes(boot[32..36].try_into().unwrap())
+        long_sectors
     };
     let reserved = u16::from_le_bytes([boot[14], boot[15]]);
     let root_entries = u16::from_le_bytes([boot[17], boot[18]]);
@@ -165,6 +168,7 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
     let clusters =
         u64::from(sectors).checked_sub(overhead).unwrap_or(0) / u64::from(boot[13].max(1));
     if !supported_bytes(bytes)
+        || (short_sectors == 0) == (long_sectors == 0)
         || sector != SECTOR_BYTES
         || !matches!(cluster, 512 | 1024 | 2048 | 4096 | 8192)
         || u64::from(sectors) * u64::from(sector) != bytes
@@ -282,6 +286,11 @@ mod tests {
             .write(true)
             .open(&path)
             .unwrap();
+        file.seek(SeekFrom::Start(32)).unwrap();
+        file.write_all(&((CONTAINER_BYTES / 512) as u32).to_le_bytes()).unwrap();
+        assert!(inspect(&mut file).is_err()); // both total-sector fields set
+        file.seek(SeekFrom::Start(32)).unwrap();
+        file.write_all(&[0; 4]).unwrap();
         file.seek(SeekFrom::Start(13)).unwrap();
         file.write_all(&[0]).unwrap();
         assert!(inspect(&mut file).is_err());
