@@ -13,14 +13,15 @@ required-features = ["cli"]
 
 [features]
 default = ["cli"]
-cli = ["dep:clap", "dep:serde_json"]
+cli = ["dep:clap", "dep:serde_json", "native"]
+native = ["canoe_fs/native"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 clap = { version = "4.5", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
-canoe_fs = { path = "../canoe-fs" }
+canoe_fs = { path = "../canoe-fs", default-features = false }
 mode2_profile = { path = "../mode2-profile", default-features = false }
 abl_tzmap = { path = "../abl-tzmap", default-features = false }
 

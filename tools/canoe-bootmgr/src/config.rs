@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const MAX_BYTES: usize = 8192;
@@ -22,7 +22,7 @@ pub enum ConfigError {
     PolicyRange { field: &'static str, maximum: u32 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Active,
@@ -54,7 +54,7 @@ impl Role {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MenuMode {
     Silent,
@@ -81,7 +81,7 @@ impl MenuMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DeviceInfoRepair {
     AsNeeded,
@@ -107,13 +107,13 @@ impl DeviceInfoRepair {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawLine {
     pub key: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigEntry {
     pub id: String,
     pub title: String,
@@ -124,7 +124,7 @@ pub struct ConfigEntry {
     pub unknown: Vec<RawLine>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigDocument {
     pub entries: Vec<ConfigEntry>,
     pub generation: u32,
@@ -137,7 +137,7 @@ pub struct ConfigDocument {
     pub unknown: Vec<RawLine>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryRequest {
     pub id: String,
     pub title: String,
@@ -150,7 +150,7 @@ pub struct EntryRequest {
     pub make_default: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyUpdate {
     pub menu_mode: Option<MenuMode>,
     pub key_window_ms: Option<u32>,

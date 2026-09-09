@@ -7,15 +7,18 @@ license = "MIT OR Apache-2.0"
 description = "Confined file operations and durable publication shared by Canoe commands"
 
 [dependencies]
-cap-std = "4"
-cap-fs-ext = "4"
-same-file = "1"
+cap-std = { version = "4", optional = true }
+cap-fs-ext = { version = "4", optional = true }
+same-file = { version = "1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = { version = "0.2", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+[features]
+default = ["native"]
+native = ["dep:cap-std", "dep:cap-fs-ext", "dep:same-file", "dep:libc", "dep:windows-sys"]
