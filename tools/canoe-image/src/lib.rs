@@ -21,7 +21,6 @@ pub mod partition;
 mod process;
 #[cfg(feature = "native")]
 pub mod vbmeta_inspect;
-#[cfg(feature = "native")]
 pub mod vendorboot;
 #[path = "../../canoe-bootmgr/src/version.rs"]
 pub mod version;

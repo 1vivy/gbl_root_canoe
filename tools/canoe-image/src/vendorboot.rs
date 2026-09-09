@@ -1,5 +1,8 @@
+#[cfg(feature = "native")]
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "native")]
+use std::path::Path;
+use std::path::PathBuf;
 
 use serde::Serialize;
 use thiserror::Error;
@@ -50,10 +53,23 @@ impl VendorBootError {
 }
 
 /// Block the guard in the kernel and Android's first-stage module loader.
+#[cfg(feature = "native")]
 pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, VendorBootError> {
     crate::output::distinct(output, &[source])
         .map_err(|error| io("validate output", output, error))?;
-    let mut bytes = fs::read(source).map_err(|error| io("read source", source, error))?;
+    let bytes = fs::read(source).map_err(|error| io("read source", source, error))?;
+    let (bytes, changed) = patch_bytes(bytes)?;
+    write_atomic(output, &bytes)?;
+    Ok(PatchReceipt {
+        output: output.display().to_string(),
+        bytes: bytes.len(),
+        changed,
+    })
+}
+
+/// Prepare an owned partition image in place without filesystem or process access.
+/// Returns the prepared image and whether its contents changed.
+pub fn patch_bytes(mut bytes: Vec<u8>) -> Result<(Vec<u8>, bool), VendorBootError> {
     let field_end = CMDLINE_OFFSET + CMDLINE_BYTES;
     if bytes.len() < field_end {
         return Err(VendorBootError::InvalidHeader {
@@ -91,12 +107,7 @@ pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, Vendo
             message: "no oplus_secure_guard_new module metadata found".to_owned(),
         });
     }
-    write_atomic(output, &bytes)?;
-    Ok(PatchReceipt {
-        output: output.display().to_string(),
-        bytes: bytes.len(),
-        changed,
-    })
+    Ok((bytes, changed))
 }
 
 fn kernel_blacklist(current: &[u8]) -> Result<Option<Vec<u8>>, VendorBootError> {
@@ -178,10 +189,12 @@ fn kernel_blacklist(current: &[u8]) -> Result<Option<Vec<u8>>, VendorBootError> 
     Ok(Some(amended))
 }
 
+#[cfg(feature = "native")]
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), VendorBootError> {
     crate::output::write(path, bytes).map_err(|error| io("publish output", path, error))
 }
 
+#[cfg(feature = "native")]
 fn io(operation: &'static str, path: &Path, source: std::io::Error) -> VendorBootError {
     VendorBootError::Io {
         operation,

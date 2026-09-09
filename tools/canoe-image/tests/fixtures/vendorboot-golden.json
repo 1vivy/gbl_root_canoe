@@ -1,0 +1,5 @@
+{
+  "vendorboot-cpio": "9d98b60b7a9ff5c23b9df6e6d108a445c5cd1eb3492c0922c01f5717a1e1721e",
+  "vendorboot-gzip": "14c170646f8ac4d8e301ae5c9bc787ebb160be74bb99f719b0710e386ae71aa5",
+  "vendorboot-lz4": "614b0953054c05606c42d5b019e0516a50ea07efb7d3365d17ff52dedd41ed58"
+}
