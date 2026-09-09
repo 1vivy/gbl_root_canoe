@@ -1,0 +1,365 @@
+/*
+ * Persist the Canoe BDS log.
+ *
+ * Copyright (c) 2026, contributors to the canoe ABL tree.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#include <Uefi.h>
+#include <Library/BaseLib.h>
+#include <Library/DebugLib.h>
+#include <Library/PrintLib.h>
+#include <Library/MemoryAllocationLib.h>
+#include <Library/UefiBootServicesTableLib.h>
+#include <Protocol/BlockIo.h>
+#include <Protocol/PartitionInfo.h>
+#include <Protocol/SimpleFileSystem.h>
+
+#include "SuperFbGptName.h"
+#include "SuperFbLog.h"
+#include "SuperFbLastBoot.h"
+
+/* File-local since the platform-ring writer that shared them was removed. */
+STATIC
+EFI_STATUS
+SfbWriteBytes (
+  IN EFI_FILE_PROTOCOL *File,
+  IN CONST VOID        *Buffer,
+  IN UINTN              Size
+  )
+{
+  EFI_STATUS Status;
+  UINTN      Written;
+  if (File == NULL || (Buffer == NULL && Size != 0)) {
+    return EFI_INVALID_PARAMETER;
+  }
+  if (Size == 0) {
+    return EFI_SUCCESS;
+  }
+  Written = Size;
+  Status = File->Write (File, &Written, (VOID *)Buffer);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+  return (Written == Size) ? EFI_SUCCESS : EFI_DEVICE_ERROR;
+}
+
+STATIC
+EFI_STATUS
+SfbWriteAscii (
+  IN EFI_FILE_PROTOCOL *File,
+  IN CONST CHAR8       *Text
+  )
+{
+  return SfbWriteBytes (File, Text, AsciiStrLen (Text));
+}
+
+STATIC
+EFI_STATUS
+SfbOpenLogfsRoot (
+  OUT EFI_FILE_PROTOCOL **Root
+  )
+{
+  EFI_STATUS                       Status;
+  EFI_STATUS                       LastStatus;
+  EFI_HANDLE                      *Handles;
+  EFI_PARTITION_ENTRY             *PartEntry;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *FileSystem;
+  UINTN                            Count;
+  UINTN                            Index;
+
+  if (Root == NULL || gBS == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *Root = NULL;
+  Handles = NULL;
+  Count = 0;
+  /* This allocates, and that is not the contradiction it looks like. The ring
+     is allocation-free so capture survives anything; persisting is a different
+     job that cannot be, because OpenVolume and Write allocate inside the FAT
+     driver whatever this call does. Swapping in a static buffer and LocateHandle
+     would remove the visible AllocatePool and change nothing about whether a
+     flush can run without a heap.
+
+     What earns the risk is that failing here costs nothing: the caller releases
+     the borrow, the ring keeps its bytes, and the next flush point writes them.
+     Caching a handle to skip the walk was considered and rejected - the
+     mass-storage export reconnects controllers, so a stored filesystem handle
+     can go stale mid-boot. */
+  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid,
+                                    NULL, &Count, &Handles);
+  if (EFI_ERROR (Status) || Handles == NULL) {
+    if (Handles != NULL) {
+      FreePool (Handles);
+    }
+    return EFI_NOT_FOUND;
+  }
+  LastStatus = EFI_NOT_FOUND;
+  for (Index = 0; Index < Count; Index++) {
+    PartEntry = NULL;
+    Status = gBS->HandleProtocol (Handles[Index], &gEfiPartitionRecordGuid,
+                                  (VOID **)&PartEntry);
+    if (EFI_ERROR (Status) || PartEntry == NULL ||
+        !SfbGptNameMatchesInline (PartEntry->PartitionName, L"logfs")) {
+      continue;
+    }
+    FileSystem = NULL;
+    Status = gBS->HandleProtocol (Handles[Index],
+                                  &gEfiSimpleFileSystemProtocolGuid,
+                                  (VOID **)&FileSystem);
+    if (EFI_ERROR (Status) || FileSystem == NULL ||
+        FileSystem->OpenVolume == NULL) {
+      LastStatus = EFI_NOT_READY;
+      DEBUG ((EFI_D_INFO, "SFB: logfs has no filesystem: %r\n", Status));
+      continue;
+    }
+    Status = FileSystem->OpenVolume (FileSystem, Root);
+    if (!EFI_ERROR (Status) && *Root != NULL) {
+      FreePool (Handles);
+      return EFI_SUCCESS;
+    }
+    LastStatus = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+    if (*Root != NULL) {
+      (*Root)->Close (*Root);
+    }
+    *Root = NULL;
+  }
+  FreePool (Handles);
+  return LastStatus;
+}
+
+STATIC
+EFI_STATUS
+SfbWriteRecord (
+  IN CONST CHAR16 *Name,
+  IN CONST VOID *Value,
+  IN UINTN ValueBytes
+  )
+{
+  EFI_STATUS Status;
+  EFI_STATUS CloseStatus;
+  EFI_FILE_PROTOCOL *Root = NULL;
+  EFI_FILE_PROTOCOL *Directory = NULL;
+  EFI_FILE_PROTOCOL *File = NULL;
+  Status = SfbOpenLogfsRoot (&Root);
+  if (EFI_ERROR (Status) || Root == NULL) {
+    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+    goto Exit;
+  }
+  Status = Root->Open (Root, &Directory, L"\\canoe",
+                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
+                       EFI_FILE_MODE_CREATE, EFI_FILE_DIRECTORY);
+  if (EFI_ERROR (Status) || Directory == NULL) {
+    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+    goto Exit;
+  }
+  Status = Directory->Open (Directory, &File, (CHAR16 *)Name,
+                            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+  if (!EFI_ERROR (Status) && File != NULL) {
+    Status = File->Delete (File);
+    File = NULL;
+    if (EFI_ERROR (Status)) goto Exit;
+  } else if (Status != EFI_NOT_FOUND) {
+    goto Exit;
+  } else if (File != NULL) {
+    File->Close (File);
+    File = NULL;
+  }
+  Status = Directory->Open (Directory, &File, (CHAR16 *)Name,
+                            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
+                            EFI_FILE_MODE_CREATE, 0);
+  if (EFI_ERROR (Status) || File == NULL) {
+    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+    goto Exit;
+  }
+  Status = SfbWriteBytes (File, Value, ValueBytes);
+  if (!EFI_ERROR (Status)) {
+    Status = (File->Flush == NULL) ? EFI_UNSUPPORTED : File->Flush (File);
+  }
+
+Exit:
+  if (File != NULL) {
+    if (EFI_ERROR (Status)) {
+      File->Delete (File);
+    } else {
+      CloseStatus = File->Close (File);
+      if (EFI_ERROR (CloseStatus)) Status = CloseStatus;
+    }
+  }
+  if (Directory != NULL) Directory->Close (Directory);
+  if (Root != NULL) Root->Close (Root);
+  return EFI_ERROR (Status) ? Status : EFI_SUCCESS;
+}
+
+EFI_STATUS
+SfbLastBootWrite (IN CONST UINT8 *Bytes)
+{
+  if (!SfbLastBootValid (Bytes, SFB_LAST_BOOT_BYTES)) return EFI_INVALID_PARAMETER;
+  return SfbWriteRecord (L"last-boot", Bytes, SFB_LAST_BOOT_BYTES);
+}
+
+STATIC EFI_STATUS
+SfbLastLaunchWrite (IN CONST SFB_LAST_LAUNCH *Launch)
+{
+  CHAR8 Value[SFB_LAST_LAUNCH_VALUE_BYTES];
+  if (!SfbLastLaunchFormat (Launch, Value, sizeof (Value))) return EFI_INVALID_PARAMETER;
+  return SfbWriteRecord (L"last-launch", Value, AsciiStrLen (Value));
+}
+
+EFI_STATUS
+SfbLastLaunchRead (
+  OUT CHAR8 *Value,
+  IN UINTN   ValueBytes
+  )
+{
+  EFI_STATUS Status;
+  EFI_FILE_PROTOCOL *Root = NULL;
+  EFI_FILE_PROTOCOL *Directory = NULL;
+  EFI_FILE_PROTOCOL *File = NULL;
+  CHAR8 Stored[SFB_LAST_LAUNCH_VALUE_BYTES];
+  UINTN ReadBytes;
+  SFB_LAST_LAUNCH Launch;
+
+  if (Value == NULL || ValueBytes == 0) return EFI_INVALID_PARAMETER;
+  Value[0] = '\0';
+  Status = SfbOpenLogfsRoot (&Root);
+  if (EFI_ERROR (Status) || Root == NULL) {
+    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+    goto Exit;
+  }
+  Status = Root->Open (Root, &Directory, L"\\canoe", EFI_FILE_MODE_READ, 0);
+  if (EFI_ERROR (Status) || Directory == NULL) {
+    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+    goto Exit;
+  }
+  Status = Directory->Open (Directory, &File, L"last-launch",
+                            EFI_FILE_MODE_READ, 0);
+  if (EFI_ERROR (Status) || File == NULL || File->Read == NULL) {
+    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+    goto Exit;
+  }
+  ReadBytes = sizeof (Stored);
+  Status = File->Read (File, &ReadBytes, Stored);
+  if (EFI_ERROR (Status)) goto Exit;
+  if (ReadBytes == 0 || ReadBytes == sizeof (Stored) ||
+      !SfbLastLaunchParse (Stored, ReadBytes, &Launch) ||
+      !SfbLastLaunchFormat (&Launch, Value, ValueBytes)) {
+    Status = EFI_COMPROMISED_DATA;
+  }
+
+Exit:
+  if (File != NULL) File->Close (File);
+  if (Directory != NULL) Directory->Close (Directory);
+  if (Root != NULL) Root->Close (Root);
+  return Status;
+}
+
+EFI_STATUS
+SfbLogFlush (
+  IN CONST CHAR8 *Tag
+  )
+{
+  EFI_STATUS         Status;
+  EFI_STATUS         CloseStatus;
+  EFI_FILE_PROTOCOL *Root;
+  EFI_FILE_PROTOCOL *Directory;
+  EFI_FILE_PROTOCOL *File;
+  CHAR8              Header[256];
+  CHAR8             *Captured;
+  UINTN              CapturedLength;
+
+  Root = NULL;
+  Directory = NULL;
+  File = NULL;
+  CapturedLength = 0;
+  /* A canonical launch-value tag is the final-resolution persistence request,
+   * not a rotating debug-log tag. This preserves the existing launch harness
+   * surface while giving the record its own durable file. */
+  {
+    SFB_LAST_LAUNCH LastLaunch;
+    if (Tag != NULL &&
+        SfbLastLaunchParse (Tag, AsciiStrLen (Tag), &LastLaunch)) {
+      return SfbLastLaunchWrite (&LastLaunch);
+    }
+  }
+  Captured = SfbLogSnapshot (&CapturedLength);
+  if (Captured == NULL) {
+    CapturedLength = 0;
+  }
+  Status = SfbOpenLogfsRoot (&Root);
+  if (EFI_ERROR (Status) || Root == NULL) {
+    /* Through Exit, not straight out: the snapshot above is borrowed and has
+       to be released even when there is nowhere to write it. Root, Directory
+       and File are all still NULL, so the rest of the cleanup is a no-op.
+       This is the common failure - logfs unbound - so leaking the borrow here
+       would suspend capture for the rest of the boot. */
+    Status = EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
+    goto Exit;
+  }
+  Status = Root->Open (Root, &Directory, L"\\canoe",
+                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
+                       EFI_FILE_MODE_CREATE, EFI_FILE_DIRECTORY);
+  if (EFI_ERROR (Status) || Directory == NULL) {
+    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+    goto Exit;
+  }
+  Status = SfbLogOpenSlot (Directory, &File);
+  if (EFI_ERROR (Status)) {
+    goto Exit;
+  }
+  if (AsciiSPrint (Header, sizeof (Header),
+                   "Canoe BDS session; tag=%a; captured-bytes=%Lu\r\n",
+                   ((Tag == NULL) ? "unspecified" : Tag),
+                   (UINT64)CapturedLength) >= sizeof (Header)) {
+    Status = EFI_BAD_BUFFER_SIZE;
+  }
+  if (Status == EFI_SUCCESS) {
+    Status = SfbWriteAscii (File, Header);
+  }
+  if (Status == EFI_SUCCESS) {
+    Status = SfbWriteAscii (File, "\r\n[canoe capture; oldest first]\r\n");
+  }
+  if (Status == EFI_SUCCESS && Captured != NULL) {
+    Status = SfbWriteBytes (File, Captured, CapturedLength);
+    if (Status == EFI_SUCCESS) {
+      Status = SfbWriteAscii (File, "\r\n");
+    }
+  }
+  if (Status == EFI_SUCCESS) {
+    Status = SfbWriteAscii (
+               File,
+               "\r\n--- Canoe BDS session complete ---\r\n");
+  }
+  if (Status == EFI_SUCCESS) {
+    if (File->Flush == NULL) {
+      Status = EFI_UNSUPPORTED;
+    } else {
+      Status = File->Flush (File);
+    }
+  }
+
+Exit:
+  /* Release only what this call borrowed. A NULL snapshot can mean another
+     borrow is already outstanding, and releasing then would hand that caller's
+     bytes back to the producer underneath it. */
+  if (Captured != NULL) {
+    SfbLogRelease ();
+  }
+  if (File != NULL) {
+    if (EFI_ERROR (Status)) {
+      File->Delete (File);
+    } else {
+      CloseStatus = File->Close (File);
+      if (EFI_ERROR (CloseStatus)) {
+        Status = CloseStatus;
+      }
+    }
+  }
+  if (Directory != NULL) {
+    Directory->Close (Directory);
+  }
+  if (Root != NULL) {
+    Root->Close (Root);
+  }
+  return Status;
+}

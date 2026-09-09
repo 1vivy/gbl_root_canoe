@@ -78,6 +78,7 @@ found at
  *  IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "../../Application/LinuxLoader/SuperFbMsdLease.h"
 #include <Uefi.h>
 #include <Library/DebugLib.h>
 #include <Library/Debug.h>
@@ -94,6 +95,9 @@ found at
 #include "FastbootCmds.h"
 #include "FastbootMain.h"
 #include "UsbDescriptors.h"
+/* CmdOem in this same library already depends on SuperFb for the mass-storage
+ * export; SfbReportStatus adds no new layering. */
+#include "../../Application/LinuxLoader/SuperFbMenu.h"
 
 #define USB_BUFF_SIZE USB_BUFFER_SIZE
 
@@ -158,6 +162,43 @@ DummyNotify (IN EFI_EVENT Event, IN VOID *Context)
 {
 }
 
+/*
+ * Initialise the platform USB controller.
+ *
+ * Signalling this event group is the vendor's own bring-up; both gadget
+ * starts below opened with an inline copy of it. It is one function now
+ * because a third caller needs it: a mass-storage export on a normal boot,
+ * where nothing has entered fastboot and so nothing has brought USB up.
+ * EFI_USBFN_IO_PROTOCOL, which the mass-storage driver locates, is installed
+ * by this bring-up and by nothing the BDS connect pass can reach.
+ *
+ * It claims no gadget and installs no descriptors, so any caller may re-run
+ * it; the callers that do want a gadget follow it with StartEx.
+ */
+EFI_STATUS
+SfbUsbControllerInit (VOID)
+{
+  EFI_STATUS Status;
+  EFI_EVENT  UsbConfigEvt;
+  EFI_GUID   InitUsbControllerGuid = {
+      0x1c0cffce,
+      0xfc8d,
+      0x4e44,
+      {0x8c, 0x78, 0x9c, 0x9e, 0x5b, 0x53, 0xd, 0x36}};
+
+  if (!SfbMsdLeaseIdle ()) return EFI_ACCESS_DENIED;
+  Status = gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK, DummyNotify,
+                               NULL, &InitUsbControllerGuid, &UsbConfigEvt);
+  if (EFI_ERROR (Status)) {
+    DEBUG (
+        (EFI_D_ERROR, "Usb controller init event not signaled: %r\n", Status));
+    return Status;
+  }
+  gBS->SignalEvent (UsbConfigEvt);
+  gBS->CloseEvent (UsbConfigEvt);
+  return EFI_SUCCESS;
+}
+
 STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
 {
   EFI_STATUS Status;
@@ -167,34 +208,31 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
   USB_DEVICE_DESCRIPTOR *SSDevDesc;
   VOID *Descriptors;
   VOID *SSDescriptors;
-  EFI_EVENT UsbConfigEvt;
   EFI_GUID UsbDeviceProtolGuid = {
       0xd9d9ce48,
       0x44b8,
       0x4f49,
       {0x8e, 0x3e, 0x2a, 0x3b, 0x92, 0x7d, 0xc6, 0xc1}};
-  EFI_GUID InitUsbControllerGuid = {
-      0x1c0cffce,
-      0xfc8d,
-      0x4e44,
-      {0x8c, 0x78, 0x9c, 0x9e, 0x5b, 0x53, 0xd, 0x36}};
 
-  Status = gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_CALLBACK, DummyNotify,
-                               NULL, &InitUsbControllerGuid, &UsbConfigEvt);
+  Status = SfbUsbControllerInit ();
   if (EFI_ERROR (Status)) {
-    DEBUG (
-        (EFI_D_ERROR, "Usb controller init event not signaled: %r\n", Status));
     return Status;
-  } else {
-    gBS->SignalEvent (UsbConfigEvt);
-    gBS->CloseEvent (UsbConfigEvt);
   }
 
   /* Locate the USBFastboot  Protocol from DXE */
   Status = gBS->LocateProtocol (&UsbDeviceProtolGuid, NULL,
                                 (VOID **)&Fbd.UsbDeviceProtocol);
+  /*
+   * Both of this function's failure exits used to be DEBUG-only. The screen at
+   * this point already reads "FASTBOOT MODE", drawn by SfbShowFastbootMode
+   * before control left the menu, so a silent failure is indistinguishable
+   * from a working gadget: the operator sees fastboot mode while the host sees
+   * no device at all, and `fastboot devices` stays empty with nothing on the
+   * device saying why.
+   */
   if (Status != EFI_SUCCESS) {
     DEBUG ((EFI_D_ERROR, "couldnt find USB device protocol, exiting now"));
+    SfbReportStatus (L"Fastboot USB device protocol not found", Status);
     return Status;
   }
 
@@ -206,7 +244,11 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
   }
 
   /* Build the descriptor for fastboot */
-  BuildDefaultDescriptors (&DevDesc, &Descriptors, &SSDevDesc, &SSDescriptors);
+  Status = BuildDefaultDescriptors (&DevDesc, &Descriptors, &SSDevDesc, &SSDescriptors);
+  if (EFI_ERROR (Status)) {
+    SfbReportStatus (L"Fastboot USB identity or descriptors unavailable", Status);
+    return Status;
+  }
   UsbSpeedDataSize = sizeof (UsbMaxSupportSpeed);
   Status = gRT->GetVariable ((CHAR16 *)L"UsbfnMaxSpeed",
                              &gQcomTokenSpaceGuid,
@@ -230,9 +272,18 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
 
   /* Start the usb device */
   Status = Fbd.UsbDeviceProtocol->StartEx (&DescSet);
+  /*
+   * Marked unconditionally: this is the one place that says whether the
+   * gadget came up, and it is the question left open when fastboot is entered
+   * after a mass-storage session has already claimed and released the shared
+   * controller. A logfs line here separates "our start failed" from "the
+   * vendor stack started us but the host cannot see it".
+   */
+  DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-start status=%r\n", Status));
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR,
             "Error start the usb device, cannot enter fastboot mode\n"));
+    SfbReportStatus (L"Fastboot USB did not start", Status);
     return EFI_NOT_STARTED;
   }
 
@@ -257,6 +308,40 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
   DEBUG ((EFI_D_INFO, "Fastboot: Processing commands\n"));
 
   return Status;
+}
+
+/*
+ * Bring the gadget back after a mass-storage export borrowed the controller.
+ * The export's StopDevice restores the fastboot descriptor set inside the
+ * vendor stack but nothing re-announces on the bus: the operator sees the
+ * FASTBOOT MODE screen while the host sees no device, and only a cable
+ * replug (a fresh attach event) revives it. Do exactly what the first start
+ * does - signal the controller-init event, StartEx the descriptor set again,
+ * and re-prime the receive queue that the Connected event normally seeds.
+ * The RX Send is best-effort: a stack that did re-deliver Connected already
+ * has a pending receive, and the duplicate attempt just fails.
+ */
+EFI_STATUS
+FastbootUsbReconnect (VOID)
+{
+  EFI_STATUS Status;
+
+  if (!SfbMsdLeaseIdle ()) return EFI_ACCESS_DENIED;
+  if (Fbd.UsbDeviceProtocol == NULL) {
+    return EFI_NOT_STARTED;
+  }
+
+  SfbUsbControllerInit ();
+
+  Status = Fbd.UsbDeviceProtocol->StartEx (&DescSet);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-reconnect status=%r\n", Status));
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Status = Fbd.UsbDeviceProtocol->Send (0x1, 511, Fbd.gRxBuffer);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-reseed status=%r\n", Status));
+  return EFI_SUCCESS;
 }
 
 /* API to stop USB device when booting to kernel, used for "fastboot boot" */
@@ -394,21 +479,37 @@ EFI_STATUS HandleUsbEvents (VOID)
 /*
  * On-device fastboot mode screen.
  *
- * While fastboot waits for a USB host it also offers two on-device actions -
- * power off and restart - driven by the same volume/power keys as the boot
- * menu. The USB event loop polls the console between transfers, so a host
- * connecting and issuing commands is unaffected.
+ * While fastboot waits for a USB host it also offers the on-device actions the
+ * host cannot reach, driven by the same volume/power keys as the boot menu. The
+ * USB event loop polls the console between transfers, so a host connecting and
+ * issuing commands is unaffected.
+ *
+ * Recovery is on this screen because it is otherwise unreachable from here. The
+ * boot menu's "Reboot to Recovery" row runs before FastbootInitialize and
+ * cannot be re-entered from inside the fastboot loop, and a device whose boot
+ * root is empty never sees that menu at all: first-run goes straight to
+ * fastboot. Ending a mass-storage export still needs Volume Down on the device,
+ * but what to do afterwards no longer does.
+ *
+ * The first row is inert on purpose. The cursor starts and is reset to 0, so
+ * whatever sits there is what a stray keypress selects; with "Power Off" there,
+ * a queued key left over from another screen could shut the device down in the
+ * middle of an operator's work. Selecting this row only repaints, which also
+ * shows the screen is still being serviced.
  */
 VOID RebootDevice (UINT8 RebootReason);
 VOID ShutdownDevice (VOID);
 
 /* Reboot reason values, mirroring ShutdownServices.h's RebootReasonType. The
  * header is deliberately not pulled in here just for these constants. */
-#define NORMAL_MODE  0x0
+#define NORMAL_MODE    0x0
+#define RECOVERY_MODE  0x1
 
-#define FB_ACTION_ROWS  2
+#define FB_ACTION_ROWS  4
 
 STATIC CONST CHAR16 *mFbActionRow[FB_ACTION_ROWS] = {
+  L"Stay in Fastboot",
+  L"Reboot to Recovery",
   L"Power Off",
   L"Restart",
 };
@@ -420,6 +521,7 @@ STATIC UINTN mFbActionCursor = 0;
 
 typedef enum {
   FbActionNone = 0,
+  FbActionRecovery,
   FbActionPowerOff,
   FbActionRestart
 } FB_ACTION;
@@ -498,7 +600,37 @@ FastbootPollActionKey (VOID)
     return FbActionNone;
   }
 
-  return (mFbActionCursor == 0) ? FbActionPowerOff : FbActionRestart;
+  switch (mFbActionCursor) {
+  case 1:
+    return FbActionRecovery;
+
+  case 2:
+    return FbActionPowerOff;
+
+  case 3:
+    return FbActionRestart;
+
+  default:
+    /* The inert row: confirm just repaints. */
+    FastbootDrawModeScreen ();
+    return FbActionNone;
+  }
+}
+
+/*
+ * Repaint the fastboot mode screen after another screen has taken the console.
+ *
+ * The mass-storage export draws over it and, once the session ends, leaves its
+ * own "Volume Down ends this session" affordance painted for a session that no
+ * longer exists; the advertised key then does nothing but move this screen's
+ * hidden cursor. The export path drains the console before it returns, so the
+ * cursor is reset here only to match what is drawn.
+ */
+VOID
+FastbootRestoreModeScreen (VOID)
+{
+  mFbActionCursor = 0;
+  FastbootDrawModeScreen ();
 }
 
 EFI_STATUS FastbootInitialize (VOID)
@@ -516,10 +648,11 @@ EFI_STATUS FastbootInitialize (VOID)
   StoreRootDeviceType ();
 
   /*
-   * Draw the on-device fastboot mode screen with the power/restart actions. A
-   * key held while entering fastboot (the power press that confirmed "Enter
-   * Fastboot") is released and drained first, with a brief pause, so it cannot
-   * fire a spurious confirm on the highlighted action row.
+   * Draw the on-device fastboot mode screen with its action rows. A key held
+   * while entering fastboot (the power press that confirmed "Enter Fastboot")
+   * is released and drained first, with a brief pause, so it cannot fire a
+   * spurious confirm; the cursor also starts on the inert row, so a key that
+   * survives both cannot do anything worse than repaint.
    */
   gBS->Stall (1000000);
   gST->ConIn->Reset (gST->ConIn, FALSE);
@@ -535,6 +668,11 @@ EFI_STATUS FastbootInitialize (VOID)
     }
 
     switch (FastbootPollActionKey ()) {
+    case FbActionRecovery:
+      FastbootShowActionScreen (L"Rebooting to recovery...");
+      RebootDevice (RECOVERY_MODE);
+      return EFI_SUCCESS;
+
     case FbActionPowerOff:
       FastbootShowActionScreen (L"Powering off...");
       ShutdownDevice ();

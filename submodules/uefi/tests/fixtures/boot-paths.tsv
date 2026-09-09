@@ -1,0 +1,30 @@
+1	boot_a.efi
+1	/EFI/Linux/boot.efi
+1	\EFI\Linux\boot.efi
+1	kernels/vmlinuz-6.12
+1	boot files/kernel.efi
+1	.hidden/kernel.efi
+1	com10.efi
+0	
+0	/
+0	../kernel
+0	/EFI/../boot.efi
+0	./boot.efi
+0	EFI//boot.efi
+0	EFI/
+0	C:/boot.efi
+0	C:boot.efi
+0	//server/share/kernel
+0	kernel:stream
+0	CON.efi
+0	aux
+0	Nul/config
+0	COM1.efi
+0	lpt9
+0	CONIN$
+0	CONOUT$.efi
+0	EFI./kernel
+0	EFI /kernel
+0	bad|name
+0	bad?name
+0	bad*name

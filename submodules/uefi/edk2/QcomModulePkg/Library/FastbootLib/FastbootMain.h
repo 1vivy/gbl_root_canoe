@@ -54,7 +54,12 @@ typedef struct FasbootDevice {
 } FastbootDeviceData;
 
 FastbootDeviceData *GetFastbootDeviceData (VOID);
+EFI_STATUS FastbootUsbReconnect (VOID);
+/* Platform USB controller bring-up. Needed before EFI_USBFN_IO_PROTOCOL
+ * exists, by fastboot and by a mass-storage export on a normal boot. */
+EFI_STATUS SfbUsbControllerInit (VOID);
 EFI_STATUS HandleUsbEvents (VOID);
 EFI_STATUS FastbootUsbDeviceStop (VOID);
+VOID FastbootRestoreModeScreen (VOID);
 EFI_STATUS FastbootInitialize (VOID);
 #endif

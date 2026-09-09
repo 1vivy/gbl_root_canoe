@@ -96,6 +96,15 @@ found at
 #include "FastbootCmds.h"
 #include "FastbootMain.h"
 #include "LinuxLoaderLib.h"
+#include "../../Application/LinuxLoader/SuperFbMenu.h"
+/* CmdOem already depends on SuperFb; this slot lookup adds no new layering. */
+#include "../../Application/LinuxLoader/SuperFbSlots.h"
+/* Same reasoning for the log: CmdOem's log-flush subcommand is an application
+   concern, and FastbootLib is linked into the application it is extending. */
+#include "../../Application/LinuxLoader/SuperFbLog.h"
+#include "../../Application/LinuxLoader/Hook/SuperFbDevInfo.h"
+#include "../../Application/LinuxLoader/SuperFbBootRoot.h"
+#include "../../Application/LinuxLoader/SuperFbContainer.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -178,7 +187,7 @@ STATIC EFI_STATUS FlashResult = EFI_SUCCESS;
 STATIC EFI_EVENT UsbTimerEvent;
 #endif
 
-STATIC UINT64 MaxUSBBufferSize = 0;
+STATIC UINT64 MaxDownLoadSize = 0;
 
 STATIC INT32 Lun = NO_LUN;
 STATIC BOOLEAN LunSet;
@@ -1196,10 +1205,10 @@ CmdDownload (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
     return;
   }
 
-  if (mNumDataBytes > MaxUSBBufferSize) {
+  if (mNumDataBytes > MaxDownLoadSize) {
     DEBUG ((EFI_D_ERROR,
             "ERROR: Data size (%d) is more than max download size (%d)\n",
-            mNumDataBytes, MaxUSBBufferSize));
+            mNumDataBytes, MaxDownLoadSize));
     FastbootFail ("Requested download size is more than max allowed\n");
     return;
   }
@@ -1370,10 +1379,10 @@ CmdFetch (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
   }
   /* The DATA phase carries an 8-digit (32-bit) length, so a single fetch can
    * return at most MAX_UINT32 bytes; larger reads must be split by offset. */
-  if (RequestSize > MaxUSBBufferSize) {
+  if (RequestSize > MaxDownLoadSize) {
     DEBUG ((EFI_D_ERROR,
             "ERROR: Data size (%d) is more than max fetch size (%d)\n",
-            RequestSize, MaxUSBBufferSize));
+            RequestSize, MaxDownLoadSize));
     FastbootFail ("Requested fetch size is more than max allowed\n");
     return;
   }
@@ -1654,7 +1663,7 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
       goto out;
     }
 
-    if ((PartitionSize > MaxUSBBufferSize) &&
+    if ((PartitionSize > MaxDownLoadSize) &&
          !IsDisableParallelDownloadFlash ()) {
       if (IsUseMThreadParallel ()) {
         FlashInfo* ThreadFlashInfo = AllocateZeroPool (sizeof (FlashInfo));
@@ -1692,7 +1701,7 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 
     if (EFI_ERROR (Status) ||
       !IsUseMThreadParallel () ||
-      (PartitionSize <= MaxUSBBufferSize)) {
+      (PartitionSize <= MaxDownLoadSize)) {
       FlashResult = HandleSparseImgFlash (PartitionName,
                                         ARRAY_SIZE (PartitionName),
                                         mFlashDataBuffer, mFlashNumDataBytes);
@@ -1722,8 +1731,8 @@ CmdFlash (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
    * sparse images.
    */
   if ((sparse_header->magic != SPARSE_HEADER_MAGIC) ||
-        (PartitionSize < MaxUSBBufferSize) ||
-        ((PartitionSize > MaxUSBBufferSize) &&
+        (PartitionSize < MaxDownLoadSize) ||
+        ((PartitionSize > MaxDownLoadSize) &&
         (IsDisableParallelDownloadFlash () ||
         (Status != EFI_SUCCESS)))) {
     if (EFI_ERROR (FlashResult)) {
@@ -1850,7 +1859,7 @@ AcceptData (IN UINT64 Size, IN VOID *Data)
      */
     GetPageSize (&PageSize);
     RoundSize = ROUND_TO_PAGE (mNumDataBytes, PageSize - 1);
-    if (RoundSize < MaxUSBBufferSize) {
+    if (RoundSize < MaxDownLoadSize) {
       gBS->SetMem ((VOID *)(Data + mNumDataBytes), RoundSize - mNumDataBytes,
                    0);
     }
@@ -2197,31 +2206,31 @@ FastbootCmdsInit (VOID)
   GetBufferSize (&MaxBufferSize, &MinBufferSize);
 
   /* Allocate buffer used to store images passed by the download command */
-  GetMaxAllocatableMemory (&MaxUSBBufferSize);
-  if (!MaxUSBBufferSize) {
+  GetMaxAllocatableMemory (&MaxDownLoadSize);
+  if (!MaxDownLoadSize) {
     DEBUG ((EFI_D_ERROR, "Failed to get free memory for fastboot buffer\n"));
     return EFI_OUT_OF_RESOURCES;
-  }
 
+  }
   do {
     // Try allocating 3/4th of free memory available.
-    MaxUSBBufferSize = EFI_FREE_MEM_DIVISOR (MaxUSBBufferSize);
-    MaxUSBBufferSize = LOCAL_ROUND_TO_PAGE (MaxUSBBufferSize, EFI_PAGE_SIZE);
-    if (MaxUSBBufferSize < MinBufferSize) {
+    MaxDownLoadSize = EFI_FREE_MEM_DIVISOR (MaxDownLoadSize);
+    MaxDownLoadSize = LOCAL_ROUND_TO_PAGE (MaxDownLoadSize, EFI_PAGE_SIZE);
+    if (MaxDownLoadSize < MinBufferSize) {
       DEBUG ((EFI_D_ERROR,
         "ERROR: Allocation fail for minimim buffer for fastboot\n"));
       return EFI_OUT_OF_RESOURCES;
     }
 
+
     /* If available buffer on target is more than max buffer size,
        we limit this to max buffer buffer size we support */
-    if (MaxUSBBufferSize > MaxBufferSize) {
-      MaxUSBBufferSize = MaxBufferSize;
+    if (MaxDownLoadSize > MaxBufferSize) {
+      MaxDownLoadSize = MaxBufferSize;
     }
-
     Status =
         GetFastbootDeviceData ()->UsbDeviceProtocol->AllocateTransferBuffer (
-                                      MaxUSBBufferSize,
+                                      MaxDownLoadSize,
                                       (VOID **)&FastBootBuffer);
   }while (EFI_ERROR (Status));
 
@@ -2231,14 +2240,14 @@ FastbootCmdsInit (VOID)
   }
 
   /* Clear allocated buffer */
-  gBS->SetMem ((VOID *)FastBootBuffer, MaxUSBBufferSize , 0x0);
+  gBS->SetMem ((VOID *)FastBootBuffer, MaxDownLoadSize , 0x0);
   DEBUG ((EFI_D_VERBOSE,
-                  "Fastboot Buffer Size allocated: %ld\n", MaxBufferSize));
+                  "Fastboot Buffer Size allocated: %ld\n", MaxDownLoadSize));
 
-  MaxBufferSize = (CheckRootDeviceType () == NAND) ?
-                              MaxUSBBufferSize : MaxUSBBufferSize / 2;
+  MaxDownLoadSize = (CheckRootDeviceType () == NAND) ?
+                              MaxDownLoadSize : MaxDownLoadSize / 2;
 
-  FastbootCommandSetup ((VOID *)FastBootBuffer, MaxUSBBufferSize);
+  FastbootCommandSetup ((VOID *)FastBootBuffer, MaxDownLoadSize);
 
   InitMultiThreadEnv ();
 
@@ -2285,17 +2294,174 @@ FastbootRegister (IN CONST CHAR8 *prefix,
   }
 }
 
+/*
+ * Reboot, honouring the target the host asked for.
+ *
+ * AcceptCmd dispatches on a prefix, so the "reboot" entry also catches
+ * fastboot's reboot-recovery, reboot-bootloader and anything else beginning
+ * that way; the remainder arrives here as arg. Ignoring it meant
+ * `fastboot reboot recovery` answered OKAY and booted Android instead, which
+ * is a large part of why leaving a mass-storage export needed the device's own
+ * buttons: the host could ask for recovery and be silently sent elsewhere.
+ *
+ * An unrecognised target fails rather than rebooting somewhere the host did not
+ * name. This device has no userspace fastbootd, so `reboot fastboot` is not
+ * quietly answered with a bootloader reboot either.
+ */
 STATIC VOID
 CmdReboot (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 {
-  DEBUG ((EFI_D_INFO, "rebooting the device\n"));
+  UINT8 Reason = NORMAL_MODE;
+
+  if (arg != NULL && *arg != '\0') {
+    if (AsciiStrCmp (arg, "-recovery") == 0) {
+      Reason = RECOVERY_MODE;
+    } else if (AsciiStrCmp (arg, "-bootloader") == 0) {
+      Reason = FASTBOOT_MODE;
+    } else {
+      DEBUG ((EFI_D_ERROR, "SFB: MARK reboot target=%a status=unsupported\n",
+              arg));
+      FastbootFail ("unsupported reboot target");
+      return;
+    }
+  }
+
+  DEBUG ((EFI_D_ERROR, "SFB: MARK reboot target=%a reason=%u\n",
+          (arg != NULL && *arg != '\0') ? arg : "-", (UINT32)Reason));
   FastbootOkay ("");
 
-  RebootDevice (NORMAL_MODE);
+  RebootDevice (Reason);
 
   // Shouldn't get here
   FastbootFail ("Failed to reboot");
 }
+
+/*
+ * Fastboot's command transport and the mass-storage gadget share the USB
+ * controller. StartDevice takes the link away from fastboot and StopDevice
+ * restores it, so the host must receive its response before export starts.
+ * Failures that can be found without taking the link (syntax and partition
+ * lookup) are reported here; a post-handoff start failure is recorded by the
+ * MSD client because no fastboot channel remains to carry FAIL.
+ */
+STATIC VOID
+CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
+{
+  CONST CHAR16          *Target;
+  CHAR8                  Identity[33];
+  BOOLEAN                Bound = FALSE;
+  EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
+  EFI_STATUS             Status;
+
+  if (Arg == NULL) {
+    FastbootFail ("unknown oem command");
+    return;
+  }
+
+  /*
+   * oem log-flush: persist the session so far into the next rotation slot on
+   * logfs. Entering fastboot already flushed once ("pre-fastboot"), so this
+   * is for what happened since - oem command outcomes, exports, anything a
+   * failed action logged. Unlike mass-storage this answers before acting:
+   * the log is still in RAM until the flush runs, and a silent failure would
+   * send the host hunting for a file that was never written.
+   */
+  if (AsciiStrCmp (Arg, "log-flush") == 0) {
+    Status = SfbLogFlush ("oem-log");
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("log flush failed");
+    } else {
+      FastbootOkay ("");
+    }
+    return;
+  }
+
+  /* Explicit Super Fastboot-only capability. No slot can be supplied. */
+  if (AsciiStrCmp (Arg, "reset-active-slot-retry") == 0) {
+    Status = SfbResetActiveSlotRetry ();
+    DEBUG ((EFI_D_INFO, "SFB: MARK active-slot-retry-reset status=%r\n",
+            Status));
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("active slot retry reset refused");
+    } else {
+      FastbootOkay ("");
+    }
+    return;
+  }
+
+  if (AsciiStrCmp (Arg, "mass-storage") == 0 ||
+      AsciiStrCmp (Arg, "mass-storage:persist") == 0) {
+    Target = L"persist";
+  } else if (AsciiStrCmp (Arg, "mass-storage:boot-root") == 0) {
+    Target = L"boot-root";
+  } else if (AsciiStrnCmp (Arg, "mass-storage:boot-root:", 23) == 0) {
+    Target = L"boot-root";
+    Bound = TRUE;
+  } else if (AsciiStrCmp (Arg, "mass-storage:logfs") == 0) {
+    Target = L"logfs";
+  } else {
+    FastbootFail ("unknown oem command");
+    return;
+  }
+
+  /*
+   * Resolve before acknowledging. This is the last point at which fastboot
+   * can still answer FAIL; SfbExportPartitionByName resolves again because it
+   * is also the non-interactive public entry point used by other callers.
+   */
+  if (StrCmp (Target, L"boot-root") == 0) {
+    Status = SfbStartFatStack ();
+    if (!EFI_ERROR (Status)) Status = SfbContainerMount ();
+    BlockIo = SfbContainerDisplayDisk ();
+  } else {
+    Status = SfbFindPartitionByName (Target, &BlockIo);
+  }
+  if (EFI_ERROR (Status) || BlockIo == NULL) {
+    FastbootFail ("mass-storage partition not found");
+    return;
+  }
+  if (Bound && !SfbContainerMatchesIdentity (Arg + 23)) {
+    FastbootFail ("boot container changed since review");
+    return;
+  }
+  /* Keep the reviewed identity across fastboot buffer/USB-stack reuse. */
+  if (Bound) CopyMem (Identity, Arg + 23, sizeof (Identity));
+
+  /*
+   * Once OKAY is sent the host switches from fastboot to USB mass storage.
+   * There is intentionally no response after SfbExportPartitionByName:
+   * waiting for the session to end would deadlock the host, and the USB link
+   * is no longer a fastboot transport. The client always stops and unassigns
+   * on every started-session exit, then this handler returns to fastboot.
+   */
+  FastbootOkay ("");
+  Status = SfbExportPartitionBound (Target, Bound ? Identity : NULL);
+  if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK msc-run target=%s status=%r reason=post-handoff\n",
+            Target, Status));
+  }
+
+  /*
+   * The export's StopDevice restores the fastboot descriptor set inside the
+   * vendor stack, but nothing re-announces on the bus: the device shows the
+   * FASTBOOT MODE screen while the host sees no gadget at all until a cable
+   * replug forces a fresh attach event. Reconnect actively - controller-init
+   * event, StartEx, receive re-prime - instead of waiting for the plug.
+   */
+  FastbootUsbReconnect ();
+
+  /*
+   * Put the fastboot mode screen back. The export screen is still painted at
+   * this point, advertising a Volume Down that now only nudges the mode
+   * screen's cursor, so the operator is left reading a session that ended and
+   * has no stated way back. Redrawing here is that way back, and it is the
+   * only one available on this path: the boot menu ran before
+   * FastbootInitialize and cannot be re-entered from inside the fastboot loop.
+   */
+  FastbootRestoreModeScreen ();
+}
+
 
 STATIC VOID UpdateGetVarVariable (VOID)
 {
@@ -2692,6 +2858,14 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   EFI_STATUS Status;
   CHAR8 HWPlatformBuf[MAX_RSP_SIZE] = "\0";
   CHAR8 DeviceType[MAX_RSP_SIZE] = "\0";
+  /* FastbootPublishVar borrows these values until fastboot teardown. */
+  STATIC CHAR8 DevInfoBuf[SFB_DEVINFO_VALUE_BYTES];
+  STATIC CHAR8 LastLaunchBuf[SFB_LAST_LAUNCH_VALUE_BYTES];
+  STATIC CHAR8 BootRootBuf[SFB_BOOT_ROOT_VALUE_BYTES];
+  STATIC CHAR8 SerialBuf[31];
+  SFB_OBSERVED_DEVINFO ObservedDevInfo;
+  SFB_BOOT_ROOT_OBSERVATION BootRootObservation;
+  SFB_SLOT_RETRIES SlotRetries;
   UINT32 PartitionCount = 0;
   MemCardType Type = UNKNOWN;
   mDataBuffer = Base;
@@ -2700,7 +2874,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   mUsbDataBuffer = Base;
 
   mFlashDataBuffer = (CheckRootDeviceType () == NAND) ?
-                           Base : (Base + MaxUSBBufferSize);
+                           Base : (Base + MaxDownLoadSize);
 
   /* Find all Software Partitions in the User Partition */
   UINT32 i;
@@ -2725,6 +2899,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
       {"boot", CmdBoot},
 #endif
       {"reboot", CmdReboot},
+      {"oem ", CmdOem},
       {"getvar:", CmdGetVar},
       {"download:", CmdDownload},
   };
@@ -2732,12 +2907,63 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   /* Register the commands only for non-user builds */
   /* Publish getvar variables */
   AsciiSPrint (MaxBufferSizeStr,
-                  sizeof (MaxBufferSizeStr), "%ld", MaxUSBBufferSize);
+                  sizeof (MaxBufferSizeStr), "%ld", MaxDownLoadSize);
   FastbootPublishVar ("max-download-size", MaxBufferSizeStr);
   FastbootPublishVar ("max-fetch-size", MaxBufferSizeStr);
 
   AsciiSPrint (FullProduct, sizeof (FullProduct), "%a", PRODUCT_NAME);
   FastbootPublishVar ("product", FullProduct);
+
+  if (!EFI_ERROR (BoardSerialNum (SerialBuf, sizeof (SerialBuf)))) {
+    FastbootPublishVar ("serialno", SerialBuf);
+    FastbootPublishVar ("canoe-device-identity", "platform-usb-serial-v1");
+  }
+  FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
+  FastbootPublishVar ("canoe-boot-volume", "fat16-container-v1");
+
+  /* Keep this one formatter as the append point for retry_a/retry_b. The
+   * observation remains unknown until the verified-boot preflight has read a
+   * valid DeviceInfo; unknown must never become a fabricated waiver. */
+  ObservedDevInfo = SfbGetObservedDevInfo ();
+  SlotRetries = SfbSlotRetries ();
+  if (SfbFormatObservedDevInfo (&ObservedDevInfo, &SlotRetries, DevInfoBuf,
+                                sizeof (DevInfoBuf))) {
+    FastbootPublishVar ("canoe-devinfo", DevInfoBuf);
+  }
+
+  /* A missing/corrupt logfs record stays absent rather than describing a
+   * launch that did not durably reach the final resolution point. */
+  if (!EFI_ERROR (SfbLastLaunchRead (LastLaunchBuf,
+                                     sizeof (LastLaunchBuf)))) {
+    FastbootPublishVar ("canoe-last-launch", LastLaunchBuf);
+  }
+
+  /* The observation is the one this boot already made before the menu; an
+   * unavailable observation stays absent rather than being re-probed here
+   * against a different filesystem state. */
+  BootRootObservation = SfbGetBootRootState ();
+  if (BootRootObservation.Available
+      && SfbBootRootFormat (BootRootObservation.State, BootRootBuf,
+                            sizeof (BootRootBuf))) {
+    FastbootPublishVar ("canoe-boot-root", BootRootBuf);
+  }
+
+  /*
+   * Without this value the host wizard must ask which slot is active, and a
+   * wrong answer mislabels every menu row. BDS already computed it from the
+   * enumerated GPT, so do not guess when the layout is unknown.
+   */
+  switch (SfbActiveSlot ()) {
+    case SfbSlotA:
+      FastbootPublishVar ("current-slot", "a");
+      break;
+    case SfbSlotB:
+      FastbootPublishVar ("current-slot", "b");
+      break;
+    case SfbSlotUnknown:
+    default:
+      break;
+  }
 
   GetPartitionCount (&PartitionCount);
   Status = PublishGetVarPartitionInfo (PublishedPartInfo, PartitionCount);

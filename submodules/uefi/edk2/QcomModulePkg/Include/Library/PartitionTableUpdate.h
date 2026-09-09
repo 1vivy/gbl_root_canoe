@@ -149,7 +149,7 @@ table in the respective position mentioned below.
 #define MAX_PRIORITY 3
 #define MAX_RETRY_COUNT 7
 #define MAX_NUM_PARTITIONS 256
-#define MIN_PARTITION_ARRAY_SIZE 0x4000
+#define MIN_PARTITION_ARRAY_SIZE 0x6000
 #define ATTRIBUTE_FLAG_OFFSET 48
 #define INVALID_PTN -1
 #define GPT_HDR_BLOCKS 0x1
@@ -247,7 +247,7 @@ BOOLEAN
 PartitionHasMultiSlot (CONST CHAR16 *Pname);
 EFI_STATUS EnumeratePartitions (VOID);
 VOID UpdatePartitionEntries (VOID);
-VOID UpdatePartitionAttributes (UINT32 UpdateType);
+EFI_STATUS UpdatePartitionAttributes (UINT32 UpdateType);
 VOID FindPtnActiveSlot (VOID);
 EFI_STATUS
 FindBootableSlot (Slot *BootableSlot);

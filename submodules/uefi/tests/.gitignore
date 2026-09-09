@@ -1,0 +1,28 @@
+# Host test binaries are build outputs, never artifacts. Committing them made
+# `make test` run a stale binary instead of rebuilding from the .c beside it,
+# and one built on a newer x86-64 baseline than the CI runner aborted with
+# "CPU ISA level is lower than required" before executing a single assertion.
+test_bls
+test_config
+test_config_store
+test_deviceinfo
+test_devinfo
+test_slot_retries
+test_slot_attributes
+test_last_launch
+test_boot_root
+test_image_map
+test_image_disk
+test_container
+test_msd_lease
+test_fat
+test_hooks
+test_launch
+test_log
+test_linuxboot
+test_profile
+test_tzmap
+test_surface
+
+# L2's offline dual-GPT dump fixture is test input, not a build image.
+!fixtures/gpt-slot-reset-dump.img

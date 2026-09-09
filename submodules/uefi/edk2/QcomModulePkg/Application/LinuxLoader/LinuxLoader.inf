@@ -71,11 +71,63 @@
 [Sources]
 	LinuxLoader.c
 	SuperFbMenu.h
+	SuperFbGptName.h
+	SuperFbLog.h
+	SuperFbLog.c
+	SuperFbLogRing.c
+	SuperFbLogFlush.c
+	SuperFbLogSlot.c
+	SuperFbLastBoot.h
+	SuperFbLastBoot.c
+	SuperFbLastLaunch.h
+	SuperFbLastLaunch.c
+	SuperFbBootRoot.h
+	SuperFbBootRoot.c
+	SuperFbConfig.h
+	SuperFbConfig.c
+	SuperFbConfigStore.h
+	SuperFbConfigStore.c
+	SuperFbConfigSave.c
 	SuperFbFat.c
-	SuperFbStore.c
+	SuperFbImageDisk.c
+	SuperFbContainer.c
+	SuperFbMsdLease.c
 	SuperFbEntries.c
 	SuperFbMenu.c
+	SuperFbMenuScaffold.c
 	SuperFbBrowser.c
+	SuperFbSlots.h
+	SuperFbSlotRetry.h
+	SuperFbSlotAttributes.h
+	SuperFbSlots.c
+	SuperFbMassStorage.h
+	SuperFbMassStorage.c
+	SuperFbMsdVariant.c
+	SuperFbBls.h
+	SuperFbBls.c
+	SuperFbLinuxBoot.h
+	SuperFbLinuxBoot.c
+	SuperFbOemWatchdog.h
+	SuperFbOemWatchdog.c
+	Generated/CanoeMsdVariantData.c
+	SuperFbLaunchPolicy.h
+	SuperFbLaunchPolicy.c
+	Hook/SuperFbManagedPath.h
+	Hook/SuperFbManagedPath.c
+	Hook/SuperFbDeviceInfo.c
+	Hook/SuperFbDevInfo.h
+	Hook/SuperFbDevInfo.c
+	Hook/SuperFbProfile.h
+	Hook/SuperFbProfile.c
+	Hook/SuperFbTzMap.c
+	Hook/SuperFbProfileRewrite.c
+	Hook/HookCommon.h
+	Hook/InstallAll.c
+	Hook/VerifiedBootHook.c
+	Hook/QseecomHook.c
+	Hook/SpssHook.c
+	Hook/ScmHook.c
+	Hook/BlockIoHook.c
 
 [Packages]
 	ArmPkg/ArmPkg.dec
@@ -85,6 +137,7 @@
 	MdeModulePkg/MdeModulePkg.dec
 	QcomModulePkg/QcomModulePkg.dec
 	FatPkg/FatPkg.dec
+	Ext4Pkg/Ext4Pkg.dec
 
 [LibraryClasses]
 	DxeServicesTableLib
@@ -92,6 +145,8 @@
 	UefiApplicationEntryPoint
 	ArmLib
 	BaseLib
+	BaseMemoryLib
+	UefiBootServicesTableLib
 	DebugLib
 	DevicePathLib
 	DebugPrintErrorLevelLib
@@ -119,6 +174,7 @@
 	gEfiFileSystemInfoGuid
 	gEfiPartitionTypeGuid
 	gEfiEventVirtualAddressChangeGuid
+	gEfiEventExitBootServicesGuid
 	gEfiEmmcRpmbPartitionGuid
 	gEfiEmmcGppPartition1Guid
 	gEfiEmmcUserPartitionGuid
@@ -158,15 +214,26 @@
 	# USB host controllers connected at menu start and released before fastboot.
 	gEfiUsb2HcProtocolGuid
 	gEfiPciIoProtocolGuid
+	# Proxy for "the resident host drivers were dispatched at all", counted by
+	# the USB census.
+	gEfiDriverBindingProtocolGuid
+	# The arm64 EFI stub takes its initrd from a LoadFile2 handle carrying the
+	# Linux initrd media GUID; the older LoadFile above is a different GUID.
+	gEfiLoadFile2ProtocolGuid
 	gEfiPlatformInfoProtocolGuid
+	gEfiQcomVerifiedBootProtocolGuid
+	gQcomQseecomProtocolGuid
+	gEfiSPSSProtocolGuid
+	gQcomScmProtocolGuid
 	gEfiChipInfoProtocolGuid
 	gQcomPmicVersionProtocolGuid
 	gEfiMemCardInfoProtocolGuid
 	gEfiPrint2ProtocolGuid
 	gEfiPartitionRecordGuid
+	gEfiRscHandlerProtocolGuid
 	gEfiResetReasonProtocolGuid
 	gQcomRngProtocolGuid
-	# Patched around FAT32 image launches so the boot menu can run unsigned
+	# Patched around unsigned image launches so the boot menu can run unsigned
 	# loaders on an unlocked device.
 	gEfiSecurityArchProtocolGuid
 	gEfiSecurity2ArchProtocolGuid
