@@ -182,3 +182,4 @@ for language in en zh; do
 done
 pass 'manager updates share the capability-gated manager-only guidance in both languages'
 echo 'all module bootstrap fixtures passed'
+sh "$ROOT/targets/magisk_module/tests/test_install_stages.sh"

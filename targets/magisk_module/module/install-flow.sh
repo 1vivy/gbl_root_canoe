@@ -78,24 +78,47 @@ canoe_install_flow() {
   canoe_choose "History of the current phone data" "I am not sure" "Fully unlocked; current data has never used an efisp mode" "Current data has used CANOE-BDS or another efisp mode" "Install manager only"
   canoe_history=
   case "$canoe_choice" in 2) canoe_history=--first-unlocked-install ;; 3) canoe_history=--previous-efisp ;; 1) : ;; *) return ;; esac
-  canoe_state=/data/adb/canoe-manager/b5/installer-$(date +%s)-$$
+  canoe_state_base=/data/adb/canoe-manager/b5/installer-$(date +%s)-$$
   canoe_review=$TMPDIR/canoe-review.txt
-  if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --mode "$canoe_mode" $canoe_custom $canoe_patch $canoe_history > "$canoe_review" 2>&1; then
-    cat "$canoe_review"
-    ui_print "- Deployment was not started. No CANOE-BDS partitions were written."
-    canoe_choose "Continue setup" "Install manager only; complete Full installation in WebUI after reboot" "Cancel module installation"
-    [ "$canoe_choice" != 2 ] || abort "Module installation cancelled"
-    return
-  fi
-  cat "$canoe_review" | sed '/^CONFIRM=/d'
-  canoe_token=$(sed -n 's/^CONFIRM=//p' "$canoe_review")
-  [ "${#canoe_token}" -eq 64 ] || abort "Native install review is incomplete"
-  canoe_choose "Review the targets and data assessment above" "Install manager only" "Apply this deployment" "Cancel module installation"
-  case "$canoe_choice" in 2) : ;; 3) abort "Module installation cancelled" ;; *) return ;; esac
-  if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
-    ui_print "- Deployment did not complete. Install the manager only, then open WebUI to review the failure or remove CANOE-BDS."
-    ui_print "- Recovery records: /data/adb/canoe-manager/b5"
-    abort "CANOE-BDS deployment failed; completed writes remain recorded"
-  fi
+  canoe_cleaned=no
+  for canoe_phase in 1 2; do
+    canoe_state=$canoe_state_base-$canoe_phase
+    if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --mode "$canoe_mode" $canoe_custom $canoe_patch $canoe_history > "$canoe_review" 2>&1; then
+      cat "$canoe_review"
+      if [ "$canoe_cleaned" = yes ]; then
+        ui_print "- CANOE-BDS installation was not started. The reviewed old mod files remain removed."
+      else
+        ui_print "- Deployment was not started. No CANOE-BDS partitions were written."
+      fi
+      canoe_choose "Continue setup" "Install manager only; complete Full installation in WebUI after reboot" "Cancel module installation"
+      [ "$canoe_choice" != 2 ] || abort "Module installation cancelled"
+      return
+    fi
+    cat "$canoe_review" | sed '/^CONFIRM=/d; /^STAGE=/d'
+    canoe_token=$(sed -n 's/^CONFIRM=//p' "$canoe_review")
+    canoe_stage=$(sed -n 's/^STAGE=//p' "$canoe_review")
+    [ "${#canoe_token}" -eq 64 ] || abort "Native install review is incomplete"
+    case "$canoe_stage" in
+      cleanup)
+        if [ "$canoe_cleaned" = yes ]; then
+          ui_print "- More old mod files appeared. Install the manager only and review these files in WebUI."
+          return
+        fi
+        canoe_apply_label="Remove old mod files and continue"
+        ;;
+      deploy) canoe_apply_label="Apply this deployment" ;;
+      *) abort "Native installer stage is unavailable" ;;
+    esac
+    canoe_choose "Review the changes above" "Install manager only" "$canoe_apply_label" "Cancel module installation"
+    case "$canoe_choice" in 2) : ;; 3) abort "Module installation cancelled" ;; *) return ;; esac
+    if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
+      ui_print "- The changes did not complete. Install the manager only, then open WebUI to review the failure or remove CANOE-BDS."
+      ui_print "- Recovery records: /data/adb/canoe-manager/b5"
+      abort "CANOE-BDS setup stopped; completed writes remain recorded"
+    fi
+    [ "$canoe_stage" = cleanup ] || return 0
+    canoe_cleaned=yes
+    ui_print "- Old mod files were removed. Preparing a new CANOE-BDS installation review."
+  done
 }
 canoe_install_flow
