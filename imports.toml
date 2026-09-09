@@ -88,7 +88,7 @@ id = "managed-msd-variant"
 kind = "artifact"
 why = "Source-built vendor-class BOT driver with interface-scoped WinUSB descriptors."
 path = "submodules/uefi/blobs/canoe-managed-msd.efi"
-sha256 = "a903597d2e2f0c19163d1f7f644c01154f146dcaa43086c11bcedaffe4255612"
+sha256 = "bdf5b6464436bd8e07fd16c184f2b2c66a2a343fa2d1975f944aadffb1708e12"
 bytes = 57344
 [import.producer]
 repo = "https://github.com/1vivy/canoe-msd.git"

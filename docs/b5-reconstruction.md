@@ -85,14 +85,15 @@ acceptance gates.
 Verified source-built blobs:
 
 - Manual: `1268a93adeea37b38b4c08f3891117e28ae6bd5d9c65124b272fa6a0bcf98256`.
-- Managed: `a903597d2e2f0c19163d1f7f644c01154f146dcaa43086c11bcedaffe4255612`.
+- Managed: `bdf5b6464436bd8e07fd16c184f2b2c66a2a343fa2d1975f944aadffb1708e12`.
 
 Canonical b5 BDS build SHA256:
-`c489e9a090fbd083dd8b2348c0f7a40fa07df8fd005a44b57586af33b2002a1e`.
+`dfb49203d37a18bcb425a2de8896f788081043510c06b4134cdc2792360d2e14`.
 
 Windows binding is provided by Microsoft OS **1.0** descriptors, not an inference
 from the vendor interface class: the managed variant responds to the `MSFT100`
 string request, advertises `WINUSB` through its interface-0 compatible ID, and
-provides its interface GUID property. The manual variant has none of these.
+provides its single interface GUID property as REG_SZ. Both device and interface
+recipient forms of that property request are accepted only for interface 0. The manual variant has none of these.
 Descriptor wire tests pass; actual Windows automatic binding still needs an
 enumeration session with this firmware.
