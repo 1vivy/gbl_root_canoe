@@ -51,6 +51,14 @@ canoe_install_flow() {
     ui_print "- Manager update only. Service CANOE-BDS through WebUI after activation."
     return
   fi
+  if ! "$MODPATH/bin/canoe-manager" installer supported >/dev/null 2>&1; then
+    if [ "${user_lang:-en}" = zh ]; then
+      ui_print "- 此 b5 版本仅安装管理器，CANOE-BDS 部署功能尚未就绪。"
+    else
+      ui_print "- This b5 build installs the manager only. CANOE-BDS deployment is not available yet."
+    fi
+    return
+  fi
   canoe_choose "CANOE-BDS first setup" "Install manager only" "Deploy CANOE-BDS now" "Cancel module installation"
   case "$canoe_choice" in
     1|timeout) return ;;
@@ -84,7 +92,7 @@ canoe_install_flow() {
   canoe_choose "Review the targets and data assessment above" "Install manager only" "Apply this deployment" "Cancel module installation"
   case "$canoe_choice" in 2) : ;; 3) abort "Module installation cancelled" ;; *) return ;; esac
   if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
-    ui_print "- Deployment did not complete. Open General -> Saved operations in WebUI for retry or recovery."
+    ui_print "- Deployment did not complete. Open CANOE BOOT MANAGER to review the failure or remove CANOE-BDS."
     ui_print "- Recovery records: /data/adb/canoe-manager/operations"
     abort "CANOE-BDS deployment failed; completed writes remain recorded"
   fi

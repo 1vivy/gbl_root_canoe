@@ -335,9 +335,7 @@ version-check:
 	fi; \
 	if [ -f submodules/uefi/build/BDS.efi ] && command -v sha256sum >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then \
 		expected="$$(sha256sum submodules/uefi/build/BDS.efi | cut -d" " -f1)"; \
-		for archive in targets/toolkit_linux/build/toolkit_linux.zip \
-			targets/toolkit_windows/build/toolkit_windows.zip \
-			targets/toolkit_android/build/toolkit_android.zip \
+		for archive in targets/toolkit_android/build/toolkit_android.zip \
 			targets/magisk_module/build/module_android.zip; do \
 			if [ ! -f "$$archive" ]; then \
 				if [ -d "$$(dirname "$$archive")" ]; then \
@@ -362,10 +360,9 @@ version-check:
 	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
 	printf 'Version check passed: %s (version code %s)\n' "$$version" "$$version_code"
 
-target_toolkit_windows:
-	cd targets/toolkit_windows && $(MAKE) build
-target_toolkit_linux:
-	cd targets/toolkit_linux && $(MAKE) build
+target_toolkit_windows target_toolkit_linux:
+	@echo "Desktop packages retired in b5; use the hosted CANOE BOOT MANAGER." >&2
+	@exit 2
 target_magisk_module:
 	cd targets/magisk_module && $(MAKE) build
 target_toolkit_android:
@@ -389,10 +386,8 @@ test:
 	cargo test --locked --manifest-path tools/canoe-fs/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe-image/Cargo.toml
 	cargo test --locked --manifest-path tools/canoe-provision/Cargo.toml
-	cargo test --locked --manifest-path ../canoe-boot-manager/native/canoe-manager/Cargo.toml
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
-	$(MAKE) -C tools/canoe-ext4 test
 	sh targets/magisk_module/tests/test_flows.sh
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 

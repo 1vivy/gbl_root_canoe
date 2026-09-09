@@ -7,7 +7,7 @@ include ../../imports.mk
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_ablfvextractor build
 
-CANOE_WEBUI_ARCHIVE := $(CANOE_ROOT_DIR)/.cache/canoe-boot-manager/canoe-boot-manager-$(CANOE_WEBUI_VERSION).tar.gz
+CANOE_KSU_DIST ?= $(abspath ../../../canoe-boot-manager/dist/ksu)
 
 NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
 export NDK_PATH
@@ -32,46 +32,12 @@ copy_resources:
 	mkdir -p build/module/bin
 	cp -r module/* build/module/
 	[ -d ../../ablrepo ] && cp -r ../../ablrepo ./build/module/ablrepo || true
-# Fetch the pinned static app into the root cache, then replace webroot
-# wholesale. The source archive is a checked-in last-known-good artifact
-# until the canoe-boot-manager repository publishes release assets.
+# b5 packages only the explicit local KSU build. Never fetch the b4 archive.
 webui_dist: copy_resources
-	$(MAKE) -C "$(CANOE_ROOT_DIR)" fetch-verified \
-		FETCH_URL="$(CANOE_WEBUI_URL)" \
-		FETCH_SHA256="$(CANOE_WEBUI_SHA256)" \
-		FETCH_DEST="$(CANOE_WEBUI_ARCHIVE)"
-	@set -eu; \
-	tmp="$$(mktemp -d "$(CURDIR)/build/.webroot.XXXXXX")"; \
-	trap 'rm -rf "$$tmp"' EXIT HUP INT TERM; \
-	tar --extract --gzip --file "$(CANOE_WEBUI_ARCHIVE)" \
-		--directory "$$tmp" --no-same-owner; \
-	test -f "$$tmp/index.html"; \
-	rm -rf build/module/webroot; \
-	mv "$$tmp" build/module/webroot; \
-	trap - EXIT HUP INT TERM; \
-	rm -rf "$$tmp"
-# Refresh the checked-in last-known-good archive from a local checkout of the
-# app, and update imports.toml plus its generated Make inputs. The tar flags are what
-# make the digest stable: without them every regeneration embeds a new mtime
-# and owner, and a pin that changes on every run pins nothing.
-# The format must be USTAR: that is what the app's own `dist-tarball` publisher
-# emits, deliberately, so member names fit its 100-byte name and 155-byte prefix
-# limits. GNU format here would produce a different digest from the published
-# asset for byte-identical content, so a pin refreshed by this helper could never
-# match one taken from a release.
-#
-#   make -C targets/magisk_module webui-pin CANOE_WEBUI_SRC=/path/to/canoe-boot-manager
-CANOE_WEBUI_SRC ?= ../../../canoe-boot-manager
+	python3 ../../scripts/stage_ksu.py "$(CANOE_KSU_DIST)" build/module/webroot "$(CANOE_VERSION)"
 webui-pin:
-	@set -eu; \
-	test -f "$(CANOE_WEBUI_SRC)/dist/index.html" || \
-		{ echo "run 'bun run build' in $(CANOE_WEBUI_SRC) first" >&2; exit 1; }; \
-	out="webui-cache/canoe-boot-manager-$(CANOE_WEBUI_VERSION).tar.gz"; \
-	tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-		--format=ustar -C "$(CANOE_WEBUI_SRC)/dist" -cf - . \
-		| gzip -n -9 > "$$out"; \
-	echo "CANOE_WEBUI_SHA256 = $$(sha256sum "$$out" | cut -d' ' -f1)"
-	$(MAKE) -C "$(CANOE_ROOT_DIR)" import-pin ID=webui
+	@echo 'b5 uses CANOE_KSU_DIST; build the app KSU target first.' >&2
+	@exit 2
 submodule_uefi: copy_resources
 	# Build the EDK2 tree at most once per workspace, and at most once per
 	# invocation. `make build` in submodules/uefi relinks LinuxLoader with

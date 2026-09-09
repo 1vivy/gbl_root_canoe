@@ -18,8 +18,8 @@ The raw `efisp` partition is not a filesystem. It contains `BDS.efi` as a whole-
 - `submodules/patcher/`: ABL patching engine.
 - `submodules/ablfvextractor/`: ABL FV extractor.
 - `tools/canoe-bootmgr/`: small mounted-root CLI/library for config, entries, BLS and prepared loaders. No device discovery, deployment assessment, GUI sessions, or automatic snapshot/readback workflows.
-- The desktop GUI and the KernelSU WebUI are ONE app in a separate repository, `canoe-boot-manager`; a single `dist/` feeds a Tauri 2 shell (shipped as `bin/canoe-boot-manager` beside its `canoe-bootmgr` sidecar) and the module's `webroot/`. The application owns deployment policy, review, snapshots, readback, receipts and recovery through its native worker shared with the KSU installer. It is not built by this checkout alone.
-- `tools/canoe-ext4/`: libext2fs userspace ext4 helper; the no-mount backend for persist reads and writes.
+- The hosted browser app and the KernelSU WebUI live in the sibling `canoe-boot-manager`. Hosted WASM replaces desktop sidecars. Android retains its native root worker at `native/canoe-manager`. Package only explicit version-matched `CANOE_KSU_DIST` assets; b5 must never fetch the b4 WebUI archive.
+- `tools/canoe-ext4/`: historical native ext4 helper retained for reference; absent from b5 release and default test paths. Browser ext4 is owned by the Rust dependency fork and `canoe-nusb-storage`.
 - `tools/canoe-host/`: retired. Unreachable from every shipped path; the Rust `canoe` CLI and the app replaced it. Do not revive it.
 - `tools/mode2-profile/`, `tools/abl-tzmap/`: Rust sidecar derivation.
 - `targets/`: end-user package assembly; `targets/*/build/` is generated.
@@ -39,7 +39,7 @@ The raw `efisp` partition is not a filesystem. It contains `BDS.efi` as a whole-
 - Mode 0 remains honest-unlocked except for the universal efisp recursion guard. Mode 1/2 policy hooks must be scoped to the one managed child lifecycle.
 - Every installed protocol or Block I/O wrapper must restore on failed preparation, failed `LoadImage`, child return, mode change, and fastboot/menu re-entry.
 - A signer digest change is evidence of a different signer, not proof of OEM identity. Preserve the explicit override boundary.
-- `version.mk` is the single version source, and `make bump` regenerates it wholesale: never hand-edit it or the files it generates, and never keep build paths there. Run `make version-check` after version work. The Web UI pin (`CANOE_WEBUI_*`) must always move together with the digest of the app's published `dist` tarball.
+- `version.mk` is the single version source, and `make bump` regenerates it wholesale: never hand-edit it or the files it generates, and never keep build paths there. Run `make version-check` after version work. The KSU dist manifest must match product, version and runtime before packaging.
 
 ## Implementation discipline
 
@@ -48,8 +48,8 @@ Fix behavior in its authoritative layer:
 - Boot/menu/hook behavior: `submodules/uefi/edk2/QcomModulePkg/Application/LinuxLoader`.
 - ABL byte patching: `submodules/patcher`.
 - Config grammar and mounted boot-root primitives: `tools/canoe-bootmgr`. Share these primitives; slot/OTA workflow policy belongs to the manager application.
-- Offline ext4 provisioning: unchanged libext2fs through `tools/canoe-ext4`. Routine FAT access uses native OS mounts. Android persist allocation uses its existing mount.
-- Host transport, native mount ownership and mass-storage orchestration: manager application OS adapters, outside the small CLI.
+- Browser ext4/FAT storage: the sibling Rust dependencies and `canoe-nusb-storage`. Android persist allocation uses its existing mount. Do not restore native desktop mounting or libext2fs helpers.
+- Browser USB/storage orchestration: manager runtime and `canoe-nusb-storage`, outside the small CLI.
 - Desktop/WebUI presentation and guided deployment: the `canoe-boot-manager` repository. The native application engine also serves the KSU installer.
 - Packaging only: `targets`; do not duplicate domain logic into package Makefiles.
 

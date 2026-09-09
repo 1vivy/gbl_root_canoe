@@ -4,8 +4,7 @@
 
 `targets/` assembles end-user artifacts. Domain behavior belongs in `submodules/` or `tools/`; target Makefiles and resources select, copy, verify, and package it.
 
-- `toolkit_linux/`: desktop app plus native Linux tools and EFI artifacts.
-- `toolkit_windows/`: desktop app, pinned fastboot subset, unchanged libext2fs helper, native FAT adapter and tools, and EFI artifacts.
+- `toolkit_linux/` and `toolkit_windows/`: retired desktop package entrypoints; b4 remains tagged.
 - `toolkit_android/`: temporary-root device package and shared device scripts.
 - `magisk_module/`: installation/OTA module, WebUI, device scripts, binaries, and bundled `ablrepo` data.
 - Every `targets/*/build/` directory is generated output.
@@ -26,7 +25,7 @@ Most package assembly is host-only. Installed package scripts are not:
 
 - Magisk customize/OTA flows may write ABL, raw `efisp`, `persist/efisp.fat`, or `vendor_boot`.
 - Android temporary-root tooling is documented as boot-root-only; the operator owns raw ABL/BDS writes.
-- Windows mounting must be explicitly read-write for installation and must target the confirmed exported physical drive.
+- Hosted managed USB does not mount a host filesystem; its implementation is outside this package tree.
 
 Keep destructive actions behind an explicit operator choice with exact slot, partition, image, and rollback path. Never add device probing or writes to a package build target. Preserve other-slot recovery and transaction rollback when changing install flows.
 
@@ -36,9 +35,6 @@ Run the exact behavior tests for an edited target, then build the artifact:
 
 ```sh
 sh targets/magisk_module/tests/test_flows.sh
-sh targets/magisk_module/tests/test_webui.sh
-make target_toolkit_linux
-make target_toolkit_windows
 make target_toolkit_android
 make target_magisk_module
 ```

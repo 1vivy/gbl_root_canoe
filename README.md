@@ -14,12 +14,15 @@ The boot root is a 32 MiB FAT16 container on ext4 persist. BDS mounts it, loads
 per-slot EFI/GM2P/TZ-map triplets and offers ordinary EFI/BLS entries. Explicit
 Save as default persists a choice; normal menu selection remains one-shot.
 
-The 7.0.0-b4 release surface uses Canoe Boot Manager, one desktop/WebUI application. Its native worker also
-serves the KSU installer and owns deployment assessment, review, readback,
-receipts, retry and recovery. Small standalone commands manage a supplied
-mounted root (`canoe-bootmgr`), prepare images (`canoe-image`) and provision the
-container (`canoe-provision`). Routine FAT access uses native OS filesystems;
-unchanged libext2fs is confined to offline ext4 provisioning/removal.
+The 7.0.0-b5 release surface is under reconstruction: hosted CANOE BOOT MANAGER
+uses WASM and managed USB; KernelSU retains a packaged WebUI and native Android
+worker. Desktop executable bundles and filesystem sidecars are retired. The
+b4-final tag preserves the preceding stack. Small mounted-root and image commands
+remain available. See [the b5 reconstruction audit](docs/b5-reconstruction.md)
+for the implemented firmware contracts and outstanding device qualification.
+
+The inherited operator guides below describe established boot behavior; their
+older desktop packaging commands are historical until explicitly updated for b5.
 
 - [Install on desktop or KernelSU](wiki/docs/install.md)
 - [Reinstall from gbl-chainload or Canoe <=6.3.5](wiki/docs/reinstall.md)

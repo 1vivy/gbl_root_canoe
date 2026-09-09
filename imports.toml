@@ -1,25 +1,11 @@
 schema = 1
 
 [[import]]
-id = "webui"
-kind = "artifact"
-why = "Checked-in Web UI archive from canoe-boot-manager; its digest currently matches the checked-in archive."
-path = "targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz"
-version = "0.1.0"
-url = "file://$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz"
-sha256 = "693bd6a50b870889924869dbd5ae0dc3ba95a01dcb94b76f00320e18b97dfa03"
-bytes = 208453
-make_prefix = "CANOE_WEBUI"
-[import.producer]
-repo = "canoe-boot-manager"
-command = "bun run build, then make -C targets/magisk_module webui-pin CANOE_WEBUI_SRC=../../../canoe-boot-manager"
-
-[[import]]
 id = "msd-variant"
 kind = "artifact"
 why = "Calibrated canoe USB mass-storage DXE compiled by the canoe-msd repository."
 path = "submodules/uefi/blobs/canoe-usbmsd.efi"
-sha256 = "f40cd851526179a1a02f34f99b9a2d3c886c548c90622f176d2f2542d4f4994d"
+sha256 = "1268a93adeea37b38b4c08f3891117e28ae6bd5d9c65124b272fa6a0bcf98256"
 bytes = 57344
 [import.producer]
 repo = "https://github.com/1vivy/canoe-msd.git"
@@ -48,15 +34,6 @@ why = "ABL extractor fixture, byte-identical to ablrepo/myron/abl.img."
 path = "submodules/ablfvextractor/tests/001_myron_abl.elf"
 sha256 = "7ad61d97208daa71898fad89839a0268f4d7b36f94e48585f67779330a82ecce"
 bytes = 335872
-
-[[import]]
-id = "platform-tools"
-kind = "fetch"
-why = "Android platform-tools archive fetched for the Windows toolkit."
-url = "https://dl.google.com/android/repository/platform-tools_r37.0.0-win.zip"
-version = "r37.0.0"
-sha256 = "4fe305812db074cea32903a489d061eb4454cbc90a49e8fea677f4b7af764918"
-make_prefix = "PLATFORM_TOOLS"
 
 [[import]]
 id = "xz-utils"
@@ -105,22 +82,24 @@ version_key = "VERSION_STRING"
 "Library/AndroidToolsUi/AndroidToolsUi.inf" = "0.1"
 "Library/MdTableLib/MdTableLib.inf" = "0.1"
 
-[[import]]
-id = "desktop-app-linux"
-kind = "external"
-why = "Operator-supplied canoe-boot-manager Linux binary from a sibling checkout."
-path_var = "CANOE_APP_LINUX_BIN"
-note = "Supply the Linux binary from canoe-boot-manager; it is not committed or hashable here."
-[import.producer]
-repo = "canoe-boot-manager"
-command = "bunx tauri build --no-bundle --ci"
 
 [[import]]
-id = "desktop-app-windows"
-kind = "external"
-why = "Operator-supplied canoe-boot-manager Windows binary from a sibling checkout."
-path_var = "CANOE_APP_WINDOWS_BIN"
-note = "Supply the x86_64-pc-windows-gnu binary from canoe-boot-manager; it is not committed or hashable here."
+id = "managed-msd-variant"
+kind = "artifact"
+why = "Source-built vendor-class BOT driver with interface-scoped WinUSB descriptors."
+path = "submodules/uefi/blobs/canoe-managed-msd.efi"
+sha256 = "a903597d2e2f0c19163d1f7f644c01154f146dcaa43086c11bcedaffe4255612"
+bytes = 57344
 [import.producer]
-repo = "canoe-boot-manager"
-command = "bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci"
+repo = "https://github.com/1vivy/canoe-msd.git"
+command = "CANOE_MSD_MANAGED=1 BOOT_MXF=/path/to/vendor pkg/scripts/build.sh"
+
+[[import]]
+id = "ksu-app"
+kind = "external"
+why = "Explicit version-matched KSU application assets, never the hosted bundle."
+path_var = "CANOE_KSU_DIST"
+note = "Stage a local dist/ksu whose manifest declares product, version and runtime=ksu."
+[import.producer]
+repo = "https://github.com/1vivy/canoe-boot-manager.git"
+command = "Build the b5 KSU target to dist/ksu"

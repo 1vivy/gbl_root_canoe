@@ -1,56 +1,10 @@
-name: Release
-
+name: Firmware prerelease
 on:
-  push:
-    tags:
-      - '*'
-
+  workflow_dispatch:
 permissions:
-  contents: write
-
+  contents: read
 jobs:
   build:
     uses: ./.github/workflows/build.yml
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-
-    # The build job already packaged each archive, because zipping only after
-    # the artifact round-trip loses every executable bit. Re-zipping here would
-    # reintroduce exactly that, so the downloaded archives are attached as-is.
-    - name: Verify the executable bit survived
-      run: |
-        unzip -q -o toolkit_linux/toolkit_linux.zip -d modecheck
-        for exe in bin/canoe-manager \
-                   bin/patch_abl bin/mode2_profile \
-                   bin/abl_tzmap bin/canoe-bootmgr bin/canoe-image bin/canoe-provision \
-                   bin/canoe-boot-manager bin/extractfv \
-                   bin/vbmetaport bin/vbmetabackup; do
-          test -x "modecheck/$exe" || { echo "not executable in release asset: $exe"; exit 1; }
-        done
-        test -x modecheck/canoe-boot-manager.sh || {
-          echo "not executable in release asset: canoe-boot-manager.sh"; exit 1;
-        }
-        rm -rf modecheck
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      with:
-        name: ${{ github.ref_name }}
-        # Beta/hotfix tags carry a hyphen (7.0.0-b1); they must not
-        # replace the stable release as "Latest".
-        prerelease: ${{ contains(github.ref_name, '-') }}
-        generate_release_notes: false
-        files: |
-          toolkit_linux/toolkit_linux.zip
-          toolkit_windows/toolkit_windows.zip
-          toolkit_android/toolkit_android.zip
-          magisk_module/magisk_module.zip
-          vbmetafixer_linux/vbmetafixer_linux.zip
-          vbmetafixer_windows/vbmetafixer_windows.zip
-          vbmetafixer_android/vbmetafixer_android.zip
+# b5 publication is explicit after browser/Android/hardware acceptance.
+# Checkpoint tags must not trigger uploads of legacy desktop packages.

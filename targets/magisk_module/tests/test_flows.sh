@@ -152,4 +152,13 @@ assert_contains "$(cat "$UI_LOG")" 'Reboot when KernelSU requests module activat
 assert_contains "$(cat "$UI_LOG")" '仅安装管理界面和工具时不会更改启动分区' \
   'Chinese activation guidance is absent'
 pass 'bootstrap explains module activation separately from boot-chain deployment'
+# Run the actual flow with a b5 worker whose deployment capability is absent.
+cp "$ROOT/targets/magisk_module/module/install-flow.sh" "$MOD/install-flow.sh"
+printf '#!/bin/sh\n[ "$1 $2" = "installer supported" ] && exit 3\nexit 99\n' > "$MOD/bin/canoe-manager"
+chmod +x "$MOD/bin/canoe-manager"
+MODPATH="$MOD" UI_LOG="$UI_LOG" CONFIG_LOG="$CONFIG_LOG" MARKER="$MARKER" \
+  BY_NAME_DIR="$BY_NAME" PATH="$TMP:$PATH" sh "$TMP/bootstrap-wrapper.sh"
+assert_contains "$(cat "$UI_LOG")" 'CANOE-BDS 部署功能尚未就绪' 'unavailable deployment was offered'
+[ ! -e "$MARKER" ] || fail 'capability escape invoked a partition operation'
+pass 'actual install flow exits before keys or writes when deployment is unavailable'
 echo 'all module bootstrap fixtures passed'

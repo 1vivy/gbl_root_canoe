@@ -81,13 +81,17 @@ if [ "$user_lang" = "zh" ]; then
   ui_print "- 仅安装管理界面和工具时不会更改启动分区，不修改启动分区或手机数据。"
   ui_print "- 按 KernelSU 提示重启以激活模块，然后打开 WebUI。"
   ui_print "- 更新激活前仍可见的 WebUI 可能属于旧版本。"
-  ui_print "- 完整安装、模式选择和 OTA 准备也可在 WebUI 中完成。"
+  if "$MODPATH/bin/canoe-manager" installer supported >/dev/null 2>&1; then
+    ui_print "- 完整安装、模式选择和 OTA 准备也可在 WebUI 中完成。"
+  fi
   ui_print "- 安装本模块本身不需要格式化数据。"
 else
   ui_print "- Installing the manager alone does not change boot partitions or phone data."
   ui_print "- Reboot when KernelSU requests module activation, then open the WebUI."
   ui_print "- A WebUI visible before an update activates may still be the previous version."
-  ui_print "- Full installation, mode selection, and OTA preparation are also available in WebUI."
+  if "$MODPATH/bin/canoe-manager" installer supported >/dev/null 2>&1; then
+    ui_print "- Full installation, mode selection, and OTA preparation are also available in WebUI."
+  fi
   ui_print "- Installing this module alone does not require formatting data."
 fi
 [ -f "$MODPATH/install-flow.sh" ] || abort "Install flow is missing"

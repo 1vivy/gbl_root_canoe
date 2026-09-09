@@ -3,18 +3,18 @@
 ## Ownership map
 
 - `canoe-bootmgr/`: small mounted boot-root command/library. Canonical config/BLS and prepared loader operations; no application deployment protocol, ext4 backend, USB, or GUI dependency resolution.
-- `canoe-image/`: explicit image inspection, derivation, graft and vendor_boot operations, using existing native helpers.
+- `canoe-image/`: explicit image inspection, derivation, graft and vendor_boot operations, using existing native helpers on Android; portable byte algorithms are shared with WASM.
 - `canoe-provision/`: explicit container inspect/create/remove on mounted persist or offline images. No device discovery or deployment wizard.
-- The sibling manager application owns its native worker, OS adapters, dependency resolution, userdata assessment, snapshots, readback, operation journals, retry/revert and guided uninstall. KSU install-time input uses that same engine.
+- The sibling manager application owns its Android native worker, hosted WASM runtime, userdata assessment, snapshots, readback, operation journals, retry/revert and guided uninstall. KSU install-time input uses that same engine.
 - `canoe/`: retired by the approved overhaul. Remove its interactive wrapper and packaging rather than maintaining a second guided frontend.
-- `canoe-ext4/`: unchanged libext2fs for offline persist provisioning, outside ordinary mounted FAT operations.
+- `canoe-ext4/`: historical libext2fs helper, excluded from b5 release/default test paths. Browser storage belongs to the shared Rust forks.
 - `mode2-profile/`, `abl-tzmap/`, patcher and extractor: shared image producers/parsers.
 
 ## Command and application boundaries
 
 Commands accept explicit paths and operations, validate formats/path bounds, stage file publication and report write/flush failures. They do not require installation-history evidence or GUI acknowledgement tokens for ordinary entry edits. Multi-step deployment snapshots, readback comparison and recovery are application responsibilities. Do not preserve tests that impose the superseded all-in-one CLI architecture.
 
-Retain one implementation of config/image primitives. Application adapters resolve their own packaged dependencies and permissions. Invoke native helpers with explicit argv; never construct shell commands from user paths. Routine filesystem work uses Windows FAT/Linux vfat/Android owned loop mounts. No concurrent raw writer to mounted storage.
+Retain one implementation of config/image primitives. Application adapters resolve their own packaged dependencies and permissions. Invoke native helpers with explicit argv; never construct shell commands from user paths. Browser filesystem work uses managed USB storage; Android uses owned loop mounts. No concurrent raw writer to mounted storage.
 
 Preserve selected image inputs. ABL/vbmeta derivation never implicitly flashes those inputs. Separate explicit slot/partition operations, boot-root writes, and reboot. Test fixtures must never select the physical phone.
 
@@ -36,11 +36,8 @@ Use the affected package's real entry point:
 
 ```sh
 cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
-cargo test --locked --manifest-path tools/canoe/Cargo.toml
-cargo test --locked --manifest-path tools/canoe-gui/Cargo.toml
 cargo test --locked --manifest-path tools/mode2-profile/Cargo.toml
 cargo test --locked --manifest-path tools/abl-tzmap/Cargo.toml
-make -C tools/canoe-ext4 test
 make version-check
 ```
 
