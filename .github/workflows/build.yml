@@ -1,20 +1,44 @@
-name: Firmware and Android build
+name: Firmware CI
 on:
   push:
-    branches: [7.0.0-b5]
+    branches: [main]
   pull_request:
+  workflow_dispatch:
   workflow_call:
+    inputs:
+      source_ref:
+        description: Exact commit resolved by the release workflow
+        type: string
+        default: ''
+    outputs:
+      commit:
+        value: ${{ jobs.firmware.outputs.commit }}
+      artifact:
+        value: ${{ jobs.firmware.outputs.artifact }}
+permissions:
+  contents: read
 jobs:
   firmware:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      artifact: firmware-${{ steps.source.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.source_ref || github.sha }}
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
+          toolchain: 1.98.0
           targets: wasm32-unknown-unknown
-      - run: sudo apt-get update && sudo apt-get install -y dosfstools liblzma-dev clang lld uuid-dev
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential dosfstools e2fsprogs liblzma-dev clang lld uuid-dev python3-pytest
       - run: make test
       - name: Qualify portable image libraries
         run: |
@@ -25,11 +49,19 @@ jobs:
           node tools/canoe-image/qualification/vendorboot/run.mjs
       - run: docker build -t gbl_builder .
       - name: Build CANOE-BDS and EFI tools
-        run: docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc 'make -C submodules/uefi build && make -C submodules/uefi tools'
+        run: |
+          docker image inspect gbl_builder --format '{{.Id}}'
+          docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc 'make -C submodules/uefi clean && make -C submodules/uefi build && make -C submodules/uefi tools'
       - run: make version-check
-      - uses: actions/upload-artifact@v4
+      - name: Capture the exact firmware build and source identity
+        run: python3 scripts/firmware_release.py package
+      - run: python3 scripts/firmware_release.py verify .work/firmware-release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: canoe-firmware-b5
-          path: submodules/uefi/build/*.efi
+          name: firmware-${{ steps.source.outputs.commit }}
+          path: .work/firmware-release/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
 # The app's pinned KSU build drives module packaging with CANOE_KSU_DIST.
 # Firmware CI never fetches a legacy WebUI or builds desktop sidecars.

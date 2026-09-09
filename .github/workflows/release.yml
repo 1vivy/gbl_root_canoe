@@ -1,10 +1,56 @@
-name: Firmware prerelease
+name: Prepare firmware draft release
 on:
+  push:
+    tags: ['release-*']
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release-<version> tag matching version.mk
+        required: true
+        type: string
 permissions:
   contents: read
+concurrency:
+  group: firmware-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.tag.outputs.commit }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: python3 scripts/firmware_release.py tag "$RELEASE_TAG"
   build:
+    needs: validate
     uses: ./.github/workflows/build.yml
-# b5 publication is explicit after browser/Android/hardware acceptance.
-# Checkpoint tags must not trigger uploads of legacy desktop packages.
+    with:
+      source_ref: ${{ needs.validate.outputs.commit }}
+  draft:
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: .work/firmware-release/
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: python3 scripts/firmware_release.py draft "$RELEASE_TAG" .work/firmware-release
+# Creating a release tag only prepares a draft. Publish deliberately after
+# qualifying these exact EFI bytes; the upload job never rebuilds the firmware.
