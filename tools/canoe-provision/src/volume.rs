@@ -29,15 +29,15 @@ pub struct VolumeInfo {
 pub const fn supported_bytes(bytes: u64) -> bool {
     bytes >= CONTAINER_BYTES && bytes <= MAX_CONTAINER_BYTES && bytes % CONTAINER_BYTES == 0
 }
-/// The volume size comes from total persist capacity. Existing files are never
+/// The volume size comes from allocator-available persist space. Existing files are never
 /// removed implicitly or used to silently shrink this reviewed selection.
-pub fn select_bytes(persist_bytes: u64, headroom_percent: u32) -> io::Result<u64> {
+pub fn select_bytes(available_bytes: u64, headroom_percent: u32) -> io::Result<u64> {
     if headroom_percent >= 100 {
         return Err(io::Error::other(
             "persist headroom must be below 100 percent",
         ));
     }
-    let available = (u128::from(persist_bytes) * (100 - headroom_percent) as u128 / 100) as u64;
+    let available = (u128::from(available_bytes) * (100 - headroom_percent) as u128 / 100) as u64;
     let bytes = available / CONTAINER_BYTES * CONTAINER_BYTES;
     if !supported_bytes(bytes) {
         return Err(io::Error::other(
@@ -210,7 +210,7 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
 mod tests {
     use super::*;
     #[test]
-    fn selection_uses_persist_total_and_does_not_shrink_to_fit_existing_files() {
+    fn selection_uses_measured_available_space_and_keeps_percentage_headroom() {
         let mib = 1024 * 1024;
         assert_eq!(select_bytes(48 * mib, 25).unwrap(), 32 * mib);
         assert_eq!(select_bytes(128 * mib, 25).unwrap(), 96 * mib);

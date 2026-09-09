@@ -74,7 +74,7 @@ impl PersistRoot {
     pub fn flush(&self) -> io::Result<()> {
         self.directory.open(".")?.sync_all()
     }
-    fn available(&self) -> io::Result<u64> {
+    pub fn available(&self) -> io::Result<u64> {
         let directory = self.directory.open(".")?;
         let mut space: libc::statvfs = unsafe { std::mem::zeroed() };
         if unsafe { libc::fstatvfs(directory.as_raw_fd(), &mut space) } != 0 {
