@@ -10,7 +10,9 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "SuperFbMenu.h"
+#include "SuperFbFatClassify.h"
+#include "SuperFbContainer.h"
+#include "SuperFbGptName.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -19,6 +21,7 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include <Library/DevicePathLib.h>
+#include <Guid/Gpt.h>
 #include <Guid/FileInfo.h>
 #include <Guid/FileSystemVolumeLabelInfo.h>
 #include <IndustryStandard/PeImage.h>
@@ -66,6 +69,8 @@ STATIC EFI_GUID mSfbDriverTagGuid = {
 };
 
 STATIC BOOLEAN mSfbFatStackStarted = FALSE;
+STATIC EFI_STATUS mSfbLastConnectStatus = EFI_SUCCESS;
+STATIC EFI_STATUS mSfbLastDetectStatus = EFI_SUCCESS;
 
 STATIC
 EFI_STATUS
@@ -79,39 +84,153 @@ SfbCreateDriverHandle (OUT EFI_HANDLE *Handle)
 }
 
 /*
+ * Event groups the platform's DXEs may be waiting on.
+ *
+ * The fastboot-only boot path never reaches the stock BDS, so nothing ever
+ * signals these. Qualcomm's own minimal ABL replacement signals all three
+ * before it enumerates filesystems (qualcomm/abl2esp, src/main.rs), and vendor
+ * drivers commonly defer the last stage of initialisation to EndOfDxe or
+ * ReadyToBoot. DetectSdCard is a vendor group whose name says what it triggers.
+ *
+ * Signalling a group nobody listens to is a no-op, so the cost of being wrong
+ * about which of these matters is nil.
+ */
+STATIC CONST EFI_GUID mSfbReadyToBootGuid = {
+  0x7ce88fb3, 0x4bd7, 0x4679,
+  { 0x87, 0xa8, 0xa8, 0xd8, 0xde, 0xe5, 0x0d, 0x2b }
+};
+STATIC CONST EFI_GUID mSfbEndOfDxeGuid = {
+  0x02ce967a, 0xdd7e, 0x4ffc,
+  { 0x9e, 0xe7, 0x81, 0x0c, 0xf0, 0x47, 0x08, 0x80 }
+};
+STATIC CONST EFI_GUID mSfbDetectSdCardGuid = {
+  0xb7972c36, 0x8a4c, 0x4a56,
+  { 0x8b, 0x02, 0x11, 0x59, 0xb5, 0x2d, 0x4b, 0xfb }
+};
+
+STATIC
+VOID
+EFIAPI
+SfbEventGroupNoop (IN EFI_EVENT Event, IN VOID *Context)
+{
+  (VOID)Event;
+  (VOID)Context;
+}
+
+/*
+ * Create a member of Group, signal it, and close it. Creating the event is what
+ * makes the group exist for this call; every other member registered by a
+ * driver is notified by the signal.
+ */
+STATIC
+EFI_STATUS
+SfbSignalEventGroup (IN CONST EFI_GUID *Group)
+{
+  EFI_STATUS  Status;
+  EFI_EVENT   Event = NULL;
+
+  Status = gBS->CreateEventEx (EVT_NOTIFY_SIGNAL, TPL_NOTIFY,
+                               SfbEventGroupNoop, NULL,
+                               (EFI_GUID *)Group, &Event);
+  if (EFI_ERROR (Status) || Event == NULL) {
+    return EFI_ERROR (Status) ? Status : EFI_OUT_OF_RESOURCES;
+  }
+
+  Status = gBS->SignalEvent (Event);
+  gBS->CloseEvent (Event);
+  return Status;
+}
+
+VOID
+SfbSignalStorageDetect (VOID)
+{
+  EFI_STATUS  Status;
+
+  Status = SfbSignalEventGroup (&mSfbDetectSdCardGuid);
+  mSfbLastDetectStatus = Status;
+  DEBUG ((EFI_D_INFO, "SFB: MARK event-signal group=detect-sd-card status=%r\n",
+          Status));
+}
+
+VOID
+SfbSignalBootPhase (VOID)
+{
+  EFI_STATUS  EndOfDxe;
+  EFI_STATUS  ReadyToBoot;
+
+  /*
+   * EndOfDxe first, then ReadyToBoot: that is the order the platform BDS would
+   * have used, and a driver that gates on both expects to see them that way.
+   */
+  EndOfDxe = SfbSignalEventGroup (&mSfbEndOfDxeGuid);
+  ReadyToBoot = SfbSignalEventGroup (&mSfbReadyToBootGuid);
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK event-signal end-of-dxe=%r ready-to-boot=%r\n",
+          EndOfDxe, ReadyToBoot));
+}
+
+/*
  * Recursively connect every controller in the system.
  *
  * The fastboot-only boot path skips the BDS "connect all" pass, so on this
- * platform whole device stacks are left dispatched-but-unconnected. Most of
- * them do not matter here, but the USB host storage chain does: this platform's
- * firmware carries the Qualcomm USB host bring-up (UsbConfigDxe), the XHCI
- * PCI-emulation shim, XhciDxe, UsbBusDxe and UsbMassStorageDxe, but nothing in
- * the fastboot path ever connects them, so an attached USB drive never appears.
+ * platform whole device stacks are left dispatched-but-unconnected. The one
+ * that matters to a chainloader is storage: without this pass the ext4 and
+ * FAT drivers are never bound to the UFS and removable block devices, no
+ * EFI_SIMPLE_FILE_SYSTEM_PROTOCOL appears, and the persist boot root that
+ * holds canoe.cfg, boot.efi and the payload loaders cannot be read at all.
+ * Connecting everything rather than a named subset is deliberate: the pass
+ * runs once, before any menu row exists, and the alternative is a hardcoded
+ * list that goes stale on the next platform.
  */
 VOID
 SfbConnectAll (VOID)
 {
   EFI_STATUS  Status;
+  EFI_STATUS  FirstError = EFI_SUCCESS;
   EFI_HANDLE  *Handles = NULL;
   UINTN       Count = 0;
   UINTN       Index;
   UINTN       Connected = 0;
+  UINTN       Skipped = 0;
+  UINTN       Failed = 0;
 
   Status = gBS->LocateHandleBuffer (AllHandles, NULL, NULL, &Count, &Handles);
   if (EFI_ERROR (Status) || Handles == NULL) {
-    DEBUG ((EFI_D_ERROR, "SFB: no handles to connect: %r\n", Status));
+    mSfbLastConnectStatus = EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-connect handles=%u connected=0 failed=1 "
+            "status=%r\n",
+            (UINT32)Count, mSfbLastConnectStatus));
     return;
   }
 
+  /*
+   * Most handles on this platform are not block devices and have no driver
+   * that wants them, and ConnectController answers EFI_NOT_FOUND for those.
+   * That is "nothing to do", not a failure: counting it as one made a healthy
+   * pass report failed=362 of 368 and hoisted a Not Found into the stack-start
+   * mark, so a real connect error had nothing to stand out against.
+   */
   for (Index = 0; Index < Count; Index++) {
     Status = gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
     if (!EFI_ERROR (Status)) {
       Connected++;
+    } else if (Status == EFI_NOT_FOUND) {
+      Skipped++;
+    } else {
+      Failed++;
+      if (FirstError == EFI_SUCCESS) {
+        FirstError = Status;
+      }
     }
   }
 
-  DEBUG ((EFI_D_INFO, "SFB: connected %u of %u handles\n",
-          (UINT32)Connected, (UINT32)Count));
+  mSfbLastConnectStatus = (Failed == 0) ? EFI_SUCCESS : FirstError;
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK fat-connect handles=%u connected=%u skipped=%u failed=%u "
+          "status=%r\n",
+          (UINT32)Count, (UINT32)Connected, (UINT32)Skipped, (UINT32)Failed,
+          mSfbLastConnectStatus));
 
   FreePool (Handles);
 }
@@ -120,15 +239,26 @@ EFI_STATUS
 SfbStartFatStack (VOID)
 {
   EFI_STATUS  Status;
+  EFI_STATUS  Ext4Status = EFI_SUCCESS;
   EFI_HANDLE  DiskIoHandle = NULL;
   EFI_HANDLE  FatHandle = NULL;
 
   if (mSfbFatStackStarted) {
     /* Re-run the connection pass only: media may have appeared since, and a USB
-     * drive may have just been inserted (or a host cable attached). */
+     * drive may have just been inserted (or a host cable attached). Re-signal
+     * the storage-detect group first for the same reason. */
+    SfbSignalStorageDetect ();
     SfbConnectAll ();
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK fat-stack-start reused=1 started=1 detect=%r "
+            "connect=%r status=%r\n",
+            mSfbLastDetectStatus, mSfbLastConnectStatus, EFI_SUCCESS));
     return EFI_SUCCESS;
   }
+
+  /* Before anything binds: give a vendor storage-detect handler the chance to
+   * publish media that is not present yet. */
+  SfbSignalStorageDetect ();
 
   /*
    * EnhancedFatDxe refuses to mount a volume without a Unicode Collation
@@ -138,37 +268,47 @@ SfbStartFatStack (VOID)
    */
   Status = InitializeUnicodeCollationEng (gImageHandle, gST);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: Unicode Collation init failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=unicode status=%r\n",
+            Status));
     return Status;
   }
 
   Status = SfbCreateDriverHandle (&DiskIoHandle);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: Disk I/O handle alloc failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=diskio-handle status=%r\n",
+            Status));
     return Status;
   }
 
   Status = InitializeDiskIo (DiskIoHandle, gST);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: Disk I/O driver init failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=diskio status=%r\n",
+            Status));
     return Status;
   }
 
   Status = SfbCreateDriverHandle (&FatHandle);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: FAT handle alloc failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=fat-handle status=%r\n",
+            Status));
     return Status;
   }
 
   Status = FatEntryPoint (FatHandle, gST);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: FAT driver init failed: %r\n", Status));
+    DEBUG ((EFI_D_ERROR,
+            "SFB: MARK fat-stack-start stage=fat status=%r\n",
+            Status));
     return Status;
   }
 
   /*
    * The read-only EXT4 driver mounts the ext4 persist partition so its \efisp
-   * directory can be scanned and browsed like a FAT32 volume. Same pattern as
+   * directory can be scanned and browsed like a FAT volume. Same pattern as
    * FAT above: a private handle carries its driver binding, and the connect
    * pass at the end binds it to the Disk I/O handles of any ext4 partitions.
    * Failure here is non-fatal to the FAT stack already up, but the persist
@@ -176,11 +316,16 @@ SfbStartFatStack (VOID)
    */
   Status = SfbCreateDriverHandle (&FatHandle);
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "SFB: Ext4 handle alloc failed: %r\n", Status));
+    Ext4Status = Status;
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK fat-stack-start stage=ext4-handle status=%r\n",
+            Status));
   } else {
-    Status = Ext4EntryPoint (FatHandle, gST);
-    if (EFI_ERROR (Status)) {
-      DEBUG ((EFI_D_ERROR, "SFB: Ext4 driver init failed: %r\n", Status));
+    Ext4Status = Ext4EntryPoint (FatHandle, gST);
+    if (EFI_ERROR (Ext4Status)) {
+      DEBUG ((EFI_D_WARN,
+              "SFB: MARK fat-stack-start stage=ext4 status=%r\n",
+              Ext4Status));
     }
   }
 
@@ -188,20 +333,221 @@ SfbStartFatStack (VOID)
 
   SfbConnectAll ();
 
+  /*
+   * Now that every controller is connected, tell the platform the DXE phase is
+   * over and a boot is imminent. A driver that published its protocol during
+   * dispatch but deferred the rest of its bring-up to one of these groups gets
+   * its chance here, before any volume is scanned or any entry is launched.
+   */
+  SfbSignalBootPhase ();
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK fat-stack-start reused=0 started=1 ext4=%r "
+          "detect=%r connect=%r status=%r\n",
+          Ext4Status, mSfbLastDetectStatus, mSfbLastConnectStatus,
+          EFI_SUCCESS));
+
   return EFI_SUCCESS;
 }
 
 /*
- * Byte offsets into the FAT boot sector. Named here rather than pulled from
- * EnhancedFatDxe's FatFileSystem.h, which is module-private to its package.
+ * TRUE when the volume handle's device path passes through a USB messaging
+ * node. FAT partitions on a USB drive hang off such a path
+ * (...USB()/HD(...)/...); internal UFS partitions do not.
+ *
+ * This is the loader's only notion of "removable". Everything that must treat
+ * a stick differently from the on-device boot root - the managed-ABL
+ * predicate, the default-entry fallback, the boot-spec discovery, the menu
+ * row prefix - asks this one question.
  */
-#define SFB_BPB_BYTES_PER_SEC   11
-#define SFB_BPB_ROOT_ENT_CNT    17
-#define SFB_BPB_TOT_SEC_16      19
-#define SFB_BPB_FAT_SZ_16       22
-#define SFB_BPB_FAT_SZ_32       36
-#define SFB_BPB_FS_TYPE_32      82
-#define SFB_BPB_SIGNATURE       510
+BOOLEAN
+SfbIsUsbVolume (IN EFI_HANDLE Volume)
+{
+  EFI_STATUS                Status;
+  EFI_DEVICE_PATH_PROTOCOL  *Node = NULL;
+
+  Status = gBS->HandleProtocol (Volume, &gEfiDevicePathProtocolGuid,
+                                (VOID **)&Node);
+  if (EFI_ERROR (Status) || Node == NULL) {
+    return FALSE;
+  }
+
+  while (!IsDevicePathEnd (Node)) {
+    if (DevicePathType (Node) == MESSAGING_DEVICE_PATH &&
+        (DevicePathSubType (Node) == MSG_USB_DP ||
+         DevicePathSubType (Node) == MSG_USB_CLASS_DP ||
+         DevicePathSubType (Node) == MSG_USB_WWID_DP)) {
+      return TRUE;
+    }
+    Node = NextDevicePathNode (Node);
+  }
+
+  return FALSE;
+}
+
+/* ---- GPT partitions by name --------------------------------------------- */
+
+extern EFI_GUID gEfiPartitionRecordGuid;
+EFI_STATUS
+SfbFindPartitionByName (IN CONST CHAR16            *Name,
+                        OUT EFI_BLOCK_IO_PROTOCOL **BlockIo)
+{
+  EFI_STATUS  Status;
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       Count = 0;
+  UINTN       Index;
+
+  if (Name == NULL || BlockIo == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *BlockIo = NULL;
+
+  /* Walked over Block I/O rather than Partition Info because this platform
+   * publishes the GPT record on the handle but not always the newer protocol,
+   * which is the same reason SfbMountLogfs walks it this way. */
+  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid,
+                                    NULL, &Count, &Handles);
+  if (EFI_ERROR (Status) || Handles == NULL) {
+    return EFI_NOT_FOUND;
+  }
+
+  Status = EFI_NOT_FOUND;
+  for (Index = 0; Index < Count; Index++) {
+    EFI_PARTITION_ENTRY    *PartEntry = NULL;
+    EFI_BLOCK_IO_PROTOCOL  *Candidate = NULL;
+
+    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
+                                        &gEfiPartitionRecordGuid,
+                                        (VOID **)&PartEntry)) ||
+        PartEntry == NULL ||
+        !SfbGptNameMatchesInline (PartEntry->PartitionName, Name)) {
+      continue;
+    }
+    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
+                                        &gEfiBlockIoProtocolGuid,
+                                        (VOID **)&Candidate)) ||
+        Candidate == NULL || Candidate->Media == NULL ||
+        !Candidate->Media->MediaPresent) {
+      continue;
+    }
+    *BlockIo = Candidate;
+    Status = EFI_SUCCESS;
+    break;
+  }
+
+  FreePool (Handles);
+  return Status;
+}
+
+/* ---- logfs -------------------------------------------------------------- */
+
+STATIC UINTN
+SfbFileSystemCount (VOID)
+{
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       Count  = 0;
+
+  if (!EFI_ERROR (gBS->LocateHandleBuffer (ByProtocol,
+                                           &gEfiSimpleFileSystemProtocolGuid,
+                                           NULL, &Count, &Handles)) &&
+      Handles != NULL) {
+    FreePool (Handles);
+  }
+  return Count;
+}
+
+/*
+ * Mount the logfs partition, nothing more.
+ *
+ * The Qualcomm BDS earlier in the boot chain defers its log flush until logfs
+ * is mounted, and the stock fastboot path never mounts it, so the buffered log
+ * is silently dropped. Binding the filesystem drivers to that one partition is
+ * all it takes; the flush itself is Qualcomm's business. Fail-soft by
+ * construction: a platform with no logfs partition mounts nothing, and the
+ * marker records that as an expected outcome rather than a failure.
+ */
+VOID
+SfbMountLogfs (VOID)
+{
+  EFI_STATUS  Status;
+  EFI_STATUS  ResultStatus = EFI_SUCCESS;
+  EFI_HANDLE  *Handles = NULL;
+  UINTN       Count    = 0;
+  UINTN       Index;
+  UINTN       Found    = 0;
+  UINTN       Mounted  = 0;
+  UINTN       Present  = 0;
+
+  if (!mSfbFatStackStarted) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK logfs-mount found=0 mounted=0 status=%r\n",
+            EFI_NOT_STARTED));
+    return;
+  }
+
+  Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid,
+                                    NULL, &Count, &Handles);
+  if (EFI_ERROR (Status) || Handles == NULL) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK logfs-mount found=0 mounted=0 status=%r\n",
+            EFI_ERROR (Status) ? Status : EFI_NOT_FOUND));
+    return;
+  }
+
+  for (Index = 0; Index < Count; Index++) {
+    EFI_PARTITION_ENTRY  *PartEntry = NULL;
+    VOID                 *FileSystem = NULL;
+    UINTN                Before;
+    UINTN                After;
+
+    Status = gBS->HandleProtocol (Handles[Index], &gEfiPartitionRecordGuid,
+                                  (VOID **)&PartEntry);
+    if (EFI_ERROR (Status) || PartEntry == NULL) continue;
+    if (!SfbGptNameMatchesInline (PartEntry->PartitionName, L"logfs")) continue;
+
+    Found++;
+    /*
+     * Already carrying a filesystem is the common case once the FAT stack has
+     * run, and it is the outcome this call exists to reach - the vendor's
+     * deferred flush only needs the volume bound, not bound by us. Counting it
+     * separately keeps that apart from a mount that genuinely did not happen;
+     * reported as one, a warm handle read as a failure on every boot.
+     */
+    Status = gBS->HandleProtocol (Handles[Index],
+                                 &gEfiSimpleFileSystemProtocolGuid,
+                                 &FileSystem);
+    if (!EFI_ERROR (Status) && FileSystem != NULL) {
+      Present++;
+      continue;
+    }
+
+    Before = SfbFileSystemCount ();
+    Status = gBS->ConnectController (Handles[Index], NULL, NULL, TRUE);
+    if (EFI_ERROR (Status) && Status != EFI_NOT_FOUND &&
+        ResultStatus == EFI_SUCCESS) {
+      ResultStatus = Status;
+    }
+    After = SfbFileSystemCount ();
+    if (After > Before) Mounted++;
+  }
+
+  FreePool (Handles);
+  if (ResultStatus == EFI_SUCCESS) {
+    if (Found == 0) {
+      ResultStatus = EFI_NOT_FOUND;
+    } else if ((Mounted + Present) != Found) {
+      ResultStatus = EFI_NOT_READY;
+    }
+  }
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK logfs-mount found=%u mounted=%u present=%u status=%r\n",
+          (UINT32)Found, (UINT32)Mounted, (UINT32)Present, ResultStatus));
+}
+
+/*
+ * Little-endian helpers used by the PE driver-file probe below. Volume
+ * classification itself lives in SuperFbFatClassify.h so the same pure
+ * decision is used by firmware and host regressions.
+ */
 
 STATIC
 UINT16
@@ -222,19 +568,19 @@ SfbLe32 (IN CONST UINT8 *Sector, IN UINTN Offset)
 
 /*
  * Decide from the boot sector alone. The FAT type is defined by the geometry
- * rather than by the "FAT32" text at offset 82, which is documented as
- * informational only, so the geometry is what is checked; the text is accepted
- * as a second opinion for images that fill it in but lay out the BPB oddly.
+ * rather than by the "FAT12"/"FAT16"/"FAT32" text at offset 54 or 82, which the
+ * specification documents as informational only - and which is exactly why this
+ * reads the geometry: the device's own FAT12 volumes do carry the text, but a
+ * volume that lies about it still mounts.
  */
 BOOLEAN
-SfbIsFat32Volume (IN EFI_HANDLE Volume)
+SfbIsFatVolume (IN EFI_HANDLE Volume)
 {
   EFI_STATUS             Status;
   EFI_BLOCK_IO_PROTOCOL  *BlockIo = NULL;
   UINT8                  *Sector;
   UINTN                  SectorSize;
-  UINT16                 BytesPerSec;
-  BOOLEAN                IsFat32 = FALSE;
+  BOOLEAN                IsFat = FALSE;
 
   Status = gBS->HandleProtocol (Volume, &gEfiBlockIoProtocolGuid,
                                 (VOID **)&BlockIo);
@@ -263,46 +609,20 @@ SfbIsFat32Volume (IN EFI_HANDLE Volume)
                                 SectorSize, Sector);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_VERBOSE, "SFB: boot sector read failed: %r\n", Status));
-    goto Done;
+  } else {
+    IsFat = (BOOLEAN)(SfbClassifyVolumeBytes (Sector, SectorSize) ==
+                      SfbVolumeKindFat);
   }
 
-  if (Sector[SFB_BPB_SIGNATURE] != 0x55 ||
-      Sector[SFB_BPB_SIGNATURE + 1] != 0xAA) {
-    goto Done;
-  }
-
-  BytesPerSec = SfbLe16 (Sector, SFB_BPB_BYTES_PER_SEC);
-  if (BytesPerSec != 512 && BytesPerSec != 1024 &&
-      BytesPerSec != 2048 && BytesPerSec != 4096) {
-    goto Done;
-  }
-
-  /* FAT32 has no fixed-size root directory, no 16-bit FAT size and, past the
-   * 32MB mark, no 16-bit total sector count either. */
-  if (SfbLe16 (Sector, SFB_BPB_ROOT_ENT_CNT) == 0 &&
-      SfbLe16 (Sector, SFB_BPB_FAT_SZ_16) == 0 &&
-      SfbLe16 (Sector, SFB_BPB_TOT_SEC_16) == 0 &&
-      SfbLe32 (Sector, SFB_BPB_FAT_SZ_32) != 0) {
-    IsFat32 = TRUE;
-    goto Done;
-  }
-
-  if (CompareMem (Sector + SFB_BPB_FS_TYPE_32, "FAT32   ", 8) == 0) {
-    IsFat32 = TRUE;
-  }
-
-Done:
   FreeAlignedPages (Sector, EFI_SIZE_TO_PAGES (SectorSize));
-
-  return IsFat32;
+  return IsFat;
 }
 
 /*
  * The ext4 superblock sits 1024 bytes into the partition and carries the
- * 0xEF53 signature at offset 56 within it (byte 1080). FAT32 volumes answer
- * FALSE here: their first few KiB are a boot sector and FATs, never an ext4
- * superblock, so this and SfbIsFat32Volume () partition the volume set
- * cleanly and a handle is never both.
+ * 0xEF53 signature at offset 56 within it (byte 1080). The shared classifier
+ * checks FAT geometry first and validates the ext4 layout before accepting the
+ * magic, so a coincidental match cannot redirect a FAT root.
  */
 BOOLEAN
 SfbIsExt4Volume (IN EFI_HANDLE Volume)
@@ -314,7 +634,6 @@ SfbIsExt4Volume (IN EFI_HANDLE Volume)
   UINTN                  Bytes;
   UINTN                  Blocks;
   BOOLEAN                IsExt4 = FALSE;
-
   Status = gBS->HandleProtocol (Volume, &gEfiBlockIoProtocolGuid,
                                 (VOID **)&BlockIo);
   if (EFI_ERROR (Status) || BlockIo == NULL || BlockIo->Media == NULL) {
@@ -330,7 +649,8 @@ SfbIsExt4Volume (IN EFI_HANDLE Volume)
     return FALSE;
   }
 
-  /* The magic is at byte 1080; read at least that far from the start. */
+  /* Read enough to cover the ext4 superblock; the classifier validates all
+   * fields before accepting the magic. */
   Bytes = 4096;
   Blocks = (Bytes + SectorSize - 1) / SectorSize;
   Bytes = Blocks * SectorSize;
@@ -346,89 +666,129 @@ SfbIsExt4Volume (IN EFI_HANDLE Volume)
                                 Bytes, Sector);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_VERBOSE, "SFB: ext4 superblock read failed: %r\n", Status));
-    goto Done;
+  } else {
+    IsExt4 = (BOOLEAN)(SfbClassifyVolumeBytes (Sector, Bytes) ==
+                       SfbVolumeKindExt4);
   }
 
-  if (SfbLe16 (Sector, 1080) == 0xEF53) {
-    IsExt4 = TRUE;
-  }
-
-Done:
   FreeAlignedPages (Sector, EFI_SIZE_TO_PAGES (Bytes));
-
   return IsExt4;
 }
 
-/*
- * The subdirectory that plays the role of a FAT32 volume root on a given
- * volume: empty for genuine FAT32 (its root already is the scan root) and
- * \efisp for the ext4 persist partition, whose boot files live there. The
- * entry scanner and the browser prepend this to the well-known boot file
- * paths and use it as the browse floor respectively.
- */
-CONST CHAR16 *
-SfbVolumeRootPrefix (IN EFI_HANDLE Volume)
+
+typedef struct {
+  EFI_HANDLE       Volume;
+  SFB_VOLUME_KIND  Kind;
+} SFB_VOLUME_CLASS;
+
+#define SFB_VOLUME_CLASS_CACHE_MAX  256
+
+STATIC SFB_VOLUME_CLASS  mSfbVolumeClassCache[SFB_VOLUME_CLASS_CACHE_MAX];
+STATIC UINTN             mSfbVolumeClassCount;
+
+VOID
+SfbResetVolumeClassCache (VOID)
 {
-  return SfbIsExt4Volume (Volume) ? L"\\efisp" : L"";
+  ZeroMem (mSfbVolumeClassCache, sizeof (mSfbVolumeClassCache));
+  mSfbVolumeClassCount = 0;
 }
 
-/*
- * TRUE when Path names an existing directory on Volume. Ext4 volumes are only
- * treated as boot volumes when they carry \efisp, so an ext4 partition whose
- * \efisp directory has not been created is never scanned or offered in the
- * browser. FAT32 volumes are never gated on this: their root is the boot root.
- */
 STATIC
-BOOLEAN
-SfbVolumeHasDir (IN EFI_HANDLE Volume, IN CONST CHAR16 *Path)
+SFB_VOLUME_KIND
+SfbProbeVolumeKind (IN EFI_HANDLE Volume)
 {
-  EFI_STATUS         Status;
-  EFI_FILE_PROTOCOL  *Root = NULL;
-  EFI_FILE_PROTOCOL  *Dir = NULL;
-  EFI_FILE_INFO      *Info;
-  UINTN              InfoSize;
-  BOOLEAN            IsDir = FALSE;
+  EFI_STATUS             Status;
+  EFI_BLOCK_IO_PROTOCOL  *BlockIo = NULL;
+  UINT8                  *Sector;
+  UINTN                  SectorSize;
+  UINTN                  Bytes;
+  UINTN                  Blocks;
+  SFB_VOLUME_KIND        Kind = SfbVolumeKindOther;
 
-  if (EFI_ERROR (SfbOpenVolumeRoot (Volume, &Root)) || Root == NULL) {
-    return FALSE;
+  Status = gBS->HandleProtocol (Volume, &gEfiBlockIoProtocolGuid,
+                                (VOID **)&BlockIo);
+  if (EFI_ERROR (Status) || BlockIo == NULL || BlockIo->Media == NULL ||
+      !BlockIo->Media->MediaPresent) {
+    return Kind;
   }
 
-  Status = Root->Open (Root, &Dir, (CHAR16 *)Path, EFI_FILE_MODE_READ, 0);
-  if (EFI_ERROR (Status) || Dir == NULL) {
-    Root->Close (Root);
-    return FALSE;
+  SectorSize = BlockIo->Media->BlockSize;
+  if (SectorSize < 512) {
+    return Kind;
   }
 
-  InfoSize = 0;
-  Status = Dir->GetInfo (Dir, &gEfiFileInfoGuid, &InfoSize, NULL);
-  if (Status == EFI_BUFFER_TOO_SMALL) {
-    Info = AllocateZeroPool (InfoSize);
-    if (Info != NULL) {
-      Status = Dir->GetInfo (Dir, &gEfiFileInfoGuid, &InfoSize, Info);
-      if (!EFI_ERROR (Status)) {
-        IsDir = (BOOLEAN)((Info->Attribute & EFI_FILE_DIRECTORY) != 0);
-      }
-      FreePool (Info);
+  Bytes = 4096;
+  Blocks = (Bytes + SectorSize - 1) / SectorSize;
+  Bytes = Blocks * SectorSize;
+  Sector = AllocateAlignedPages (EFI_SIZE_TO_PAGES (Bytes),
+                                 BlockIo->Media->IoAlign > 1 ?
+                                   BlockIo->Media->IoAlign : 8);
+  if (Sector == NULL) {
+    return Kind;
+  }
+
+  Status = BlockIo->ReadBlocks (BlockIo, BlockIo->Media->MediaId, 0,
+                                Bytes, Sector);
+  if (!EFI_ERROR (Status)) {
+    Kind = SfbClassifyVolumeBytes (Sector, Bytes);
+  }
+  FreeAlignedPages (Sector, EFI_SIZE_TO_PAGES (Bytes));
+  return Kind;
+}
+
+STATIC
+SFB_VOLUME_KIND
+SfbClassifyVolume (IN EFI_HANDLE Volume)
+{
+  UINTN           Index;
+  SFB_VOLUME_KIND Kind;
+
+  for (Index = 0; Index < mSfbVolumeClassCount; Index++) {
+    if (mSfbVolumeClassCache[Index].Volume == Volume) {
+      return mSfbVolumeClassCache[Index].Kind;
     }
   }
 
-  Dir->Close (Dir);
-  Root->Close (Root);
-
-  return IsDir;
+  Kind = SfbProbeVolumeKind (Volume);
+  if (mSfbVolumeClassCount < SFB_VOLUME_CLASS_CACHE_MAX) {
+    mSfbVolumeClassCache[mSfbVolumeClassCount].Volume = Volume;
+    mSfbVolumeClassCache[mSfbVolumeClassCount].Kind = Kind;
+    mSfbVolumeClassCount++;
+  } else {
+    DEBUG ((EFI_D_WARN, "SFB: volume classification cache full\n"));
+    Kind = SfbVolumeKindOther;
+  }
+  return Kind;
+}
+/* Every discoverable boot volume is FAT and uses its volume root. The ext4
+ * parent is exclusively a container locator and is never a boot-root fallback. */
+CONST CHAR16 *
+SfbVolumeRootPrefix (IN EFI_HANDLE Volume)
+{
+  (VOID)Volume;
+  return L"";
+}
+BOOLEAN
+SfbVolumeIsExt4 (IN EFI_HANDLE Volume)
+{
+  return (BOOLEAN)(SfbClassifyVolume (Volume) == SfbVolumeKindExt4);
 }
 
 EFI_STATUS
 SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
 {
-  EFI_STATUS  Status;
-  EFI_HANDLE  *All = NULL;
-  UINTN       AllCount = 0;
-  UINTN       Kept = 0;
-  UINTN       Index;
+  EFI_STATUS        Status;
+  EFI_HANDLE        *All = NULL;
+  UINTN              AllCount = 0;
+  UINTN              Kept = 0;
+  UINTN              Index;
+  SFB_VOLUME_KIND    Kind;
 
   *Handles = NULL;
   *Count = 0;
+  Status = SfbContainerMount ();
+  if (EFI_ERROR (Status)) DEBUG ((EFI_D_INFO, "SFB: MARK container unavailable=%r\n", Status));
+  SfbResetVolumeClassCache ();
 
   Status = gBS->LocateHandleBuffer (ByProtocol,
                                     &gEfiSimpleFileSystemProtocolGuid,
@@ -436,29 +796,30 @@ SfbLocateVolumes (OUT EFI_HANDLE **Handles, OUT UINTN *Count)
                                     &AllCount,
                                     &All);
   if (EFI_ERROR (Status) || All == NULL) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK volumes kept=0 of=%u status=%r\n",
+            (UINT32)AllCount,
+            EFI_ERROR (Status) ? Status : EFI_NOT_FOUND));
     return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
   }
 
-  /* Filter in place: the buffer is ours, and the survivors keep their order.
-   * FAT32 volumes are the menu's traditional boot media; ext4 volumes are the
-   * persist partition, whose \efisp directory the scanner treats as a volume
-   * root via SfbVolumeRootPrefix (). An ext4 volume without \efisp is dropped:
-   * it has no boot root to scan and nothing to browse, so it would only clutter
-   * the menu. Anything else is dropped too. */
+  /* Keep the container FAT volume and ordinary FAT media. Legacy ext4
+   * directories are intentionally neither scanned nor offered in the browser. */
   for (Index = 0; Index < AllCount; Index++) {
-    if (SfbIsFat32Volume (All[Index]) ||
-        (SfbIsExt4Volume (All[Index]) &&
-         SfbVolumeHasDir (All[Index], L"\\efisp"))) {
+    Kind = SfbClassifyVolume (All[Index]);
+    if (Kind == SfbVolumeKindFat) {
       All[Kept++] = All[Index];
     }
   }
 
-  DEBUG ((EFI_D_INFO, "SFB: %u of %u file systems are FAT32/ext4\n",
-          (UINT32)Kept, (UINT32)AllCount));
+  Status = (Kept == 0) ? EFI_NOT_FOUND : EFI_SUCCESS;
+  DEBUG ((EFI_D_INFO,
+          "SFB: MARK volumes kept=%u of=%u kinds=fat status=%r\n",
+          (UINT32)Kept, (UINT32)AllCount, Status));
 
   if (Kept == 0) {
     FreePool (All);
-    return EFI_NOT_FOUND;
+    return Status;
   }
 
   *Handles = All;
@@ -527,6 +888,11 @@ SfbReadFileBytes (IN EFI_FILE_PROTOCOL *Root,
   EFI_STATUS         Status;
   EFI_FILE_PROTOCOL  *File = NULL;
   UINTN              ReadSize = MaxBytes;
+  EFI_STATUS         CloseStatus;
+
+  if (Root == NULL || Path == NULL || Buffer == NULL || BytesRead == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
 
   *BytesRead = 0;
 
@@ -536,10 +902,16 @@ SfbReadFileBytes (IN EFI_FILE_PROTOCOL *Root,
   }
 
   Status = File->Read (File, &ReadSize, Buffer);
-  File->Close (File);
+  CloseStatus = File->Close (File);
 
   if (EFI_ERROR (Status)) {
     return Status;
+  }
+  if (EFI_ERROR (CloseStatus)) {
+    return CloseStatus;
+  }
+  if (ReadSize > MaxBytes) {
+    return EFI_COMPROMISED_DATA;
   }
 
   *BytesRead = ReadSize;
@@ -689,4 +1061,3 @@ SfbGetVolumeLabel (IN EFI_FILE_PROTOCOL *Root,
 
   FreePool (Label);
 }
-
