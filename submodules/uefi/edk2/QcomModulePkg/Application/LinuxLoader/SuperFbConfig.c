@@ -1,0 +1,862 @@
+/*
+ * Pure `canoe.cfg` parser. See SuperFbConfig.h and wiki/docs/canoe-cfg.md.
+ *
+ * Copyright (c) 2026, contributors to the canoe ABL tree.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
+#include "SuperFbBootPath.h"
+#include "SuperFbConfig.h"
+
+/* Keeps the translation unit legal when the feature is compiled out. */
+const char *gSfbConfigModuleTag = "SuperFbConfig";
+
+static SFB_BOOLEAN
+SfbCfgIsSpace (char Character)
+{
+  return (SFB_BOOLEAN)(Character == ' ' || Character == '\t');
+}
+
+static SFB_BOOLEAN
+SfbCfgIsPrintable (char Character)
+{
+  unsigned char Byte = (unsigned char)Character;
+
+  return (SFB_BOOLEAN)(Byte >= 0x20u && Byte <= 0x7eu);
+}
+
+static SFB_UINTN
+SfbCfgLength (const char *Text)
+{
+  SFB_UINTN Index = 0;
+
+  while (Text[Index] != '\0') {
+    Index++;
+  }
+  return Index;
+}
+
+static SFB_BOOLEAN
+SfbCfgEquals (const char *Left, const char *Right)
+{
+  SFB_UINTN Index;
+
+  for (Index = 0; Left[Index] == Right[Index]; Index++) {
+    if (Left[Index] == '\0') {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+static void
+SfbCfgZero (void *Buffer, SFB_UINTN Bytes)
+{
+  unsigned char *Out = (unsigned char *)Buffer;
+  SFB_UINTN      Index;
+
+  for (Index = 0; Index < Bytes; Index++) {
+    Out[Index] = 0;
+  }
+}
+
+/*
+ * Copy Text[0..Length) and terminate. FALSE when it did not fit, leaving Out
+ * exactly as it was: a rejected value must not destroy the one already there,
+ * or an over-long `title` would blank a row that had a perfectly good default.
+ * Callers that want a rejection to clear the field do so themselves.
+ */
+static SFB_BOOLEAN
+SfbCfgCopy (char *Out, SFB_UINTN Chars, const char *Text, SFB_UINTN Length)
+{
+  SFB_UINTN Index;
+
+  if (Out == NULL || Chars == 0 || Length >= Chars) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Length; Index++) {
+    Out[Index] = Text[Index];
+  }
+  Out[Length] = '\0';
+  return TRUE;
+}
+
+/*
+ * Decimal only, no sign, no leading-plus, bounded by Limit. Rejects an empty
+ * run and anything that would overflow before the bound is even reached.
+ */
+static SFB_BOOLEAN
+SfbCfgParseU32 (const char *Text,
+                SFB_UINTN   Length,
+                SFB_UINT32  Limit,
+                SFB_UINT32 *Value)
+{
+  SFB_UINT32 Accumulated = 0;
+  SFB_UINTN  Index;
+
+  if (Length == 0 || Length > 10) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Length; Index++) {
+    char Digit = Text[Index];
+
+    if (Digit < '0' || Digit > '9') {
+      return FALSE;
+    }
+    Digit = (char)(Digit - '0');
+    if (Accumulated > Limit / 10u ||
+        (Accumulated == Limit / 10u &&
+         (SFB_UINT32)Digit > Limit % 10u)) {
+      return FALSE;
+    }
+    Accumulated = (Accumulated * 10u) + (SFB_UINT32)Digit;
+  }
+  *Value = Accumulated;
+  return TRUE;
+}
+
+/* An id is 1..SFB_CONFIG_ID_CHARS-1 characters of [A-Za-z0-9._-]. The set is
+ * deliberately narrow: an id is compared against `default` and printed, and a
+ * separator or a space inside one would make both ambiguous. */
+static SFB_BOOLEAN
+SfbCfgValidId (const char *Text, SFB_UINTN Length)
+{
+  SFB_UINTN Index;
+
+  if (Length == 0 || Length >= SFB_CONFIG_ID_CHARS) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Length; Index++) {
+    char Character = Text[Index];
+
+    if ((Character >= 'A' && Character <= 'Z') ||
+        (Character >= 'a' && Character <= 'z') ||
+        (Character >= '0' && Character <= '9') ||
+        Character == '.' || Character == '_' || Character == '-') {
+      continue;
+    }
+    return FALSE;
+  }
+  return TRUE;
+}
+
+static SFB_BOOLEAN
+SfbCfgKeyIs (const char *Begin, const char *End, const char *Want);
+
+static SFB_BOOLEAN
+SfbCfgParseMenuMode (const char          *Begin,
+                     const char          *End,
+                     SFB_CONFIG_MENU_MODE *Mode)
+{
+  if (SfbCfgKeyIs (Begin, End, "silent")) {
+    *Mode = SfbConfigMenuSilent;
+    return TRUE;
+  }
+  if (SfbCfgKeyIs (Begin, End, "menu")) {
+    *Mode = SfbConfigMenuMenu;
+    return TRUE;
+  }
+  return FALSE;
+}
+
+static SFB_BOOLEAN
+SfbCfgValidBlsStem (const char *Text, SFB_UINTN Length)
+{
+  SFB_UINTN Index;
+
+  if (Length == 0 || Length >= SFB_CONFIG_BLS_STEM_CHARS) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Length; Index++) {
+    char Character = Text[Index];
+
+    if ((Character >= 'A' && Character <= 'Z') ||
+        (Character >= 'a' && Character <= 'z') ||
+        (Character >= '0' && Character <= '9') ||
+        Character == '.' || Character == '_' || Character == '-') {
+      continue;
+    }
+    return FALSE;
+  }
+  return TRUE;
+}
+
+static SFB_BOOLEAN
+SfbCfgParseDefault (const char *Text,
+                    SFB_UINTN   Length,
+                    char       *EntryId,
+                    char       *BlsStem,
+                    SFB_BOOLEAN *IsBls)
+{
+  static const char Prefix[] = "bls:";
+  SFB_UINTN PrefixLength = sizeof (Prefix) - 1;
+  SFB_UINTN Index;
+
+  *IsBls = FALSE;
+  if (Length > PrefixLength &&
+      SfbCfgKeyIs (Text, Text + PrefixLength, Prefix) &&
+      SfbCfgValidBlsStem (Text + PrefixLength, Length - PrefixLength)) {
+    for (Index = 0; Index < Length - PrefixLength; Index++) {
+      char Character = Text[PrefixLength + Index];
+
+      if (Character >= 'A' && Character <= 'Z') {
+        Character = (char)(Character + ('a' - 'A'));
+      }
+      BlsStem[Index] = Character;
+    }
+    BlsStem[Index] = '\0';
+    *IsBls = TRUE;
+    return TRUE;
+  }
+  return SfbCfgValidId (Text, Length) &&
+         SfbCfgCopy (EntryId, SFB_CONFIG_ID_CHARS, Text, Length);
+}
+
+/*
+ * Fold a boot-root-relative path into an absolute one on the boot root:
+ * one optional leading separator is dropped, '/' becomes '\', and the result
+ * carries exactly one leading '\'.
+ *
+ * The rejected shapes are the ones normalization would otherwise hide: an
+ * empty path, a '.' or '..' component, a doubled separator and a trailing
+ * separator. They are refused before normalization, so no two distinct inputs
+ * can canonicalise onto the same accepted path.
+ */
+static SFB_BOOLEAN
+SfbCfgFoldPath (const char *Text,
+                SFB_UINTN   Length,
+                char       *Out,
+                SFB_UINTN   Chars)
+{
+  SFB_UINTN Index;
+  SFB_UINTN Count = 0;
+  SFB_UINTN Start;
+  if (!SfbBootPathValid (Text, Length)) {
+    return FALSE;
+  }
+  Start = (Text[0] == '/' || Text[0] == '\\') ? 1 : 0;
+
+  if (Chars < 3) {
+    return FALSE;
+  }
+  Out[Count++] = '\\';
+  for (Index = Start; Index < Length; Index++) {
+    char Character = Text[Index];
+
+    if (!SfbCfgIsPrintable (Character)) {
+      Out[0] = '\0';
+      return FALSE;
+    }
+    if (Character == '/') {
+      Character = '\\';
+    }
+    if (Count + 1 >= Chars) {
+      Out[0] = '\0';
+      return FALSE;
+    }
+    Out[Count++] = Character;
+  }
+  Out[Count] = '\0';
+  return TRUE;
+}
+
+/*
+ * One logical line: [Begin, End) with the terminator, any '\r' before it and
+ * surrounding whitespace already removed. *Cursor advances past the newline.
+ * Returns FALSE only when the buffer is exhausted.
+ */
+static SFB_BOOLEAN
+SfbCfgNextLine (const char **Cursor,
+                const char  *Limit,
+                const char **Begin,
+                const char **End)
+{
+  const char *Scan = *Cursor;
+  const char *LineStart;
+  const char *LineEnd;
+
+  if (Scan >= Limit || *Scan == '\0') {
+    return FALSE;
+  }
+
+  LineStart = Scan;
+  while (Scan < Limit && *Scan != '\0' && *Scan != '\n') {
+    Scan++;
+  }
+  LineEnd = Scan;
+  if (Scan < Limit && *Scan == '\n') {
+    Scan++;
+  }
+  *Cursor = Scan;
+
+  if (LineEnd > LineStart && LineEnd[-1] == '\r') {
+    LineEnd--;
+  }
+  while (LineStart < LineEnd && SfbCfgIsSpace (*LineStart)) {
+    LineStart++;
+  }
+  while (LineEnd > LineStart && SfbCfgIsSpace (LineEnd[-1])) {
+    LineEnd--;
+  }
+
+  *Begin = LineStart;
+  *End = LineEnd;
+  return TRUE;
+}
+
+/*
+ * Split a line into a key and a value. The key is the run up to the first
+ * space or tab; the value is what follows with its leading whitespace dropped.
+ * A line with no whitespace is all key and an empty value.
+ */
+static void
+SfbCfgSplit (const char  *Begin,
+             const char  *End,
+             const char **KeyEnd,
+             const char **ValueBegin)
+{
+  const char *Scan = Begin;
+
+  while (Scan < End && !SfbCfgIsSpace (*Scan)) {
+    Scan++;
+  }
+  *KeyEnd = Scan;
+  while (Scan < End && SfbCfgIsSpace (*Scan)) {
+    Scan++;
+  }
+  *ValueBegin = Scan;
+}
+
+static SFB_BOOLEAN
+SfbCfgKeyIs (const char *Begin, const char *End, const char *Want)
+{
+  SFB_UINTN Length = (SFB_UINTN)(End - Begin);
+  SFB_UINTN Index;
+
+  if (Length != SfbCfgLength (Want)) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Length; Index++) {
+    if (Begin[Index] != Want[Index]) {
+      return FALSE;
+    }
+  }
+  return TRUE;
+}
+
+static SFB_BOOLEAN
+SfbCfgParseMode (const char *Begin, const char *End, SFB_UINT8 *Mode)
+{
+  SFB_UINT32 Value;
+
+  if (!SfbCfgParseU32 (Begin, (SFB_UINTN)(End - Begin), SFB_CONFIG_MODE_MAX,
+                       &Value)) {
+    return FALSE;
+  }
+  *Mode = (SFB_UINT8)Value;
+  return TRUE;
+}
+
+static SFB_BOOLEAN
+SfbCfgParseRole (const char      *Begin,
+                 const char      *End,
+                 SFB_CONFIG_ROLE *Role)
+{
+  if (SfbCfgKeyIs (Begin, End, "active")) {
+    *Role = SfbConfigRoleActive;
+    return TRUE;
+  }
+  if (SfbCfgKeyIs (Begin, End, "inactive")) {
+    *Role = SfbConfigRoleInactive;
+    return TRUE;
+  }
+  if (SfbCfgKeyIs (Begin, End, "backup")) {
+    *Role = SfbConfigRoleBackup;
+    return TRUE;
+  }
+  if (SfbCfgKeyIs (Begin, End, "other")) {
+    *Role = SfbConfigRoleOther;
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/* TRUE when Id[0..Length) is already the id of an accepted entry. Compared
+ * against the stored NUL-terminated id, so a prefix never collides. */
+static SFB_BOOLEAN
+SfbCfgIdTaken (const SFB_CONFIG *Config, const char *Id, SFB_UINTN Length)
+{
+  SFB_UINTN Index;
+
+  for (Index = 0; Index < Config->Count; Index++) {
+    const char *Existing = Config->Entry[Index].Id;
+    SFB_UINTN   Scan;
+
+    if (SfbCfgLength (Existing) != Length) {
+      continue;
+    }
+    for (Scan = 0; Scan < Length && Existing[Scan] == Id[Scan]; Scan++) {
+    }
+    if (Scan == Length) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+SFB_UINT8
+SfbConfigEntryMode (
+  const SFB_CONFIG       *Config,
+  const SFB_CONFIG_ENTRY *Entry
+  )
+{
+  if (Entry == NULL) {
+    return (Config != NULL) ? Config->Mode : (SFB_UINT8)SFB_CONFIG_MODE_FAKE_LOCKED;
+  }
+  if (Entry->ModeExplicit) {
+    return Entry->Mode;
+  }
+  return (Config != NULL) ? Config->Mode : (SFB_UINT8)SFB_CONFIG_MODE_FAKE_LOCKED;
+}
+
+const char *
+SfbConfigRoleSuffix (SFB_CONFIG_ROLE Role)
+{
+  switch (Role) {
+  case SfbConfigRoleActive:
+    return " (active)";
+  case SfbConfigRoleInactive:
+    return " (inactive)";
+  case SfbConfigRoleBackup:
+    return " (backup)";
+  case SfbConfigRoleOther:
+  default:
+    return "";
+  }
+}
+
+SFB_BOOLEAN
+SfbConfigParse (
+  const char *Bytes,
+  SFB_UINTN   Size,
+  SFB_CONFIG *Config
+  )
+{
+  const char       *Cursor;
+  const char       *Limit;
+  const char       *Begin;
+  const char       *End;
+  SFB_BOOLEAN       SawVersion = FALSE;
+  SFB_BOOLEAN       SawEntry = FALSE;
+  SFB_CONFIG_ENTRY *Current = NULL;
+  char              DefaultId[SFB_CONFIG_ID_CHARS];
+  char              DefaultBlsStem[SFB_CONFIG_BLS_STEM_CHARS];
+  SFB_BOOLEAN       DefaultIsBls = FALSE;
+  SFB_UINTN         Index;
+
+  if (Config == NULL) {
+    return FALSE;
+  }
+  SfbCfgZero (Config, sizeof (*Config));
+  Config->Mode = (SFB_UINT8)SFB_CONFIG_MODE_FAKE_LOCKED;
+  Config->MenuMode = SfbConfigMenuSilent;
+  Config->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
+  Config->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
+  Config->LockPolicy = SfbConfigLockAsNeeded;
+  Config->DefaultIndex = SFB_CONFIG_NO_DEFAULT;
+  DefaultId[0] = '\0';
+  DefaultBlsStem[0] = '\0';
+
+  if (Bytes == NULL || Size == 0) {
+    return FALSE;
+  }
+  if (Size > SFB_CONFIG_MAX_BYTES) {
+    Size = SFB_CONFIG_MAX_BYTES;
+  }
+
+  Cursor = Bytes;
+  Limit = Bytes + Size;
+
+  while (SfbCfgNextLine (&Cursor, Limit, &Begin, &End)) {
+    const char *KeyEnd;
+    const char *Value;
+    SFB_UINTN   ValueLength;
+
+    if (Begin == End || *Begin == '#') {
+      continue;
+    }
+    SfbCfgSplit (Begin, End, &KeyEnd, &Value);
+    ValueLength = (SFB_UINTN)(End - Value);
+
+    if (SfbCfgKeyIs (Begin, KeyEnd, "version")) {
+      SFB_UINT32 Parsed = 0;
+
+      if (SawVersion ||
+          !SfbCfgParseU32 (Value, ValueLength, SFB_CONFIG_VERSION, &Parsed) ||
+          Parsed != SFB_CONFIG_VERSION) {
+        /* An unknown generation of this file must not be half-applied. */
+        SfbCfgZero (Config, sizeof (*Config));
+        return FALSE;
+      }
+      SawVersion = TRUE;
+      continue;
+    }
+
+    /* Nothing else is believed until the version is established: a file whose
+     * first lines parse under a future grammar must not leak into this one. */
+    if (!SawVersion) {
+      Config->RejectedLines++;
+      continue;
+    }
+
+    if (SfbCfgKeyIs (Begin, KeyEnd, "entry")) {
+      SawEntry = TRUE;
+      if (Config->Count >= SFB_CONFIG_MAX_ENTRIES ||
+          !SfbCfgValidId (Value, ValueLength) ||
+          SfbCfgIdTaken (Config, Value, ValueLength)) {
+        Config->RejectedLines++;
+        Current = NULL;
+        continue;
+      }
+      Current = &Config->Entry[Config->Count];
+      SfbCfgZero (Current, sizeof (*Current));
+      Current->Role = SfbConfigRoleOther;
+      Current->Mode = Config->Mode;
+      (void)SfbCfgCopy (Current->Id, SFB_CONFIG_ID_CHARS, Value, ValueLength);
+      /* Title defaults to the id; an explicit `title` replaces it. */
+      (void)SfbCfgCopy (Current->Title, SFB_CONFIG_TITLE_CHARS, Value,
+                        ValueLength);
+      Config->Count++;
+      continue;
+    }
+
+    if (Current != NULL) {
+      if (SfbCfgKeyIs (Begin, KeyEnd, "title")) {
+        if (ValueLength == 0 ||
+            !SfbCfgCopy (Current->Title, SFB_CONFIG_TITLE_CHARS, Value,
+                         ValueLength)) {
+          Config->RejectedLines++;
+        }
+        continue;
+      }
+      if (SfbCfgKeyIs (Begin, KeyEnd, "image")) {
+        if (!SfbCfgFoldPath (Value, ValueLength, Current->Image,
+                             SFB_CONFIG_PATH_CHARS)) {
+          Config->RejectedLines++;
+        }
+        continue;
+      }
+      if (SfbCfgKeyIs (Begin, KeyEnd, "options")) {
+        /* Copied verbatim: no path folding, no separator rewriting. The
+         * value is an argument string whose grammar belongs to the image
+         * being launched, and rewriting a slash inside it would corrupt a
+         * kernel command line. An empty value is a rejected line rather
+         * than a silent no-op, so a typo is visible. */
+        if (ValueLength == 0 ||
+            !SfbCfgCopy (Current->Options, SFB_CONFIG_OPTIONS_CHARS, Value,
+                         ValueLength)) {
+          Config->RejectedLines++;
+        }
+        continue;
+      }
+      if (SfbCfgKeyIs (Begin, KeyEnd, "mode")) {
+        if (!SfbCfgParseMode (Value, End, &Current->Mode)) {
+          Current->Mode = Config->Mode;
+          Config->RejectedLines++;
+        } else {
+          Current->ModeExplicit = TRUE;
+        }
+        continue;
+      }
+      if (SfbCfgKeyIs (Begin, KeyEnd, "role")) {
+        if (!SfbCfgParseRole (Value, End, &Current->Role)) {
+          Config->RejectedLines++;
+        }
+        continue;
+      }
+      Config->RejectedLines++;
+      continue;
+    }
+
+    /* File-global keys. Reached only before the first `entry`. */
+    if (SfbCfgKeyIs (Begin, KeyEnd, "generation")) {
+      if (!SfbCfgParseU32 (Value, ValueLength, 0xffffffffu,
+                           &Config->Generation)) {
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+    /*
+     * The legacy `timeout` spelling remains a compatibility key while
+     * pre-b2 host/device writers still emit it; new transactions use the
+     * independent menu policy keys. The core cutover retires the compatibility
+     * name once those writers no longer produce it.
+     */
+    if (SfbCfgKeyIs (Begin, KeyEnd, "menu-mode")) {
+      if (!SfbCfgParseMenuMode (Value, End, &Config->MenuMode)) {
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "key-window")) {
+      if (!SfbCfgParseU32 (Value, ValueLength, SFB_CONFIG_KEY_WINDOW_MAX,
+                           &Config->KeyWindowMs)) {
+        Config->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "menu-timeout")) {
+      if (!SfbCfgParseU32 (Value, ValueLength,
+                           SFB_CONFIG_MENU_TIMEOUT_MAX,
+                           &Config->MenuTimeoutSeconds)) {
+        Config->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "timeout")) {
+      SFB_UINT32 LegacyTimeout;
+
+      if (!SfbCfgParseU32 (Value, ValueLength,
+                           SFB_CONFIG_MENU_TIMEOUT_MAX, &LegacyTimeout)) {
+        Config->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
+        Config->RejectedLines++;
+      } else {
+        Config->MenuMode = SfbConfigMenuMenu;
+        Config->MenuTimeoutSeconds = LegacyTimeout;
+      }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "default")) {
+      Config->DefaultSpecified = TRUE;
+      DefaultId[0] = '\0';
+      DefaultBlsStem[0] = '\0';
+      if (!SfbCfgParseDefault (Value, ValueLength, DefaultId,
+                               DefaultBlsStem, &DefaultIsBls)) {
+        DefaultIsBls = FALSE;
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "mode")) {
+      if (!SfbCfgParseMode (Value, End, &Config->Mode)) {
+        Config->Mode = (SFB_UINT8)SFB_CONFIG_MODE_FAKE_LOCKED;
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "devinfo-repair")) {
+      if (SfbCfgKeyIs (Value, End, "never")) {
+        Config->LockPolicy = SfbConfigLockNever;
+      } else if (SfbCfgKeyIs (Value, End, "asneeded")) {
+        Config->LockPolicy = SfbConfigLockAsNeeded;
+      } else {
+        Config->RejectedLines++;
+      }
+      continue;
+    }
+
+    Config->RejectedLines++;
+  }
+
+  if (!SawVersion) {
+    SfbCfgZero (Config, sizeof (*Config));
+    return FALSE;
+  }
+
+  /* Drop entries with no usable image. Done in one compaction pass so an
+   * earlier rejection cannot renumber a later `default` resolution. */
+  {
+    SFB_UINTN Keep = 0;
+
+    for (Index = 0; Index < Config->Count; Index++) {
+      if (Config->Entry[Index].Image[0] == '\0') {
+        Config->RejectedLines++;
+        continue;
+      }
+      if (Keep != Index) {
+        Config->Entry[Keep] = Config->Entry[Index];
+      }
+      Keep++;
+    }
+    for (Index = Keep; Index < Config->Count; Index++) {
+      SfbCfgZero (&Config->Entry[Index], sizeof (Config->Entry[Index]));
+    }
+    Config->Count = Keep;
+  }
+
+  /* A policy-only/BLS-only current file must not revive rows from .prev.
+   * Declared but unusable entries still mark a corrupt configuration. */
+  if (SawEntry && Config->Count == 0) {
+    SfbCfgZero (Config, sizeof (*Config));
+    return FALSE;
+  }
+
+  if (Config->DefaultSpecified) {
+    Config->DefaultIsBls = DefaultIsBls;
+    if (DefaultIsBls) {
+      (void)SfbCfgCopy (Config->DefaultBlsStem,
+                        SFB_CONFIG_BLS_STEM_CHARS,
+                        DefaultBlsStem, SfbCfgLength (DefaultBlsStem));
+    } else if (DefaultId[0] != '\0') {
+      for (Index = 0; Index < Config->Count; Index++) {
+        if (SfbCfgEquals (Config->Entry[Index].Id, DefaultId)) {
+          Config->DefaultIndex = Index;
+          break;
+        }
+      }
+      if (Config->DefaultIndex == SFB_CONFIG_NO_DEFAULT) {
+        /* A default naming an entry that is not installed is a real condition
+         * after a partial OTA, not a reason to refuse to boot. */
+        Config->RejectedLines++;
+      }
+    }
+  }
+
+  Config->Valid = TRUE;
+  return TRUE;
+}
+
+/* Explicit preference editing. Keep the original text around unknown keys,
+ * comments and unrelated entries; parsing into a smaller firmware struct and
+ * serializing that struct would silently erase future/host-owned fields. */
+static SFB_BOOLEAN
+SfbCfgAppend (char *Output, SFB_UINTN Capacity, SFB_UINTN *Used,
+               const char *Bytes, SFB_UINTN Size)
+{
+  SFB_UINTN Index;
+  if (*Used > Capacity || Size > Capacity - *Used) {
+    return FALSE;
+  }
+  for (Index = 0; Index < Size; Index++) {
+    Output[(*Used)++] = Bytes[Index];
+  }
+  return TRUE;
+}
+
+static SFB_UINTN
+SfbCfgDecimal (SFB_UINT32 Value, char *Output)
+{
+  char Reverse[10];
+  SFB_UINTN Count = 0;
+  SFB_UINTN Index;
+  do {
+    Reverse[Count++] = (char)('0' + Value % 10u);
+    Value /= 10u;
+  } while (Value != 0);
+  for (Index = 0; Index < Count; Index++) {
+    Output[Index] = Reverse[Count - Index - 1];
+  }
+  return Count;
+}
+
+SFB_BOOLEAN
+SfbConfigEditDefault (const char *Bytes, SFB_UINTN Size,
+                      const char *Target, SFB_UINT8 Mode,
+                      char *Output, SFB_UINTN *OutputSize)
+{
+  SFB_CONFIG Config;
+  SFB_UINTN Capacity;
+  SFB_UINTN Used = 0;
+  SFB_UINTN Index;
+  SFB_UINT32 Generation;
+  char Id[SFB_CONFIG_ID_CHARS];
+  char Stem[SFB_CONFIG_BLS_STEM_CHARS];
+  char Digits[10];
+  SFB_UINTN DigitCount;
+  SFB_BOOLEAN IsBls;
+  SFB_BOOLEAN InEntry = FALSE;
+  SFB_BOOLEAN Selected = FALSE;
+  SFB_BOOLEAN Found = FALSE;
+  const char *Cursor;
+  const char *Limit;
+  const char *Begin;
+  const char *End;
+
+  if (OutputSize == NULL) {
+    return FALSE;
+  }
+  Capacity = *OutputSize;
+  *OutputSize = 0;
+  if (Bytes == NULL || Target == NULL || Output == NULL || Bytes == Output ||
+      Size > SFB_CONFIG_MAX_BYTES || Mode > SFB_CONFIG_MODE_MAX ||
+      !SfbConfigParse (Bytes, Size, &Config) ||
+      Config.Generation == 0xffffffffu ||
+      !SfbCfgParseDefault (Target, SfbCfgLength (Target), Id, Stem, &IsBls)) {
+    return FALSE;
+  }
+  if (Capacity > SFB_CONFIG_MAX_BYTES) {
+    Capacity = SFB_CONFIG_MAX_BYTES;
+  }
+  if (!IsBls) {
+    for (Index = 0; Index < Config.Count; Index++) {
+      if (SfbCfgEquals (Config.Entry[Index].Id, Id)) {
+        Found = TRUE;
+      }
+    }
+    if (!Found) {
+      return FALSE;
+    }
+  }
+  Generation = Config.Generation + 1;
+  DigitCount = SfbCfgDecimal (Generation, Digits);
+  Cursor = Bytes;
+  Limit = Bytes + Size;
+  while (Cursor < Limit) {
+    const char *Raw = Cursor;
+    const char *KeyEnd;
+    const char *Value;
+    SFB_BOOLEAN EntryLine;
+    if (!SfbCfgNextLine (&Cursor, Limit, &Begin, &End)) {
+      break;
+    }
+    SfbCfgSplit (Begin, End, &KeyEnd, &Value);
+    EntryLine = SfbCfgKeyIs (Begin, KeyEnd, "entry");
+    if (EntryLine) {
+      InEntry = TRUE;
+      Selected = (SFB_BOOLEAN)(!IsBls && SfbCfgKeyIs (Value, End, Id));
+    }
+    if ((!InEntry && (SfbCfgKeyIs (Begin, KeyEnd, "generation") ||
+                       SfbCfgKeyIs (Begin, KeyEnd, "default"))) ||
+        (Selected && SfbCfgKeyIs (Begin, KeyEnd, "mode"))) {
+      continue;
+    }
+    if (!SfbCfgAppend (Output, Capacity, &Used, Raw,
+                       (SFB_UINTN)(Cursor - Raw))) {
+      return FALSE;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "version") || (EntryLine && Selected)) {
+      if (Used != 0 && Output[Used - 1] != '\n' &&
+          !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) {
+        return FALSE;
+      }
+      if (EntryLine) {
+        char ModeLine[] = " mode 0\n";
+        ModeLine[6] = (char)('0' + Mode);
+        if (!SfbCfgAppend (Output, Capacity, &Used, ModeLine, 8)) {
+          return FALSE;
+        }
+      } else if (!SfbCfgAppend (Output, Capacity, &Used, "generation ", 11) ||
+                  !SfbCfgAppend (Output, Capacity, &Used, Digits, DigitCount) ||
+                  !SfbCfgAppend (Output, Capacity, &Used, "\ndefault ", 9) ||
+                  !SfbCfgAppend (Output, Capacity, &Used, Target,
+                                 SfbCfgLength (Target)) ||
+                  !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) {
+        return FALSE;
+      }
+    }
+  }
+  if (!SfbConfigParse (Output, Used, &Config) ||
+      Config.Generation != Generation ||
+      (IsBls && (!Config.DefaultIsBls ||
+                  !SfbCfgEquals (Config.DefaultBlsStem, Stem))) ||
+      (!IsBls && (Config.DefaultIndex >= Config.Count ||
+                   !SfbCfgEquals (Config.Entry[Config.DefaultIndex].Id, Id) ||
+                   SfbConfigEntryMode (&Config,
+                      &Config.Entry[Config.DefaultIndex]) != Mode))) {
+    return FALSE;
+  }
+  *OutputSize = Used;
+  return TRUE;
+}
