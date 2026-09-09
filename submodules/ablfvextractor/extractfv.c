@@ -51,7 +51,6 @@ typedef struct {
     bmp_entry_t images[MAX_BMP_FILES];
     int         img_count;
     uint64_t    seen_hashes[HASH_TABLE_SIZE];
-    int         hash_count;
     bool        verbose;
     bool        info_only;
 } extractor_t;
@@ -115,12 +114,19 @@ static uint64_t fnv_hash(const uint8_t *data, size_t len) {
 }
 
 static bool hash_check_and_add(extractor_t *ext, const uint8_t *data, size_t len) {
-    uint64_t h = fnv_hash(data, len);
-    for (int i = 0; i < ext->hash_count; i++) {
-        if (ext->seen_hashes[i] == h) return true; /* 已见过 */
+    uint64_t hash = fnv_hash(data, len);
+    if (hash == 0) hash = 1;
+    size_t index = (size_t)hash & (HASH_TABLE_SIZE - 1);
+
+    for (size_t probes = 0; probes < HASH_TABLE_SIZE; probes++) {
+        uint64_t *slot = &ext->seen_hashes[index];
+        if (*slot == hash) return true;
+        if (*slot == 0) {
+            *slot = hash;
+            return false;
+        }
+        index = (index + 1) & (HASH_TABLE_SIZE - 1);
     }
-    if (ext->hash_count < HASH_TABLE_SIZE)
-        ext->seen_hashes[ext->hash_count++] = h;
     return false;
 }
 

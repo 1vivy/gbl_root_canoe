@@ -6,14 +6,16 @@ set -e
 # ══════════════════════════════════════
 NDK=$NDK_PATH
 API=31
-TRIPLE="aarch64-linux-android"
+ARCH=${ANDROID_ARCH:-aarch64}
+case "$ARCH" in aarch64|x86_64) ;; *) echo "Unsupported Android architecture: $ARCH" >&2; exit 1 ;; esac
+TRIPLE="${ARCH}-linux-android"
 SRC="extractfv.c"
 OUT_DIR="build"
 XZ_VER="5.4.5"
 XZ_URL="https://tukaani.org/xz/xz-${XZ_VER}.tar.gz"
 XZ_SRC="third_party/xz"
-LZMA_BUILD="build/lzma-aarch64"
-LZMA_INSTALL="build/lzma-install-aarch64"
+LZMA_BUILD="build/lzma-${ARCH}"
+LZMA_INSTALL="build/lzma-install-${ARCH}"
 
 cd "$(dirname "$0")"/../
 
@@ -56,7 +58,7 @@ fi
 if [ -f "${LZMA_INSTALL}/lib/liblzma.a" ]; then
     echo "[2/3] liblzma already built, skipping"
 else
-    echo "[2/3] Building liblzma for arm64..."
+    echo "[2/3] Building liblzma for ${ARCH}..."
     mkdir -p "$LZMA_BUILD" "$LZMA_INSTALL"
 
     LZMA_INSTALL_ABS="$(cd "$LZMA_INSTALL" && pwd)"
@@ -89,7 +91,7 @@ fi
 # ══════════════════════════════════════
 # Step 3: 编译 extractfv
 # ══════════════════════════════════════
-echo "[3/3] Compiling extractfv for arm64-v8a..."
+echo "[3/3] Compiling extractfv for ${ARCH}..."
 
 mkdir -p "$OUT_DIR"
 

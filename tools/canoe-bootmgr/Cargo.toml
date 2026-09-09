@@ -1,0 +1,32 @@
+[package]
+name = "canoe_bootmgr"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Manage a mounted Canoe boot root"
+
+[[bin]]
+name = "canoe-bootmgr"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["cli"]
+cli = ["dep:clap", "dep:serde_json"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+clap = { version = "4.5", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+canoe_fs = { path = "../canoe-fs" }
+mode2_profile = { path = "../mode2-profile", default-features = false }
+abl_tzmap = { path = "../abl-tzmap", default-features = false }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"

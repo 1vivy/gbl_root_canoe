@@ -138,7 +138,13 @@ int32_t find_ldrB_instructio_reverse(char* buffer, int32_t size,
     }
     return -1;
 }
+/* Analysis-only traversal: observes the chain and mutates nothing. */
 int32_t empty_source_callback(char* buffer, int32_t size, int32_t now_offset, int8_t current_reg_target, int32_t start_offset) {
+    (void)buffer;
+    (void)size;
+    (void)now_offset;
+    (void)current_reg_target;
+    (void)start_offset;
     return 0;
 }
 //typedef int32_t (*ForwardCallback)(char* buffer, int32_t size, int32_t now_offset, DecodedInst d, int32_t ancher_offset);

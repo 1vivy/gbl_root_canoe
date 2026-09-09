@@ -70,6 +70,7 @@ echo "[3/3] Compiling extractfv for Windows..."
 mkdir -p "$OUT_DIR"
 
 ${TRIPLE}-gcc -O2 -std=c11 \
+    -Wl,--no-insert-timestamp \
     -Wall -Wextra -Wno-unused-parameter \
     -I"${LZMA_INSTALL}/include" \
     -o "${OUT_DIR}/extractfv.exe" \

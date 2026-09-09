@@ -1,0 +1,18 @@
+# OnePlus Ace 6T (CPH2767, macan) — second ABL build shipped by the
+# "Super Flasher" package, 778240 bytes. This is the GBL-vulnerable variant.
+#
+# Source of truth: Ghidra project ~/Ghidra/projects/canoe-abl-tz-20260821,
+# records under ~/Ghidra/records/canoe-abl-tz-20260821/. Command table is
+# byte-for-byte identical to the stock build; only the send-site addresses move
+# (keymaster client FUN_00025384, SPSS GUID at .data 0x81c3c). Recorded as its
+# own artifact rather than merged, so a per-build divergence stays visible.
+#
+# Excluded on purpose: 0x207 (failure-log argument only). Not observed
+# statically: 0x202, 0x203.
+sha256=63574f1a8afce44100e53084406eb98f1279d5ada601dfa7ddaccaae882dadf4
+
+command=0x200 size=4 semantic=get_version occurrences=1
+command=0x201 size=44 semantic=set_rot occurrences=1
+command=0x208 size=64 semantic=set_bootstate occurrences=1
+command=0x211 size=36 semantic=set_vbh occurrences=1
+command=0x219 size=44 semantic=unknown occurrences=1

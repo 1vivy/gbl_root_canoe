@@ -1,0 +1,21 @@
+[package]
+name = "canoe_fs"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Confined file operations and durable publication shared by Canoe commands"
+
+[dependencies]
+cap-std = "4"
+cap-fs-ext = "4"
+same-file = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+tempfile = "3"

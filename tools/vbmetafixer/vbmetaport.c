@@ -130,6 +130,13 @@ static int transplant_vbmeta(const char *source_vbmeta, const char *target_image
     }
     printf("Target image: %s (%zu bytes)\n", target_image, target_size);
 
+    if (target_size < AVB_FOOTER_SIZE || vbmeta_size > target_size - AVB_FOOTER_SIZE) {
+        fprintf(stderr, "Target image is too small for VBMeta and footer\n");
+        free(vbmeta_data);
+        free(target_data);
+        return -1;
+    }
+
     uint64_t original_size;
     uint64_t existing_vbmeta_offset, existing_vbmeta_size;
     if (read_avb_footer(target_data, target_size,
@@ -160,10 +167,9 @@ static int transplant_vbmeta(const char *source_vbmeta, const char *target_image
            (unsigned long long)footer_offset, (unsigned long long)footer_offset);
     printf("  Footer size: %d\n", AVB_FOOTER_SIZE);
 
-    uint64_t required_size = original_size + vbmeta_size + AVB_FOOTER_SIZE;
-    if (required_size > target_size) {
-        fprintf(stderr, "Insufficient space: need %llu bytes, only %zu available\n",
-                (unsigned long long)required_size, target_size);
+    if (original_size > footer_offset || vbmeta_size > footer_offset - original_size) {
+        fprintf(stderr, "Insufficient space for VBMeta and footer (%zu bytes available)\n",
+                target_size);
         free(vbmeta_data);
         free(target_data);
         return -1;
@@ -176,59 +182,41 @@ static int transplant_vbmeta(const char *source_vbmeta, const char *target_image
     printf("[Step 4] Assemble new image\n");
     printf("----------------------------------------------------------------------\n");
 
-    uint8_t *output_data = calloc(1, target_size);
-    if (!output_data) {
-        fprintf(stderr, "Memory allocation failed\n");
-        free(vbmeta_data);
-        free(target_data);
-        return -1;
-    }
-
-    memcpy(output_data, target_data, (size_t)original_size);
+    memset(target_data + original_size, 0, target_size - (size_t)original_size);
+    memcpy(target_data + vbmeta_offset, vbmeta_data, vbmeta_size);
     printf("  Written original data: %llu bytes\n", (unsigned long long)original_size);
-
-    memcpy(output_data + vbmeta_offset, vbmeta_data, vbmeta_size);
     printf("  Written VBMeta: %zu bytes @ 0x%llx\n", vbmeta_size, (unsigned long long)vbmeta_offset);
-
     if (padding_size > 0)
         printf("  Padding: %llu bytes\n", (unsigned long long)padding_size);
-
-    create_avb_footer(output_data + footer_offset, original_size, vbmeta_offset, vbmeta_size);
+    create_avb_footer(target_data + footer_offset, original_size, vbmeta_offset, vbmeta_size);
     printf("  Written Footer: %d bytes @ 0x%llx\n\n", AVB_FOOTER_SIZE, (unsigned long long)footer_offset);
-
-    free(target_data);
     free(vbmeta_data);
 
-    /* 5. Write output file */
     printf("[Step 5] Write output file\n");
     printf("----------------------------------------------------------------------\n");
-    if (write_file(output_image, output_data, target_size) != 0) {
+    if (write_file(output_image, target_data, target_size) != 0) {
         fprintf(stderr, "Failed to write output file: %s\n", output_image);
-        free(output_data);
+        free(target_data);
         return -1;
     }
     printf("Written: %s (%zu bytes)\n\n", output_image, target_size);
 
-    /* 6. Verify */
     printf("[Step 6] Verify output image\n");
     printf("----------------------------------------------------------------------\n");
-
     uint64_t v_orig, v_offset, v_size;
-    if (read_avb_footer(output_data, target_size, &v_orig, &v_offset, &v_size)) {
-        printf("  Footer verification passed\n");
-        printf("    Original image size: %llu\n", (unsigned long long)v_orig);
-        printf("    VBMeta offset: %llu\n", (unsigned long long)v_offset);
-        printf("    VBMeta size: %llu\n", (unsigned long long)v_size);
-
-        if (verify_avb_header(output_data + v_offset, (size_t)v_size) == 0)
-            printf("  VBMeta data verification passed\n");
-        else
-            fprintf(stderr, "  VBMeta data verification failed\n");
-    } else {
-        fprintf(stderr, "  Footer verification failed\n");
+    if (!read_avb_footer(target_data, target_size, &v_orig, &v_offset, &v_size) ||
+        v_offset > target_size || v_size > target_size - v_offset ||
+        verify_avb_header(target_data + v_offset, (size_t)v_size) != 0) {
+        fprintf(stderr, "  Output image verification failed\n");
+        free(target_data);
+        return -1;
     }
-
-    free(output_data);
+    printf("  Footer verification passed\n");
+    printf("    Original image size: %llu\n", (unsigned long long)v_orig);
+    printf("    VBMeta offset: %llu\n", (unsigned long long)v_offset);
+    printf("    VBMeta size: %llu\n", (unsigned long long)v_size);
+    printf("  VBMeta data verification passed\n");
+    free(target_data);
 
     printf("\n======================================================================\n");
     printf("Transplant complete!\n");
