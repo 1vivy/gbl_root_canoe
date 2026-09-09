@@ -75,10 +75,10 @@ canoe_install_flow() {
     canoe_choose "vendor_boot preparation" "Keep current vendor_boot" "Patch vendor_boot" "Install manager only"
     case "$canoe_choice" in 2) canoe_patch=--patch-vendor-boot ;; 1) : ;; *) return ;; esac
   fi
-  canoe_choose "Installation history for the data assessment" "Used an EFISP mod before, or unsure" "First EFISP mod on an unlocked phone" "Install manager only"
+  canoe_choose "History of the current phone data" "I am not sure" "Fully unlocked; current data has never used an efisp mode" "Current data has used CANOE-BDS or another efisp mode" "Install manager only"
   canoe_history=
-  case "$canoe_choice" in 2) canoe_history=--first-unlocked-install ;; 1) : ;; *) return ;; esac
-  canoe_state=/data/adb/canoe-manager/installer/install-$(date +%s)-$$
+  case "$canoe_choice" in 2) canoe_history=--first-unlocked-install ;; 3) canoe_history=--previous-efisp ;; 1) : ;; *) return ;; esac
+  canoe_state=/data/adb/canoe-manager/b5/installer-$(date +%s)-$$
   canoe_review=$TMPDIR/canoe-review.txt
   if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --mode "$canoe_mode" $canoe_custom $canoe_patch $canoe_history > "$canoe_review" 2>&1; then
     cat "$canoe_review"
@@ -93,8 +93,8 @@ canoe_install_flow() {
   canoe_choose "Review the targets and data assessment above" "Install manager only" "Apply this deployment" "Cancel module installation"
   case "$canoe_choice" in 2) : ;; 3) abort "Module installation cancelled" ;; *) return ;; esac
   if ! "$MODPATH/bin/canoe-manager" bootstrap --module-root "$MODPATH" --state-dir "$canoe_state" --confirm "$canoe_token"; then
-    ui_print "- Deployment did not complete. Open CANOE BOOT MANAGER to review the failure or remove CANOE-BDS."
-    ui_print "- Recovery records: /data/adb/canoe-manager/operations"
+    ui_print "- Deployment did not complete. Install the manager only, then open WebUI to review the failure or remove CANOE-BDS."
+    ui_print "- Recovery records: /data/adb/canoe-manager/b5"
     abort "CANOE-BDS deployment failed; completed writes remain recorded"
   fi
 }

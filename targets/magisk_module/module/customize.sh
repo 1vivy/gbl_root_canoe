@@ -70,8 +70,8 @@ set_perm "$MODPATH/lang.txt" 0 0 0644
 
 # The build step bundles ablrepo for the WebUI's offline lookup. Keep it in
 # the installed module at /data/adb/modules/<module-id>/ablrepo; module.prop
-# is authoritative for that id. The app passes the resolved path as local_repo
-# and falls back to remote lookup only when the bundled directory is absent.
+# is authoritative for that id. The native worker validates this exact packaged
+# repository against Android product/model/SoC facts; there is no remote fallback.
 
 # Input presentation follows. The native worker owns preparation and the
 # reviewed writes, shared with WebUI; shell never implements partition writes.
