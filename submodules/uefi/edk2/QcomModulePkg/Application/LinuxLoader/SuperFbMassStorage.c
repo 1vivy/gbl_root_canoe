@@ -169,7 +169,7 @@ SfbMassStoragePartitionBytes (IN EFI_BLOCK_IO_PROTOCOL *BlockIo)
 }
 
 STATIC EFI_STATUS
-ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity)
+ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity, IN BOOLEAN Managed)
 {
   EFI_STATUS            Status;
   EFI_STATUS            QueryStatus;
@@ -224,7 +224,9 @@ ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity
    * driver (05c6:f000) is the fallback when this build carries no bundled
    * driver or it could not start.
    */
-  Msd = SfbMsdVariantProtocol ();
+  Msd = Managed ? SfbMsdManagedProtocol () : SfbMsdVariantProtocol ();
+  /* Managed access must never fall back to an OS-mounted class08 device. */
+  if (Managed && Msd == NULL) return EFI_UNSUPPORTED;
   Bundled = (BOOLEAN)(Msd != NULL);
   if (Msd == NULL) {
     Status = gBS->LocateProtocol ((EFI_GUID *)&mSfbUsbMsdProtocolGuid, NULL,
@@ -254,6 +256,11 @@ ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity
     Status = SfbContainerUsbBeginBound (&BlockIo, Identity);
     if (EFI_ERROR (Status)) return Status;
   }
+  if (!Container) {
+    if (BlockIo->FlushBlocks == NULL) return EFI_UNSUPPORTED;
+    Status = BlockIo->FlushBlocks (BlockIo);
+    if (EFI_ERROR (Status)) return Status;
+  }
   Status = SfbMsdLeaseAssign (Msd, BlockIo, Container ? SfbContainerUsbEnd : NULL);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR,
@@ -270,7 +277,8 @@ ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity
    * confirm keystroke is still queued here, so the screen must be visible
    * before the drain hands control to the export loop.
    */
-  SfbBeginScreen (L"USB Mass Storage", L"The host may now mount the disk.");
+  SfbBeginScreen (Managed ? L"CANOE BOOT MANAGER" : L"USB Mass Storage",
+    Managed ? L"The app controls this storage session." : L"The host may now mount the disk.");
   Print (L"Partition: %a\r\n", (Tag != NULL) ? Tag : "?");
   Print (L"Size: %Lu bytes\r\n", SfbMassStoragePartitionBytes (BlockIo));
   Print (L"\r\nVolume Down ends this session.\r\n");
@@ -596,11 +604,11 @@ SfbExportPartitionByName (IN CONST CHAR16 *Target)
 EFI_STATUS
 SfbMassStorageExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag)
 {
-  return ExportDisk (Name, Tag, NULL);
+  return ExportDisk (Name, Tag, NULL, FALSE);
 }
 
-EFI_STATUS
-SfbExportPartitionBound (IN CONST CHAR16 *Target, IN CONST CHAR8 *Identity)
+STATIC EFI_STATUS
+ExportPartition (IN CONST CHAR16 *Target, IN CONST CHAR8 *Identity, BOOLEAN Managed)
 {
   CONST CHAR8 *Tag;
 
@@ -632,5 +640,10 @@ SfbExportPartitionBound (IN CONST CHAR16 *Target, IN CONST CHAR8 *Identity)
    */
   (VOID)SfbLogFlush ("pre-export");
 
-  return ExportDisk (Target, Tag, Identity);
+  return ExportDisk (Target, Tag, Identity, Managed);
 }
+
+EFI_STATUS SfbExportPartitionBound (CONST CHAR16 *Target, CONST CHAR8 *Identity)
+{ return ExportPartition (Target, Identity, FALSE); }
+EFI_STATUS SfbExportPartitionManaged (CONST CHAR16 *Target, CONST CHAR8 *Identity)
+{ return ExportPartition (Target, Identity, TRUE); }

@@ -26,3 +26,5 @@ test_surface
 
 # L2's offline dual-GPT dump fixture is test input, not a build image.
 !fixtures/gpt-slot-reset-dump.img
+
+/test_hash

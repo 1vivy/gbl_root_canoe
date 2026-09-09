@@ -90,5 +90,8 @@ SfbMassStorageExportDisk (IN CONST CHAR16 *Name,
  */
 SFB_USB_MSD_PROTOCOL *
 SfbMsdVariantProtocol (VOID);
+SFB_USB_MSD_PROTOCOL *SfbMsdManagedProtocol (VOID);
+BOOLEAN SfbMsdManagedAvailable (VOID);
+EFI_STATUS SfbExportPartitionManaged (CONST CHAR16 *Target, CONST CHAR8 *Identity);
 
 #endif

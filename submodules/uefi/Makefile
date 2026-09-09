@@ -12,6 +12,8 @@ build:
 	# builds the platform-driver fallback instead.
 	python3 embed_variant.py blobs/canoe-usbmsd.efi \
 		edk2/QcomModulePkg/Application/LinuxLoader/Generated/CanoeMsdVariantData.c
+	python3 embed_variant.py blobs/canoe-managed-msd.efi \
+		edk2/QcomModulePkg/Application/LinuxLoader/Generated/CanoeManagedMsdVariantData.c CanoeManagedMsd
 	# EDK2 tracks sources and headers, but a changed build flag is invisible to
 	# it. Bumping CANOE_VERSION alone leaves every object holding the previous
 	# -DSFB_BDS_VERSION, and the relink then ships a BDS that reports the old

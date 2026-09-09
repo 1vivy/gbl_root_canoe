@@ -51,6 +51,9 @@ found at
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
+#include "FastbootHash.h"
+#include "../../Application/LinuxLoader/SuperFbMassStorage.h"
+#include "../../Application/LinuxLoader/SuperFbMsdLease.h"
 #define PAGE_SHIFT 12
 #define PAGE_SIZE (_AC(1, UL) << PAGE_SHIFT)
 #define DIV_ROUND_UP(n, d) (((n) + (d) - 1) / (d))
@@ -1436,6 +1439,25 @@ CmdFetch (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 
   FastbootOkay ("");
 }
+/* hash:<partition>:<hex-offset>:<hex-length>; reply is unpadded base64url. */
+STATIC VOID
+CmdHash (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
+{
+  CHAR16 Name[36];
+  CHAR8 Digest[44];
+  UINT64 Offset, Length;
+  EFI_BLOCK_IO_PROTOCOL *Disk = NULL;
+  EFI_HANDLE *Handle = NULL;
+  EFI_STATUS Status = SfbHashParse (Arg, Name, &Offset, &Length);
+  if (EFI_ERROR (Status)) { FastbootFail ("Invalid hash range"); return; }
+  WaitForFlashFinished ();
+  LunSet = FALSE;
+  Status = PartitionGetInfo (Name, &Disk, &Handle);
+  if (!EFI_ERROR (Status)) Status = SfbHashPartition (Disk, Offset, Length, Digest);
+  if (EFI_ERROR (Status)) FastbootFail ("Partition hash failed");
+  else FastbootOkay (Digest);
+}
+
 /*  Function needed for event notification callback */
 STATIC VOID
 BlockIoCallback (IN EFI_EVENT Event, IN VOID *Context)
@@ -2350,6 +2372,8 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
   CONST CHAR16          *Target;
   CHAR8                  Identity[33];
   BOOLEAN                Bound = FALSE;
+  BOOLEAN                Managed = FALSE;
+  CONST CHAR8           *Storage;
   EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
   EFI_STATUS             Status;
 
@@ -2389,19 +2413,22 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     return;
   }
 
-  if (AsciiStrCmp (Arg, "mass-storage") == 0 ||
-      AsciiStrCmp (Arg, "mass-storage:persist") == 0) {
-    Target = L"persist";
-  } else if (AsciiStrCmp (Arg, "mass-storage:boot-root") == 0) {
-    Target = L"boot-root";
-  } else if (AsciiStrnCmp (Arg, "mass-storage:boot-root:", 23) == 0) {
+  if (AsciiStrCmp (Arg, "mass-storage") == 0) Storage = "persist";
+  else if (AsciiStrnCmp (Arg, "mass-storage:", 13) == 0) Storage = Arg + 13;
+  else if (AsciiStrnCmp (Arg, "managed-storage:", 16) == 0) {
+    Storage = Arg + 16;
+    Managed = TRUE;
+  } else { FastbootFail ("unknown oem command"); return; }
+  if (AsciiStrCmp (Storage, "persist") == 0) Target = L"persist";
+  else if (AsciiStrCmp (Storage, "logfs") == 0) Target = L"logfs";
+  else if (AsciiStrCmp (Storage, "boot-root") == 0) Target = L"boot-root";
+  else if (AsciiStrnCmp (Storage, "boot-root:", 10) == 0) {
     Target = L"boot-root";
     Bound = TRUE;
-  } else if (AsciiStrCmp (Arg, "mass-storage:logfs") == 0) {
-    Target = L"logfs";
-  } else {
-    FastbootFail ("unknown oem command");
-    return;
+  } else { FastbootFail ("unknown storage target"); return; }
+  if (!SfbMsdLeaseIdle ()) { FastbootFail ("storage export cleanup incomplete"); return; }
+  if (Managed && SfbMsdManagedProtocol () == NULL) {
+    FastbootFail ("managed storage unavailable"); return;
   }
 
   /*
@@ -2420,12 +2447,12 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     FastbootFail ("mass-storage partition not found");
     return;
   }
-  if (Bound && !SfbContainerMatchesIdentity (Arg + 23)) {
+  if (Bound && !SfbContainerMatchesIdentity (Storage + 10)) {
     FastbootFail ("boot container changed since review");
     return;
   }
   /* Keep the reviewed identity across fastboot buffer/USB-stack reuse. */
-  if (Bound) CopyMem (Identity, Arg + 23, sizeof (Identity));
+  if (Bound) CopyMem (Identity, Storage + 10, sizeof (Identity));
 
   /*
    * Once OKAY is sent the host switches from fastboot to USB mass storage.
@@ -2435,7 +2462,8 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
    * on every started-session exit, then this handler returns to fastboot.
    */
   FastbootOkay ("");
-  Status = SfbExportPartitionBound (Target, Bound ? Identity : NULL);
+  Status = Managed ? SfbExportPartitionManaged (Target, Bound ? Identity : NULL)
+                   : SfbExportPartitionBound (Target, Bound ? Identity : NULL);
   if (EFI_ERROR (Status) && Status != EFI_ABORTED) {
     DEBUG ((EFI_D_ERROR,
             "SFB: MARK msc-run target=%s status=%r reason=post-handoff\n",
@@ -2449,6 +2477,8 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
    * replug forces a fresh attach event. Reconnect actively - controller-init
    * event, StartEx, receive re-prime - instead of waiting for the plug.
    */
+  /* Failed cleanup retains ownership; do not announce fastboot over a live LUN. */
+  if (!SfbMsdLeaseIdle ()) return;
   FastbootUsbReconnect ();
 
   /*
@@ -2890,6 +2920,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
       {"flash:", CmdFlash},
       {"erase:", CmdErase},
       {"fetch:", CmdFetch},
+      {"hash:", CmdHash},
 #endif
 /*
  *CAUTION(CRITICAL): Enabling this command will allow boot with different
@@ -2920,6 +2951,8 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   }
   FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
   FastbootPublishVar ("canoe-boot-volume", "fat16-container-v1");
+  FastbootPublishVar ("canoe-hash", "sha256-range-v1");
+  if (SfbMsdManagedAvailable ()) FastbootPublishVar ("canoe-managed-storage", "bot-v1");
 
   /* Keep this one formatter as the append point for retry_a/retry_b. The
    * observation remains unknown until the verified-boot preflight has read a

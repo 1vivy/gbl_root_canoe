@@ -30,6 +30,9 @@ def main() -> int:
     blob = Path(sys.argv[1])
     out = Path(sys.argv[2])
 
+    symbol = sys.argv[3] if len(sys.argv) > 3 else "CanoeMsd"
+    if symbol not in ("CanoeMsd", "CanoeManagedMsd"):
+        raise SystemExit("unsupported embed symbol")
     body = HEADER
     data = b""
     if blob.is_file():
@@ -49,6 +52,7 @@ def main() -> int:
         body += "CONST UINT8 *gCanoeMsdVariant = NULL;\n"
     body += f"CONST UINTN gCanoeMsdVariantSize = {len(data)};\n"
 
+    body = body.replace("CanoeMsd", symbol)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(body)
     print(f"embed_variant: {out} -> {len(data)} bytes")

@@ -31,6 +31,8 @@
  */
 extern CONST UINT8  *gCanoeMsdVariant;
 extern CONST UINTN  gCanoeMsdVariantSize;
+extern CONST UINT8 *gCanoeManagedMsdVariant;
+extern CONST UINTN gCanoeManagedMsdVariantSize;
 
 STATIC CONST EFI_GUID mSfbMsdProtocolGuid = {
   0xc8591faf, 0xdbcc, 0x479e,
@@ -43,9 +45,12 @@ typedef enum {
   SfbVariantFailed
 } SFB_VARIANT_STATE;
 
-STATIC SFB_USB_MSD_PROTOCOL *mSfbVariant = NULL;
-STATIC SFB_VARIANT_STATE     mSfbVariantState = SfbVariantUntried;
-STATIC EFI_HANDLE            mSfbVariantImage = NULL;
+typedef struct {
+  SFB_USB_MSD_PROTOCOL *Protocol;
+  SFB_VARIANT_STATE State;
+  EFI_HANDLE Image;
+} SFB_VARIANT;
+STATIC SFB_VARIANT mVariants[2];
 
 /*
  * Start the bundled driver and hand back its protocol instance. It installs
@@ -54,8 +59,8 @@ STATIC EFI_HANDLE            mSfbVariantImage = NULL;
  * the image, and take the handle that appears. Tried once per boot; a
  * failure latches so later exports fall back without re-paying the load.
  */
-SFB_USB_MSD_PROTOCOL *
-SfbMsdVariantProtocol (VOID)
+STATIC SFB_USB_MSD_PROTOCOL *
+VariantProtocol (BOOLEAN Managed)
 {
   EFI_STATUS  Status;
   EFI_HANDLE  *Before = NULL;
@@ -67,17 +72,20 @@ SfbMsdVariantProtocol (VOID)
   BOOLEAN     Known;
   EFI_HANDLE  NewHandle = NULL;
   VOID        *Protocol = NULL;
+  SFB_VARIANT *Variant = &mVariants[Managed ? 1 : 0];
+  CONST UINT8 *Blob = Managed ? gCanoeManagedMsdVariant : gCanoeMsdVariant;
+  UINTN BlobSize = Managed ? gCanoeManagedMsdVariantSize : gCanoeMsdVariantSize;
 
-  if (mSfbVariantState == SfbVariantReady) {
-    return mSfbVariant;
+  if (Variant->State == SfbVariantReady) {
+    return Variant->Protocol;
   }
-  if (mSfbVariantState == SfbVariantFailed) {
+  if (Variant->State == SfbVariantFailed) {
     return NULL;
   }
-  mSfbVariantState = SfbVariantFailed;
+  Variant->State = SfbVariantFailed;
   Status = EFI_NOT_FOUND;
 
-  if (gCanoeMsdVariant == NULL || gCanoeMsdVariantSize == 0) {
+  if (Blob == NULL || BlobSize == 0) {
     goto Out;
   }
 
@@ -89,8 +97,8 @@ SfbMsdVariantProtocol (VOID)
    * keeps a corrupt embed from becoming a wild jump. The load uses the PI
    * memory form (no device path, source buffer set), which predates and
    * outlives the MEMMAP-path form across vendor DXE cores. */
-  if (gCanoeMsdVariantSize < 0x40 ||
-      gCanoeMsdVariant[0] != 'M' || gCanoeMsdVariant[1] != 'Z') {
+  if (BlobSize < 0x40 ||
+      Blob[0] != 'M' || Blob[1] != 'Z') {
     Status = EFI_LOAD_ERROR;
     DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe status=%r reason=bad-embed\n",
             Status));
@@ -98,10 +106,10 @@ SfbMsdVariantProtocol (VOID)
   }
   DEBUG ((EFI_D_ERROR,
           "SFB: MARK msc-dxe stage=load-entered size=0x%Lx status=%r\n",
-          (UINT64)gCanoeMsdVariantSize, EFI_NOT_STARTED));
+          (UINT64)BlobSize, EFI_NOT_STARTED));
 
-  Status = gBS->LoadImage (FALSE, gImageHandle, NULL, (VOID *)gCanoeMsdVariant,
-                           gCanoeMsdVariantSize, &mSfbVariantImage);
+  Status = gBS->LoadImage (FALSE, gImageHandle, NULL, (VOID *)Blob,
+                           BlobSize, &Variant->Image);
   DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe load status=%r\n", Status));
   if (EFI_ERROR (Status)) {
     goto Out;
@@ -109,7 +117,7 @@ SfbMsdVariantProtocol (VOID)
   DEBUG ((EFI_D_ERROR,
           "SFB: MARK msc-dxe stage=start-entered status=%r\n",
           EFI_NOT_STARTED));
-  Status = gBS->StartImage (mSfbVariantImage, 0, NULL);
+  Status = gBS->StartImage (Variant->Image, 0, NULL);
   DEBUG ((EFI_D_ERROR, "SFB: MARK msc-dxe start status=%r\n", Status));
   if (EFI_ERROR (Status)) {
     goto Out;
@@ -148,20 +156,27 @@ SfbMsdVariantProtocol (VOID)
     }
     goto Out;
   }
-  mSfbVariant      = (SFB_USB_MSD_PROTOCOL *)Protocol;
-  mSfbVariantState = SfbVariantReady;
+  Variant->Protocol      = (SFB_USB_MSD_PROTOCOL *)Protocol;
+  Variant->State = SfbVariantReady;
 
 Out:
-  DEBUG (((mSfbVariant != NULL) ? EFI_D_INFO : EFI_D_WARN,
+  DEBUG (((Variant->Protocol != NULL) ? EFI_D_INFO : EFI_D_WARN,
           "SFB: MARK msc-dxe selected=%a usable=%u status=%r\n",
-          (mSfbVariant != NULL) ? "bundled" : "platform",
-          (UINT32)(mSfbVariant != NULL),
-          (mSfbVariant != NULL) ? EFI_SUCCESS : Status));
+          (Variant->Protocol != NULL) ? "bundled" : "platform",
+          (UINT32)(Variant->Protocol != NULL),
+          (Variant->Protocol != NULL) ? EFI_SUCCESS : Status));
   if (Before != NULL) {
     FreePool (Before);
   }
   if (After != NULL) {
     FreePool (After);
   }
-  return mSfbVariant;
+  return Variant->Protocol;
+}
+
+SFB_USB_MSD_PROTOCOL *SfbMsdVariantProtocol (VOID) { return VariantProtocol (FALSE); }
+SFB_USB_MSD_PROTOCOL *SfbMsdManagedProtocol (VOID) { return VariantProtocol (TRUE); }
+BOOLEAN SfbMsdManagedAvailable (VOID)
+{
+  return gCanoeManagedMsdVariant != NULL && gCanoeManagedMsdVariantSize >= 0x40;
 }

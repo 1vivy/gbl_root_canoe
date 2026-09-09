@@ -183,3 +183,9 @@ test_config_store: test_config_store.c \
 
 test_usb_serial: test_usb_serial.c ../edk2/QcomModulePkg/Library/FastbootLib/UsbSerial.c
 	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $^
+
+.PHONY: test_hash
+test: test_hash
+test_hash:
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o test_hash test_hash.c ../edk2/QcomModulePkg/Library/FastbootLib/FastbootHash.c
+	python3 test_hash.py

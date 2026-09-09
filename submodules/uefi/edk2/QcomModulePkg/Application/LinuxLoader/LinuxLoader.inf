@@ -110,6 +110,7 @@
 	SuperFbOemWatchdog.h
 	SuperFbOemWatchdog.c
 	Generated/CanoeMsdVariantData.c
+	Generated/CanoeManagedMsdVariantData.c
 	SuperFbLaunchPolicy.h
 	SuperFbLaunchPolicy.c
 	Hook/SuperFbManagedPath.h
