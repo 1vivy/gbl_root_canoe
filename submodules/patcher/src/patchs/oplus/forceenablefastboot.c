@@ -12,7 +12,7 @@ bool patch_fastbootcheck(char* buffer, int32_t size, int32_t global_var_offset) 
         if (!str_at(buffer, size, off0, "fastboot_unlock_verify error and reboot.")) continue;
         if (d.type == INST_CBZ_W || d.type == INST_CBZ_X){//change to B
             write_instr(buffer, i, change_to_b(d.raw));
-            printf("Patched fastboot warning jump at 0x%X to always jump, fastboot always enabled\n", i);
+            PATCH_LOG("Patched fastboot warning jump at 0x%X to always jump, fastboot always enabled\n", i);
             return true;
         }
     }
@@ -21,7 +21,7 @@ bool patch_fastbootcheck(char* buffer, int32_t size, int32_t global_var_offset) 
 
 bool patch_fastboot(char* buffer, int32_t size, int32_t global_var_offset) {
     if (!patch_fastbootcheck(buffer, size, global_var_offset)) {
-        printf("OPlus Warning: patch_fastbootcheck failed\n");
+        PATCH_LOG("OPlus Warning: patch_fastbootcheck failed\n");
         return false;
     }
     return true;

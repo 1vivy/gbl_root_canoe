@@ -3,7 +3,7 @@
 #include "arm64_inst_decoder.h"
 #include <stdint.h>
 #include <stdbool.h>
-#include <stdio.h>
+#include "patchs/log.h"
 typedef enum { LOC_REG, LOC_STK64, LOC_STK8 } DataLocType;
 
 typedef struct {

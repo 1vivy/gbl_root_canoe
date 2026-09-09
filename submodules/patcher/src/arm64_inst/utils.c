@@ -32,19 +32,19 @@ bool locset_empty(const LocSet* s) { return s->count == 0; }
 
 void locset_print(const LocSet* s) {
     if (s->count == 0) {
-        printf("WARRNING: LocSet empty, using fallback. Will Match any LDRB\n");
+        PATCH_LOG("WARRNING: LocSet empty, using fallback. Will Match any LDRB\n");
         return;
     }
-    printf("  LocSet{");
+    PATCH_LOG("  LocSet{");
     for (int32_t i = 0; i < s->count; ++i) {
-        if (i) printf(", ");
+        if (i) PATCH_LOG(", ");
         switch (s->locs[i].type) {
-            case LOC_REG:   printf("W%d", s->locs[i].val); break;
-            case LOC_STK64: printf("[SP+0x%X]/64", s->locs[i].val); break;
-            case LOC_STK8:  printf("[SP+0x%X]/8",  s->locs[i].val); break;
+            case LOC_REG:   PATCH_LOG("W%d", s->locs[i].val); break;
+            case LOC_STK64: PATCH_LOG("[SP+0x%X]/64", s->locs[i].val); break;
+            case LOC_STK8:  PATCH_LOG("[SP+0x%X]/8",  s->locs[i].val); break;
         }
     }
-    printf("}\n");
+    PATCH_LOG("}\n");
 }
 
 StrbInfo decode_any_strb(uint32_t raw) {
@@ -70,14 +70,14 @@ int32_t find_ldrB_instructio_reverse(char* buffer, int32_t size,
         DecodedInst d = decode_at(buffer, now_offset);
 
         if (d.type == INST_PACIASP) {
-            printf("Reached function start at 0x%X\n", now_offset);
+            PATCH_LOG("Reached function start at 0x%X\n", now_offset);
             break;
         }
 
         /* ---- 64-bit 栈 reload 弹跳 ---- */
         if (d.type == INST_LDR_X_IMM && d.rn == 31 && (int8_t)d.rt == current_target) {
             uint32_t spill_imm = d.imm;
-            printf("Bounce at 0x%X: LDR X%d,[SP,#0x%X]\n",
+            PATCH_LOG("Bounce at 0x%X: LDR X%d,[SP,#0x%X]\n",
                    now_offset, (int)current_target, spill_imm);
             int32_t search = now_offset - 4;
             bool found = false;
@@ -85,7 +85,7 @@ int32_t find_ldrB_instructio_reverse(char* buffer, int32_t size,
                 DecodedInst ds = decode_at(buffer, search);
                 if (ds.type == INST_PACIASP) break;
                 if (ds.type == INST_STR_X_IMM && ds.rn == 31 && ds.imm == spill_imm) {
-                    printf("  -> STR X%d,[SP,#0x%X] at 0x%X\n",
+                    PATCH_LOG("  -> STR X%d,[SP,#0x%X] at 0x%X\n",
                            (int32_t)ds.rt, spill_imm, search);
                     current_target = (int8_t)ds.rt;
                     now_offset = search - 4;
@@ -95,15 +95,15 @@ int32_t find_ldrB_instructio_reverse(char* buffer, int32_t size,
                 }
                 search -= 4;
             }
-            if (!found) { printf("  -> No matching STR, abort\n"); return -1; }
-            if (bounce_count > MAX_BOUNCES) { printf("Too many bounces\n"); return -1; }
+            if (!found) { PATCH_LOG("  -> No matching STR, abort\n"); return -1; }
+            if (bounce_count > MAX_BOUNCES) { PATCH_LOG("Too many bounces\n"); return -1; }
             continue;
         }
 
         /* ---- byte 级栈 reload 弹跳 ---- */
         if (d.type == INST_LDRB_IMM && d.rn == 31 && (int8_t)d.rt == current_target) {
             uint32_t byte_imm = d.imm;
-            printf("Byte bounce at 0x%X: LDRB W%d,[SP,#0x%X]\n",
+            PATCH_LOG("Byte bounce at 0x%X: LDRB W%d,[SP,#0x%X]\n",
                    now_offset, (int)current_target, byte_imm);
             int32_t search = now_offset - 4;
             bool found = false;
@@ -111,7 +111,7 @@ int32_t find_ldrB_instructio_reverse(char* buffer, int32_t size,
                 DecodedInst ds = decode_at(buffer, search);
                 if (ds.type == INST_PACIASP) break;
                 if (ds.type == INST_STRB_IMM && ds.rn == 31 && ds.imm == byte_imm) {
-                    printf("  -> STRB W%d,[SP,#0x%X] at 0x%X\n",
+                    PATCH_LOG("  -> STRB W%d,[SP,#0x%X] at 0x%X\n",
                            (int32_t)ds.rt, byte_imm, search);
                     current_target = (int8_t)ds.rt;
                     now_offset = search - 4;
@@ -121,14 +121,14 @@ int32_t find_ldrB_instructio_reverse(char* buffer, int32_t size,
                 }
                 search -= 4;
             }
-            if (!found) { printf("  -> No matching STRB, abort\n"); return -1; }
-            if (bounce_count > MAX_BOUNCES) { printf("Too many bounces\n"); return -1; }
+            if (!found) { PATCH_LOG("  -> No matching STRB, abort\n"); return -1; }
+            if (bounce_count > MAX_BOUNCES) { PATCH_LOG("Too many bounces\n"); return -1; }
             continue;
         }
 
         /* ---- 真正源头: LDRB W{current_target}, [Xn!=SP, #imm] ---- */
         if (d.type == INST_LDRB_IMM && (int8_t)d.rt == current_target && d.rn != 31) {
-            printf("Found source LDRB at 0x%X: LDRB W%d,[X%d,#0x%X](%d bounces)\n",
+            PATCH_LOG("Found source LDRB at 0x%X: LDRB W%d,[X%d,#0x%X](%d bounces)\n",
                    now_offset, d.rt, d.rn, d.imm, bounce_count);
             *global_var_offset = (int32_t)d.imm;
             return callback(buffer, size, now_offset, current_target, start_offset);
@@ -154,7 +154,7 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
     set.count = 0;
     locset_add_reg(&set, src_reg);
 
-    printf("\n=== Forward tracking from LDRB@0x%X (W%d), anchor=0x%X ===\n",
+    PATCH_LOG("\n=== Forward tracking from LDRB@0x%X (W%d), anchor=0x%X ===\n",
            start_offset, (int)src_reg, ancher_offset);
     locset_print(&set);
 
@@ -162,7 +162,7 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
         DecodedInst d = decode_at(buffer, off);
 
         if (d.type == INST_PACIASP) {
-            printf("0x%X: function boundary, stop\n", off);
+            PATCH_LOG("0x%X: function boundary, stop\n", off);
             break;
         }
 
@@ -174,11 +174,11 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
                 if (locset_has_reg(&set, (int8_t)d.rt)) {
                     int32_t cb_result = callback(buffer, size, off, d, ancher_offset);
                     if (cb_result!=NEED_MORE) return cb_result;
-                    printf("  0x%X: STR X%d,[SP,#0x%X] spill64\n", off, d.rt, d.imm);
+                    PATCH_LOG("  0x%X: STR X%d,[SP,#0x%X] spill64\n", off, d.rt, d.imm);
                     locset_add_stk64(&set, d.imm);
                     locset_print(&set);
                 } else if (locset_has_stk64(&set, d.imm)) {
-                    printf("  0x%X: STR X%d,[SP,#0x%X] overwrite stk64 -> del\n", off, d.rt, d.imm);
+                    PATCH_LOG("  0x%X: STR X%d,[SP,#0x%X] overwrite stk64 -> del\n", off, d.rt, d.imm);
                     locset_del_stk64(&set, d.imm);
                     locset_print(&set);
                 }
@@ -191,11 +191,11 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
                 if (locset_has_stk64(&set, d.imm)) {
                     int32_t cb_result = callback(buffer, size, off, d, ancher_offset);
                     if (cb_result!=NEED_MORE) return cb_result;
-                    printf("  0x%X: LDR X%d,[SP,#0x%X] reload64\n", off, d.rt, d.imm);
+                    PATCH_LOG("  0x%X: LDR X%d,[SP,#0x%X] reload64\n", off, d.rt, d.imm);
                     locset_add_reg(&set, (int8_t)d.rt);
                     locset_print(&set);
                 } else if (locset_has_reg(&set, (int8_t)d.rt)) {
-                    printf("  0x%X: LDR X%d,[SP,#0x%X] overwrite reg -> del\n", off, d.rt, d.imm);
+                    PATCH_LOG("  0x%X: LDR X%d,[SP,#0x%X] overwrite reg -> del\n", off, d.rt, d.imm);
                     locset_del_reg(&set, (int8_t)d.rt);
                     locset_print(&set);
                 }
@@ -208,11 +208,11 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
                 if (locset_has_reg(&set, (int8_t)d.rt)) {
                     int32_t cb_result = callback(buffer, size, off, d, ancher_offset);
                     if (cb_result!=NEED_MORE) return cb_result;
-                    printf("  0x%X: STR W%d,[SP,#0x%X] spill32\n", off, d.rt, d.imm);
+                    PATCH_LOG("  0x%X: STR W%d,[SP,#0x%X] spill32\n", off, d.rt, d.imm);
                     locset_add_stk64(&set, d.imm);
                     locset_print(&set);
                 } else if (locset_has_stk64(&set, d.imm)) {
-                    printf("  0x%X: STR W%d,[SP,#0x%X] overwrite stk -> del\n", off, d.rt, d.imm);
+                    PATCH_LOG("  0x%X: STR W%d,[SP,#0x%X] overwrite stk -> del\n", off, d.rt, d.imm);
                     locset_del_stk64(&set, d.imm);
                     locset_print(&set);
                 }
@@ -225,11 +225,11 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
                 if (locset_has_stk64(&set, d.imm)) {
                     int32_t cb_result = callback(buffer, size, off, d, ancher_offset);
                     if (cb_result!=NEED_MORE) return cb_result;
-                    printf("  0x%X: LDR W%d,[SP,#0x%X] reload32\n", off, d.rt, d.imm);
+                    PATCH_LOG("  0x%X: LDR W%d,[SP,#0x%X] reload32\n", off, d.rt, d.imm);
                     locset_add_reg(&set, (int8_t)d.rt);
                     locset_print(&set);
                 } else if (locset_has_reg(&set, (int8_t)d.rt)) {
-                    printf("  0x%X: LDR W%d,[SP,#0x%X] overwrite reg -> del\n", off, d.rt, d.imm);
+                    PATCH_LOG("  0x%X: LDR W%d,[SP,#0x%X] overwrite reg -> del\n", off, d.rt, d.imm);
                     locset_del_reg(&set, (int8_t)d.rt);
                     locset_print(&set);
                 }
@@ -241,11 +241,11 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
             if (locset_has_reg(&set, (int8_t)d.rm) && d.rt != 31) {
                 int32_t cb_result = callback(buffer, size, off, d, ancher_offset);
                 if (cb_result!=NEED_MORE) return cb_result;
-                printf("  0x%X: MOV X%d,X%d propagate\n", off, d.rt, d.rm);
+                PATCH_LOG("  0x%X: MOV X%d,X%d propagate\n", off, d.rt, d.rm);
                 locset_add_reg(&set, (int8_t)d.rt);
                 locset_print(&set);
             } else if (locset_has_reg(&set, (int8_t)d.rt)) {
-                printf("  0x%X: MOV X%d,X%d overwrite -> del\n", off, d.rt, d.rm);
+                PATCH_LOG("  0x%X: MOV X%d,X%d overwrite -> del\n", off, d.rt, d.rm);
                 locset_del_reg(&set, (int8_t)d.rt);
                 locset_print(&set);
             }
@@ -256,11 +256,11 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
             if (locset_has_reg(&set, (int8_t)d.rm) && d.rt != 31) {
                 int32_t cb_result = callback(buffer, size, off, d, ancher_offset);
                 if (cb_result!=NEED_MORE) return cb_result;
-                printf("  0x%X: MOV W%d,W%d propagate\n", off, d.rt, d.rm);
+                PATCH_LOG("  0x%X: MOV W%d,W%d propagate\n", off, d.rt, d.rm);
                 locset_add_reg(&set, (int8_t)d.rt);
                 locset_print(&set);
             } else if (locset_has_reg(&set, (int8_t)d.rt)) {
-                printf("  0x%X: MOV W%d,W%d overwrite -> del\n", off, d.rt, d.rm);
+                PATCH_LOG("  0x%X: MOV W%d,W%d overwrite -> del\n", off, d.rt, d.rm);
                 locset_del_reg(&set, (int8_t)d.rt);
                 locset_print(&set);
             }
@@ -275,13 +275,13 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
                 //typedef int32_t (*ForwardCallback)(char* buffer, int32_t size, int32_t now_offset, DecodedInst d, int32_t ancher_offset);
                 int32_t cb_result = callback(buffer, size, off, d, ancher_offset);
                 if (cb_result!=NEED_MORE) return cb_result;
-                printf("  0x%X: STRB W%d,[X%d,#0x%X] -> spill8\n",
+                PATCH_LOG("  0x%X: STRB W%d,[X%d,#0x%X] -> spill8\n",
                         off, si.rt, si.rn, si.imm);
                 if (si.rn == 31) locset_add_stk8(&set, si.imm);
                 locset_print(&set);
                 
             } else if (si.valid && si.rn == 31 && locset_has_stk8(&set, si.imm)) {
-                printf("  0x%X: STRB W%d,[SP,#0x%X] overwrite stk8 -> del\n",
+                PATCH_LOG("  0x%X: STRB W%d,[SP,#0x%X] overwrite stk8 -> del\n",
                        off, si.rt, si.imm);
                 locset_del_stk8(&set, si.imm);
             }
@@ -293,7 +293,7 @@ int32_t track_forward(char* buffer, int32_t size, int32_t start_offset,
         }
     }
 
-    printf("Forward tracking: no sink STRB found after anchor 0x%X\n", ancher_offset);
+    PATCH_LOG("Forward tracking: no sink STRB found after anchor 0x%X\n", ancher_offset);
     return FAILURE;
 }
 bool str_at(const char* buffer, int32_t size, int64_t file_off, const char* needle) {

@@ -6,7 +6,7 @@
 
 #include "arm64_inst/utils.h"
 
-#include <stdio.h>
+#include "patchs/log.h"
 #include <string.h>
 
 static int32_t patch_abl_gbl(char *Buffer, int32_t Size) {
@@ -90,7 +90,7 @@ static bool LocateLockStateGlobal(char *Buffer, int32_t Size,
     *GlobalVarOffset = -1;
     Matches = LocateBootState(Buffer, Size, &LockRegister, &Offset);
     if (Matches != 1) {
-        printf("Warning: boot-state signature matched %d times, "
+        PATCH_LOG("Warning: boot-state signature matched %d times, "
                "skipping Oplus warning patch\n",
                (int)Matches);
         return false;
@@ -99,16 +99,17 @@ static bool LocateLockStateGlobal(char *Buffer, int32_t Size,
                                      GlobalVarOffset,
                                      empty_source_callback) != 0 ||
         *GlobalVarOffset < 0) {
-        printf("Warning: lock-state global not resolved for W%d\n",
+        PATCH_LOG("Warning: lock-state global not resolved for W%d\n",
                (int)LockRegister);
         return false;
     }
-    printf("Lock-state global offset: 0x%X (register W%d)\n",
+    PATCH_LOG("Lock-state global offset: 0x%X (register W%d)\n",
            (unsigned)*GlobalVarOffset, (int)LockRegister);
     return true;
 }
 
-bool PatchBuffer(char *Data, int32_t Size) {
+uint32_t PatchBufferFlags(char *Data, int32_t Size) {
+    uint32_t Flags = 0;
     LIBAVB_FORCE_RESULT Result;
     int32_t GlobalVarOffset = -1;
 
@@ -118,13 +119,16 @@ bool PatchBuffer(char *Data, int32_t Size) {
 
     Result = patch_libavb_force_success(Data, Size);
     if (Result != LIBAVB_FORCE_SUCCESS) {
-        printf("Error: mandatory libavb_force_success patch failed (%d)\n",
+        PATCH_LOG("Error: mandatory libavb_force_success patch failed (%d)\n",
                (int)Result);
         return false;
     }
-    printf("libavb_force_success patch applied\n");
+    Flags |= PATCH_REQUIRED_AVB;
+    PATCH_LOG("libavb_force_success patch applied\n");
     if (patch_abl_gbl(Data, Size) != 0) {
-        printf("Warning: Failed to patch ABL GBL\n");
+        PATCH_LOG("Warning: Failed to patch ABL GBL\n");
+    } else {
+        Flags |= PATCH_EFISP_REDIRECT;
     }
 
     /*
@@ -136,14 +140,15 @@ bool PatchBuffer(char *Data, int32_t Size) {
      */
     switch (patch_fastboot_lock_gates(Data, Size)) {
         case LOCK_GATES_SUCCESS:
-            printf("fastboot lock-state gates patched\n");
+            Flags |= PATCH_FASTBOOT_GATES;
+            PATCH_LOG("fastboot lock-state gates patched\n");
             break;
         case LOCK_GATES_ABSENT:
-            printf("Warning: no fastboot lock-state gates found; fastboot may "
+            PATCH_LOG("Warning: no fastboot lock-state gates found; fastboot may "
                    "refuse flash while the device reports locked\n");
             break;
         default:
-            printf("Warning: fastboot lock-state gate patch failed; fastboot "
+            PATCH_LOG("Warning: fastboot lock-state gate patch failed; fastboot "
                    "will refuse flash while the device reports locked\n");
             break;
     }
@@ -155,12 +160,21 @@ bool PatchBuffer(char *Data, int32_t Size) {
      */
     if (LocateLockStateGlobal(Data, Size, &GlobalVarOffset)) {
         if (!patch_warning(Data, Size, GlobalVarOffset)) {
-            printf("Warning: Oplus orange-state warning patch failed\n");
+            PATCH_LOG("Warning: Oplus orange-state warning patch failed\n");
+        } else {
+            Flags |= PATCH_OPLUS_WARNING;
         }
     }
     if (!patch_fastboot(Data, Size, GlobalVarOffset)) {
-        printf("Warning: Oplus force-enable-fastboot patch failed\n");
+        PATCH_LOG("Warning: Oplus force-enable-fastboot patch failed\n");
+    } else {
+        Flags |= PATCH_OPLUS_FASTBOOT;
     }
 
-    return true;
+    return Flags;
+}
+
+
+bool PatchBuffer(char *Data, int32_t Size) {
+    return (PatchBufferFlags(Data, Size) & PATCH_REQUIRED_AVB) != 0;
 }

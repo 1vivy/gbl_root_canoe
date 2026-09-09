@@ -26,7 +26,7 @@
 #include "patchs/fastboot_lock_gates.h"
 #include "arm64_inst/utils.h"
 
-#include <stdio.h>
+#include "patchs/log.h"
 
 /* Every gate the ABL guards behind lock state. The trailing newline on the
  * slot-change message is part of the literal in the binary; matching without it
@@ -123,7 +123,7 @@ static LOCK_GATES_RESULT PlanOneGate(const char *Buffer, int32_t Size,
     }
     *Present = true;
     if (Matches > 1) {
-        printf("Warning: lock gate '%s' anchor matched %d times\n", Needle,
+        PATCH_LOG("Warning: lock gate '%s' anchor matched %d times\n", Needle,
                (int)Matches);
         return LOCK_GATES_AMBIGUOUS;
     }
@@ -145,7 +145,7 @@ static LOCK_GATES_RESULT PlanOneGate(const char *Buffer, int32_t Size,
         return LOCK_GATES_FAILURE;
     }
     if (Matches > 1) {
-        printf("Warning: lock gate '%s' has %d branches into its error block\n",
+        PATCH_LOG("Warning: lock gate '%s' has %d branches into its error block\n",
                Needle, (int)Matches);
         return LOCK_GATES_AMBIGUOUS;
     }
@@ -189,7 +189,7 @@ LOCK_GATES_RESULT patch_fastboot_lock_gates(char *Buffer, int32_t Size) {
 
     for (int32_t Index = 0; Index < Planned; Index++) {
         write_instr(Buffer, Offsets[Index], Values[Index]);
-        printf("Patched lock-state gate at 0x%X (%s)\n", (unsigned)Offsets[Index],
+        PATCH_LOG("Patched lock-state gate at 0x%X (%s)\n", (unsigned)Offsets[Index],
                Values[Index] == NOP ? "NOP" : "unconditional B");
     }
     return LOCK_GATES_SUCCESS;
