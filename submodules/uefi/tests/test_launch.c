@@ -49,6 +49,7 @@ static CHAR16 mReadPath[SFB_PATH_CHARS];
 static UINT8 mBootRecord[256];
 static UINT8 mBootRecordAtStart[256];
 static BOOLEAN mObserveLocked;
+static EFI_STATUS mBootClearStatus, mBootWriteStatus;
 static void TestBootRecordLifecycle(void);
 static EFI_STATUS mPrepareStatus;
 static SFB_BOOT_MODE mLastPrepareMode;
@@ -983,6 +984,9 @@ ResetLaunchBackend(void)
 {
   static EFI_BOOT_SERVICES BootServices;
   ResetArena ();
+  mBootClearStatus = mBootWriteStatus = EFI_SUCCESS;
+  memset(mBootRecord, 0, sizeof(mBootRecord));
+  memset(mBootRecordAtStart, 0, sizeof(mBootRecordAtStart));
   memset (&BootServices, 0, sizeof (BootServices));
   BootServices.LocateProtocol = FakeLocateProtocol;
   mLastPrepareMode = SfbBootModeHonestUnlocked;
@@ -2824,7 +2828,8 @@ SfbShowBootingScreen(IN CONST CHAR16 *Name,
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.c"
 
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLastBoot.c"
-EFI_STATUS SfbLastBootWrite(IN CONST UINT8 *Bytes) { assert(SfbLastBootValid(Bytes, SFB_LAST_BOOT_BYTES)); memcpy(mBootRecord, Bytes, sizeof(mBootRecord)); return EFI_SUCCESS; }
+EFI_STATUS SfbLastBootClear(VOID) { if (!EFI_ERROR(mBootClearStatus)) memset(mBootRecord, 0, sizeof(mBootRecord)); return mBootClearStatus; }
+EFI_STATUS SfbLastBootWrite(IN CONST UINT8 *Bytes) { assert(SfbLastBootValid(Bytes, SFB_LAST_BOOT_BYTES)); if (!EFI_ERROR(mBootWriteStatus)) memcpy(mBootRecord, Bytes, sizeof(mBootRecord)); return mBootWriteStatus; }
 SFB_OBSERVED_DEVINFO SfbGetObservedDevInfo(VOID) { SFB_OBSERVED_DEVINFO v = {mObserveLocked, FALSE, FALSE}; return v; }
 SFB_SLOT_RETRIES SfbSlotRetries(VOID) { SFB_SLOT_RETRIES v = {0}; return v; }
 
@@ -2837,14 +2842,23 @@ static void TestBootRecordLifecycle(void) {
   assert(mBootRecordAtStart[7] == 2 && mBootRecordAtStart[9] == 1);
   assert(mBootRecordAtStart[11] == 1);
   assert(memcmp(&mBootRecordAtStart[16], &Profile, 120) == 0);
-  assert(mBootRecord[5] == SFB_LAST_BOOT_RETURNED);
+  assert(!SfbLastBootValid(mBootRecord, sizeof(mBootRecord)));
   ResetLaunchBackend(); mObserveLocked = FALSE;
   assert(SfbLaunchImage(&Path, FALSE, SfbBootModeHonestUnlocked, NULL, NULL, NULL) == EFI_SUCCESS);
-  assert(mBootRecordAtStart[5] == SFB_LAST_BOOT_UNMANAGED);
+  assert(!SfbLastBootValid(mBootRecordAtStart, sizeof(mBootRecordAtStart)));
   assert(mBootRecordAtStart[11] == 0);
   assert(!mSfbInitialDeviceInfo.Available);
   ResetLaunchBackend(); mObserveLocked = TRUE; mLoadStatus = EFI_DEVICE_ERROR;
   assert(SfbLaunchImage(&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL, NULL) == EFI_DEVICE_ERROR);
-  assert(mBootRecord[5] == SFB_LAST_BOOT_RETURNED && mBootRecord[9] == 1);
+  assert(!SfbLastBootValid(mBootRecord, sizeof(mBootRecord)));
+  ResetLaunchBackend(); mBootClearStatus = EFI_ACCESS_DENIED;
+  assert(SfbLaunchImage(&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL, NULL) == EFI_ACCESS_DENIED);
+  assert(mStartCount == 0 && mLoadCount == 0 && !mPolicyActive);
+  ResetLaunchBackend(); mBootWriteStatus = EFI_NOT_FOUND;
+  assert(SfbLaunchImage(&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL, NULL) == EFI_SUCCESS);
+  assert(mStartCount == 1 && !SfbLastBootValid(mBootRecordAtStart, sizeof(mBootRecordAtStart)));
+  ResetLaunchBackend(); mBootWriteStatus = EFI_DEVICE_ERROR;
+  assert(SfbLaunchImage(&Path, TRUE, SfbBootModeKmProfile, &Profile, NULL, NULL) == EFI_DEVICE_ERROR);
+  assert(mStartCount == 0 && !mPolicyActive);
   ZeroMem(&mSfbInitialDeviceInfo, sizeof(mSfbInitialDeviceInfo)); mObserveLocked = FALSE;
 }

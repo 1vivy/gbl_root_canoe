@@ -79,6 +79,7 @@
 #include <Protocol/SimpleTextIn.h>
 #include "SuperFbMenu.h"
 #include "SuperFbBootRoot.h"
+#include "SuperFbLastBoot.h"
 #include "SuperFbOemWatchdog.h"
 #include "SuperFbLog.h"
 
@@ -194,6 +195,11 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     }
     SfbBootMark (L"logfs");
     SfbMountLogfs ();
+    /* Mount only the canonical container and discard any prior launch before
+     * configuration, default launch, menu or fastboot can observe this boot. */
+    Status = SfbLastBootClear ();
+    DEBUG ((EFI_ERROR (Status) ? EFI_D_WARN : EFI_D_INFO,
+            "SFB: MARK last-boot clear-on-entry status=%r\n", Status));
     /*
      * The USB core is left exactly as inherited. Host mode was investigated
      * on this target and abandoned: the vendor mode switch works and XHCI
@@ -304,6 +310,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
    * to be unrecoverable. Written now, while there is still a filesystem and a
    * caller.
    */
+  (VOID)SfbLastBootClear ();
   (VOID)SfbLogFlush ("pre-fastboot");
   DEBUG ((EFI_D_INFO, "Launching fastboot\n"));
   Status = FastbootInitialize ();

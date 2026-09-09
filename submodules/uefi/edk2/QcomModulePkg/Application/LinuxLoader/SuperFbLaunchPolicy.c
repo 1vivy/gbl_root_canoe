@@ -1,6 +1,7 @@
 #include "SuperFbLaunchPolicy.h"
 #include "SuperFbSlots.h"
 #include "SuperFbLog.h"
+#include "SuperFbLastLaunch.h"
 #include "SuperFbLastBoot.h"
 #include "Hook/SuperFbDevInfo.h"
 
@@ -274,21 +275,17 @@ SfbLaunchModeText (IN BOOLEAN Managed, IN SFB_BOOT_MODE Mode)
   return (Mode <= SfbBootModeKmProfile) ? Modes[Mode] : "?";
 }
 
-/* This snapshot describes a launch decision, not successful Android startup.
- * Rewrite its lifecycle on return and on unmanaged attempts. Readers must not
- * infer current-boot freshness from FAT dates or the monotonic count alone. */
-STATIC VOID
-SfbPersistBootRecord (UINT8 *Record, UINT8 Phase)
+/* Only a managed Android handoff is published. A returned/failed attempt is
+ * removed, never a replacement record that can look like the running OS. */
+STATIC EFI_STATUS
+SfbPersistBootRecord (UINT8 *Record)
 {
   UINT32 Checksum;
   UINTN Index;
-  EFI_STATUS Status;
-  Record[5] = Phase;
+  Record[5] = SFB_LAST_BOOT_HANDOFF;
   Checksum = SfbLastBootChecksum (Record);
   for (Index = 0; Index < 4; ++Index) Record[252 + Index] = (UINT8)(Checksum >> (8 * Index));
-  Status = SfbLastBootWrite (Record);
-  DEBUG ((EFI_ERROR (Status) ? EFI_D_WARN : EFI_D_INFO,
-          "SFB: MARK last-boot phase=%u status=%r\n", (UINT32)Phase, Status));
+  return SfbLastBootWrite (Record);
 }
 
 EFI_STATUS
@@ -324,6 +321,17 @@ SfbLaunchImage (
      EffectiveMode == SfbBootModeHonestUnlocked)
       ? SfbLaunchReasonProfileAbsent : SfbLaunchReasonNone;
 
+  /* Clear before argument/preparation errors can leave an earlier handoff.
+   * An absent boot root has no record. A present, uncleared record cannot be
+   * attributed to another Android boot, so keep the menu/fastboot escape. */
+  Status = SfbLastBootClear ();
+  if (Managed && EFI_ERROR (Status) && Status != EFI_NOT_FOUND) {
+    Print (L"Unable to clear the previous Android boot record (%r). Return to the menu or Super Fastboot.\n", Status);
+    SfbRestoreSecurity ();
+    SfbDisarmManagedAblHooks ();
+    return Status;
+  }
+
   if (DevicePath == NULL || gBS == NULL || gBS->LoadImage == NULL ||
       gBS->StartImage == NULL) {
     SfbRestoreSecurity ();
@@ -351,8 +359,6 @@ SfbLaunchImage (
   if (gBS->GetNextMonotonicCount != NULL) gBS->GetNextMonotonicCount (&Attempt);
   for (RecordIndex = 0; RecordIndex < 8; ++RecordIndex)
     BootRecord[216 + RecordIndex] = (UINT8)(Attempt >> (8 * RecordIndex));
-  /* Invalidate a preceding handoff before any preparation can fail. */
-  SfbPersistBootRecord (BootRecord, SFB_LAST_BOOT_RETURNED);
 
   if (Managed) {
     Status = SfbPrepareManagedAblHooks (LaunchMode, Profile, TzMap,
@@ -361,8 +367,6 @@ SfbLaunchImage (
     if (!mSfbInitialDeviceInfo.Available && Observed.Available) mSfbInitialDeviceInfo = Observed;
     if (mSfbInitialDeviceInfo.Available) Observed = mSfbInitialDeviceInfo;
     BootRecord[9] = Observed.Available ? (UINT8)(1 | (Observed.Unlocked ? 2 : 0) | (Observed.Critical ? 4 : 0)) : 0;
-    /* Preserve the pre-repair observation even if LoadImage later fails. */
-    SfbPersistBootRecord (BootRecord, SFB_LAST_BOOT_RETURNED);
     if (Status == EFI_ACCESS_DENIED) {
       /*
        * The config withheld permission for the DeviceInfo repair this mode
@@ -437,35 +441,7 @@ SfbLaunchImage (
   }
 
   if (Managed) {
-    STATIC CONST CHAR8 *CONST ReasonText[] = {
-      "none", "profile-absent", "lockstate-refused"
-    };
-    CHAR8 LastLaunchValue[SFB_LAST_LAUNCH_VALUE_BYTES];
-    UINTN Offset;
-    UINTN ReasonIndex;
-    CONST CHAR8 *Reason;
-    EFI_STATUS PersistStatus;
     EFI_STATUS RetryResetStatus;
-
-    Reason = ReasonText[LaunchReason];
-    /* Fixed grammar, built without adding a formatter dependency to the launch
-     * harness. SfbLogFlush validates it before replacing the durable record. */
-    for (Offset = 0; "requested=0 effective=0 reason="[Offset] != '\0';
-         Offset++) {
-      LastLaunchValue[Offset] =
-        "requested=0 effective=0 reason="[Offset];
-    }
-    LastLaunchValue[10] = (CHAR8)('0' + RequestedMode);
-    LastLaunchValue[22] = (CHAR8)('0' + LaunchMode);
-    for (ReasonIndex = 0; Reason[ReasonIndex] != '\0'; ReasonIndex++) {
-      LastLaunchValue[Offset++] = Reason[ReasonIndex];
-    }
-    LastLaunchValue[Offset] = '\0';
-    PersistStatus = SfbLogFlush (LastLaunchValue);
-    DEBUG ((EFI_ERROR (PersistStatus) ? EFI_D_WARN : EFI_D_INFO,
-            "SFB: MARK last-launch requested=%u effective=%u reason=%u "
-            "status=%r\n", (UINT32)RequestedMode, (UINT32)LaunchMode,
-            (UINT32)LaunchReason, PersistStatus));
 
     /*
      * Restore the active slot's retry budget before handing control to the
@@ -489,7 +465,17 @@ SfbLaunchImage (
     CopyMem (&BootRecord[16], Profile, SFB_MODE2_PROFILE_BYTES);
   }
   if (Managed && TzMap != NULL) CopyMem (&BootRecord[136], TzMap->AblDigest, 32);
-  SfbPersistBootRecord (BootRecord, Managed ? SFB_LAST_BOOT_HANDOFF : SFB_LAST_BOOT_UNMANAGED);
+  if (Managed) {
+    EFI_STATUS RecordStatus = SfbPersistBootRecord (BootRecord);
+    DEBUG ((EFI_ERROR (RecordStatus) ? EFI_D_WARN : EFI_D_INFO,
+            "SFB: MARK last-boot handoff status=%r\n", RecordStatus));
+    if (EFI_ERROR (RecordStatus) && RecordStatus != EFI_NOT_FOUND) {
+      Print (L"Unable to invalidate an incomplete Android boot record (%r). Return to the menu or Super Fastboot.\n", RecordStatus);
+      SfbDisarmManagedAblHooks ();
+      if (Options != NULL) FreePool (Options);
+      return RecordStatus;
+    }
+  }
 
   DEBUG ((EFI_D_INFO,
           "SFB: MARK image-start managed=%u mode=%a\n",
@@ -509,7 +495,11 @@ SfbLaunchImage (
    */
   gBS->SetWatchdogTimer (0, 0x10000, 0, NULL);
   SfbDisarmManagedAblHooks ();
-  SfbPersistBootRecord (BootRecord, SFB_LAST_BOOT_RETURNED);
+  {
+    EFI_STATUS ClearStatus = SfbLastBootClear ();
+    DEBUG ((EFI_ERROR (ClearStatus) ? EFI_D_WARN : EFI_D_INFO,
+            "SFB: MARK last-boot clear-on-return status=%r\n", ClearStatus));
+  }
   if (Options != NULL) {
     FreePool (Options);
   }

@@ -79,6 +79,7 @@
 	SuperFbLogSlot.c
 	SuperFbLastBoot.h
 	SuperFbLastBoot.c
+	SuperFbLastBootStore.c
 	SuperFbLastLaunch.h
 	SuperFbLastLaunch.c
 	SuperFbBootRoot.h

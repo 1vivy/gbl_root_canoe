@@ -35,7 +35,7 @@ STATIC EFI_STATUS Transfer (SFB_IMAGE_DISK *D, UINT32 Id, EFI_LBA Lba, UINTN Siz
     return EFI_INVALID_PARAMETER;
   if (Size % 512 != 0)
     return EFI_BAD_BUFFER_SIZE;
-  if (Lba >= EXT4_IMAGE_BYTES / 512 || Size / 512 > EXT4_IMAGE_BYTES / 512 - Lba)
+  if (Lba >= D->Map->Bytes / 512 || Size / 512 > D->Map->Bytes / 512 - Lba)
     return EFI_INVALID_PARAMETER;
   Offset = Lba * 512;
   while (Size != 0)
@@ -115,7 +115,7 @@ EFI_STATUS SfbImageDiskInit (SFB_IMAGE_DISK *D, EXT4_IMAGE_MAP *Map)
   UINT64 Total = 0, ParentBytes;
   UINTN I, J, Align;
   if (D == NULL || Map == NULL || Map->Parent == NULL || Map->Parent->Media == NULL ||
-      Map->Count == 0 || Map->Count > EXT4_IMAGE_MAX_EXTENTS || Map->Parent->ReadBlocks == NULL ||
+      !Ext4ImageSizeValid (Map->Bytes) || Map->Count == 0 || Map->Count > EXT4_IMAGE_MAX_EXTENTS || Map->Parent->ReadBlocks == NULL ||
       Map->Parent->WriteBlocks == NULL || Map->Parent->FlushBlocks == NULL)
     return EFI_INVALID_PARAMETER;
   Media = Map->Parent->Media;
@@ -135,7 +135,7 @@ EFI_STATUS SfbImageDiskInit (SFB_IMAGE_DISK *D, EXT4_IMAGE_MAP *Map)
   {
     EXT4_IMAGE_RANGE *R = &Map->Ranges[I];
     if (R->Logical != Total || R->Bytes == 0 || R->Bytes % 512 != 0 || R->Physical % 512 != 0 ||
-        R->Bytes > EXT4_IMAGE_BYTES - Total || R->Physical >= ParentBytes ||
+        R->Bytes > Map->Bytes - Total || R->Physical >= ParentBytes ||
         R->Bytes > ParentBytes - R->Physical)
       return EFI_VOLUME_CORRUPTED;
     for (J = 0; J < I; J++)
@@ -144,7 +144,7 @@ EFI_STATUS SfbImageDiskInit (SFB_IMAGE_DISK *D, EXT4_IMAGE_MAP *Map)
         return EFI_VOLUME_CORRUPTED;
     Total += R->Bytes;
   }
-  if (Total != EXT4_IMAGE_BYTES)
+  if (Total != Map->Bytes)
     return EFI_VOLUME_CORRUPTED;
   ZeroMem (D, sizeof (*D));
   D->Map = Map;
@@ -160,7 +160,7 @@ EFI_STATUS SfbImageDiskInit (SFB_IMAGE_DISK *D, EXT4_IMAGE_MAP *Map)
   D->Media.LogicalPartition = TRUE;
   D->Media.WriteCaching = TRUE;
   D->Media.BlockSize = 512;
-  D->Media.LastBlock = EXT4_IMAGE_BYTES / 512 - 1;
+  D->Media.LastBlock = D->Map->Bytes / 512 - 1;
   D->Media.IoAlign = 1;
   D->Block.Revision = EFI_BLOCK_IO_PROTOCOL_REVISION;
   D->Block.Media = &D->Media;

@@ -2890,7 +2890,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   CHAR8 DeviceType[MAX_RSP_SIZE] = "\0";
   /* FastbootPublishVar borrows these values until fastboot teardown. */
   STATIC CHAR8 DevInfoBuf[SFB_DEVINFO_VALUE_BYTES];
-  STATIC CHAR8 LastLaunchBuf[SFB_LAST_LAUNCH_VALUE_BYTES];
   STATIC CHAR8 BootRootBuf[SFB_BOOT_ROOT_VALUE_BYTES];
   STATIC CHAR8 SerialBuf[31];
   SFB_OBSERVED_DEVINFO ObservedDevInfo;
@@ -2951,6 +2950,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   }
   FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
   FastbootPublishVar ("canoe-boot-volume", "fat16-container-v1");
+  FastbootPublishVar ("canoe-boot-volume-sizes", "8-256MiB-step8-v1");
   FastbootPublishVar ("canoe-hash", "sha256-range-v1");
   if (SfbMsdManagedAvailable ()) FastbootPublishVar ("canoe-managed-storage", "bot-v1");
 
@@ -2962,13 +2962,6 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   if (SfbFormatObservedDevInfo (&ObservedDevInfo, &SlotRetries, DevInfoBuf,
                                 sizeof (DevInfoBuf))) {
     FastbootPublishVar ("canoe-devinfo", DevInfoBuf);
-  }
-
-  /* A missing/corrupt logfs record stays absent rather than describing a
-   * launch that did not durably reach the final resolution point. */
-  if (!EFI_ERROR (SfbLastLaunchRead (LastLaunchBuf,
-                                     sizeof (LastLaunchBuf)))) {
-    FastbootPublishVar ("canoe-last-launch", LastLaunchBuf);
   }
 
   /* The observation is the one this boot already made before the menu; an

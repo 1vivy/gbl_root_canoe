@@ -16,6 +16,9 @@
 SFB_UINT32 SfbLastBootChecksum(const SFB_UINT8 *Bytes);
 SFB_BOOLEAN SfbLastBootValid(const SFB_UINT8 *Bytes, SFB_UINTN Size);
 #ifndef SFB_HOST_BUILD
+/* Canonical efisp.fat root only. NOT_FOUND means no available record; every
+ * other error means an old/plausible record could not be ruled out. */
+EFI_STATUS SfbLastBootClear(VOID);
 EFI_STATUS SfbLastBootWrite(IN CONST UINT8 *Bytes);
 #endif
 #endif

@@ -10,7 +10,6 @@
 
 #include <Uefi.h>
 #include <Protocol/SimpleFileSystem.h>
-#include "SuperFbLastLaunch.h"
 
 /* Start capturing this image's log output into a ring the BDS owns. Idempotent. */
 VOID    SfbLogBegin (VOID);
@@ -47,11 +46,6 @@ VOID    SfbLogNote (IN CONST CHAR8 *Format, ...);
    session header (e.g. "stage4", "pre-launch"). Returns EFI_SUCCESS only when a
    file was written and closed. Fail-soft: never fatal to the caller. */
 EFI_STATUS SfbLogFlush (IN CONST CHAR8 *Tag);
-
-/* Persist/read the canonical last managed-launch value in logfs\\canoe.
- * A failed write deletes the partial replacement, and readers validate the
- * complete grammar before publishing it. */
-EFI_STATUS SfbLastLaunchRead (OUT CHAR8 *Value, IN UINTN ValueBytes);
 
 /* Open this session's log file in the rotation, evicting the oldest slot when
    all are taken. Declared here because the writer and the rotation live in

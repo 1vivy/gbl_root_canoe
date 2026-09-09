@@ -11,6 +11,7 @@
 #include "SuperFbMenu.h"
 #include "SuperFbLaunchPolicy.h"
 #include "SuperFbContainer.h"
+#include "SuperFbLastBoot.h"
 #include "SuperFbConfigStore.h"
 
 #include <Library/BaseLib.h>
@@ -814,6 +815,8 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
 {
   SFB_MAIN_MENU_CONTEXT State;
   SFB_MENU_TEMPLATE     Template;
+
+  (VOID)SfbLastBootClear ();
 
   if (InitialMode > SfbBootModeKmProfile) {
     InitialMode = SfbBootModeAblFakeLocked;

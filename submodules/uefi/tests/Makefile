@@ -147,7 +147,7 @@ test_surface: test_surface.c \
 	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 clean:
-	rm -f test_usb_serial test_msd_lease test_image_map test_image_disk test_container test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
+	rm -f test_last_boot_store test_usb_serial test_msd_lease test_image_map test_image_disk test_container test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
 
 .PHONY: test_image_map
 test: test_image_map
@@ -189,3 +189,9 @@ test: test_hash
 test_hash:
 	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o test_hash test_hash.c ../edk2/QcomModulePkg/Library/FastbootLib/FastbootHash.c
 	python3 test_hash.py
+
+.PHONY: test_last_boot_store
+test: test_last_boot_store
+test_last_boot_store: test_last_boot_store.c ../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLastBootStore.c ../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLastBoot.c
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -DNO_MSABI_VA_FUNCS -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
+	./test_last_boot_store

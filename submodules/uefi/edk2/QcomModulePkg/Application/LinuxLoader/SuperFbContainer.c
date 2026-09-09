@@ -47,31 +47,38 @@ STATIC EFI_STATUS CheckFat (VOID)
 {
   UINT8 Header[512], Mirror[512];
   UINTN Sector;
+  UINT32 Total, FatSectors, Clusters, DataStart;
+  UINT8 SectorsPerCluster;
   EFI_STATUS Status =
       mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 0, sizeof (Header), Header);
-  if (EFI_ERROR (Status))
-    return Status;
-  if (Le16 (Header + 11) != 512 || Header[13] != 4 || Le16 (Header + 14) != 1 || Header[16] != 2 ||
-      Le16 (Header + 17) != 512 || Le16 (Header + 19) != 0 || Le16 (Header + 22) != 64 ||
-      Le32 (Header + 32) != 65536 || Le16 (Header + 510) != 0xaa55)
+  if (EFI_ERROR (Status)) return Status;
+  Total = Le16 (Header + 19);
+  if (Total != 0 && Le32 (Header + 32) != 0) return EFI_VOLUME_CORRUPTED;
+  if (Total == 0) Total = Le32 (Header + 32);
+  FatSectors = Le16 (Header + 22);
+  SectorsPerCluster = Header[13];
+  if (Le16 (Header + 11) != 512 || Le16 (Header + 14) != 1 || Header[16] != 2 ||
+      Le16 (Header + 17) != 512 || Total != mMap->Bytes / 512 ||
+      (SectorsPerCluster == 0 || SectorsPerCluster > 16 || (SectorsPerCluster & (SectorsPerCluster - 1)) != 0) ||
+      FatSectors == 0 || FatSectors > 256 || Le16 (Header + 510) != 0xaa55)
+    return EFI_VOLUME_CORRUPTED;
+  DataStart = 1 + 2 * FatSectors + 32;
+  if (Total <= DataStart) return EFI_VOLUME_CORRUPTED;
+  Clusters = (Total - DataStart) / SectorsPerCluster;
+  if (Clusters < 4085 || Clusters >= 65525 || Clusters + 2 > FatSectors * 256)
     return EFI_VOLUME_CORRUPTED;
   Status = mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 1, sizeof (Header), Header);
-  if (EFI_ERROR (Status))
-    return Status;
+  if (EFI_ERROR (Status)) return Status;
   if (Le16 (Header) != 0xfff8 || (Le16 (Header + 2) & 0xc000) != 0xc000)
     return EFI_VOLUME_CORRUPTED;
-  for (Sector = 0; Sector < 64; Sector++)
+  for (Sector = 0; Sector < FatSectors; Sector++)
   {
-    Status = mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 1 + Sector, sizeof (Header),
-                                     Header);
-    if (EFI_ERROR (Status))
-      return Status;
-    Status = mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 65 + Sector,
+    Status = mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 1 + Sector, sizeof (Header), Header);
+    if (EFI_ERROR (Status)) return Status;
+    Status = mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 1 + FatSectors + Sector,
                                      sizeof (Mirror), Mirror);
-    if (EFI_ERROR (Status))
-      return Status;
-    if (CompareMem (Header, Mirror, sizeof (Header)) != 0)
-      return EFI_VOLUME_CORRUPTED;
+    if (EFI_ERROR (Status)) return Status;
+    if (CompareMem (Header, Mirror, sizeof (Header)) != 0) return EFI_VOLUME_CORRUPTED;
   }
   return EFI_SUCCESS;
 }
@@ -219,7 +226,7 @@ EFI_STATUS SfbContainerMount (VOID)
   Status = gBS->HandleProtocol (mHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
   if (EFI_ERROR (Status) || Fs == NULL)
     goto Failed;
-  DEBUG ((EFI_D_INFO, "SFB: MARK container mounted=1 bytes=%u\n", EXT4_IMAGE_BYTES));
+  DEBUG ((EFI_D_INFO, "SFB: MARK container mounted=1 bytes=%Lu\n", mMap->Bytes));
   return EFI_SUCCESS;
 Failed:
   if (File != NULL)
@@ -232,6 +239,30 @@ Failed:
       return Cleanup;
   }
   return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
+}
+
+EFI_STATUS SfbContainerOpenRoot (EFI_FILE_PROTOCOL **Root)
+{
+  EFI_STATUS Status;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs = NULL;
+  if (Root == NULL) return EFI_INVALID_PARAMETER;
+  *Root = NULL;
+  Status = SfbContainerMount ();
+  if (EFI_ERROR (Status)) return Status;
+  if (mUsbOwned || mHandle == NULL || gBS == NULL || gBS->HandleProtocol == NULL)
+    return EFI_NOT_READY;
+  Status = gBS->HandleProtocol (mHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
+  if (EFI_ERROR (Status) || Fs == NULL || Fs->OpenVolume == NULL)
+    return EFI_ERROR (Status) ? Status : EFI_NOT_READY;
+  Status = Fs->OpenVolume (Fs, Root);
+  return EFI_ERROR (Status) ? Status : (*Root != NULL ? EFI_SUCCESS : EFI_DEVICE_ERROR);
+}
+
+EFI_STATUS SfbContainerFlush (VOID)
+{
+  if (mUsbOwned || mHandle == NULL || !mDisk.Active || mDisk.Block.FlushBlocks == NULL)
+    return EFI_NOT_READY;
+  return mDisk.Block.FlushBlocks (&mDisk.Block);
 }
 
 EFI_BLOCK_IO_PROTOCOL *SfbContainerDisplayDisk (VOID)

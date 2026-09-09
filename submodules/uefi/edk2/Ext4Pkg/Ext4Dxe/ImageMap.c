@@ -82,7 +82,7 @@ STATIC EFI_STATUS Walk (MAP_CONTEXT *C, EXT4_EXTENT_HEADER *H, UINTN Capacity, U
       UINT64 Length = E->ee_len;
       EXT4_IMAGE_RANGE *R;
       if (E->ee_block != C->Logical || Length == 0 || Length > 32768 ||
-          Length > EXT4_IMAGE_BYTES / P->BlockSize - C->Logical ||
+          Length > C->Map->Bytes / P->BlockSize - C->Logical ||
           Physical >= P->NumberBlocks || Length > P->NumberBlocks - Physical ||
           C->Map->Count == EXT4_IMAGE_MAX_EXTENTS) return EFI_VOLUME_CORRUPTED;
       for (J = 0; J < Length; J++) if (!DataBlock (P, Physical + J)) return EFI_VOLUME_CORRUPTED;
@@ -204,7 +204,7 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *Protocol, EXT4_IMAGE_MAP **Out) {
   if (EFI_ERROR (Status)) return Status;
   if (CompareMem (Fresh, File->Inode, P->InodeSize) != 0 || !Ext4FileIsReg (File) ||
       File->Inode->i_flags != EXT4_EXTENTS_FL || File->Inode->i_links != 1 ||
-      Ext4InodeSize (File->Inode) != EXT4_IMAGE_BYTES) {
+      !Ext4ImageSizeValid (Ext4InodeSize (File->Inode))) {
     FreePool (Fresh);
     return EFI_VOLUME_CORRUPTED;
   }
@@ -214,9 +214,10 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *Protocol, EXT4_IMAGE_MAP **Out) {
   C->Map = AllocateZeroPool (sizeof (*C->Map));
   if (C->Map == NULL) { FreePool (C); return EFI_OUT_OF_RESOURCES; }
   C->File = File;
+  C->Map->Bytes = Ext4InodeSize (File->Inode);
   Status = Walk (C, (EXT4_EXTENT_HEADER *)File->Inode->i_data, sizeof (File->Inode->i_data),
                  ((EXT4_EXTENT_HEADER *)File->Inode->i_data)->eh_depth);
-  if (!EFI_ERROR (Status) && C->Logical != EXT4_IMAGE_BYTES / P->BlockSize) Status = EFI_VOLUME_CORRUPTED;
+  if (!EFI_ERROR (Status) && C->Logical != C->Map->Bytes / P->BlockSize) Status = EFI_VOLUME_CORRUPTED;
   /* An extent must never alias a block holding its own extent tree. */
   for (I = 0; !EFI_ERROR (Status) && I < C->Map->Count; I++)
     for (J = 0; J < C->NodeCount; J++)

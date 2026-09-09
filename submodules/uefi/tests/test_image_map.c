@@ -80,6 +80,14 @@ int main(void) {
    e->ee_start_lo=100;rejected(); /* file data overlaps its extent-tree block */
    e->ee_start_lo=512;h->eh_depth=1;rejected();
  }
+ for (UINT64 size=EXT4_IMAGE_MIN_BYTES;size<=EXT4_IMAGE_MAX_BYTES;size+=EXT4_IMAGE_STEP_BYTES) {
+   reset();P.BlockSize=65536;P.NumberBlocks=8192;P.SuperBlock.s_blocks_per_group=8192;
+   Media.BlockSize=65536;Media.LastBlock=8191;
+   Inode.i_size_lo=(UINT32)size;extent()->ee_len=(UINT16)(size/65536);
+   assert(Ext4MapImage(&F.Protocol,&m)==EFI_SUCCESS);assert(m->Bytes==size && m->Ranges[0].Bytes==size);FreePool(m);
+ }
+ reset();Inode.i_size_lo=12U*1024U*1024U;rejected();
+ reset();Inode.i_size_lo=264U*1024U*1024U;rejected();
  puts("PASS image mapping: dense extent trees, holes, unwritten/overlapping/metadata/free blocks and dirty media");
  return 0;
 }

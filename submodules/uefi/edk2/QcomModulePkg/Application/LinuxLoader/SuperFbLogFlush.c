@@ -17,7 +17,6 @@
 
 #include "SuperFbGptName.h"
 #include "SuperFbLog.h"
-#include "SuperFbLastBoot.h"
 
 /* File-local since the platform-ring writer that shared them was removed. */
 STATIC
@@ -128,132 +127,6 @@ SfbOpenLogfsRoot (
   return LastStatus;
 }
 
-STATIC
-EFI_STATUS
-SfbWriteRecord (
-  IN CONST CHAR16 *Name,
-  IN CONST VOID *Value,
-  IN UINTN ValueBytes
-  )
-{
-  EFI_STATUS Status;
-  EFI_STATUS CloseStatus;
-  EFI_FILE_PROTOCOL *Root = NULL;
-  EFI_FILE_PROTOCOL *Directory = NULL;
-  EFI_FILE_PROTOCOL *File = NULL;
-  Status = SfbOpenLogfsRoot (&Root);
-  if (EFI_ERROR (Status) || Root == NULL) {
-    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
-    goto Exit;
-  }
-  Status = Root->Open (Root, &Directory, L"\\canoe",
-                       EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
-                       EFI_FILE_MODE_CREATE, EFI_FILE_DIRECTORY);
-  if (EFI_ERROR (Status) || Directory == NULL) {
-    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
-    goto Exit;
-  }
-  Status = Directory->Open (Directory, &File, (CHAR16 *)Name,
-                            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
-  if (!EFI_ERROR (Status) && File != NULL) {
-    Status = File->Delete (File);
-    File = NULL;
-    if (EFI_ERROR (Status)) goto Exit;
-  } else if (Status != EFI_NOT_FOUND) {
-    goto Exit;
-  } else if (File != NULL) {
-    File->Close (File);
-    File = NULL;
-  }
-  Status = Directory->Open (Directory, &File, (CHAR16 *)Name,
-                            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE |
-                            EFI_FILE_MODE_CREATE, 0);
-  if (EFI_ERROR (Status) || File == NULL) {
-    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
-    goto Exit;
-  }
-  Status = SfbWriteBytes (File, Value, ValueBytes);
-  if (!EFI_ERROR (Status)) {
-    Status = (File->Flush == NULL) ? EFI_UNSUPPORTED : File->Flush (File);
-  }
-
-Exit:
-  if (File != NULL) {
-    if (EFI_ERROR (Status)) {
-      File->Delete (File);
-    } else {
-      CloseStatus = File->Close (File);
-      if (EFI_ERROR (CloseStatus)) Status = CloseStatus;
-    }
-  }
-  if (Directory != NULL) Directory->Close (Directory);
-  if (Root != NULL) Root->Close (Root);
-  return EFI_ERROR (Status) ? Status : EFI_SUCCESS;
-}
-
-EFI_STATUS
-SfbLastBootWrite (IN CONST UINT8 *Bytes)
-{
-  if (!SfbLastBootValid (Bytes, SFB_LAST_BOOT_BYTES)) return EFI_INVALID_PARAMETER;
-  return SfbWriteRecord (L"last-boot", Bytes, SFB_LAST_BOOT_BYTES);
-}
-
-STATIC EFI_STATUS
-SfbLastLaunchWrite (IN CONST SFB_LAST_LAUNCH *Launch)
-{
-  CHAR8 Value[SFB_LAST_LAUNCH_VALUE_BYTES];
-  if (!SfbLastLaunchFormat (Launch, Value, sizeof (Value))) return EFI_INVALID_PARAMETER;
-  return SfbWriteRecord (L"last-launch", Value, AsciiStrLen (Value));
-}
-
-EFI_STATUS
-SfbLastLaunchRead (
-  OUT CHAR8 *Value,
-  IN UINTN   ValueBytes
-  )
-{
-  EFI_STATUS Status;
-  EFI_FILE_PROTOCOL *Root = NULL;
-  EFI_FILE_PROTOCOL *Directory = NULL;
-  EFI_FILE_PROTOCOL *File = NULL;
-  CHAR8 Stored[SFB_LAST_LAUNCH_VALUE_BYTES];
-  UINTN ReadBytes;
-  SFB_LAST_LAUNCH Launch;
-
-  if (Value == NULL || ValueBytes == 0) return EFI_INVALID_PARAMETER;
-  Value[0] = '\0';
-  Status = SfbOpenLogfsRoot (&Root);
-  if (EFI_ERROR (Status) || Root == NULL) {
-    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
-    goto Exit;
-  }
-  Status = Root->Open (Root, &Directory, L"\\canoe", EFI_FILE_MODE_READ, 0);
-  if (EFI_ERROR (Status) || Directory == NULL) {
-    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
-    goto Exit;
-  }
-  Status = Directory->Open (Directory, &File, L"last-launch",
-                            EFI_FILE_MODE_READ, 0);
-  if (EFI_ERROR (Status) || File == NULL || File->Read == NULL) {
-    Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
-    goto Exit;
-  }
-  ReadBytes = sizeof (Stored);
-  Status = File->Read (File, &ReadBytes, Stored);
-  if (EFI_ERROR (Status)) goto Exit;
-  if (ReadBytes == 0 || ReadBytes == sizeof (Stored) ||
-      !SfbLastLaunchParse (Stored, ReadBytes, &Launch) ||
-      !SfbLastLaunchFormat (&Launch, Value, ValueBytes)) {
-    Status = EFI_COMPROMISED_DATA;
-  }
-
-Exit:
-  if (File != NULL) File->Close (File);
-  if (Directory != NULL) Directory->Close (Directory);
-  if (Root != NULL) Root->Close (Root);
-  return Status;
-}
-
 EFI_STATUS
 SfbLogFlush (
   IN CONST CHAR8 *Tag
@@ -272,16 +145,6 @@ SfbLogFlush (
   Directory = NULL;
   File = NULL;
   CapturedLength = 0;
-  /* A canonical launch-value tag is the final-resolution persistence request,
-   * not a rotating debug-log tag. This preserves the existing launch harness
-   * surface while giving the record its own durable file. */
-  {
-    SFB_LAST_LAUNCH LastLaunch;
-    if (Tag != NULL &&
-        SfbLastLaunchParse (Tag, AsciiStrLen (Tag), &LastLaunch)) {
-      return SfbLastLaunchWrite (&LastLaunch);
-    }
-  }
   Captured = SfbLogSnapshot (&CapturedLength);
   if (Captured == NULL) {
     CapturedLength = 0;

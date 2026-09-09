@@ -25,11 +25,12 @@ static EFI_STATUS EFIAPI read_blocks (EFI_BLOCK_IO_PROTOCOL *p, UINT32 id, EFI_L
                                       VOID *out)
 {
   assert (p == &Parent && id == Media.MediaId && n == Media.BlockSize &&
-          ((UINTN)out % Media.IoAlign) == 0 && (lba + 1) * n <= BYTES);
+          ((UINTN)out % Media.IoAlign) == 0 && lba <= Media.LastBlock);
   Reads++;
   if (ReadFailure)
     return EFI_DEVICE_ERROR;
-  memcpy (out, Storage + lba * n, n);
+  if ((lba + 1) * n <= BYTES) memcpy (out, Storage + lba * n, n);
+  else memset (out, 0, n); /* Sparse upper fixture storage for size-bound tests. */
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI write_blocks (EFI_BLOCK_IO_PROTOCOL *p, UINT32 id, EFI_LBA lba, UINTN n,
@@ -68,6 +69,7 @@ int main (void)
   Parent.FlushBlocks = flush;
   m->Parent = &Parent;
   m->MediaId = 42;
+  m->Bytes = EXT4_IMAGE_BYTES;
   m->Count = 3;
   m->Ranges[0] = (EXT4_IMAGE_RANGE){0, 1024, 1024};
   m->Ranges[1] = (EXT4_IMAGE_RANGE){1024, 16 * 1024 * 1024 + 1024, 16 * 1024 * 1024};
@@ -113,6 +115,17 @@ int main (void)
   assert (d.Block.ReadBlocks (&d.Block, 42, 0, 512, out) == EFI_NO_MEDIA);
   m->Ranges[1].Physical = 1024;
   assert (SfbImageDiskInit (&d, m) == EFI_VOLUME_CORRUPTED);
+  for (UINT64 size = EXT4_IMAGE_MIN_BYTES; size <= EXT4_IMAGE_MAX_BYTES; size += EXT4_IMAGE_STEP_BYTES) {
+    Media.LastBlock = EXT4_IMAGE_MAX_BYTES / 4096 - 1;
+    m->Bytes = size; m->Count = 1; m->Ranges[0] = (EXT4_IMAGE_RANGE){0, 0, size};
+    assert (SfbImageDiskInit (&d, m) == EFI_SUCCESS);
+    assert (d.Media.LastBlock == size / 512 - 1);
+    assert (d.Block.ReadBlocks (&d.Block, 42, size / 512 - 1, 512, out) == EFI_SUCCESS);
+    assert (d.Block.ReadBlocks (&d.Block, 42, size / 512, 512, out) == EFI_INVALID_PARAMETER);
+    SfbImageDiskDestroy (&d);
+  }
+  m->Bytes = 12U * 1024U * 1024U;
+  assert (SfbImageDiskInit (&d, m) == EFI_INVALID_PARAMETER);
   free (Storage);
   free (expected);
   free (m);

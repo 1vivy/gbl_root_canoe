@@ -22,7 +22,8 @@ static EFI_DEVICE_PATH_PROTOCOL Path;
 static BOOLEAN Connected, Busy, ParentBusy, FailFlush, Missing, BadFat;
 static UINTN Maps, Opens, ParentDisconnects;
 static UINT8 Incarnation;
-static UINT8 Bytes[128 * 1024];
+static UINT8 Bytes[256 * 1024];
+static UINT64 ImageBytes = EXT4_IMAGE_BYTES;
 VOID *EFIAPI CopyMem (VOID *a, CONST VOID *b, UINTN n) { return memcpy (a, b, n); }
 INTN EFIAPI CompareMem (CONST VOID *a, CONST VOID *b, UINTN n) { return memcmp (a, b, n); }
 VOID *EFIAPI ZeroMem (VOID *a, UINTN n) { return memset (a, 0, n); }
@@ -98,7 +99,8 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *f, EXT4_IMAGE_MAP **out)
   (*out)->Count = 1;
   for (UINTN I = 0; I < 24; I++) (*out)->Identity[I] = (UINT8)I;
   (*out)->Identity[23] ^= Incarnation;
-  (*out)->Ranges[0] = (EXT4_IMAGE_RANGE){0, 0, EXT4_IMAGE_BYTES};
+  (*out)->Bytes = ImageBytes;
+  (*out)->Ranges[0] = (EXT4_IMAGE_RANGE){0, 0, ImageBytes};
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI close_file (EFI_FILE_PROTOCOL *f)
@@ -299,6 +301,26 @@ int main (void)
     assert (SfbContainerUsbEnd (TRUE) == EFI_SUCCESS);
     assert (SfbContainerMount () == EFI_SUCCESS);
     assert (SfbContainerUnmount () == EFI_SUCCESS);
+  }
+  for (ImageBytes = EXT4_IMAGE_MIN_BYTES; ImageBytes <= EXT4_IMAGE_MAX_BYTES; ImageBytes += EXT4_IMAGE_STEP_BYTES) {
+    UINT32 Total = (UINT32)(ImageBytes / 512);
+    UINT8 Spc = ImageBytes < 64U*1024U*1024U ? 2 : ImageBytes < 128U*1024U*1024U ? 4 : ImageBytes < 256U*1024U*1024U ? 8 : 16;
+    UINT32 FatSectors = (Total / Spc + 2 + 255) / 256;
+    Media.LastBlock = ImageBytes / 4096 - 1;
+    memset (Bytes, 0, sizeof (Bytes));
+    Bytes[12] = 2; Bytes[13] = Spc; Bytes[14] = 1; Bytes[16] = 2; Bytes[18] = 2;
+    Bytes[22] = (UINT8)FatSectors; Bytes[23] = (UINT8)(FatSectors >> 8);
+    if (Total < 65536) { Bytes[19] = (UINT8)Total; Bytes[20] = (UINT8)(Total >> 8); }
+    else { for (UINTN I = 0; I < 4; I++) Bytes[32 + I] = (UINT8)(Total >> (8 * I)); }
+    Bytes[510] = 0x55; Bytes[511] = 0xaa;
+    Bytes[512] = 0xf8; Bytes[513] = Bytes[514] = Bytes[515] = 0xff;
+    memcpy (Bytes + (1 + FatSectors) * 512, Bytes + 512, FatSectors * 512);
+    assert (SfbContainerMount () == EFI_SUCCESS);
+    assert (Published && Published->Media->LastBlock == Total - 1);
+    assert (SfbContainerUnmount () == EFI_SUCCESS);
+    Bytes[(1 + FatSectors) * 512 + 32] = 1;
+    assert (SfbContainerMount () == EFI_VOLUME_CORRUPTED);
+    assert (!Published);
   }
   puts ("PASS container lifecycle: exact path, invalid FAT, reuse, busy/flush handoff refusal, "
         "retry and cache teardown");
