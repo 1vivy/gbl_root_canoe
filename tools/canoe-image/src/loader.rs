@@ -37,6 +37,8 @@ pub struct PreparedLoader {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("input is not a complete ARM64 EFI application")]
+    InvalidEfi,
     #[error(transparent)]
     Extraction(#[from] abl_extract::Error),
     #[error("ABL preparation: {0}")]
@@ -100,5 +102,30 @@ pub fn prepare_loader(
         gm2p,
         tzmap,
         source,
+    })
+}
+
+/// Structural PE inspection only. A supported CANOE-BDS claim additionally
+/// requires the caller's trusted release manifest digest/version match.
+#[derive(Debug, Clone, Serialize)]
+pub struct EfiInspection {
+    pub architecture: &'static str,
+    pub subsystem: &'static str,
+    pub file_bytes: usize,
+    pub occupied_bytes: usize,
+    pub sha256: String,
+}
+
+pub fn inspect_efi_application(bytes: &[u8]) -> Result<EfiInspection, Error> {
+    if bytes.len() > MAX_ABL_BYTES {
+        return Err(Error::InvalidEfi);
+    }
+    let occupied_bytes = abl_extract::pe_size(bytes).ok_or(Error::InvalidEfi)?;
+    Ok(EfiInspection {
+        architecture: "aarch64",
+        subsystem: "efi-application",
+        file_bytes: bytes.len(),
+        occupied_bytes,
+        sha256: format!("{:x}", Sha256::digest(bytes)),
     })
 }

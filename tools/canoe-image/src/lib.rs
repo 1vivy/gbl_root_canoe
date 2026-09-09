@@ -14,7 +14,6 @@ pub mod cli;
 pub mod graft;
 #[cfg(feature = "native")]
 mod output;
-#[cfg(feature = "native")]
 pub mod partition;
 #[cfg(feature = "native")]
 mod process;
