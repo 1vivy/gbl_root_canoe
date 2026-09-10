@@ -12,6 +12,7 @@ pub enum Kind {
     InitBoot,
     Recovery,
     VendorBoot,
+    Dtbo,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +35,12 @@ pub fn inspect(bytes: &[u8], expected: Kind) -> io::Result<Inspection> {
         .map_err(io::Error::other)?
         .map_or(bytes.len(), |footer| footer.original_image_size);
     let bytes = &bytes[..limit];
+    if bytes.starts_with(&0xd7b7ab1eu32.to_be_bytes()) {
+        if !matches!(expected, Kind::Any | Kind::Dtbo) {
+            return Err(invalid("DT table does not match the selected partition"));
+        }
+        return dt_table(bytes);
+    }
     if bytes.starts_with(b"VNDRBOOT") {
         if !matches!(expected, Kind::Any | Kind::VendorBoot) {
             return Err(invalid(
@@ -63,7 +70,7 @@ pub fn inspect(bytes: &[u8], expected: Kind) -> io::Result<Inspection> {
             verification: "structural-only",
         });
     }
-    if !bytes.starts_with(b"ANDROID!") || expected == Kind::VendorBoot {
+    if !bytes.starts_with(b"ANDROID!") || matches!(expected, Kind::VendorBoot | Kind::Dtbo) {
         return Err(invalid(
             "image format does not match the selected Android partition",
         ));
@@ -94,6 +101,66 @@ pub fn inspect(bytes: &[u8], expected: Kind) -> io::Result<Inspection> {
         boot_signature_bytes: signature,
         payload_end: end,
         verification: "structural-only",
+    })
+}
+
+/// AOSP system/libufdt/utils/src/dt_table.h, versions 0 and 1. Entry
+/// payloads may be shared exactly. This checks the table, not FDT contents or
+/// compressed expansion, device applicability, signatures or overlay execution.
+fn dt_table(bytes: &[u8]) -> io::Result<Inspection> {
+    let number = |offset| -> io::Result<usize> {
+        let value = bytes.get(offset..add(offset, 4)?)
+            .ok_or_else(|| invalid("truncated DT table header"))?;
+        Ok(u32::from_be_bytes(value.try_into().unwrap()) as usize)
+    };
+    let total = number(4)?;
+    let header = number(8)?;
+    let entry_bytes = number(12)?;
+    let count = number(16)?;
+    let entries = number(20)?;
+    let page = number(24)?;
+    let version = number(28)?;
+    if header != 32 || entry_bytes != 32 || version > 1 {
+        return Err(invalid("unsupported DT table header, entry size or version"));
+    }
+    if count == 0 || count > 4096 || !page.is_power_of_two() || page > 65_536 {
+        return Err(invalid("invalid DT table entry count or page size"));
+    }
+    let table_bytes = count.checked_mul(entry_bytes)
+        .ok_or_else(|| invalid("DT table entry range overflow"))?;
+    let table_end = add(entries, table_bytes)?;
+    if entries < header || table_end > total || total > bytes.len() {
+        return Err(invalid("DT table exceeds its image payload"));
+    }
+    let mut ranges = Vec::with_capacity(count);
+    for index in 0..count {
+        let entry = entries + index * entry_bytes;
+        let size = number(entry)?;
+        let start = number(entry + 4)?;
+        let end = add(start, size)?;
+        if size == 0 || start < table_end || end > total {
+            return Err(invalid("DT entry exceeds or overlaps its table"));
+        }
+        if version == 1 && number(entry + 16)? & 0xf > 2 {
+            return Err(invalid("unsupported DT entry compression"));
+        }
+        ranges.push((start, end));
+    }
+    ranges.sort_unstable();
+    for pair in ranges.windows(2) {
+        if pair[1].0 < pair[0].1 && pair[0] != pair[1] {
+            return Err(invalid("DT entry payloads partially overlap"));
+        }
+    }
+    Ok(Inspection {
+        format: "dtbo",
+        header_version: version as u32,
+        page_bytes: page,
+        kernel_bytes: 0,
+        ramdisk_bytes: 0,
+        boot_signature_bytes: 0,
+        payload_end: total,
+        verification: "dt-table-structure-only",
     })
 }
 
