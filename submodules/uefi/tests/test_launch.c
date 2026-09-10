@@ -1509,7 +1509,14 @@ TestBootRootEmpty(void)
    * from a PC was to navigate the menu by hand.
    */
   mVolumesAvailable = FALSE;
-  assert(SfbBootRootObserve () == SfbBootRootNoVolumes);
+  assert(SfbBootRootObserve () == SfbBootRootNoRoot);
+  mVolumesAvailable = TRUE;
+  mOpenStatus = EFI_UNSUPPORTED;
+  assert(SfbBootRootObserve () == SfbBootRootUnavailable);
+  mOpenStatus = EFI_DEVICE_ERROR;
+  assert(SfbBootRootObserve () == SfbBootRootUnavailable);
+  mOpenStatus = EFI_SUCCESS;
+  mVolumesAvailable = FALSE;
   mBootRootManagedPresent = FALSE;
 }
 
@@ -2498,6 +2505,14 @@ AllocateZeroPool(IN UINTN AllocationSize)
   mArenaUsed += Aligned;
   memset (Block, 0, AllocationSize);
   return Block;
+}
+
+EFI_STATUS
+SfbContainerOpenRoot (EFI_FILE_PROTOCOL **Root)
+{
+  *Root = NULL;
+  if (!mVolumesAvailable) return EFI_NOT_FOUND;
+  return SfbOpenVolumeRoot (mVolume, Root);
 }
 
 EFI_STATUS

@@ -63,6 +63,37 @@ even if no container map was ever opened. A remaining foreign filesystem or a
 refused release prevents the export. Fastboot EFI RAM boot releases the current
 container before starting the child image.
 
+## Android persist state after a recovery/system boot
+
+The inherited Ext4Dxe deliberately accepts `EXT4_FEATURE_INCOMPAT_RECOVER`
+([upstream change d7cf7e11][recover]). Android routinely leaves that bit set.
+The added image mapper accidentally excluded it from its own supported-feature
+mask, so it hid an otherwise readable container after a successful deployment
+and recovery boot. The mapper now accepts the same state without clearing the
+bit, replaying the journal or modifying outer filesystem metadata. Its existing
+file bounds, initialized extents and checked I/O still apply. Benign inode
+flags such as NOATIME/NODUMP/SYNC likewise do not make its contents corrupt.
+Unsupported data encodings and incompatible write semantics remain unsupported.
+
+Boot-root observation now opens the canonical container through
+`SfbContainerOpenRoot`. It no longer scans unrelated FAT volumes and concludes
+that an unreadable container is empty. An actual mount failure is reported as
+`unavailable` and retains the Super Fastboot escape; it is not a first-install
+finding. Ordinary removable-media discovery remains in the menu/browser. The known
+container also uses FatDxe’s mounted identity directly instead of repeating a
+raw BPB classification probe. Partition discovery retains real errors instead
+of replacing them with absence.
+
+The captured post-recovery image contained both Android loaders, matching
+sidecars, tools and the two-entry `canoe.cfg`. Current production Ext4 opening,
+image mapping and mapped disk reads reproduced all 72 MiB without modifying the
+capture. Separate diagnostic journal replay on a disposable local copy left the
+FAT bytes identical and the filesystem check passed. Replay is not a prerequisite
+added to BDS or an operation performed on the phone. This is a captured-image
+qualification; the revised firmware still needs a physical boot test.
+
+[recover]: https://github.com/SuperTurtleDev/gbl_root_canoe/commit/d7cf7e11bb2ac2c268e1df7bfd47f9705bbb87ee
+
 ## Diagnosis and physical qualification, 2026-09-10
 
 The retained post-deployment image contains a valid, empty FAT16 container whose

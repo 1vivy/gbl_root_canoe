@@ -125,7 +125,7 @@ EFI_STATUS SfbContainerMount (VOID)
   }
   Status = SfbFindPartitionByName (L"persist", &Parent);
   if (EFI_ERROR (Status) || Parent == NULL)
-    return EFI_NOT_FOUND;
+    return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
   Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid, NULL, &Count, &Handles);
   if (EFI_ERROR (Status))
     return Status;
@@ -142,9 +142,10 @@ EFI_STATUS SfbContainerMount (VOID)
   }
   FreePool (Handles);
   if (mPersist == NULL)
-    return EFI_NOT_FOUND;
+    return EFI_NOT_READY;
   Stage = "persist-filesystem";
   Status = Ext4OpenImageFileSystem (mPersist, &Fs);
+  if (Status == EFI_NOT_FOUND) Status = EFI_UNSUPPORTED;
   if (EFI_ERROR (Status) || Fs == NULL)
     goto Failed;
   Stage = "persist-root";
@@ -171,7 +172,7 @@ EFI_STATUS SfbContainerMount (VOID)
   ParentPath = DevicePathFromHandle (mPersist);
   if (ParentPath == NULL)
   {
-    Status = EFI_NOT_FOUND;
+    Status = EFI_NOT_READY;
     goto Failed;
   }
   ZeroMem (&Node, sizeof (Node));
@@ -214,7 +215,7 @@ Failed:
       return EFI_ERROR (Status) ? Status : Cleanup;
     }
   }
-  return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
+  return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
 }
 
 EFI_STATUS SfbContainerOpenRoot (EFI_FILE_PROTOCOL **Root)

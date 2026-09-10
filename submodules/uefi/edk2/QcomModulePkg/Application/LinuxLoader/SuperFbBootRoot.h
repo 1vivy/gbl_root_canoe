@@ -11,10 +11,11 @@ typedef enum {
   SfbBootRootPopulatedManaged = 1,
   SfbBootRootEmptyRoot = 2,
   SfbBootRootNoRoot = 3,
-  SfbBootRootNoVolumes = 4
+  SfbBootRootNoVolumes = 4,
+  SfbBootRootUnavailable = 5
 } SFB_BOOT_ROOT_STATE;
 
-/* Always emits one of the five pinned reason literals when Buffer fits. */
+/* Always emits one of the pinned reason literals when Buffer fits. */
 SFB_BOOLEAN
 SfbBootRootFormat (
   SFB_BOOT_ROOT_STATE  State,
@@ -36,8 +37,8 @@ VOID SfbPublishBootRootTable (VOID);
 
 /*
  * A root is populated only when it contains a launchable managed loader or a
- * valid config naming an existing image. A missing or unreachable root is
- * first-run too.
+ * valid config naming an existing image. A missing root is first-run; a failed mount is unavailable,
+ * not evidence of an empty installation.
  */
 SFB_BOOT_ROOT_STATE SfbBootRootObserve (VOID);
 #endif

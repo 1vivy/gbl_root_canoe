@@ -250,16 +250,20 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
             (UINT32)PowerOnKey, (UINT32)Decision, Config.KeyWindowMs));
 
     /*
-     * First-run is checked before key intent. A root that cannot be located or
-     * opened, or one with no launchable image/config, defaults to fastboot so
-     * the PC can install it. Volume Up on the first-run screen is an explicit
+     * Boot-root availability is checked before key intent. Mount errors retain
+     * the fastboot escape without declaring a new install. A missing root or
+     * one with no launchable image/config enters the first-run flow. Volume Up on the first-run screen is an explicit
      * opt-in to the normal menu, which can enumerate anything discovered in
      * the meantime.
      */
     BootRootState = SfbBootRootObserve ();
     SfbRecordBootRootState (BootRootState);
     SfbPublishBootRootTable ();
-    if (SfbBootRootIsEmptyState (BootRootState)) {
+    if (BootRootState == SfbBootRootUnavailable) {
+      Print (L"CANOE-BDS boot files could not be opened. Entering Super Fastboot.\n");
+      DEBUG ((EFI_D_WARN, "SFB: MARK bootflow root-unavailable=1\n"));
+      EnterFastboot = TRUE;
+    } else if (SfbBootRootIsEmptyState (BootRootState)) {
       DEBUG ((EFI_D_INFO, "SFB: MARK bootflow first-run=1\n"));
       if (SfbShowFirstRunScreen ()) {
         SfbShowEnteringMenu ();

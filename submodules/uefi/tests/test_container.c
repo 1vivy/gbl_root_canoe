@@ -21,6 +21,7 @@ static EFI_FILE_PROTOCOL Root, File;
 static EFI_DEVICE_PATH_PROTOCOL Path;
 static BOOLEAN Connected, Busy, ParentBusy, FailFlush, Missing, MountRejected, ConnectNotFound;
 static UINTN Maps, Opens, ParentDisconnects;
+static EFI_STATUS FindStatus;
 static UINT8 Incarnation;
 static UINT64 ImageBytes = EXT4_IMAGE_BYTES;
 VOID *EFIAPI CopyMem (VOID *a, CONST VOID *b, UINTN n) { return memcpy (a, b, n); }
@@ -83,8 +84,8 @@ static EFI_STATUS EFIAPI flush (EFI_BLOCK_IO_PROTOCOL *p)
 EFI_STATUS SfbFindPartitionByName (CONST CHAR16 *name, EFI_BLOCK_IO_PROTOCOL **out)
 {
   assert (name[0] == 'p');
-  *out = &Parent;
-  return EFI_SUCCESS;
+  *out = EFI_ERROR (FindStatus) ? NULL : &Parent;
+  return FindStatus;
 }
 EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *f, EXT4_IMAGE_MAP **out)
 {
@@ -222,6 +223,11 @@ int main (void)
   Root.Open = open_file;
   Root.Close = close_file;
   File.Close = close_file;
+  FindStatus = EFI_OUT_OF_RESOURCES;
+  assert (SfbContainerMount () == EFI_OUT_OF_RESOURCES);
+  FindStatus = EFI_DEVICE_ERROR;
+  assert (SfbContainerMount () == EFI_DEVICE_ERROR);
+  FindStatus = EFI_SUCCESS;
   Missing = TRUE;
   assert (SfbContainerMount () == EFI_NOT_FOUND);
   assert (Opens == 1 && Maps == 0 && !Published);

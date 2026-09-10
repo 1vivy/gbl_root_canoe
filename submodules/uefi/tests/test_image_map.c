@@ -58,6 +58,12 @@ int main(void) {
  EXT4_IMAGE_MAP *m;
  reset();assert(!Ext4HasGdtCsum(&P));P.FeaturesRoCompat=EXT4_FEATURE_RO_COMPAT_GDT_CSUM;assert(Ext4HasGdtCsum(&P));
  reset();assert(Ext4MapImage(&F.Protocol,&m)==EFI_SUCCESS);assert(m->Count==1);assert(m->Ranges[0].Physical==512*4096);assert(m->Ranges[0].Bytes==EXT4_IMAGE_BYTES);FreePool(m);
+ /* Android's normal persist state is readable; RECOVER is not a mount gate. */
+ reset();P.FeaturesIncompat|=EXT4_FEATURE_INCOMPAT_RECOVER;
+ P.FeaturesCompat=EXT3_FEATURE_COMPAT_HAS_JOURNAL;
+ assert(Ext4MapImage(&F.Protocol,&m)==EFI_SUCCESS);
+ assert(m->Count==1 && m->Ranges[0].Physical==512*4096);
+ assert((P.FeaturesIncompat&EXT4_FEATURE_INCOMPAT_RECOVER)!=0);FreePool(m);
  reset();P.SuperBlock.s_state=0;rejected();
  reset();memset(P.SuperBlock.s_uuid, 0x41, 16);F.InodeNum=0x13121110;Inode.i_generation=0x17161514;
  assert(Ext4MapImage(&F.Protocol,&m)==EFI_SUCCESS);
@@ -71,6 +77,12 @@ int main(void) {
  reset();header()->eh_max=65535;rejected();
  reset();header()->eh_entries=2;extent()->ee_len=4096;extent()[1]=extent()[0];extent()[1].ee_block=4096;rejected();
  reset();extent()->ee_len=4096;rejected();
+ reset();Inode.i_flags|=EXT4_NODUMP_FL|EXT4_NOATIME_FL|EXT4_SYNC_FL;
+ assert(Ext4MapImage(&F.Protocol,&m)==EFI_SUCCESS);FreePool(m);
+ reset();Inode.i_flags|=EXT4_IMMUTABLE_FL;rejected();
+ reset();Inode.i_flags|=EXT4_COMPR_FL;rejected();
+ reset();Inode.i_flags|=EXT4_VERITY_FL;rejected();
+ reset();Inode.i_flags|=EXT4_JOURNAL_DATA_FL;rejected();
  reset();Inode.i_links=2;rejected();
  reset();Media.ReadOnly=TRUE;rejected();
  reset();header()->eh_depth=1;
@@ -88,6 +100,6 @@ int main(void) {
  }
  reset();Inode.i_size_lo=12U*1024U*1024U;rejected();
  reset();Inode.i_size_lo=264U*1024U*1024U;rejected();
- puts("PASS image mapping: dense extent trees, holes, unwritten/overlapping/metadata/free blocks and dirty media");
+ puts("PASS image mapping: dense extent trees, holes, unwritten/overlapping/metadata/free blocks and Android journal state");
  return 0;
 }

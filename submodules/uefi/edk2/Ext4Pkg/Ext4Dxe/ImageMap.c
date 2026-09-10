@@ -171,7 +171,8 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *Protocol, EXT4_IMAGE_MAP **Out) {
   UINT32 AllowedCompat = EXT3_FEATURE_COMPAT_HAS_JOURNAL | EXT4_FEATURE_COMPAT_EXT_ATTR |
                          EXT4_FEATURE_COMPAT_RESIZE_INO | EXT4_FEATURE_COMPAT_DIR_INDEX | SPARSE_SUPER2;
   UINT32 AllowedIncompat = EXT4_FEATURE_INCOMPAT_FILETYPE | EXT4_FEATURE_INCOMPAT_EXTENTS |
-                          EXT4_FEATURE_INCOMPAT_64BIT | EXT4_FEATURE_INCOMPAT_FLEX_BG;
+                          EXT4_FEATURE_INCOMPAT_64BIT | EXT4_FEATURE_INCOMPAT_FLEX_BG |
+                          EXT4_FEATURE_INCOMPAT_RECOVER;
   if (Out == NULL) return EFI_INVALID_PARAMETER;
   *Out = NULL;
   if (Protocol == NULL || Protocol->Read != Ext4ReadFile) {
@@ -199,6 +200,9 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *Protocol, EXT4_IMAGE_MAP **Out) {
             P->BlockSize, P->NumberBlockGroups, P->DescSize));
     return EFI_UNSUPPORTED;
   }
+  /* Match Ext4Dxe: Android routinely leaves RECOVER set. Mapping an existing
+   * initialized file neither replays the journal nor changes ext4 metadata.
+   * The flag alone must not make readable boot files disappear. */
   if (P->FeaturesIncompat & ~AllowedIncompat ||
       P->FeaturesRoCompat & ~AllowedRo || P->FeaturesCompat & ~AllowedCompat) {
     DEBUG ((EFI_D_ERROR, "SFB: MARK image-map reason=features incompat=%x ro=%x compat=%x\n",
@@ -218,12 +222,18 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *Protocol, EXT4_IMAGE_MAP **Out) {
   Status = Ext4ReadInode (P, File->InodeNum, &Fresh);
   if (EFI_ERROR (Status)) return Status;
   if (CompareMem (Fresh, File->Inode, P->InodeSize) != 0 || !Ext4FileIsReg (File) ||
-      File->Inode->i_flags != EXT4_EXTENTS_FL || File->Inode->i_links != 1 ||
+      !(File->Inode->i_flags & EXT4_EXTENTS_FL) || File->Inode->i_links != 1 ||
       !Ext4ImageSizeValid (Ext4InodeSize (File->Inode))) {
     FreePool (Fresh);
     return EFI_VOLUME_CORRUPTED;
   }
   FreePool (Fresh);
+  /* Benign inode hints (NOATIME, NODUMP, SYNC, etc.) do not change file bytes.
+   * Direct backing-file writes cannot implement compression/encryption, inline
+   * data, verity, data journaling, or immutable/append-only write semantics. */
+  if (File->Inode->i_flags & (EXT4_COMPR_FL | EXT4_COMPRBLK_FL | EXT4_ECOMPR_FL |
+       EXT4_IMMUTABLE_FL | EXT4_APPEND_FL | EXT4_JOURNAL_DATA_FL | EXT4_VERITY_FL |
+       0x10000000U)) return EFI_UNSUPPORTED; /* INLINE_DATA */
   C = AllocateZeroPool (sizeof (*C));
   if (C == NULL) return EFI_OUT_OF_RESOURCES;
   C->Map = AllocateZeroPool (sizeof (*C->Map));

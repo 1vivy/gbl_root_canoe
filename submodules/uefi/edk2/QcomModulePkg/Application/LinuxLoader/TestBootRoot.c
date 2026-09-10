@@ -18,7 +18,8 @@ main (void)
     { SfbBootRootPopulatedManaged, "populated-managed", FALSE },
     { SfbBootRootEmptyRoot, "empty-root", TRUE },
     { SfbBootRootNoRoot, "no-root", TRUE },
-    { SfbBootRootNoVolumes, "no-volumes", TRUE }
+    { SfbBootRootNoVolumes, "no-volumes", TRUE },
+    { SfbBootRootUnavailable, "unavailable", FALSE }
   };
   char Value[SFB_BOOT_ROOT_VALUE_BYTES];
   char TooSmall[sizeof ("populated-managed") - 1u];
@@ -39,6 +40,6 @@ main (void)
     assert(TooSmall[Index] == 'x');
   }
 
-  puts("boot root: five states and empty-state truth table");
+  puts("boot root: unavailable is distinct from empty installation");
   return 0;
 }

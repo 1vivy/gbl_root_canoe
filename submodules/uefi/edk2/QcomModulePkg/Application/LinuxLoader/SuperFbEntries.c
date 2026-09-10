@@ -156,11 +156,9 @@ SfbRootHasUsableConfig (IN EFI_FILE_PROTOCOL *Root,
   return Usable;
 }
 
-/*
- * A missing or unreachable root is first-run too. A root is populated only
- * when it contains a launchable managed loader or a valid config naming an
- * existing image.
- */
+/* Observe the canonical container directly. Other FAT volumes remain available
+ * to the menu/browser, but cannot turn a failed container mount into an empty
+ * installation. Mount ownership stays in SfbContainerOpenRoot. */
 SFB_BOOT_ROOT_STATE
 SfbBootRootObserve (VOID)
 {
@@ -170,66 +168,30 @@ SfbBootRootObserve (VOID)
     SFB_MANAGED_SLOT_B_NAME,
     SFB_MANAGED_BACKUP_NAME
   };
+  EFI_FILE_PROTOCOL *Root = NULL;
   EFI_STATUS Status;
-  EFI_HANDLE *Volumes = NULL;
-  UINTN VolumeCount = 0;
-  UINTN Index;
+  SFB_BOOT_ROOT_STATE State = SfbBootRootEmptyRoot;
   UINTN Which;
-  BOOLEAN FoundRoot = FALSE;
 
-  Status = SfbLocateVolumes (&Volumes, &VolumeCount);
-  if (EFI_ERROR (Status) || Volumes == NULL || VolumeCount == 0) {
-    DEBUG ((EFI_D_WARN,
-            "SFB: MARK boot-root reason=no-volumes status=%r\n", Status));
-    return SfbBootRootNoVolumes;
+  Status = SfbContainerOpenRoot (&Root);
+  if (EFI_ERROR (Status) || Root == NULL) {
+    State = Status == EFI_NOT_FOUND ? SfbBootRootNoRoot : SfbBootRootUnavailable;
+    DEBUG ((EFI_D_WARN, "SFB: MARK boot-root open-status=%r state=%u\n", Status, State));
+    return State;
   }
-
-  for (Index = 0; Index < VolumeCount; Index++) {
-    EFI_FILE_PROTOCOL *Root = NULL;
-    CHAR16 ConfigPath[SFB_PATH_CHARS];
-
-    if (EFI_ERROR (SfbOpenVolumeRoot (Volumes[Index], &Root)) ||
-        Root == NULL) {
-      continue;
-    }
-    FoundRoot = TRUE;
-
-    if (!EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
-                                 SFB_CONFIG_FILE_PATH, ConfigPath,
-                                 ARRAY_SIZE (ConfigPath))) &&
-        SfbRootHasUsableConfig (Root, SfbVolumeRootPrefix (Volumes[Index]),
-                                ConfigPath)) {
-      DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=populated-config\n"));
-      Root->Close (Root);
-      FreePool (Volumes);
-      return SfbBootRootPopulatedConfig;
-    }
-
+  if (SfbRootHasUsableConfig (Root, L"", SFB_CONFIG_FILE_PATH)) {
+    State = SfbBootRootPopulatedConfig;
+  } else {
     for (Which = 0; Which < ARRAY_SIZE (ManagedNames); Which++) {
-      CHAR16 ManagedPath[SFB_PATH_CHARS];
-
-      if (!EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volumes[Index]),
-                                   ManagedNames[Which], ManagedPath,
-                                   ARRAY_SIZE (ManagedPath))) &&
-          SfbFileExists (Root, ManagedPath)) {
-        DEBUG ((EFI_D_INFO,
-                "SFB: MARK boot-root reason=populated-managed path='%s'\n",
-                ManagedPath));
-        Root->Close (Root);
-        FreePool (Volumes);
-        return SfbBootRootPopulatedManaged;
+      if (SfbFileExists (Root, ManagedNames[Which])) {
+        State = SfbBootRootPopulatedManaged;
+        break;
       }
     }
-    Root->Close (Root);
   }
-
-  FreePool (Volumes);
-  if (!FoundRoot) {
-    DEBUG ((EFI_D_WARN, "SFB: MARK boot-root reason=no-root\n"));
-    return SfbBootRootNoRoot;
-  }
-  DEBUG ((EFI_D_INFO, "SFB: MARK boot-root reason=empty-root\n"));
-  return SfbBootRootEmptyRoot;
+  Root->Close (Root);
+  DEBUG ((EFI_D_INFO, "SFB: MARK boot-root state=%u\n", State));
+  return State;
 }
 
 VOID

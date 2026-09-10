@@ -12,13 +12,14 @@ SfbBootRootFormat (
     "populated-managed",
     "empty-root",
     "no-root",
-    "no-volumes"
+    "no-volumes",
+    "unavailable"
   };
   const char *Reason;
   SFB_UINTN Length;
   SFB_UINTN Index;
 
-  if ((SFB_UINT32)State > (SFB_UINT32)SfbBootRootNoVolumes || Buffer == NULL) {
+  if ((SFB_UINT32)State > (SFB_UINT32)SfbBootRootUnavailable || Buffer == NULL) {
     return FALSE;
   }
   Reason = Reasons[State];

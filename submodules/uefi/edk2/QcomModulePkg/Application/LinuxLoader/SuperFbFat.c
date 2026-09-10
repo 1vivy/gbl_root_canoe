@@ -407,7 +407,7 @@ SfbFindPartitionByName (IN CONST CHAR16            *Name,
   Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid,
                                     NULL, &Count, &Handles);
   if (EFI_ERROR (Status) || Handles == NULL) {
-    return EFI_NOT_FOUND;
+    return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
   }
 
   Status = EFI_NOT_FOUND;
@@ -422,12 +422,16 @@ SfbFindPartitionByName (IN CONST CHAR16            *Name,
         !SfbGptNameMatchesInline (PartEntry->PartitionName, Name)) {
       continue;
     }
-    if (EFI_ERROR (gBS->HandleProtocol (Handles[Index],
-                                        &gEfiBlockIoProtocolGuid,
-                                        (VOID **)&Candidate)) ||
-        Candidate == NULL || Candidate->Media == NULL ||
-        !Candidate->Media->MediaPresent) {
-      continue;
+    Status = gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid,
+                                  (VOID **)&Candidate);
+    if (EFI_ERROR (Status)) break;
+    if (Candidate == NULL || Candidate->Media == NULL) {
+      Status = EFI_DEVICE_ERROR;
+      break;
+    }
+    if (!Candidate->Media->MediaPresent) {
+      Status = EFI_NO_MEDIA;
+      break;
     }
     *BlockIo = Candidate;
     Status = EFI_SUCCESS;
@@ -742,6 +746,10 @@ SfbClassifyVolume (IN EFI_HANDLE Volume)
 {
   UINTN           Index;
   SFB_VOLUME_KIND Kind;
+
+  /* FatDxe has already mounted the contained volume. Do not re-admit it by
+   * parsing its raw BPB, or hide it after an unrelated probe allocation fails. */
+  if (SfbIsContainerVolume (Volume)) return SfbVolumeKindFat;
 
   for (Index = 0; Index < mSfbVolumeClassCount; Index++) {
     if (mSfbVolumeClassCache[Index].Volume == Volume) {
