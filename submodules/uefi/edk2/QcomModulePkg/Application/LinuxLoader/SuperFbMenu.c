@@ -616,15 +616,47 @@ SfbDrawMainMenuRow (IN VOID    *Context,
     SfbDrawRow (Selected, Marker, Entry->Desc);
   }
 }
-STATIC VOID SfbRunAdvancedMenu (IN CONST SFB_MENU_STATE *Menu);
+STATIC VOID SfbRunAdvancedMenu (IN SFB_MAIN_MENU_CONTEXT *State);
 STATIC VOID SfbRunRebootMenu (VOID);
+
+/* Rebuilding discovery after a child returns must not turn Save default into
+ * a cursor jump. Match the selected entry's stable name, or its volume/path
+ * when it is a manually discovered EFI; built-in actions match their kind. */
+STATIC UINTN
+SfbRestoreMainSelection (CONST SFB_MENU_STATE *Menu,
+                         CONST SFB_BOOT_ENTRY *Previous, UINTN PreviousRow)
+{
+  UINTN Index;
+  if (Previous == NULL) {
+    return Menu->DefaultIndex < Menu->Count ? Menu->DefaultIndex : 0;
+  }
+  for (Index = 0; Index < Menu->Count; Index++) {
+    CONST SFB_BOOT_ENTRY *Entry = &Menu->Entry[Index];
+    if (Entry->Kind != Previous->Kind || Entry->IsUsb != Previous->IsUsb) { continue; }
+    if (Previous->DefaultTarget[0] != '\0') {
+      if (AsciiStrCmp (Entry->DefaultTarget, Previous->DefaultTarget) == 0) { return Index; }
+    } else if (Entry->Kind == SfbEntryEfiFile || Entry->Kind == SfbEntryBlsLinux ||
+               Entry->Kind == SfbEntryBlsEfi) {
+      if (Entry->Volume == Previous->Volume && StrCmp (Entry->Path, Previous->Path) == 0) { return Index; }
+    } else if (Entry->Kind != SfbEntryBack || StrCmp (Entry->Desc, Previous->Desc) == 0) {
+      return Index;
+    }
+  }
+  return PreviousRow < Menu->Count ? PreviousRow : Menu->Count ? Menu->Count - 1 : 0;
+}
 
 STATIC
 EFI_STATUS
 SfbRefreshMainMenu (IN VOID *Context)
 {
   SFB_MAIN_MENU_CONTEXT *State = (SFB_MAIN_MENU_CONTEXT *)Context;
+  SFB_BOOT_ENTRY Previous;
+  UINTN PreviousRow = State->Template->Cursor;
+  BOOLEAN HadSelection = PreviousRow < State->Menu.Count;
 
+  /* Only value fields are compared after discovery; the old DevicePath is
+   * owned and released by SfbFreeMenu, never dereferenced by this copy. */
+  if (HadSelection) { CopyMem (&Previous, &State->Menu.Entry[PreviousRow], sizeof (Previous)); }
   SfbFreeMenu (&State->Menu);
   SfbBuildMenu (&State->Menu, State->CurrentMode);
   SfbSetShowBooting (State->Menu.ShowBooting);
@@ -633,15 +665,15 @@ SfbRefreshMainMenu (IN VOID *Context)
                           : SfbConfigLockAsNeeded);
   State->Template->RowCount = State->Menu.Count;
   State->Template->VisibleRows = SfbMainMenuVisibleRows ();
-  State->Template->Cursor = (State->Menu.DefaultIndex != SFB_NO_INDEX &&
-                             State->Menu.DefaultIndex < State->Menu.Count)
-                            ? State->Menu.DefaultIndex : 0;
+  State->Template->Cursor = SfbRestoreMainSelection (&State->Menu,
+                             HadSelection ? &Previous : NULL, PreviousRow);
   State->Template->TimeoutMs =
     (State->AllowCountdown &&
      State->Menu.MenuMode == SfbConfigMenuMenu &&
      State->Menu.DefaultFromConfig &&
      State->Menu.MenuTimeoutSeconds != 0)
     ? State->Menu.MenuTimeoutSeconds * 1000 : 0;
+  State->AllowCountdown = FALSE;
   return EFI_SUCCESS;
 }
 
@@ -692,7 +724,7 @@ SfbHandleMainMenuRow (IN VOID *Context,
     State->EnterFastboot = TRUE;
     return SfbMenuActionExit;
   case SfbEntryAdvanced:
-    SfbRunAdvancedMenu (&State->Menu);
+    SfbRunAdvancedMenu (State);
     return SfbMenuActionRebuild;
   case SfbEntryReboot:
     SfbRunRebootMenu ();
@@ -934,7 +966,8 @@ Done:
 STATIC SFB_MENU_ACTION
 SfbHandleAdvanced (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
 {
-  CONST SFB_MENU_STATE *Menu = Context;
+  SFB_MAIN_MENU_CONTEXT *State = Context;
+  CONST SFB_MENU_STATE *Menu = &State->Menu;
   (VOID)Key;
   switch (Row) {
   case 0: SfbRunEntryPreference (Menu, FALSE); break;
@@ -942,12 +975,15 @@ SfbHandleAdvanced (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
   case 2: SfbRunPolicyMenu (); break;
   case 3: SfbRunToolsBrowser (Menu->Mode); break;
   case 4: SfbRunFileBrowser (Menu->Mode); break;
-  default: break;
+  default: return SfbMenuActionExit;
   }
-  return SfbMenuActionExit;
+  /* Preference saves can change the menu's policy and entry values. Refresh
+   * those values while keeping Advanced open at the action just completed. */
+  (VOID)SfbRefreshMainMenu (State);
+  return SfbMenuActionContinue;
 }
 STATIC VOID
-SfbRunAdvancedMenu (IN CONST SFB_MENU_STATE *Menu)
+SfbRunAdvancedMenu (IN SFB_MAIN_MENU_CONTEXT *State)
 {
   STATIC SFB_MENU_ROW Rows[] = {
     {L"Save a default entry", L" "}, {L"Change an Android entry's mode", L" "},
@@ -959,7 +995,7 @@ SfbRunAdvancedMenu (IN CONST SFB_MENU_STATE *Menu)
   Template.Title = L"Advanced"; Template.Subtitle = L"Manage boot preferences or launch an EFI application.";
   Template.Footer = L"Volume Up/Down: move   Power: select";
   Template.Rows = Rows; Template.RowCount = ARRAY_SIZE (Rows); Template.Navigate = TRUE;
-  Template.Context = (VOID *)Menu; Template.Handler = SfbHandleAdvanced;
+  Template.Context = State; Template.Handler = SfbHandleAdvanced;
   (VOID)SfbRunMenu (&Template);
 }
 STATIC SFB_MENU_ACTION

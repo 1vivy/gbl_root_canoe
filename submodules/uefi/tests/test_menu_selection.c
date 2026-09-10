@@ -15,6 +15,12 @@
 EFI_SYSTEM_TABLE *gST;
 VOID EFIAPI FreePool (VOID *Buffer) { (void)Buffer; assert(!"drawing must not free entries"); }
 VOID *EFIAPI ZeroMem (VOID *Buffer, UINTN Size) { return memset(Buffer, 0, Size); }
+VOID *EFIAPI CopyMem (VOID *Out, CONST VOID *In, UINTN Size) { return memcpy(Out, In, Size); }
+INTN EFIAPI AsciiStrCmp (CONST CHAR8 *A, CONST CHAR8 *B) { return strcmp(A, B); }
+INTN EFIAPI StrCmp (CONST CHAR16 *A, CONST CHAR16 *B) {
+  while (*A && *A == *B) { A++; B++; }
+  return (INTN)*A - (INTN)*B;
+}
 static CHAR8 mFrame[8192];
 static UINTN mFrameBytes;
 static CONST CHAR8 *mExpectedHeader[32];
@@ -111,9 +117,21 @@ FakeClear (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This)
 /* Keep the firmware key reader compiled but uncalled; the real runner consumes
  * the simulated key stream below. Production cursor movement and drawing stay
  * unchanged. Section GC discards hardware-only screens and their dependencies. */
+static SFB_MENU_STATE mDiscoveredMenu;
+static VOID TestBuildMenu (SFB_MENU_STATE *Menu, SFB_BOOT_MODE Mode) {
+  (void)Mode; memcpy(Menu, &mDiscoveredMenu, sizeof *Menu);
+}
+static VOID TestFreeMenu (SFB_MENU_STATE *Menu) { memset(Menu, 0, sizeof *Menu); }
+static VOID TestSetLockPolicy (SFB_CONFIG_LOCK_POLICY Policy) { (void)Policy; }
+#define SfbBuildMenu TestBuildMenu
+#define SfbFreeMenu TestFreeMenu
+#define SfbSetLaunchLockPolicy TestSetLockPolicy
 #define SfbWaitForKey SfbFirmwareWaitForKey
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.c"
 #undef SfbWaitForKey
+#undef SfbSetLaunchLockPolicy
+#undef SfbFreeMenu
+#undef SfbBuildMenu
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenuScaffold.c"
 
 SFB_KEY
@@ -275,6 +293,42 @@ int main (int argc, char **argv)
   mConsoleRows = 24; assert(SfbMainMenuVisibleRows() == 9);
   mConsoleRows = 32; assert(SfbMainMenuVisibleRows() == SFB_VISIBLE_ROWS);
 
+  /* Actual main-menu refresh keeps the selected action through changed
+   * discovery/default preferences. Only the first display has a countdown. */
+  Initialize(&State, &Template);
+  Add(&State, SfbEntryEfiFile, L"\\boot_a.efi", L"Android A", 1, TRUE, FALSE);
+  Add(&State, SfbEntryAdvanced, L"", L"Advanced >", 0, FALSE, FALSE);
+  Add(&State, SfbEntryReboot, L"", L"Reboot >", 0, FALSE, FALSE);
+  State.Menu.DefaultIndex = 0; State.Menu.DefaultFromConfig = TRUE;
+  State.Menu.MenuMode = SfbConfigMenuMenu; State.Menu.MenuTimeoutSeconds = 5;
+  memcpy(&mDiscoveredMenu, &State.Menu, sizeof mDiscoveredMenu);
+  memset(&State.Menu, 0, sizeof State.Menu); State.AllowCountdown = TRUE;
+  assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS);
+  assert(Template.Cursor == 0 && Template.TimeoutMs == 5000);
+  Template.Cursor = 1;
+  /* An extra entry appeared while a child owned the screen. */
+  mDiscoveredMenu.Entry[3] = mDiscoveredMenu.Entry[2];
+  mDiscoveredMenu.Entry[2] = mDiscoveredMenu.Entry[1];
+  mDiscoveredMenu.Entry[1] = mDiscoveredMenu.Entry[0];
+  StrCpyS(mDiscoveredMenu.Entry[1].Path, SFB_PATH_CHARS, L"\\boot_b.efi");
+  mDiscoveredMenu.Count = 4; mDiscoveredMenu.DefaultIndex = 1;
+  assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS);
+  assert(Template.Cursor == 2 && State.Menu.Entry[Template.Cursor].Kind == SfbEntryAdvanced);
+  assert(Template.TimeoutMs == 0);
+  Template.Cursor = 3;
+  assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS && Template.Cursor == 3);
+  Template.Cursor = 0;
+  assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS && Template.Cursor == 0);
+  memcpy(State.Menu.Entry[0].DefaultTarget, "android-a", sizeof "android-a");
+  mDiscoveredMenu.Entry[1] = State.Menu.Entry[0];
+  StrCpyS(mDiscoveredMenu.Entry[1].Path, SFB_PATH_CHARS, L"\\boot_backup.efi");
+  mDiscoveredMenu.Entry[0].Kind = SfbEntryPowerOff;
+  assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS && Template.Cursor == 1);
+  /* If the selected item disappeared, clamp the cursor without selecting a
+   * configured default implicitly or rearming an automatic launch. */
+  Template.Cursor = 3; mDiscoveredMenu.Count = 1;
+  assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS && Template.Cursor == 0 && Template.TimeoutMs == 0);
+
   /* Banner policy is universal, including the old boot.efi spelling. A hidden
    * menu launch clears the menu; a hidden unattended launch keeps the splash. */
   FakeClear(&Out); Print(L"splash");
@@ -298,6 +352,6 @@ int main (int argc, char **argv)
   mFrameBytes = 0; mFrame[0] = 0;
   SfbDrawMainMenuHeader(&State);
   assert(mFrameBytes == 0);
-  printf("menu selection: 11 navigation frames, %u policy/countdown cases, first-run keys, grouped actions, banner policy, long path and empty guard passed\n", Cases);
+  printf("menu selection: 11 navigation frames, %u policy/countdown cases, first-run keys, grouped actions, submenu selection, banner policy, long path and empty guard passed\n", Cases);
   return 0;
 }
