@@ -32,3 +32,13 @@ and writes the complete zero-filled data area. The command contains no runtime
 FAT formatter, FAT file writer, whole-volume transaction journal or compression
 dependency. Installed systems maintain the contained filesystem through native
 OS FAT support.
+
+Portable `check`/`inspect` opens the image through the pinned `rust-fatfs`
+filesystem library with writes prohibited. Existing FAT layouts do not need to
+match the generated template: reserved sectors, root-directory size, FAT count
+and dirty-state handling belong to the filesystem driver. Inspection does not
+repair the image or clear its dirty flag. The enclosing container retains the
+8–256 MiB size range and 8 MiB increments advertised by CANOE-BDS. Android's
+worker opens its owned loop through the kernel vfat driver directly; it does not
+run this portable probe before mounting or compare a second BPB interpretation
+against the mounted filesystem.

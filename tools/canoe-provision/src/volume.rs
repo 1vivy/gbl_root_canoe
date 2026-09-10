@@ -152,7 +152,7 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
     let mut boot = [0u8; 512];
     disk.read_exact(&mut boot)?;
     disk.seek(SeekFrom::Start(0))?;
-    let fs = fatfs::FileSystem::new(ReadOnly(disk), fatfs::FsOptions::new())
+    let fs = fatfs::FileSystem::new(ReadOnly(&mut *disk), fatfs::FsOptions::new())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     // The filesystem driver has validated these BPB fields. The enclosing file
     // still bounds the volume: a partition-sized claim cannot enlarge its owner.
@@ -165,7 +165,7 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
         return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "FAT volume exceeds its container"));
     }
     let stats = fs.stats().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-    Ok(VolumeInfo {
+    let info = VolumeInfo {
         bytes,
         sector_bytes: sector,
         cluster_bytes: stats.cluster_size(),
@@ -175,7 +175,10 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
             fatfs::FatType::Fat16 => "fat16",
             fatfs::FatType::Fat32 => "fat32",
         },
-    })
+    };
+    drop(fs);
+    disk.seek(SeekFrom::Start(0))?;
+    Ok(info)
 }
 
 /// Even filesystem bookkeeping during drop cannot write through a probe.
