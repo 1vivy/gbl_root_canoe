@@ -313,6 +313,7 @@ typedef struct {
   CONST CHAR16       *Footer;
   SFB_MENU_ROW       *Rows;
   UINTN               RowCount;
+  UINTN               VisibleRows; /* Zero uses the shared default. */
   UINTN               Cursor;
   UINT32              TimeoutMs;
   BOOLEAN             Navigate;

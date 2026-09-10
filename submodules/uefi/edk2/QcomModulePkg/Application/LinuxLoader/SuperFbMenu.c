@@ -425,12 +425,7 @@ SfbShowActionScreen (IN CONST CHAR16 *Text)
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
 }
 
-/*
- * Seconds to hold on the "Entering Boot Menu" screen before the menu starts
- * taking input. Long enough that a volume key held from power-on has been
- * released, so it does not immediately move the menu cursor.
- */
-
+/* Clear queued startup keys before the destination draws its own screen. */
 VOID
 SfbShowEnteringMenu (VOID)
 {
@@ -482,6 +477,19 @@ SfbDrawSelectionLine (IN CONST CHAR16 *Text)
 /* Drawing is deliberately observational: use the same configured/fallback
  * choice as SfbLaunchEntry without opening files or preparing launch hooks.
  * Launch-time profile/lock-policy failures remain launch-time decisions. */
+/* The main menu adds selected-entry details and group dividers. Reserve their
+ * lines before handing scrolling to the shared scaffold. */
+STATIC UINTN
+SfbMainMenuVisibleRows (VOID)
+{
+  UINTN Columns, Rows = 32;
+  if (gST->ConOut->Mode != NULL && gST->ConOut->QueryMode != NULL &&
+      EFI_ERROR (gST->ConOut->QueryMode (gST->ConOut,
+        (UINTN)gST->ConOut->Mode->Mode, &Columns, &Rows))) { Rows = 32; }
+  Rows = Rows > 15 ? Rows - 15 : 1;
+  return Rows < SFB_VISIBLE_ROWS ? Rows : SFB_VISIBLE_ROWS;
+}
+
 STATIC
 VOID
 SfbDrawMainMenuHeader (IN VOID *Context)
@@ -624,6 +632,7 @@ SfbRefreshMainMenu (IN VOID *Context)
                           ? State->Menu.LockPolicy
                           : SfbConfigLockAsNeeded);
   State->Template->RowCount = State->Menu.Count;
+  State->Template->VisibleRows = SfbMainMenuVisibleRows ();
   State->Template->Cursor = (State->Menu.DefaultIndex != SFB_NO_INDEX &&
                              State->Menu.DefaultIndex < State->Menu.Count)
                             ? State->Menu.DefaultIndex : 0;

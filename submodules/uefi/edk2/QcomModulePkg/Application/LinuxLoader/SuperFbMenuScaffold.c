@@ -91,9 +91,9 @@ SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template)
     if (Template->RowCount == 0) {
       Print (L"  No entries found.\r\n");
     } else {
-      UINTN Start = SfbWindowStart (Template->Cursor, Template->RowCount,
-                                    SFB_VISIBLE_ROWS);
-      UINTN Last = Start + SFB_VISIBLE_ROWS;
+      UINTN Visible = Template->VisibleRows != 0 ? Template->VisibleRows : SFB_VISIBLE_ROWS;
+      UINTN Start = SfbWindowStart (Template->Cursor, Template->RowCount, Visible);
+      UINTN Last = Start + Visible;
       UINTN Row;
 
       if (Last > Template->RowCount) {

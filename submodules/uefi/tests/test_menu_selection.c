@@ -23,6 +23,7 @@ static UINTN mFrames, mNextKey, mSelectedRow;
 static UINT32 mFirstTimeout;
 static BOOLEAN mCheckMainHeader = TRUE;
 static UINTN mColumns = 80;
+static UINTN mConsoleRows = 32;
 static BOOLEAN mEmitFrames;
 
 static UINTN
@@ -98,7 +99,7 @@ FakeCursor (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, BOOLEAN Visible) { (void)This
 static EFI_STATUS EFIAPI
 FakeQuery (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, UINTN Mode, UINTN *Columns, UINTN *Rows)
 {
-  (void)This; (void)Mode; *Columns = mColumns; *Rows = 32; return EFI_SUCCESS;
+  (void)This; (void)Mode; *Columns = mColumns; *Rows = mConsoleRows; return EFI_SUCCESS;
 }
 
 static EFI_STATUS EFIAPI
@@ -270,6 +271,9 @@ int main (int argc, char **argv)
   Frame("Reboot >\r\nRestart into Fastbootd, bootloader, recovery or system.\r\n\r\n", SfbKeySelect);
   assert(SfbRunMenu(&Template) == EFI_SUCCESS && mNextKey == 5);
   assert(strstr(mFrame,"Advanced >\r\n----------------------------------------\r\n") != NULL);
+
+  mConsoleRows = 24; assert(SfbMainMenuVisibleRows() == 9);
+  mConsoleRows = 32; assert(SfbMainMenuVisibleRows() == SFB_VISIBLE_ROWS);
 
   /* Banner policy is universal, including the old boot.efi spelling. A hidden
    * menu launch clears the menu; a hidden unattended launch keeps the splash. */
