@@ -1731,8 +1731,8 @@ TestBootRootProbe(void)
     }
   }
   assert(Files == 2);
-  assert(StrCmp (Menu.Entry[1].Desc, L"Android") == 0);
-  assert(StrCmp (Menu.Entry[2].Desc, L"Android (previous)") == 0);
+  assert(StrCmp (Menu.Entry[0].Desc, L"Android") == 0);
+  assert(StrCmp (Menu.Entry[1].Desc, L"Android (previous)") == 0);
   assert(!Menu.DefaultFromConfig);
   SfbFreeMenu (&Menu);
   /* Both independently managed slots are discovered with stable titles. */
@@ -1746,11 +1746,11 @@ TestBootRootProbe(void)
     }
   }
   assert(Files == 4);
-  assert(StrCmp (Menu.Entry[2].Desc, L"Android (slot A)") == 0);
-  assert(StrCmp (Menu.Entry[3].Desc, L"Android (slot B)") == 0);
-  assert(StrCmp (Menu.Entry[4].Desc, L"Android (previous)") == 0);
+  assert(StrCmp (Menu.Entry[1].Desc, L"Android (slot A)") == 0);
+  assert(StrCmp (Menu.Entry[2].Desc, L"Android (slot B)") == 0);
+  assert(StrCmp (Menu.Entry[3].Desc, L"Android (previous)") == 0);
+  assert(!Menu.Entry[1].Passthrough);
   assert(!Menu.Entry[2].Passthrough);
-  assert(!Menu.Entry[3].Passthrough);
   SfbFreeMenu (&Menu);
 
 
@@ -1827,7 +1827,7 @@ TestAdditiveDiscovery(void)
 
   /* Two configured rows and exactly one discovered row. */
   assert(Files == 3);
-  assert(Discovered == 3);
+  assert(Discovered == 2);
   assert(WithMedia.Count == Alone.Count + 1);
   assert(WithMedia.DefaultFromConfig);
   assert(WithMedia.DefaultIndex == Alone.DefaultIndex);

@@ -485,6 +485,112 @@ typedef struct {
   BOOLEAN            EnterFastboot;
 } SFB_MAIN_MENU_CONTEXT;
 
+/* Keep selection details to two console lines, including long file paths.
+ * The last column is reserved to prevent automatic wrapping before CR/LF. */
+STATIC
+VOID
+SfbDrawSelectionLine (IN CONST CHAR16 *Text)
+{
+  CHAR16 Line[SFB_PATH_CHARS];
+  UINTN Columns = 80;
+  UINTN Rows;
+  UINTN Limit;
+  UINTN Index;
+
+  if (gST->ConOut->Mode != NULL && gST->ConOut->QueryMode != NULL &&
+      EFI_ERROR (gST->ConOut->QueryMode (gST->ConOut,
+                                        (UINTN)gST->ConOut->Mode->Mode,
+                                        &Columns, &Rows))) {
+    Columns = 80;
+  }
+  Limit = Columns > 1 ? Columns - 1 : 1;
+  if (Limit >= ARRAY_SIZE (Line)) { Limit = ARRAY_SIZE (Line) - 1; }
+  for (Index = 0; Index < Limit && Text[Index] != L'\0'; Index++) {
+    Line[Index] = Text[Index];
+  }
+  if (Text[Index] != L'\0' && Index >= 3) {
+    Line[Index - 3] = Line[Index - 2] = Line[Index - 1] = L'.';
+  }
+  Line[Index] = L'\0';
+  Print (L"%s\r\n", Line);
+}
+
+/* Drawing is deliberately observational: use the same configured/fallback
+ * choice as SfbLaunchEntry without opening files or preparing launch hooks.
+ * Launch-time profile/lock-policy failures remain launch-time decisions. */
+STATIC
+VOID
+SfbDrawMainMenuHeader (IN VOID *Context)
+{
+  SFB_MAIN_MENU_CONTEXT *State = (SFB_MAIN_MENU_CONTEXT *)Context;
+  CONST SFB_BOOT_ENTRY *Entry;
+  CONST CHAR16 *Detail;
+
+  if (State->Template->Cursor >= State->Menu.Count) {
+    return;
+  }
+  Entry = &State->Menu.Entry[State->Template->Cursor];
+  if (SfbIsManagedAblEntry (Entry)) {
+    SFB_BOOT_MODE Mode = Entry->ModeFromConfig ? Entry->Mode : State->CurrentMode;
+    SfbDrawSelectionLine (SfbBootModeLabel (Mode));
+    SfbDrawSelectionLine (Entry->Path);
+    Print (L"\r\n");
+    return;
+  }
+  switch (Entry->Kind) {
+  case SfbEntryEfiFile:
+    Detail = Entry->IsUsb ? L"USB EFI application" : L"EFI application";
+    break;
+  case SfbEntryBlsLinux:
+    Detail = L"BLS Linux entry";
+    break;
+  case SfbEntryBlsEfi:
+    Detail = L"BLS EFI entry";
+    break;
+  case SfbEntryMode:
+    SfbDrawSelectionLine (L"Fallback for unconfigured managed loaders");
+    SfbDrawSelectionLine (SfbBootModeLabel (State->CurrentMode));
+    Print (L"\r\n");
+    return;
+  case SfbEntryFastboot:
+    Detail = L"Connect to a host for device maintenance.";
+    break;
+  case SfbEntrySelector:
+    Detail = L"Browse and launch an EFI application.";
+    break;
+  case SfbEntryTools:
+    Detail = L"Browse the installed EFI tools.";
+    break;
+  case SfbEntrySaveDefault:
+    Detail = L"Choose the entry and mode used on future boots.";
+    break;
+  case SfbEntryMassStorage:
+    Detail = L"Choose storage to share with a host over USB.";
+    break;
+  case SfbEntryRecovery:
+    Detail = L"Restart the phone into recovery.";
+    break;
+  case SfbEntryRestart:
+    Detail = L"Restart the phone.";
+    break;
+  case SfbEntryPowerOff:
+    Detail = L"Turn off the phone.";
+    break;
+  default:
+    Detail = Entry->Desc;
+    break;
+  }
+  if (Entry->Kind == SfbEntryEfiFile || Entry->Kind == SfbEntryBlsLinux ||
+      Entry->Kind == SfbEntryBlsEfi) {
+    SfbDrawSelectionLine (Detail);
+    SfbDrawSelectionLine (Entry->Path);
+  } else {
+    SfbDrawSelectionLine (Entry->Desc);
+    SfbDrawSelectionLine (Detail);
+  }
+  Print (L"\r\n");
+}
+
 STATIC
 VOID
 SfbDrawMainMenuRow (IN VOID    *Context,
@@ -497,14 +603,7 @@ SfbDrawMainMenuRow (IN VOID    *Context,
                                   ? L"*" : L" ";
   CONST CHAR16          *Prefix = Entry->IsUsb ? L"[E] " : L"";
 
-  if (Entry->Kind == SfbEntryMode) {
-    CHAR16 Text[SFB_DESC_CHARS + 90];
-
-    UnicodeSPrint (Text, sizeof (Text),
-                   L"Session mode: %s (configured entry modes unaffected)",
-                   SfbBootModeLabel (State->Menu.Mode));
-    SfbDrawRow (Selected, Marker, Text);
-  } else if (Entry->Role != SfbConfigRoleOther || Entry->Passthrough) {
+  if (Entry->Role != SfbConfigRoleOther || Entry->Passthrough) {
     CONST CHAR8 *AsciiSuffix = SfbConfigRoleSuffix (Entry->Role);
     CHAR16 Suffix[16];
     CHAR16 Passthrough[16];
@@ -799,8 +898,8 @@ SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode)
     Rows[Index].Text = SfbBootModeLabel ((SFB_BOOT_MODE)Index);
   }
   ZeroMem (&Template, sizeof (Template));
-  Template.Title = L"Boot Mode";
-  Template.Subtitle = L"Session fallback only; configured entry modes win.";
+  Template.Title = L"Unconfigured loader mode";
+  Template.Subtitle = L"This boot only; configured entry modes remain unchanged.";
   Template.Footer = L"Vol Up/Down: move   Power: select";
   Template.Rows = Rows;
   Template.RowCount = ARRAY_SIZE (Rows);
@@ -841,6 +940,7 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
   Template.Refresh = SfbRefreshMainMenu;
   Template.Exit = SfbExitMainMenu;
   Template.Handler = SfbHandleMainMenuRow;
+  Template.DrawHeader = SfbDrawMainMenuHeader;
   Template.DrawRow = SfbDrawMainMenuRow;
   (VOID)SfbRunMenu (&Template);
   return State.EnterFastboot;

@@ -1256,10 +1256,11 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   EFI_STATUS Status;
   EFI_HANDLE ConfigVolume = NULL;
   SFB_CONFIG Config;
-  /* Fastboot, Selector, Tools, Mass Storage, Recovery, Power Off, Restart:
+  /* Fastboot, Selector, Tools, fallback Mode, Mass Storage, Recovery,
+   * Power Off, Restart:
    * the rows appended after truncation, whose space the discovered entries
    * must not eat. */
-  UINTN MandatoryRows = 7;
+  UINTN MandatoryRows = 8;
   UINTN ReservedRows;
   UINTN Unconfigured;
   UINTN Index;
@@ -1274,9 +1275,6 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   Menu->LockPolicy = SfbConfigLockAsNeeded;
 
   SfbBootMark (L"menu:begin");
-  /* The mode row is a session-only override, never a persisted setting. */
-  SfbAppendBuiltIn (Menu, SfbEntryMode, L"Session boot mode");
-
   SfbBootMark (L"menu:config");
 
   Status = SfbLoadBootConfig (&Config, &ConfigVolume, &Menu->ConfigPrevious);
@@ -1360,6 +1358,9 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Super Fastboot");
   SfbAppendBuiltIn (Menu, SfbEntrySelector, L"Enter EFI Program Selector");
   SfbAppendBuiltIn (Menu, SfbEntryTools, L"EFI Tools");
+  /* Keep the fallback control with the utilities. The selection header shows
+   * each entry's own policy; this control never overrides configured modes. */
+  SfbAppendBuiltIn (Menu, SfbEntryMode, L"Unconfigured loader mode");
   SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");
   SfbAppendBuiltIn (Menu, SfbEntryRecovery, L"Reboot to Recovery");
   SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power Off");

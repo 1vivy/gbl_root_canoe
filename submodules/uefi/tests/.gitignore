@@ -18,6 +18,7 @@ test_msd_lease
 test_fat
 test_hooks
 test_launch
+test_menu_selection
 test_log
 test_linuxboot
 test_profile
