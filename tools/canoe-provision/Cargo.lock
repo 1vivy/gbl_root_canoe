@@ -71,6 +71,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "clap",
+ "fatfs",
  "libc",
  "serde",
  "serde_json",
@@ -189,6 +190,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
+name = "fatfs"
+version = "0.4.0"
+source = "git+https://github.com/1vivy/rust-fatfs?rev=a8cdf82d9b1a8b4125197c20d320d35df646f64d#a8cdf82d9b1a8b4125197c20d320d35df646f64d"
+dependencies = [
+ "bitflags",
+ "log",
+]
+
+[[package]]
 name = "fs-set-times"
 version = "0.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -267,6 +277,12 @@ name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+
+[[package]]
+name = "log"
+version = "0.4.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "maybe-owned"

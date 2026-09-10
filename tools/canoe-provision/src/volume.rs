@@ -140,8 +140,9 @@ pub fn initialize_sized(file: &mut impl Write, bytes: u64) -> io::Result<()> {
     Ok(())
 }
 
-/// Reject foreign layouts before opening a writable filesystem. This probe
-/// is generic so the same validation can wrap files and aligned raw devices.
+/// Inspect an existing filesystem without writing its bytes. Geometry and FAT
+/// admission belong to rust-fatfs; a valid layout need not match our formatter's
+/// template, and a dirty flag alone is not a refusal to open it.
 pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
     let bytes = disk.seek(SeekFrom::End(0))?;
     if !supported_bytes(bytes) {
@@ -150,60 +151,46 @@ pub fn inspect<T: Read + Seek>(disk: &mut T) -> io::Result<VolumeInfo> {
     disk.seek(SeekFrom::Start(0))?;
     let mut boot = [0u8; 512];
     disk.read_exact(&mut boot)?;
-    let sector = u16::from_le_bytes([boot[11], boot[12]]);
-    let cluster = u32::from(sector) * u32::from(boot[13]);
-    let short_sectors = u16::from_le_bytes([boot[19], boot[20]]);
-    let long_sectors = u32::from_le_bytes(boot[32..36].try_into().unwrap());
-    let sectors = if short_sectors != 0 {
-        u32::from(short_sectors)
-    } else {
-        long_sectors
-    };
-    let reserved = u16::from_le_bytes([boot[14], boot[15]]);
-    let root_entries = u16::from_le_bytes([boot[17], boot[18]]);
-    let fat_sectors = u16::from_le_bytes([boot[22], boot[23]]);
-    let overhead = u64::from(reserved)
-        + u64::from(boot[16]) * u64::from(fat_sectors)
-        + (u64::from(root_entries) * 32).div_ceil(u64::from(SECTOR_BYTES));
-    let clusters =
-        u64::from(sectors).checked_sub(overhead).unwrap_or(0) / u64::from(boot[13].max(1));
-    if !supported_bytes(bytes)
-        || (short_sectors == 0) == (long_sectors == 0)
-        || sector != SECTOR_BYTES
-        || !matches!(cluster, 512 | 1024 | 2048 | 4096 | 8192)
-        || u64::from(sectors) * u64::from(sector) != bytes
-        || reserved != 1
-        || boot[16] != 2
-        || root_entries != 512
-        || !(4085..65525).contains(&clusters)
-        || boot[510..512] != [0x55, 0xaa]
-        || u64::from(fat_sectors) * u64::from(sector) < (clusters + 2) * 2
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "not a supported Canoe 8–256 MiB FAT16 boot volume",
-        ));
-    }
-    let mut fat = vec![0; usize::from(fat_sectors) * 512];
-    let mut mirror = vec![0; fat.len()];
-    disk.seek(SeekFrom::Start(512))?;
-    disk.read_exact(&mut fat)?;
-    disk.seek(SeekFrom::Start((1 + u64::from(fat_sectors)) * 512))?;
-    disk.read_exact(&mut mirror)?;
-    if fat != mirror || fat[..2] != [0xf8, 0xff] || fat[3] & 0xc0 != 0xc0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "boot volume has dirty or inconsistent FAT tables; recover before use",
-        ));
-    }
     disk.seek(SeekFrom::Start(0))?;
+    let fs = fatfs::FileSystem::new(ReadOnly(disk), fatfs::FsOptions::new())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+    // The filesystem driver has validated these BPB fields. The enclosing file
+    // still bounds the volume: a partition-sized claim cannot enlarge its owner.
+    let sector = u16::from_le_bytes([boot[11], boot[12]]);
+    let short = u16::from_le_bytes([boot[19], boot[20]]);
+    let sectors = if short != 0 { u32::from(short) } else {
+        u32::from_le_bytes(boot[32..36].try_into().unwrap())
+    };
+    if u64::from(sectors) * u64::from(sector) > bytes {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "FAT volume exceeds its container"));
+    }
+    let stats = fs.stats().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
     Ok(VolumeInfo {
         bytes,
         sector_bytes: sector,
-        cluster_bytes: cluster,
-        data_bytes: clusters * u64::from(cluster),
-        filesystem: "fat16",
+        cluster_bytes: stats.cluster_size(),
+        data_bytes: u64::from(stats.total_clusters()) * u64::from(stats.cluster_size()),
+        filesystem: match fs.fat_type() {
+            fatfs::FatType::Fat12 => "fat12",
+            fatfs::FatType::Fat16 => "fat16",
+            fatfs::FatType::Fat32 => "fat32",
+        },
     })
+}
+
+/// Even filesystem bookkeeping during drop cannot write through a probe.
+struct ReadOnly<'a, T>(&'a mut T);
+impl<T: Read> Read for ReadOnly<'_, T> {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> { self.0.read(bytes) }
+}
+impl<T: Seek> Seek for ReadOnly<'_, T> {
+    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> { self.0.seek(position) }
+}
+impl<T> Write for ReadOnly<'_, T> {
+    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        Err(io::Error::new(io::ErrorKind::PermissionDenied, "read-only FAT inspection"))
+    }
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
 }
 
 #[cfg(test)]
@@ -277,7 +264,40 @@ mod tests {
         assert!(inspect(&mut File::open(&path).unwrap()).is_ok());
     }
     #[test]
-    fn rejects_foreign_or_truncated_geometry() {
+    fn existing_alternate_layout_and_dirty_volume_follow_filesystem_admission() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ordinary.fat");
+        File::create(&path).unwrap().set_len(32 * 1024 * 1024).unwrap();
+        let output = std::process::Command::new("mkfs.fat")
+            .args(["-a", "-F", "16", "-S", "512", "-s", "4", "-R", "8", "-r", "1024", "-f", "1"])
+            .arg(&path).output().unwrap();
+        assert!(output.status.success());
+        let mut bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes[16], 1); // not the formatter's two FATs
+        assert_eq!(u16::from_le_bytes([bytes[14], bytes[15]]), 8);
+        let fat_offset = 8 * 512;
+        bytes[fat_offset + 3] &= 0x7f; // FAT16 clean-shutdown bit
+        bytes[37] |= 1; // BPB dirty status
+        let original = bytes.clone();
+        let info = inspect(&mut io::Cursor::new(&mut bytes)).unwrap();
+        assert_eq!(info.filesystem, "fat16");
+        assert_eq!(info.cluster_bytes, 2048);
+        assert_eq!(bytes, original); // inspection never repairs/marks clean
+    }
+    #[test]
+    fn filesystem_driver_owns_mirror_policy_and_container_bounds_still_apply() {
+        let mut bytes = Vec::new();
+        initialize(&mut bytes).unwrap();
+        let fat_sectors = u16::from_le_bytes([bytes[22], bytes[23]]) as usize;
+        bytes[(1 + fat_sectors) * 512 + 20] ^= 1;
+        let original = bytes.clone();
+        assert!(inspect(&mut io::Cursor::new(&mut bytes)).is_ok());
+        assert_eq!(bytes, original);
+        bytes[19..21].copy_from_slice(&u16::MAX.to_le_bytes());
+        assert!(inspect(&mut io::Cursor::new(bytes)).is_err());
+    }
+    #[test]
+    fn filesystem_driver_rejects_invalid_or_truncated_geometry() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("staging.fat");
         create_staging(&path).unwrap();
@@ -288,7 +308,7 @@ mod tests {
             .unwrap();
         file.seek(SeekFrom::Start(32)).unwrap();
         file.write_all(&((CONTAINER_BYTES / 512) as u32).to_le_bytes()).unwrap();
-        assert!(inspect(&mut file).is_err()); // both total-sector fields set
+        assert!(inspect(&mut file).is_ok()); // the driver uses the short field when both agree
         file.seek(SeekFrom::Start(32)).unwrap();
         file.write_all(&[0; 4]).unwrap();
         file.seek(SeekFrom::Start(13)).unwrap();

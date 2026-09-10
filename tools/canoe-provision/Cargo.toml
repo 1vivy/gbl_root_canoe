@@ -23,6 +23,7 @@ legacy-ext4-tests = ["cli"]
 clap = { version = "4.5", features = ["derive"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+fatfs = { git = "https://github.com/1vivy/rust-fatfs", rev = "a8cdf82d9b1a8b4125197c20d320d35df646f64d", default-features = false, features = ["std", "alloc", "lfn", "unicode"] }
 tempfile = { version = "3", optional = true }
 
 [target.'cfg(unix)'.dependencies]
