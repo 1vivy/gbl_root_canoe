@@ -257,11 +257,11 @@ SfbBootModeLabel (IN SFB_BOOT_MODE Mode)
   case SfbBootModeHonestUnlocked:
     return L"Mode 0 - Honest unlocked";
   case SfbBootModeAblFakeLocked:
-    return L"Mode 1 - ABL fake locked";
+    return L"Mode 1 - Android locked";
   case SfbBootModeKmProfile:
-    return L"Mode 2 - KM/SPSS profile spoof";
+    return L"Mode 2 - Profile spoof";
   default:
-    return L"Mode 1 - ABL fake locked";
+    return L"Mode 1 - Android locked";
   }
 }
 
@@ -581,11 +581,11 @@ SfbHandleSaveConfirmation (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
   SFB_SAVE_CONFIRM_CONTEXT *State = (SFB_SAVE_CONFIRM_CONTEXT *)Context;
   EFI_FILE_PROTOCOL *Root = NULL;
   EFI_STATUS Status;
-  UINTN CancelRow = State->Entry->Passthrough ? 1 : 4;
+  UINTN CancelRow = State->Entry->Passthrough ? 1 : 3;
   UINT8 Mode;
   (VOID)Key;
   if (Row >= CancelRow) { return SfbMenuActionExit; }
-  Mode = Row == 0 ? (UINT8)State->Mode : (UINT8)(Row - 1);
+  Mode = State->Entry->Passthrough ? (UINT8)State->Mode : (UINT8)Row;
   if (!SfbIsContainerVolume (State->Entry->Volume) ||
       State->Entry->DefaultTarget[0] == '\0') {
     Status = EFI_INVALID_PARAMETER;
@@ -607,25 +607,26 @@ STATIC VOID
 SfbConfirmSaveDefault (IN CONST SFB_BOOT_ENTRY *Entry, IN SFB_BOOT_MODE Mode)
 {
   SFB_MENU_ROW ManagedRows[] = {
-    { L"Save with the configured mode", L" " },
-    { L"Save with Mode 0 - Honest unlocked", L" " },
-    { L"Save with Mode 1 - Android locked", L" " },
-    { L"Save with Mode 2 - Profile spoof", L" " },
+    { NULL, L" " }, { NULL, L" " }, { NULL, L" " },
     { L"Cancel", L" " }
   };
   STATIC SFB_MENU_ROW OtherRows[] = {
     { L"Save as default", L" " }, { L"Cancel", L" " }
   };
-  CHAR16 ConfiguredLabel[96];
+  CHAR16 ModeLabels[3][96];
+  UINTN Index;
   SFB_SAVE_CONFIRM_CONTEXT State;
   SFB_MENU_TEMPLATE Template;
   ZeroMem (&State, sizeof (State));
   ZeroMem (&Template, sizeof (Template));
   State.Entry = Entry;
   State.Mode = Entry->ModeFromConfig ? Entry->Mode : Mode;
-  UnicodeSPrint (ConfiguredLabel, sizeof (ConfiguredLabel), L"Save with %s",
-                 SfbBootModeLabel (State.Mode));
-  ManagedRows[0].Text = ConfiguredLabel;
+  for (Index = 0; Index < ARRAY_SIZE (ModeLabels); Index++) {
+    UnicodeSPrint (ModeLabels[Index], sizeof (ModeLabels[Index]),
+                   L"Save with %s%s", SfbBootModeLabel ((SFB_BOOT_MODE)Index),
+                   Index == (UINTN)State.Mode ? L" (current)" : L"");
+    ManagedRows[Index].Text = ModeLabels[Index];
+  }
   Template.Title = Entry->Desc;
   Template.Subtitle = Entry->Passthrough ? L"Save this entry for future boots?" :
     L"Changing between Mode 0 and Mode 1/2 requires formatting phone data.";
@@ -784,16 +785,18 @@ STATIC
 VOID
 SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode)
 {
-  STATIC SFB_MENU_ROW Rows[] = {
-    { L"Mode 0 - Honest unlocked", L" " },
-    { L"Mode 1 - ABL fake locked", L" " },
-    { L"Mode 2 - KM/SPSS profile spoof", L" " },
+  SFB_MENU_ROW Rows[] = {
+    { NULL, L" " }, { NULL, L" " }, { NULL, L" " },
     { L"Back", L" " }
   };
   SFB_MENU_TEMPLATE Template;
+  UINTN Index;
 
   if (CurrentMode == NULL) {
     return;
+  }
+  for (Index = 0; Index < 3; Index++) {
+    Rows[Index].Text = SfbBootModeLabel ((SFB_BOOT_MODE)Index);
   }
   ZeroMem (&Template, sizeof (Template));
   Template.Title = L"Boot Mode";
