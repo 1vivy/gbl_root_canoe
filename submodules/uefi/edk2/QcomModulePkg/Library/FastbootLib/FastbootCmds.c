@@ -52,6 +52,7 @@ found at
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 #include "FastbootHash.h"
+#include "FastbootResponse.h"
 #include "../../Application/LinuxLoader/SuperFbMassStorage.h"
 #include "../../Application/LinuxLoader/SuperFbMsdLease.h"
 #define PAGE_SHIFT 12
@@ -315,14 +316,12 @@ UINTN GetXfrSize (VOID)
 STATIC VOID
 FastbootAck (IN CONST CHAR8 *code, CONST CHAR8 *Reason)
 {
-  if (Reason == NULL)
-    Reason = "";
-
-  AsciiSPrint (GetFastbootDeviceData ()->gTxBuffer, MAX_RSP_SIZE, "%a%a", code,
-               Reason);
+  /* gTxBuffer is a USB_BUFF_SIZE allocation, including room for the local
+   * terminator after a full 64-byte protocol response. */
+  UINTN Length = SfbFastbootEncodeResponse (
+      code, Reason, GetFastbootDeviceData ()->gTxBuffer);
   GetFastbootDeviceData ()->UsbDeviceProtocol->Send (
-      ENDPOINT_OUT, AsciiStrLen (GetFastbootDeviceData ()->gTxBuffer),
-      GetFastbootDeviceData ()->gTxBuffer);
+      ENDPOINT_OUT, Length, GetFastbootDeviceData ()->gTxBuffer);
   DEBUG ((EFI_D_VERBOSE, "Sending %d:%a\n",
           AsciiStrLen (GetFastbootDeviceData ()->gTxBuffer),
           GetFastbootDeviceData ()->gTxBuffer));
@@ -2376,6 +2375,8 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
   CONST CHAR8           *Storage;
   EFI_BLOCK_IO_PROTOCOL *BlockIo = NULL;
   EFI_STATUS             Status;
+  CONST CHAR8           *FailureStage = "partition lookup";
+  CHAR8                  Failure[SFB_FASTBOOT_PAYLOAD_BYTES + 1u];
 
   if (Arg == NULL) {
     FastbootFail ("unknown oem command");
@@ -2437,14 +2438,22 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
    * is also the non-interactive public entry point used by other callers.
    */
   if (StrCmp (Target, L"boot-root") == 0) {
+    FailureStage = "boot-root drivers";
     Status = SfbStartFatStack ();
-    if (!EFI_ERROR (Status)) Status = SfbContainerMount ();
+    if (!EFI_ERROR (Status)) {
+      FailureStage = "boot-root mount";
+      Status = SfbContainerMount ();
+    }
     BlockIo = SfbContainerDisplayDisk ();
   } else {
     Status = SfbFindPartitionByName (Target, &BlockIo);
   }
   if (EFI_ERROR (Status) || BlockIo == NULL) {
-    FastbootFail ("mass-storage partition not found");
+    if (!EFI_ERROR (Status)) Status = EFI_NOT_FOUND;
+    DEBUG ((EFI_D_ERROR, "SFB: MARK storage-preflight target=%s stage=%a status=%r\n",
+            Target, FailureStage, Status));
+    AsciiSPrint (Failure, sizeof (Failure), "%a: %r", FailureStage, Status);
+    FastbootFail (Failure);
     return;
   }
   if (Bound && !SfbContainerMatchesIdentity (Storage + 10)) {
@@ -2497,22 +2506,22 @@ STATIC VOID UpdateGetVarVariable (VOID)
 {
 }
 
+STATIC VOID
+FastbootGetVarInfo (CONST CHAR8 *Payload)
+{
+  FastbootInfo (Payload);
+  /* The next fragment must not overwrite an in-flight transfer buffer. */
+  WaitForTransferComplete ();
+}
+
 STATIC VOID CmdGetVarAll (VOID)
 {
   FASTBOOT_VAR *Var;
-  CHAR8 GetVarAll[MAX_RSP_SIZE];
 
-  for (Var = Varlist; Var; Var = Var->next) {
-    AsciiStrnCpyS (GetVarAll, sizeof (GetVarAll), Var->name, MAX_RSP_SIZE);
-    AsciiStrnCatS (GetVarAll, sizeof (GetVarAll), ":", AsciiStrLen (":"));
-    AsciiStrnCatS (GetVarAll, sizeof (GetVarAll), Var->value, MAX_RSP_SIZE);
-    FastbootInfo (GetVarAll);
-    /* Wait for the transfer to complete */
-    WaitForTransferComplete ();
-    ZeroMem (GetVarAll, sizeof (GetVarAll));
-  }
+  for (Var = Varlist; Var; Var = Var->next)
+    SfbFastbootGetVarInfo (Var->name, Var->value, FastbootGetVarInfo);
 
-  FastbootOkay (GetVarAll);
+  FastbootOkay ("");
 }
 
 STATIC VOID
@@ -2890,6 +2899,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   CHAR8 DeviceType[MAX_RSP_SIZE] = "\0";
   /* FastbootPublishVar borrows these values until fastboot teardown. */
   STATIC CHAR8 DevInfoBuf[SFB_DEVINFO_VALUE_BYTES];
+  STATIC CHAR8 SlotRetriesBuf[SFB_SLOT_RETRIES_VALUE_BYTES];
   STATIC CHAR8 BootRootBuf[SFB_BOOT_ROOT_VALUE_BYTES];
   STATIC CHAR8 SerialBuf[31];
   SFB_OBSERVED_DEVINFO ObservedDevInfo;
@@ -2959,10 +2969,12 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
    * valid DeviceInfo; unknown must never become a fabricated waiver. */
   ObservedDevInfo = SfbGetObservedDevInfo ();
   SlotRetries = SfbSlotRetries ();
-  if (SfbFormatObservedDevInfo (&ObservedDevInfo, &SlotRetries, DevInfoBuf,
+  if (SfbFormatObservedDevInfo (&ObservedDevInfo, DevInfoBuf,
                                 sizeof (DevInfoBuf))) {
     FastbootPublishVar ("canoe-devinfo", DevInfoBuf);
   }
+  if (SfbFormatSlotRetries (&SlotRetries, SlotRetriesBuf, sizeof (SlotRetriesBuf)))
+    FastbootPublishVar ("canoe-slot-retries", SlotRetriesBuf);
 
   /* The observation is the one this boot already made before the menu; an
    * unavailable observation stays absent rather than being re-probed here

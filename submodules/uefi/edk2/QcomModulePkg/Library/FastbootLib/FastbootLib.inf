@@ -85,6 +85,7 @@
   UsbSerial.c
   FastbootCmds.c
   FastbootHash.c
+  FastbootResponse.c
   PartitionTableUpdate.c
   Board.c
   ThreadStack.c

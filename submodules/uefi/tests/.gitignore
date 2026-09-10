@@ -29,4 +29,5 @@ test_surface
 
 /test_hash
 /test_ext4_checksums
+/test_fastboot_response
 test_last_boot_store

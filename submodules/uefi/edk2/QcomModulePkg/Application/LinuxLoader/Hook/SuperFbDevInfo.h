@@ -5,7 +5,8 @@
 #include "SuperFbProfile.h"
 #include "../SuperFbSlotRetry.h"
 
-#define SFB_DEVINFO_VALUE_BYTES 80u
+#define SFB_DEVINFO_VALUE_BYTES 61u
+#define SFB_SLOT_RETRIES_VALUE_BYTES 32u
 
 typedef struct {
   SFB_BOOLEAN Available;
@@ -13,14 +14,18 @@ typedef struct {
   SFB_BOOLEAN Critical;
 } SFB_OBSERVED_DEVINFO;
 
-/* Always emits the pinned five-field grammar when Buffer is large enough. */
+/* Each value fits the fastboot 60-byte payload. Unknown observations remain
+ * unknown; slot retry metadata has a separate diagnostic variable. */
 SFB_BOOLEAN
 SfbFormatObservedDevInfo (
   const SFB_OBSERVED_DEVINFO *Observed,
-  const SFB_SLOT_RETRIES     *Retries,
   char                       *Buffer,
   SFB_UINTN                   BufferBytes
   );
+
+SFB_BOOLEAN
+SfbFormatSlotRetries (
+  const SFB_SLOT_RETRIES *Retries, char *Buffer, SFB_UINTN BufferBytes);
 
 #ifndef SFB_HOST_BUILD
 VOID SfbRecordObservedDevInfo (IN BOOLEAN Unlocked, IN BOOLEAN Critical);

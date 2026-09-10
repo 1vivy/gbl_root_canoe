@@ -128,6 +128,7 @@ STATIC EFI_STATUS UnmountInternal (VOID)
 EFI_STATUS SfbContainerMount (VOID)
 {
   EFI_STATUS Status;
+  CONST CHAR8 *Stage = "persist-connect";
   EFI_BLOCK_IO_PROTOCOL *Parent = NULL;
   EFI_HANDLE *Handles = NULL;
   UINTN Count = 0, I;
@@ -177,15 +178,19 @@ EFI_STATUS SfbContainerMount (VOID)
   Status = gBS->ConnectController (mPersist, NULL, NULL, TRUE);
   if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED)
     goto Failed;
+  Stage = "persist-filesystem";
   Status = gBS->HandleProtocol (mPersist, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
   if (EFI_ERROR (Status) || Fs == NULL)
     goto Failed;
+  Stage = "persist-root";
   Status = Fs->OpenVolume (Fs, &Root);
   if (EFI_ERROR (Status))
     goto Failed;
+  Stage = "container-open";
   Status = Root->Open (Root, &File, L"\\efisp.fat", EFI_FILE_MODE_READ, 0);
   if (EFI_ERROR (Status))
     goto Failed;
+  Stage = "container-map";
   Status = Ext4MapImage (File, &mMap);
   File->Close (File);
   File = NULL;
@@ -193,12 +198,15 @@ EFI_STATUS SfbContainerMount (VOID)
   Root = NULL;
   if (EFI_ERROR (Status))
     goto Failed;
+  Stage = "image-disk";
   Status = SfbImageDiskInit (&mDisk, mMap);
   if (EFI_ERROR (Status))
     goto Failed;
+  Stage = "fat-check";
   Status = CheckFat ();
   if (EFI_ERROR (Status))
     goto Failed;
+  Stage = "persist-path";
   ParentPath = DevicePathFromHandle (mPersist);
   if (ParentPath == NULL)
   {
@@ -210,25 +218,31 @@ EFI_STATUS SfbContainerMount (VOID)
   Node.Header.SubType = MEDIA_VENDOR_DP;
   SetDevicePathNodeLength (&Node.Header, sizeof (Node));
   CopyMem (&Node.Guid, &mContainerGuid, sizeof (Node.Guid));
+  Stage = "container-path";
   mPath = AppendDevicePathNode (ParentPath, &Node.Header);
   if (mPath == NULL)
   {
     Status = EFI_OUT_OF_RESOURCES;
     goto Failed;
   }
+  Stage = "container-publish";
   Status = gBS->InstallMultipleProtocolInterfaces (&mHandle, &gEfiBlockIoProtocolGuid, &mDisk.Block,
                                                    &gEfiDevicePathProtocolGuid, mPath, NULL);
   if (EFI_ERROR (Status))
     goto Failed;
+  Stage = "fat-connect";
   Status = gBS->ConnectController (mHandle, NULL, NULL, TRUE);
   if (EFI_ERROR (Status))
     goto Failed;
+  Stage = "fat-filesystem";
   Status = gBS->HandleProtocol (mHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
   if (EFI_ERROR (Status) || Fs == NULL)
     goto Failed;
   DEBUG ((EFI_D_INFO, "SFB: MARK container mounted=1 bytes=%Lu\n", mMap->Bytes));
   return EFI_SUCCESS;
 Failed:
+  (VOID) Stage;
+  DEBUG ((EFI_D_ERROR, "SFB: MARK container-mount stage=%a status=%r\n", Stage, Status));
   if (File != NULL)
     File->Close (File);
   if (Root != NULL)
@@ -236,7 +250,10 @@ Failed:
   {
     EFI_STATUS Cleanup = SfbContainerUnmount ();
     if (EFI_ERROR (Cleanup))
+    {
+      DEBUG ((EFI_D_ERROR, "SFB: MARK container-cleanup status=%r\n", Cleanup));
       return Cleanup;
+    }
   }
   return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;
 }
