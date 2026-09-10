@@ -252,7 +252,9 @@ Failed:
     if (EFI_ERROR (Cleanup))
     {
       DEBUG ((EFI_D_ERROR, "SFB: MARK container-cleanup status=%r\n", Cleanup));
-      return Cleanup;
+      /* A cleanup failure must not replace the filesystem error that caused
+       * cleanup. Retained handles still make the next handoff retry cleanup. */
+      return EFI_ERROR (Status) ? Status : Cleanup;
     }
   }
   return EFI_ERROR (Status) ? Status : EFI_NOT_FOUND;

@@ -232,6 +232,11 @@ int main (void)
   Missing = TRUE;
   assert (SfbContainerMount () == EFI_NOT_FOUND);
   assert (Opens == 1 && Maps == 0 && !Published);
+  ParentBusy = TRUE;
+  assert (SfbContainerMount () == EFI_NOT_FOUND);
+  assert (SfbContainerUnmount () == EFI_ACCESS_DENIED);
+  ParentBusy = FALSE;
+  assert (SfbContainerUnmount () == EFI_SUCCESS);
   Missing = FALSE;
   BadFat = TRUE;
   assert (SfbContainerMount () == EFI_VOLUME_CORRUPTED);
