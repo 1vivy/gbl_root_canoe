@@ -235,3 +235,9 @@ test: test_raw_persist_export
 test_raw_persist_export:
 	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -Wno-unused-but-set-variable -fno-builtin -fshort-wchar -ffunction-sections -fdata-sections $(HOOK_INCLUDES) -I../edk2/Ext4Pkg/Include -I../edk2/QcomModulePkg/Library -Wl,--gc-sections -o test_raw_persist_export test_raw_persist_export.c
 	./test_raw_persist_export
+
+.PHONY: test_reboot_targets
+test: test_reboot_targets
+test_reboot_targets: test_reboot_targets.c ../edk2/QcomModulePkg/Library/RebootTargetLib/RebootTargetLib.c
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar -ffunction-sections -fdata-sections $(HOOK_INCLUDES) -Wl,--gc-sections -o $@ $^
+	./$@

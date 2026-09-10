@@ -462,6 +462,7 @@ SfbConfigParse (
   Config->MenuMode = SfbConfigMenuSilent;
   Config->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
   Config->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
+  Config->ShowBooting = TRUE;
   Config->LockPolicy = SfbConfigLockAsNeeded;
   Config->DefaultIndex = SFB_CONFIG_NO_DEFAULT;
   DefaultId[0] = '\0';
@@ -596,6 +597,12 @@ SfbConfigParse (
       if (!SfbCfgParseMenuMode (Value, End, &Config->MenuMode)) {
         Config->RejectedLines++;
       }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "show-booting")) {
+      if (SfbCfgKeyIs (Value, End, "yes")) { Config->ShowBooting = TRUE; }
+      else if (SfbCfgKeyIs (Value, End, "no")) { Config->ShowBooting = FALSE; }
+      else { Config->RejectedLines++; }
       continue;
     }
     if (SfbCfgKeyIs (Begin, KeyEnd, "key-window")) {
@@ -751,112 +758,102 @@ SfbCfgDecimal (SFB_UINT32 Value, char *Output)
   return Count;
 }
 
-SFB_BOOLEAN
-SfbConfigEditDefault (const char *Bytes, SFB_UINTN Size,
-                      const char *Target, SFB_UINT8 Mode,
-                      char *Output, SFB_UINTN *OutputSize)
+/* Keep text preservation and generation handling common to the three edits. */
+typedef enum { SfbEditDefault, SfbEditMode, SfbEditPolicy } SFB_CFG_EDIT;
+
+static SFB_BOOLEAN
+SfbCfgAppendNumber (char *Output, SFB_UINTN Capacity, SFB_UINTN *Used,
+                    const char *Key, SFB_UINT32 Number)
+{
+  char Digits[10];
+  SFB_UINTN Count = SfbCfgDecimal (Number, Digits);
+  return SfbCfgAppend (Output, Capacity, Used, Key, SfbCfgLength (Key)) &&
+         SfbCfgAppend (Output, Capacity, Used, Digits, Count) &&
+         SfbCfgAppend (Output, Capacity, Used, "\n", 1);
+}
+
+static SFB_BOOLEAN
+SfbCfgEdit (const char *Bytes, SFB_UINTN Size, SFB_CFG_EDIT Edit,
+            const char *Target, SFB_UINT8 Mode, const SFB_CONFIG *Policy,
+            char *Output, SFB_UINTN *OutputSize)
 {
   SFB_CONFIG Config;
-  SFB_UINTN Capacity;
-  SFB_UINTN Used = 0;
-  SFB_UINTN Index;
+  SFB_UINTN Capacity, Used = 0, Index;
   SFB_UINT32 Generation;
-  char Id[SFB_CONFIG_ID_CHARS];
-  char Stem[SFB_CONFIG_BLS_STEM_CHARS];
-  char Digits[10];
-  SFB_UINTN DigitCount;
-  SFB_BOOLEAN IsBls;
-  SFB_BOOLEAN InEntry = FALSE;
-  SFB_BOOLEAN Selected = FALSE;
-  SFB_BOOLEAN Found = FALSE;
-  const char *Cursor;
-  const char *Limit;
-  const char *Begin;
-  const char *End;
-
-  if (OutputSize == NULL) {
-    return FALSE;
-  }
+  char Id[SFB_CONFIG_ID_CHARS], Stem[SFB_CONFIG_BLS_STEM_CHARS];
+  SFB_BOOLEAN IsBls = FALSE, InEntry = FALSE, Selected = FALSE, Found = FALSE;
+  const char *Cursor, *Limit, *Begin, *End;
+  if (OutputSize == NULL) { return FALSE; }
   Capacity = *OutputSize;
   *OutputSize = 0;
-  if (Bytes == NULL || Target == NULL || Output == NULL || Bytes == Output ||
-      Size > SFB_CONFIG_MAX_BYTES || Mode > SFB_CONFIG_MODE_MAX ||
-      !SfbConfigParse (Bytes, Size, &Config) ||
-      Config.Generation == 0xffffffffu ||
-      !SfbCfgParseDefault (Target, SfbCfgLength (Target), Id, Stem, &IsBls)) {
-    return FALSE;
-  }
-  if (Capacity > SFB_CONFIG_MAX_BYTES) {
-    Capacity = SFB_CONFIG_MAX_BYTES;
-  }
-  if (!IsBls) {
+  if (Bytes == NULL || Output == NULL || Bytes == Output ||
+      Size > SFB_CONFIG_MAX_BYTES || !SfbConfigParse (Bytes, Size, &Config) ||
+      Config.Generation == 0xffffffffu) { return FALSE; }
+  if (Edit == SfbEditPolicy) {
+    if (Policy == NULL || Policy->KeyWindowMs > 10000 ||
+        Policy->MenuTimeoutSeconds > 300 || Policy->MenuMode > SfbConfigMenuMenu) { return FALSE; }
+  } else {
+    if (Target == NULL || !SfbCfgParseDefault (Target, SfbCfgLength (Target), Id, Stem, &IsBls) ||
+        (Edit == SfbEditMode && (IsBls || Mode > SFB_CONFIG_MODE_MAX))) { return FALSE; }
     for (Index = 0; Index < Config.Count; Index++) {
-      if (SfbCfgEquals (Config.Entry[Index].Id, Id)) {
-        Found = TRUE;
-      }
+      if (SfbCfgEquals (Config.Entry[Index].Id, Id)) { Found = TRUE; }
     }
-    if (!Found) {
-      return FALSE;
-    }
+    if (!IsBls && !Found) { return FALSE; }
   }
+  if (Capacity > SFB_CONFIG_MAX_BYTES) { Capacity = SFB_CONFIG_MAX_BYTES; }
   Generation = Config.Generation + 1;
-  DigitCount = SfbCfgDecimal (Generation, Digits);
-  Cursor = Bytes;
-  Limit = Bytes + Size;
+  Cursor = Bytes; Limit = Bytes + Size;
   while (Cursor < Limit) {
-    const char *Raw = Cursor;
-    const char *KeyEnd;
-    const char *Value;
-    SFB_BOOLEAN EntryLine;
-    if (!SfbCfgNextLine (&Cursor, Limit, &Begin, &End)) {
-      break;
-    }
+    const char *Raw = Cursor, *KeyEnd, *Value;
+    SFB_BOOLEAN EntryLine, VersionLine;
+    if (!SfbCfgNextLine (&Cursor, Limit, &Begin, &End)) { break; }
     SfbCfgSplit (Begin, End, &KeyEnd, &Value);
     EntryLine = SfbCfgKeyIs (Begin, KeyEnd, "entry");
+    VersionLine = !InEntry && SfbCfgKeyIs (Begin, KeyEnd, "version");
     if (EntryLine) {
       InEntry = TRUE;
-      Selected = (SFB_BOOLEAN)(!IsBls && SfbCfgKeyIs (Value, End, Id));
+      Selected = Edit == SfbEditMode && SfbCfgKeyIs (Value, End, Id);
     }
-    if ((!InEntry && (SfbCfgKeyIs (Begin, KeyEnd, "generation") ||
-                       SfbCfgKeyIs (Begin, KeyEnd, "default"))) ||
-        (Selected && SfbCfgKeyIs (Begin, KeyEnd, "mode"))) {
-      continue;
-    }
-    if (!SfbCfgAppend (Output, Capacity, &Used, Raw,
-                       (SFB_UINTN)(Cursor - Raw))) {
-      return FALSE;
-    }
-    if (SfbCfgKeyIs (Begin, KeyEnd, "version") || (EntryLine && Selected)) {
-      if (Used != 0 && Output[Used - 1] != '\n' &&
-          !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) {
-        return FALSE;
-      }
+    if ((!InEntry && SfbCfgKeyIs (Begin, KeyEnd, "generation")) ||
+        (!InEntry && Edit == SfbEditDefault && SfbCfgKeyIs (Begin, KeyEnd, "default")) ||
+        (Selected && SfbCfgKeyIs (Begin, KeyEnd, "mode")) ||
+        (!InEntry && Edit == SfbEditPolicy &&
+          (SfbCfgKeyIs (Begin, KeyEnd, "menu-mode") || SfbCfgKeyIs (Begin, KeyEnd, "key-window") ||
+           SfbCfgKeyIs (Begin, KeyEnd, "menu-timeout") || SfbCfgKeyIs (Begin, KeyEnd, "timeout") ||
+           SfbCfgKeyIs (Begin, KeyEnd, "show-booting")))) { continue; }
+    if (!SfbCfgAppend (Output, Capacity, &Used, Raw, (SFB_UINTN)(Cursor - Raw))) { return FALSE; }
+    if (VersionLine || (EntryLine && Selected)) {
+      if (Used && Output[Used - 1] != '\n' && !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) { return FALSE; }
       if (EntryLine) {
-        char ModeLine[] = " mode 0\n";
-        ModeLine[6] = (char)('0' + Mode);
-        if (!SfbCfgAppend (Output, Capacity, &Used, ModeLine, 8)) {
-          return FALSE;
+        if (!SfbCfgAppendNumber (Output, Capacity, &Used, " mode ", Mode)) { return FALSE; }
+      } else {
+        if (!SfbCfgAppendNumber (Output, Capacity, &Used, "generation ", Generation)) { return FALSE; }
+        if (Edit == SfbEditDefault) {
+          if (!SfbCfgAppend (Output, Capacity, &Used, "default ", 8) ||
+              !SfbCfgAppend (Output, Capacity, &Used, Target, SfbCfgLength (Target)) ||
+              !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) { return FALSE; }
+        } else if (Edit == SfbEditPolicy) {
+          const char *Menu = Policy->MenuMode == SfbConfigMenuMenu ? "menu-mode menu\n" : "menu-mode silent\n";
+          const char *Show = Policy->ShowBooting ? "show-booting yes\n" : "show-booting no\n";
+          if (!SfbCfgAppend (Output, Capacity, &Used, Menu, SfbCfgLength (Menu)) ||
+              !SfbCfgAppendNumber (Output, Capacity, &Used, "key-window ", Policy->KeyWindowMs) ||
+              !SfbCfgAppendNumber (Output, Capacity, &Used, "menu-timeout ", Policy->MenuTimeoutSeconds) ||
+              !SfbCfgAppend (Output, Capacity, &Used, Show, SfbCfgLength (Show))) { return FALSE; }
         }
-      } else if (!SfbCfgAppend (Output, Capacity, &Used, "generation ", 11) ||
-                  !SfbCfgAppend (Output, Capacity, &Used, Digits, DigitCount) ||
-                  !SfbCfgAppend (Output, Capacity, &Used, "\ndefault ", 9) ||
-                  !SfbCfgAppend (Output, Capacity, &Used, Target,
-                                 SfbCfgLength (Target)) ||
-                  !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) {
-        return FALSE;
       }
     }
   }
-  if (!SfbConfigParse (Output, Used, &Config) ||
-      Config.Generation != Generation ||
-      (IsBls && (!Config.DefaultIsBls ||
-                  !SfbCfgEquals (Config.DefaultBlsStem, Stem))) ||
-      (!IsBls && (Config.DefaultIndex >= Config.Count ||
-                   !SfbCfgEquals (Config.Entry[Config.DefaultIndex].Id, Id) ||
-                   SfbConfigEntryMode (&Config,
-                      &Config.Entry[Config.DefaultIndex]) != Mode))) {
-    return FALSE;
-  }
+  if (!SfbConfigParse (Output, Used, &Config) || Config.Generation != Generation) { return FALSE; }
   *OutputSize = Used;
   return TRUE;
 }
+
+SFB_BOOLEAN SfbConfigEditDefault (const char *Bytes, SFB_UINTN Size, const char *Target,
+                                 char *Output, SFB_UINTN *OutputSize)
+{ return SfbCfgEdit (Bytes, Size, SfbEditDefault, Target, 0, NULL, Output, OutputSize); }
+SFB_BOOLEAN SfbConfigEditMode (const char *Bytes, SFB_UINTN Size, const char *Target, SFB_UINT8 Mode,
+                              char *Output, SFB_UINTN *OutputSize)
+{ return SfbCfgEdit (Bytes, Size, SfbEditMode, Target, Mode, NULL, Output, OutputSize); }
+SFB_BOOLEAN SfbConfigEditPolicy (const char *Bytes, SFB_UINTN Size, const SFB_CONFIG *Policy,
+                                char *Output, SFB_UINTN *OutputSize)
+{ return SfbCfgEdit (Bytes, Size, SfbEditPolicy, NULL, 0, Policy, Output, OutputSize); }

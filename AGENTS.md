@@ -32,11 +32,11 @@ The raw `efisp` partition is not a filesystem. It contains `BDS.efi` as a whole-
 
 ## Load-bearing contracts
 
-- BDS owns its bounded FAT mapping and firmware mount. Explicit Save as default may persist config; ordinary selections remain one-shot. Application workflows own deployment snapshots/readback/recovery; command primitives retain input validation and checked I/O.
-- `canoe.cfg` is the canonical persisted configuration. Session menu mode changes are not persisted. Its boot policy is `menu-mode silent|menu` with `key-window` milliseconds and a `menu-timeout` that only counts down in menu mode; `timeout` is a pre-b2 reader alias no writer emits. A `default` names a config entry id or a discovered BLS row as `bls:<stem>`, and an unresolvable default opens the menu instead of launching another row.
+- BDS owns its bounded FAT mapping and firmware mount. Explicit default, managed-entry mode and boot-policy saves may persist config; ordinary selections remain one-shot. Application workflows own deployment snapshots/readback/recovery; command primitives retain input validation and checked I/O.
+- `canoe.cfg` is the canonical persisted configuration. Ordinary entry launches do not change it; the Advanced preference actions save only their named setting. Its boot policy is `menu-mode silent|menu` with `key-window` milliseconds and a `menu-timeout` that only counts down in menu mode; `timeout` is a pre-b2 reader alias no writer emits. `show-booting yes|no` controls the launch banner and defaults to yes. A `default` names a config entry id or a discovered BLS row as `bls:<stem>`, and an unresolvable default opens the menu instead of launching another row.
 - Every managed `boot_a.efi`, `boot_b.efi` or `boot_backup.efi` generation carries its matching 120-byte `.gm2p` and 256-byte `.tzmap` sidecars. `boot.efi` is a pre-b2 compatibility name the BDS still reads.
-- `efisp` must be hidden during a managed child launch so a patched ABL cannot recursively reload this BDS.
-- Mode 0 remains honest-unlocked except for the universal efisp recursion guard. Mode 1/2 policy hooks must be scoped to the one managed child lifecycle.
+- Prepared managed ABL images disable their efisp lookup through the ABL patcher (`efisp` → `nulls`). There is no runtime efisp Block I/O hiding hook. Do not assume unmodified on-slot ABL can be chainloaded safely.
+- Mode 0 remains honest-unlocked. Mode 1/2 policy hooks must be scoped to the one managed child lifecycle.
 - Every installed protocol or Block I/O wrapper must restore on failed preparation, failed `LoadImage`, child return, mode change, and fastboot/menu re-entry.
 - A signer digest change is evidence of a different signer, not proof of OEM identity. Preserve the explicit override boundary.
 - `version.mk` is the single version source, and `make bump` regenerates it wholesale: never hand-edit it or the files it generates, and never keep build paths there. Run `make version-check` after version work. The KSU dist manifest must match product, version and runtime before packaging.
@@ -50,7 +50,7 @@ Fix behavior in its authoritative layer:
 - Config grammar and mounted boot-root primitives: `tools/canoe-bootmgr`. Share these primitives; slot/OTA workflow policy belongs to the manager application.
 - Browser ext4/FAT storage: the sibling Rust dependencies and `canoe-nusb-storage`. Android persist allocation uses its existing mount. Do not restore native desktop mounting or libext2fs helpers.
 - Browser USB/storage orchestration: manager runtime and `canoe-nusb-storage`, outside the small CLI.
-- Desktop/WebUI presentation and guided deployment: the `canoe-boot-manager` repository. The native application engine also serves the KSU installer.
+- Desktop/WebUI presentation and guided deployment: the `canoe-boot-manager` repository. The KSU installer only deploys the manager package; the activated WebUI owns partition workflows.
 - Packaging only: `targets`; do not duplicate domain logic into package Makefiles.
 
 Declare a symbol used across files in the shared header, never hand-copied into a `.c`; and let the canonical build arbitrate include order and toolchain behaviour, not an editor's language server.

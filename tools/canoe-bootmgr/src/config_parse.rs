@@ -38,6 +38,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
     let mut menu_mode = MenuMode::Silent;
     let mut key_window_ms = 1200;
     let mut menu_timeout_s = 5;
+    let mut show_booting = true;
     let mut global_mode = 1;
     let mut repair = DeviceInfoRepair::AsNeeded;
     let mut default = None;
@@ -112,6 +113,17 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
             "menu-timeout" => {
                 menu_timeout_s = parse_policy_number(value, "menu_timeout_s", MAX_MENU_TIMEOUT_S)?;
             }
+            "show-booting" => {
+                show_booting = match value {
+                    "yes" => true,
+                    "no" => false,
+                    _ => {
+                        return Err(ConfigError::Invalid(
+                            "show-booting must be yes or no".to_owned(),
+                        ));
+                    }
+                };
+            }
             "timeout" => {
                 menu_timeout_s = parse_policy_number(value, "menu_timeout_s", MAX_MENU_TIMEOUT_S)?;
                 menu_mode = MenuMode::Menu;
@@ -139,6 +151,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
         menu_mode,
         key_window_ms,
         menu_timeout_s,
+        show_booting,
         default,
         mode: global_mode,
         devinfo_repair: repair,

@@ -1477,9 +1477,9 @@ TestBootRootEmpty(void)
   mBootRootManagedPresent = FALSE;
   assert(SfbBootRootObserve () == SfbBootRootEmptyRoot);
   /* Volume Up is the sole first-run opt-in; all default paths stay fastboot. */
-  assert(SfbFirstRunEntersMenu (SfbKeyUp));
+  assert(SfbFirstRunEntersMenu (SfbKeyDown));
   assert(!SfbFirstRunEntersMenu (SfbKeyTimeout));
-  assert(!SfbFirstRunEntersMenu (SfbKeyDown));
+  assert(!SfbFirstRunEntersMenu (SfbKeyUp));
   assert(!SfbFirstRunEntersMenu (SfbKeySelect));
 
   mBootRootSlotAPresent = TRUE;
@@ -1711,12 +1711,20 @@ TestBootRootProbe(void)
       assert(StrCmp (Menu.Entry[Index].Desc, L"Android") == 0);
       assert(Menu.Entry[Index].Mode == SfbBootModeAblFakeLocked);
       assert(!Menu.Entry[Index].ModeFromConfig);
-    } else if (Menu.Entry[Index].Kind == SfbEntryTools) {
+    } else if (Menu.Entry[Index].Kind == SfbEntryAdvanced) {
       Tools = TRUE;
     }
   }
   assert(Files == 1);
   assert(Tools);
+  {
+    const SFB_ENTRY_KIND Actions[] = {SfbEntryMassStorage, SfbEntryFastboot,
+      SfbEntryAdvanced, SfbEntryReboot, SfbEntryPowerOff, SfbEntryRestart};
+    assert(Menu.Count >= 6);
+    for (UINTN Action=0; Action<6; Action++) {
+      assert(Menu.Entry[Menu.Count-6+Action].Kind == Actions[Action]);
+    }
+  }
   /* Nothing authored this menu, so it must be shown rather than launched. */
   assert(!Menu.DefaultFromConfig);
   SfbFreeMenu (&Menu);
@@ -2371,18 +2379,18 @@ TestPowerOnDecisionTable (void)
           SfbBootDecisionDefault);
   assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyTimeout, FALSE) ==
           SfbBootDecisionMenu);
-  assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyUp, TRUE) ==
-          SfbBootDecisionMenu);
   assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyDown, TRUE) ==
+          SfbBootDecisionMenu);
+  assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyUp, TRUE) ==
           SfbBootDecisionFastboot);
 
   /* Menu mode always opens the menu after expiry, where the shared scaffold
    * owns menu-timeout; Volume Down retains the fastboot escape. */
   assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyTimeout, TRUE) ==
           SfbBootDecisionMenu);
-  assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyUp, TRUE) ==
-          SfbBootDecisionMenu);
   assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyDown, TRUE) ==
+          SfbBootDecisionMenu);
+  assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyUp, TRUE) ==
           SfbBootDecisionFastboot);
 }
 

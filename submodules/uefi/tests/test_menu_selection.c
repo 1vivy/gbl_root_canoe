@@ -93,6 +93,9 @@ FakeAttribute (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, UINTN Attribute)
 }
 
 static EFI_STATUS EFIAPI
+FakeCursor (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, BOOLEAN Visible) { (void)This; (void)Visible; return EFI_SUCCESS; }
+
+static EFI_STATUS EFIAPI
 FakeQuery (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, UINTN Mode, UINTN *Columns, UINTN *Rows)
 {
   (void)This; (void)Mode; *Columns = mColumns; *Rows = 32; return EFI_SUCCESS;
@@ -187,7 +190,7 @@ Frame (CONST CHAR8 *Header, SFB_KEY Key)
 int main (int argc, char **argv)
 {
   EFI_SIMPLE_TEXT_OUTPUT_MODE OutputMode = {.Mode = 0};
-  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL Out = {.SetAttribute = FakeAttribute, .ClearScreen = FakeClear, .QueryMode = FakeQuery, .Mode = &OutputMode};
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL Out = {.SetAttribute = FakeAttribute, .ClearScreen = FakeClear, .QueryMode = FakeQuery, .EnableCursor = FakeCursor, .Mode = &OutputMode};
   EFI_SYSTEM_TABLE Table = {.ConOut = &Out};
   SFB_MAIN_MENU_CONTEXT State;
   SFB_MENU_TEMPLATE Template;
@@ -242,29 +245,40 @@ int main (int argc, char **argv)
   }
 
 
-  /* Cancel a fallback edit, then re-enter with the same entry highlighted.
-   * A later explicit fallback edit affects only unconfigured managed images. */
-  mFrames = mNextKey = mFirstTimeout = 0;
+  /* First run goes to the same destination with one wait, never a preliminary
+   * ordinary key window. Every key is dispatched through the actual scaffold. */
   mCheckMainHeader = FALSE;
-  SFB_BOOT_MODE Fallback = SfbBootModeAblFakeLocked;
-  Frame("Unconfigured loader mode", SfbKeyUp);
-  Frame(">   Back", SfbKeySelect);
-  SfbRunModeMenu(&Fallback);
-  assert(Fallback == SfbBootModeAblFakeLocked && mNextKey == 2);
-  mFrames = mNextKey = 0;
-  Frame("Unconfigured loader mode", SfbKeyDown);
-  Frame(">   Mode 1 - Android locked", SfbKeyDown);
-  Frame(">   Mode 2 - Profile spoof", SfbKeySelect);
-  SfbRunModeMenu(&Fallback);
-  assert(Fallback == SfbBootModeKmProfile && mNextKey == 3);
+  for (unsigned Key = SfbKeyTimeout; Key <= SfbKeySelect; Key++) {
+    mFrames = mNextKey = 0; mFirstTimeout = 2000;
+    Frame("Volume Up/timeout: Super Fastboot   Volume Down: boot menu", (SFB_KEY)Key);
+    assert(SfbShowFirstRunScreen() == (Key == SfbKeyDown));
+    assert(mNextKey == 1);
+  }
   mCheckMainHeader = TRUE;
   Initialize(&State, &Template);
-  State.CurrentMode = Fallback;
-  Add(&State, SfbEntryEfiFile, L"\\boot_b.efi", L"Android B", SfbBootModeAblFakeLocked, TRUE, FALSE);
-  Add(&State, SfbEntryEfiFile, L"\\boot_backup.efi", L"Previous loader", SfbBootModeAblFakeLocked, FALSE, FALSE);
-  Frame("Mode 1 - Android locked\r\n\\boot_b.efi\r\n\r\n", SfbKeyDown);
-  Frame("Mode 2 - Profile spoof\r\n\\boot_backup.efi\r\n\r\n", SfbKeySelect);
-  assert(SfbRunMenu(&Template) == EFI_SUCCESS && mNextKey == 2 && mSelectedRow == 1);
+  Add(&State, SfbEntryEfiFile, L"\\boot_a.efi", L"Android A", SfbBootModeAblFakeLocked, TRUE, FALSE);
+  Add(&State, SfbEntryMassStorage, L"", L"USB mass storage", 0, FALSE, FALSE);
+  Add(&State, SfbEntryFastboot, L"", L"Enter Super Fastboot", 0, FALSE, FALSE);
+  Add(&State, SfbEntryAdvanced, L"", L"Advanced >", 0, FALSE, FALSE);
+  Add(&State, SfbEntryReboot, L"", L"Reboot >", 0, FALSE, FALSE);
+  Add(&State, SfbEntryPowerOff, L"", L"Power off", 0, FALSE, FALSE);
+  Add(&State, SfbEntryRestart, L"", L"Restart", 0, FALSE, FALSE);
+  Frame("Mode 1 - Android locked\r\n\\boot_a.efi\r\n\r\n", SfbKeyDown);
+  Frame("USB mass storage\r\nChoose storage to share with a host over USB.\r\n\r\n", SfbKeyDown);
+  Frame("Enter Super Fastboot\r\nConnect to a host for device maintenance.\r\n\r\n", SfbKeyDown);
+  Frame("Advanced >\r\nDefaults, Android modes, boot policy and EFI tools.\r\n\r\n", SfbKeyDown);
+  Frame("Reboot >\r\nRestart into Fastbootd, bootloader, recovery or system.\r\n\r\n", SfbKeySelect);
+  assert(SfbRunMenu(&Template) == EFI_SUCCESS && mNextKey == 5);
+  assert(strstr(mFrame,"Advanced >\r\n----------------------------------------\r\n") != NULL);
+
+  /* Banner policy is universal, including the old boot.efi spelling. A hidden
+   * menu launch clears the menu; a hidden unattended launch keeps the splash. */
+  FakeClear(&Out); Print(L"splash");
+  SfbSetShowBooting(FALSE); SfbShowBootingScreen(L"Android",L"\\boot_a.efi",FALSE);
+  assert(strcmp(mFrame,"splash")==0);
+  SfbShowBootingScreen(L"Android",L"\\boot_a.efi",TRUE); assert(mFrameBytes==0);
+  SfbSetShowBooting(TRUE); SfbShowBootingScreen(L"Android",L"\\boot.efi",FALSE);
+  assert(strcmp(mFrame,"Booting Android\r\n")==0);
 
   /* Long names cannot wrap the header and shift every menu row on small
    * consoles. A BLS/EFI image retains its type instead of an Android policy. */
@@ -280,6 +294,6 @@ int main (int argc, char **argv)
   mFrameBytes = 0; mFrame[0] = 0;
   SfbDrawMainMenuHeader(&State);
   assert(mFrameBytes == 0);
-  printf("menu selection: 11 navigation frames, %u policy/countdown cases, cancel/change/reentry, long path and empty guard passed\n", Cases);
+  printf("menu selection: 11 navigation frames, %u policy/countdown cases, first-run keys, grouped actions, banner policy, long path and empty guard passed\n", Cases);
   return 0;
 }

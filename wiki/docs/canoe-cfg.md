@@ -1,7 +1,7 @@
 # `canoe.cfg` — the boot-root contract
 
 `canoe.cfg` is the persisted BDS menu configuration. The mounted-root CLI,
-application and explicit BDS Save as default action share this format. Normal
+application and explicit BDS default, entry-mode and boot-policy actions share this format. Normal
 menu selections remain one-shot. The raw `efisp` partition contains BDS only.
 
 ## Location and syntax
@@ -33,19 +33,28 @@ In 7.0.0-b5 the boot policy is explicit. Global keys must appear before the firs
 | `menu-mode` | `silent`, `menu` | `silent` for fresh installs | Startup policy |
 | `key-window` | `0..=10000` | `1200` | Volume-key sampling window in milliseconds |
 | `menu-timeout` | `0..=300` | `5` | Menu countdown in seconds; only in Menu mode |
+| `show-booting` | `yes`, `no` | `yes` | Display the Booting message when launching an image |
 | `default` | an entry ID or `bls:<stem>` | none | Row launched without menu input |
 | `mode` | `0`, `1`, `2` | `1` | Fallback mode for entries without their own mode |
 | `devinfo-repair` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo` |
 
 `key-window` is inclusive at both bounds. `key-window 0` means no sampling:
 Silent mode launches the default immediately, while Menu mode still opens the
-menu. In Silent mode, VOL UP during the key window opens the menu and then waits
-indefinitely for input; VOL DOWN takes the existing Super Fastboot path; no key
-launches the configured default immediately. In Menu mode, VOL DOWN during the
-key window takes Super Fastboot, then the menu always opens. The menu counts down
-for `menu-timeout` seconds and launches the default; any key cancels the
-countdown and leaves the menu waiting indefinitely. `menu-timeout 0` disables
-automatic launch.
+menu. VOL UP goes directly to Super Fastboot; VOL DOWN opens the ordinary boot
+menu. Without a key, Silent mode launches the configured default; Menu mode opens
+the menu and counts down for `menu-timeout` seconds. Any menu interaction cancels
+the countdown. An unresolved default opens the menu. An empty boot root retains
+its separate two-second first-run timeout to Super Fastboot; it does not also wait
+through `key-window`. VOL DOWN on first run opens the same boot menu.
+
+The default `show-booting yes` applies to all images, including legacy `boot.efi`.
+`show-booting no` suppresses the message, not image loading or diagnostics. A
+menu-driven launch still clears the menu; an unattended launch preserves the
+existing screen. The CBM and BDS **Hide Booting…** controls edit this one key.
+Older BDS builds ignore this additive key; current firmware advertises
+`canoe-boot-policy=show-booting-v1`. Configuration remains `version 1`.
+A policy-only document with no boot entries is valid. Save default never changes
+an entry mode; Change entry mode never changes the default target.
 
 Here, Super Fastboot means the BDS's own fastboot session, which waives ABL's
 critical-partition status so flashing works from it; partitions inside `super`
@@ -77,6 +86,7 @@ generation N
 menu-mode silent|menu
 key-window 1200
 menu-timeout 5
+show-booting yes
 default android-a          # or: default bls:pmos
 mode 0|1|2
 devinfo-repair asneeded|never
@@ -174,6 +184,7 @@ generation 4
 menu-mode silent
 key-window 1200
 menu-timeout 5
+show-booting yes
 default android-a
 mode 1
 devinfo-repair asneeded

@@ -86,3 +86,5 @@ No agent boot, flash, provisioning or format command was issued. Detailed result
 and remaining observations are in the sibling app's
 `docs/b4-physical-readonly-2026-09-08.md`. Compile/contract/guest proof is recorded
 in `docs/canoe-overhaul.md` and the app's `e2e/OVERHAUL-ACCEPTANCE.md`.
+
+Historical terminology note: the “recursion guard” above means the prepared ABL patch disables its `efisp` lookup (`efisp` → `nulls`). Current BDS has no runtime efisp Block I/O hiding hook. This document describes the earlier comparison, not a runtime Escape implementation.

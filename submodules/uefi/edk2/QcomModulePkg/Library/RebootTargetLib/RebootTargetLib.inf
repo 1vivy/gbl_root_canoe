@@ -1,0 +1,22 @@
+[Defines]
+  INF_VERSION = 0x00010006
+  BASE_NAME = RebootTargetLib
+  FILE_GUID = 203ab6f4-45e2-45b5-9c5a-a8a3a4bedbce
+  MODULE_TYPE = BASE
+  VERSION_STRING = 1.0
+  LIBRARY_CLASS = RebootTargetLib
+[Sources]
+  RebootTargetLib.c
+[Packages]
+  MdePkg/MdePkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+[Guids]
+  gEfiMiscPartitionGuid
+[Protocols]
+  gEfiBlockIoProtocolGuid

@@ -17,10 +17,12 @@
   RebootTools.c
 
 [Packages]
+  QcomModulePkg/QcomModulePkg.dec
   MdePkg/MdePkg.dec
   AndroidToolsPkg/AndroidToolsPkg.dec
 
 [LibraryClasses]
+  RebootTargetLib
   AndroidToolsUi
   BaseLib
   BaseMemoryLib

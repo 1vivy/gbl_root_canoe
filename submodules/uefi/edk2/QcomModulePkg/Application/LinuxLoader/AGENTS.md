@@ -18,13 +18,13 @@ Keep responsibilities separated:
 
 Never conflate these locations:
 
-- raw `efisp`: contains this whole `BDS.efi`; hide its Block I/O handle during every managed ABL launch to prevent recursive re-entry.
+- raw `efisp`: contains this whole `BDS.efi`. Prepared managed ABL images disable their efisp lookup in the patcher; no runtime efisp Block I/O hiding hook exists.
 - ext4 `persist/efisp.fat`: bounded FAT boot root, provisioned as FAT16 (8–256 MiB in 8 MiB steps), containing configuration, EFI images, sidecars and the current Android handoff record. The image disk bounds the mapped range to the actual file size; FatDxe owns filesystem validation and mounting. Do not duplicate its FAT checks in the mount wrapper. Preserve upstream Ext4Dxe acceptance of Android’s normal `needs_recovery` state; the image mapper must not reintroduce a rejection. A mount failure is unavailable, not an empty installation. Original 32 MiB containers remain supported. Legacy `persist/efisp` is ignored.
 - FAT32 removable media: separate discovery/browser roots; never inherit managed boot-root policy implicitly.
 
 `last-boot` is cleared on BDS entry, before launch, and on child return/menu/fastboot re-entry. Only a managed Android handoff publishes a checked CNLB record in the canonical container. Logfs retains debug logs only, never launch evidence. An unavailable container means no record; an accessible record that cannot be invalidated blocks managed handoff while leaving menu and Super Fastboot available.
 
-BDS may explicitly Save as default with staged config and validated previous-config fallback; ordinary selection is one-shot. Image installation and application recovery belong to host/device tools. Persist is a boot volume only through its validated `efisp.fat` container.
+BDS may explicitly save a default, a managed entry mode, or boot policy through the shared staged config writer and previous-config fallback; ordinary selection is one-shot. Image installation and application recovery belong to host/device tools. Persist is a boot volume only through its validated `efisp.fat` container.
 
 ## Managed launch invariants
 
@@ -32,13 +32,13 @@ Managed paths are exactly the live/backup ABL paths recognized by `SfbIsManagedA
 
 1. Parse and validate the exact adjacent `.gm2p` and `.tzmap` sidecars.
 2. Prepare only the requested mode's policy.
-3. Arm the universal efisp recursion guard in every mode.
+3. Use the prepared managed ABL image whose efisp dispatch has been disabled by the patcher; do not substitute raw on-slot ABL.
 4. Preload requested drivers without managed hooks left active.
 5. Temporarily adjust image-security handling only around the intended `LoadImage` operation.
 6. Restore image security before `StartImage`.
 7. On every error or child return, disarm all QSEE/SPSS/SCM/VerifiedBoot/BlockIo wrappers and return to a clean menu/fastboot state.
 
-Mode 0 remains honest-unlocked and installs no managed projection beyond the efisp recursion guard. Mode 1 and Mode 2 must obey the configured lock policy: either reject the launch or visibly downgrade to a fully honest-unlocked path, never continue with a partial projection or widen hooks to unrelated EFI images.
+Mode 0 remains honest-unlocked and installs no managed projection. Mode 1 and Mode 2 must obey the configured lock policy: either reject the launch or visibly downgrade to a fully honest-unlocked path, never continue with a partial projection or widen hooks to unrelated EFI images.
 
 Sidecar wire formats are ABI:
 

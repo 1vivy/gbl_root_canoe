@@ -1,3 +1,4 @@
+#include <Library/RebootTargetLib.h>
 /** @file
 
   Copyright (c) 2013-2014, ARM Ltd. All rights reserved.<BR>
@@ -2315,45 +2316,32 @@ FastbootRegister (IN CONST CHAR8 *prefix,
   }
 }
 
-/*
- * Reboot, honouring the target the host asked for.
- *
- * AcceptCmd dispatches on a prefix, so the "reboot" entry also catches
- * fastboot's reboot-recovery, reboot-bootloader and anything else beginning
- * that way; the remainder arrives here as arg. Ignoring it meant
- * `fastboot reboot recovery` answered OKAY and booted Android instead, which
- * is a large part of why leaving a mass-storage export needed the device's own
- * buttons: the host could ask for recovery and be silently sent elsewhere.
- *
- * An unrecognised target fails rather than rebooting somewhere the host did not
- * name. This device has no userspace fastbootd, so `reboot fastboot` is not
- * quietly answered with a bootloader reboot either.
- */
+/* Reboot destinations share the same BCB/reset conventions as the BDS menu
+ * and standalone RebootTools. An unknown suffix never silently reboots. */
 STATIC VOID
 CmdReboot (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 {
-  UINT8 Reason = NORMAL_MODE;
-
+  REBOOT_TARGET Target = RebootTargetSystem;
+  UINT8 Reason;
+  EFI_STATUS Status;
   if (arg != NULL && *arg != '\0') {
-    if (AsciiStrCmp (arg, "-recovery") == 0) {
-      Reason = RECOVERY_MODE;
-    } else if (AsciiStrCmp (arg, "-bootloader") == 0) {
-      Reason = FASTBOOT_MODE;
-    } else {
-      DEBUG ((EFI_D_ERROR, "SFB: MARK reboot target=%a status=unsupported\n",
-              arg));
-      FastbootFail ("unsupported reboot target");
-      return;
-    }
+    if (AsciiStrCmp (arg, "-recovery") == 0) { Target = RebootTargetRecovery; }
+    else if (AsciiStrCmp (arg, "-bootloader") == 0) { Target = RebootTargetBootloader; }
+    else if (AsciiStrCmp (arg, "-fastboot") == 0) { Target = RebootTargetFastbootd; }
+    else { FastbootFail ("unsupported reboot target"); return; }
   }
-
+  WaitForFlashFinished ();
+  Status = RebootTargetPrepare (Target, &Reason);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK reboot target=%a prepare=%r\n",
+            (arg != NULL && *arg != '\0') ? arg : "-", Status));
+    FastbootFail ("could not prepare reboot target");
+    return;
+  }
   DEBUG ((EFI_D_ERROR, "SFB: MARK reboot target=%a reason=%u\n",
           (arg != NULL && *arg != '\0') ? arg : "-", (UINT32)Reason));
   FastbootOkay ("");
-
   RebootDevice (Reason);
-
-  // Shouldn't get here
   FastbootFail ("Failed to reboot");
 }
 
@@ -2968,6 +2956,7 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   }
   FastbootPublishVar ("canoe-bds", SFB_BDS_VERSION);
   FastbootPublishVar ("canoe-boot-volume", "fat16-container-v1");
+  FastbootPublishVar ("canoe-boot-policy", "show-booting-v1");
   FastbootPublishVar ("canoe-boot-volume-sizes", "8-256MiB-step8-v1");
   FastbootPublishVar ("canoe-hash", "sha256-range-v1");
   if (SfbMsdManagedAvailable ()) FastbootPublishVar ("canoe-managed-storage", "bot-v1");

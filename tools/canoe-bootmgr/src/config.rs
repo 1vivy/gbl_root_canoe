@@ -131,6 +131,8 @@ pub struct ConfigDocument {
     pub menu_mode: MenuMode,
     pub key_window_ms: u32,
     pub menu_timeout_s: u32,
+    #[serde(default = "default_show_booting")]
+    pub show_booting: bool,
     pub default: Option<String>,
     pub mode: u8,
     pub devinfo_repair: DeviceInfoRepair,
@@ -155,6 +157,7 @@ pub struct PolicyUpdate {
     pub menu_mode: Option<MenuMode>,
     pub key_window_ms: Option<u32>,
     pub menu_timeout_s: Option<u32>,
+    pub show_booting: Option<bool>,
 }
 
 pub(crate) fn validate_request(request: &EntryRequest) -> Result<(), ConfigError> {
@@ -255,4 +258,8 @@ pub(crate) fn canonical_image(value: &str) -> Result<String, ConfigError> {
 
 pub(crate) fn printable(value: &str) -> bool {
     value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+}
+
+pub const fn default_show_booting() -> bool {
+    true
 }

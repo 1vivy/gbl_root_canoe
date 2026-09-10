@@ -33,6 +33,7 @@
 #
 ################################################################################
 [LibraryClasses]
+  RebootTargetLib|QcomModulePkg/Library/RebootTargetLib/RebootTargetLib.inf
   UefiApplicationEntryPoint|MdePkg/Library/UefiApplicationEntryPoint/UefiApplicationEntryPoint.inf
   UefiBootServicesTableLib|MdePkg/Library/UefiBootServicesTableLib/UefiBootServicesTableLib.inf
   UefiRuntimeServicesTableLib|MdePkg/Library/UefiRuntimeServicesTableLib/UefiRuntimeServicesTableLib.inf

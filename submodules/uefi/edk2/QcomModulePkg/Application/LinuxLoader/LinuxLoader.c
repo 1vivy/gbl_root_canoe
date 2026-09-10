@@ -241,24 +241,29 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     DEBUG ((EFI_D_INFO, "SFB: MARK mode-current mode=%u config-valid=%u\n",
             (UINT32)Mode, (UINT32)ConfigAvailable));
 
-    PowerOnKey = WaitForPowerOnKey (Config.KeyWindowMs);
-    Decision = SfbDecidePowerOn (
-                 Config.MenuMode,
-                 PowerOnKey,
-                 (BOOLEAN)(ConfigAvailable && Config.DefaultSpecified));
-    DEBUG ((EFI_D_INFO, "SFB: power-on key=%u decision=%u window=%u\n",
-            (UINT32)PowerOnKey, (UINT32)Decision, Config.KeyWindowMs));
 
     /*
      * Boot-root availability is checked before key intent. Mount errors retain
      * the fastboot escape without declaring a new install. A missing root or
-     * one with no launchable image/config enters the first-run flow. Volume Up on the first-run screen is an explicit
+     * one with no launchable image/config enters the first-run flow. Volume Down on the first-run screen is an explicit
      * opt-in to the normal menu, which can enumerate anything discovered in
      * the meantime.
      */
     BootRootState = SfbBootRootObserve ();
     SfbRecordBootRootState (BootRootState);
     SfbPublishBootRootTable ();
+    SfbSetShowBooting (ConfigAvailable ? Config.ShowBooting : TRUE);
+    Decision = SfbBootDecisionMenu;
+    if (BootRootState != SfbBootRootUnavailable && !SfbBootRootIsEmptyState (BootRootState)) {
+      PowerOnKey = WaitForPowerOnKey (Config.KeyWindowMs);
+      Decision = SfbDecidePowerOn (
+                   Config.MenuMode,
+                   PowerOnKey,
+                   (BOOLEAN)(ConfigAvailable && Config.DefaultSpecified));
+      DEBUG ((EFI_D_INFO, "SFB: power-on key=%u decision=%u window=%u\n",
+              (UINT32)PowerOnKey, (UINT32)Decision, Config.KeyWindowMs));
+
+    }
     if (BootRootState == SfbBootRootUnavailable) {
       Print (L"CANOE-BDS boot files could not be opened. Entering Super Fastboot.\n");
       DEBUG ((EFI_D_WARN, "SFB: MARK bootflow root-unavailable=1\n"));

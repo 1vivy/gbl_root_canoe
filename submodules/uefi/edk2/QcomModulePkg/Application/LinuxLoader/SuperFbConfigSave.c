@@ -111,9 +111,9 @@ Done:
   return Status;
 }
 
-EFI_STATUS
-SfbStoreConfigDefault (EFI_FILE_PROTOCOL *Root,
-                        CONST CHAR8 *Target, UINT8 Mode)
+STATIC EFI_STATUS
+SfbStoreConfigEdit (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target,
+                    UINT8 Mode, CONST SFB_CONFIG *Policy, BOOLEAN ChangeMode)
 {
   CHAR8 *Current = NULL;
   CHAR8 *Next = NULL;
@@ -130,10 +130,17 @@ SfbStoreConfigDefault (EFI_FILE_PROTOCOL *Root,
     goto Done;
   }
   Status = SfbReadStoredConfig (Root, Current, &Size, Config, &Previous);
-  if (EFI_ERROR (Status)) {
-    goto Done;
+  if (Status == EFI_NOT_FOUND && Policy != NULL) {
+    CONST CHAR8 Seed[] = "version 1\ngeneration 0\n";
+    CopyMem (Current, Seed, sizeof (Seed));
+    Size = sizeof (Seed) - 1;
+    Previous = TRUE;
+    Status = EFI_SUCCESS;
   }
-  if (!SfbConfigEditDefault (Current, Size, Target, Mode, Next, &NextSize)) {
+  if (EFI_ERROR (Status)) { goto Done; }
+  if (!(Policy != NULL ? SfbConfigEditPolicy (Current, Size, Policy, Next, &NextSize) :
+        ChangeMode ? SfbConfigEditMode (Current, Size, Target, Mode, Next, &NextSize) :
+        SfbConfigEditDefault (Current, Size, Target, Next, &NextSize))) {
     Status = EFI_INVALID_PARAMETER;
     goto Done;
   }
@@ -150,3 +157,10 @@ Done:
   if (Config != NULL) { FreePool (Config); }
   return Status;
 }
+
+EFI_STATUS SfbStoreConfigDefault (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target)
+{ return SfbStoreConfigEdit (Root, Target, 0, NULL, FALSE); }
+EFI_STATUS SfbStoreConfigMode (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target, UINT8 Mode)
+{ return SfbStoreConfigEdit (Root, Target, Mode, NULL, TRUE); }
+EFI_STATUS SfbStoreConfigPolicy (EFI_FILE_PROTOCOL *Root, CONST SFB_CONFIG *Policy)
+{ return SfbStoreConfigEdit (Root, NULL, 0, Policy, FALSE); }

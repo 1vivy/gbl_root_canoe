@@ -16,6 +16,7 @@
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfigStore.h"
 
 EFI_GUID gEfiFileInfoGuid;
+VOID *EFIAPI CopyMem (VOID *Destination, CONST VOID *Source, UINTN Size) { return memcpy(Destination, Source, Size); }
 typedef struct {
   EFI_FILE_PROTOCOL Protocol;
   char Name[64];
@@ -127,30 +128,30 @@ int main (void) {
   Config = ReadConfig (&Previous);
   assert (!Previous && Config.Count == 0 && Config.Generation == 9);
   assert (Config.DefaultIsBls && Config.KeyWindowMs == 2345);
-  assert (SfbStoreConfigDefault (&Root, "bls:linux", 0) == EFI_SUCCESS);
+  assert (SfbStoreConfigDefault (&Root, "bls:linux") == EFI_SUCCESS);
   Config = ReadConfig (&Previous);
   assert (!Previous && Config.Count == 0 && Config.DefaultIsBls);
   Reset ();
   Put (".canoe-cfg-stage-00000001", "old interrupted staging", 23);
-  assert (SfbStoreConfigDefault (&Root, "a", 2) == EFI_SUCCESS);
+  assert (SfbStoreConfigMode (&Root, "a", 2) == EFI_SUCCESS);
   Total = Mutations;
   assert (Find (".canoe-cfg-stage-00000001") != NULL);
   Config = ReadConfig (&Previous); assert (!Previous && Config.Generation == 5 && Config.Entry[0].Mode == 2);
   File = Find ("canoe.cfg.prev"); assert (File && File->Size == strlen (Original) && memcmp (File->Bytes, Original, File->Size) == 0);
   for (Boundary = 1; Boundary <= Total; Boundary++) {
     Reset (); FaultAt = Boundary;
-    assert (EFI_ERROR (SfbStoreConfigDefault (&Root, "a", 2)));
+    assert (EFI_ERROR (SfbStoreConfigMode (&Root, "a", 2)));
     FaultAt = 0;
     Config = ReadConfig (&Previous);
     assert ((Config.Generation == 4 && Config.Entry[0].Mode == 1) || (Config.Generation == 5 && Config.Entry[0].Mode == 2));
     assert (memcmp (Find ("keep")->Bytes, "unrelated", 9) == 0 && !Allocations);
   }
   Reset (); ShortWrite = TRUE;
-  assert (EFI_ERROR (SfbStoreConfigDefault (&Root, "a", 2)));
+  assert (EFI_ERROR (SfbStoreConfigMode (&Root, "a", 2)));
   Config = ReadConfig (&Previous); assert (!Previous && Config.Generation == 4);
   Reset (); Put ("canoe.cfg.prev", Original, strlen (Original)); Put ("canoe.cfg", "invalid", 7);
   Config = ReadConfig (&Previous); assert (Previous && Config.Generation == 4);
-  assert (SfbStoreConfigDefault (&Root, "a", 2) == EFI_SUCCESS);
+  assert (SfbStoreConfigMode (&Root, "a", 2) == EFI_SUCCESS);
   assert (memcmp (Find ("canoe.cfg.prev")->Bytes, Original, strlen (Original)) == 0);
   Config = ReadConfig (&Previous); assert (!Previous && Config.Generation == 5);
   Find ("canoe.cfg")->Present = FALSE;
@@ -158,6 +159,13 @@ int main (void) {
   CurrentReadError = EFI_ACCESS_DENIED;
   { char Bytes[SFB_CONFIG_MAX_BYTES + 1]; UINTN Size;
     assert (SfbReadStoredConfig (&Root, Bytes, &Size, &Config, &Previous) == EFI_ACCESS_DENIED); }
+  Reset ();
+  Find ("canoe.cfg")->Present = FALSE;
+  assert (SfbConfigParse ("version 1\n", 10, &Config));
+  Config.ShowBooting = FALSE;
+  assert (SfbStoreConfigPolicy (&Root, &Config) == EFI_SUCCESS);
+  Config = ReadConfig (&Previous);
+  assert (!Previous && Config.Count == 0 && !Config.ShowBooting);
   assert (!Allocations);
   printf ("test_config_store: %lu mutation failure boundaries, fallback and preservation passed\n", (unsigned long)Total);
   return 0;

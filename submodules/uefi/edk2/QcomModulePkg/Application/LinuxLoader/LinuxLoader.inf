@@ -142,6 +142,7 @@
 	Ext4Pkg/Ext4Pkg.dec
 
 [LibraryClasses]
+  RebootTargetLib
 	DxeServicesTableLib
 	UefiLib
 	UefiApplicationEntryPoint

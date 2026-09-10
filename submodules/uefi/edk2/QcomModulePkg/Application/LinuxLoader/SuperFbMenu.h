@@ -5,9 +5,8 @@
  * offer whatever removable/ESP boot loaders it finds there even on platforms
  * whose firmware exposes nothing but Block I/O.
  *
- * The menu is a reader. Its state lives in `canoe.cfg` on the boot root, is
- * authored by the host tool or the on-device module, and is never written from
- * here - see wiki/docs/canoe-cfg.md and SuperFbConfig.h.
+ * Explicit default, mode and boot-policy saves update canoe.cfg on the FAT
+ * boot root. Ordinary selections remain one-shot.
  *
  * Copyright (c) 2026, contributors to the canoe ABL tree.
  * SPDX-License-Identifier: BSD-3-Clause
@@ -117,7 +116,9 @@ typedef enum {
    * fastboot mode screen. */
   SfbEntryPowerOff,
   SfbEntryRestart,
-  SfbEntryRecovery
+  SfbEntryRecovery,
+  SfbEntryAdvanced,
+  SfbEntryReboot
 } SFB_ENTRY_KIND;
 
 /*
@@ -207,6 +208,7 @@ typedef struct {
   SFB_CONFIG_MENU_MODE   MenuMode;
   UINT32                 KeyWindowMs;
   UINT32                 MenuTimeoutSeconds;
+  BOOLEAN                ShowBooting;
   SFB_CONFIG_LOCK_POLICY LockPolicy;
   /* Non-zero means canoe.cfg was partly refused. Surfaced in the menu: a
    * half-applied config must be visible, never silent. */
@@ -245,7 +247,7 @@ SfbDecidePowerOn (
   IN BOOLEAN              HasDefault
   )
 {
-  if (Key == SfbKeyDown) {
+  if (Key == SfbKeyUp) {
     return SfbBootDecisionFastboot;
   }
   if (MenuMode == SfbConfigMenuSilent &&
@@ -255,12 +257,12 @@ SfbDecidePowerOn (
   return SfbBootDecisionMenu;
 }
 
-/* First-run's only opt-in is Volume Up. It is intentionally independent of the
+/* First-run's only opt-in is Volume Down. It is intentionally independent of the
  * persisted silent/menu policy and keeps the historical fastboot default. */
 static inline BOOLEAN
 SfbFirstRunEntersMenu (IN SFB_KEY Key)
 {
-  return (BOOLEAN)(Key == SfbKeyUp);
+  return (BOOLEAN)(Key == SfbKeyDown);
 }
 
 /*
@@ -631,6 +633,8 @@ SfbShowFirstRunScreen (VOID);
  * FALSE the current screen is left as-is (unattended default boot).
  * FilePath is used to judge whether to hide the text for boot.efi.
  */
+VOID SfbSetShowBooting (IN BOOLEAN ShowBooting);
+
 VOID
 SfbShowBootingScreen (IN CONST CHAR16 *Name,
                       IN CONST CHAR16 *FilePath,

@@ -54,6 +54,7 @@
   FLASH_DEFINITION               = QcomModulePkg/QcomModulePkg.fdf
 
 [LibraryClasses.common]
+  RebootTargetLib|QcomModulePkg/Library/RebootTargetLib/RebootTargetLib.inf
   BaseStackCheckLib|MdePkg/Library/BaseStackCheckLib/BaseStackCheckLib.inf
   DebugPrintErrorLevelLib|MdePkg/Library/BaseDebugPrintErrorLevelLib/BaseDebugPrintErrorLevelLib.inf
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf

@@ -482,24 +482,40 @@ TestExplicitDefaultEdit (void)
     " mode 1\nentry b\n title B\n image boot_b.efi\n mode 2\n options untouched=1\n";
   char Output[SFB_CONFIG_MAX_BYTES + 1];
   SFB_UINTN Size = SFB_CONFIG_MAX_BYTES;
-  assert (SfbConfigEditDefault (Input, strlen (Input), "a", 2, Output, &Size));
+  assert (SfbConfigEditDefault (Input, strlen (Input), "a", Output, &Size));
   Output[Size] = 0;
   assert (strstr (Output, "# retained comment\n") != NULL);
   assert (strstr (Output, "future-policy retained\n") != NULL);
   assert (strstr (Output, "entry b\n title B\n image boot_b.efi\n mode 2\n options untouched=1\n") != NULL);
   assert (SfbConfigParse (Output, Size, &gConfig));
   assert (gConfig.Generation == 8 && gConfig.DefaultIndex == 0);
-  assert (gConfig.Entry[0].Mode == 2 && gConfig.Mode == 1);
+  assert (gConfig.Entry[0].Mode == 1 && gConfig.Mode == 1);
   Size = SFB_CONFIG_MAX_BYTES;
-  assert (SfbConfigEditDefault (Input, strlen (Input), "bls:linux", 0, Output, &Size));
+  assert (SfbConfigEditDefault (Input, strlen (Input), "bls:linux", Output, &Size));
   assert (SfbConfigParse (Output, Size, &gConfig));
   assert (gConfig.DefaultIsBls && strcmp (gConfig.DefaultBlsStem, "linux") == 0);
   assert (gConfig.Entry[0].Mode == 1 && gConfig.Entry[1].Mode == 2);
   Size = SFB_CONFIG_MAX_BYTES;
-  assert (!SfbConfigEditDefault (Input, strlen (Input), "missing", 1, Output, &Size));
+  assert (!SfbConfigEditDefault (Input, strlen (Input), "missing", Output, &Size));
   assert (Size == 0);
+  Size = SFB_CONFIG_MAX_BYTES;
+  assert (SfbConfigEditMode (Input, strlen (Input), "b", 0, Output, &Size));
+  assert (SfbConfigParse (Output, Size, &gConfig));
+  assert (gConfig.DefaultIndex == 0 && gConfig.Entry[1].Mode == 0);
+  {
+    SFB_CONFIG Policy = gConfig;
+    Policy.ShowBooting = FALSE; Policy.KeyWindowMs = 500;
+    Size = SFB_CONFIG_MAX_BYTES;
+    assert (SfbConfigEditPolicy (Input, strlen (Input), &Policy, Output, &Size));
+    assert (SfbConfigParse (Output, Size, &gConfig));
+    assert (!gConfig.ShowBooting && gConfig.KeyWindowMs == 500);
+    assert (gConfig.DefaultIndex == 0 && gConfig.Entry[1].Mode == 2);
+    Size = SFB_CONFIG_MAX_BYTES;
+    assert (SfbConfigEditPolicy ("version 1\n", 10, &Policy, Output, &Size));
+    assert (SfbConfigParse (Output, Size, &gConfig) && gConfig.Count == 0 && !gConfig.ShowBooting);
+  }
   Size = 10;
-  assert (!SfbConfigEditDefault (Input, strlen (Input), "a", 1, Output, &Size));
+  assert (!SfbConfigEditDefault (Input, strlen (Input), "a", Output, &Size));
   assert (Size == 0);
 }
 

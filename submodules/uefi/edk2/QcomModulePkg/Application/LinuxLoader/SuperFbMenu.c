@@ -20,6 +20,7 @@
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
 #include <Library/ShutdownServices.h>
+#include <Library/RebootTargetLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include <Protocol/SimpleTextIn.h>
@@ -196,30 +197,6 @@ SfbWaitForKey (IN UINT32 TimeoutMs)
 
 /* ---- drawing ------------------------------------------------------------ */
 
-STATIC CONST CHAR16*
-SfbGetFileName (IN CONST CHAR16 *Path)
-{
-  CONST CHAR16 *FileName = Path;
-  while (*Path != L'\0') {
-    if (*Path == L'\\') FileName = Path + 1;
-    Path++;
-  }
-  return FileName;
-}
-
-STATIC BOOLEAN
-SfbStrCaseEqual (IN CONST CHAR16 *Str1, IN CONST CHAR16 *Str2)
-{
-  while (*Str1 && *Str2) {
-    CHAR16 c1 = (*Str1 >= L'a' && *Str1 <= L'z') ? *Str1 - 0x20 : *Str1;
-    CHAR16 c2 = (*Str2 >= L'a' && *Str2 <= L'z') ? *Str2 - 0x20 : *Str2;
-    if (c1 != c2) return FALSE;
-    Str1++;
-    Str2++;
-  }
-  return *Str1 == L'\0' && *Str2 == L'\0';
-}
-
 VOID
 SfbBeginScreen (IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle)
 {
@@ -376,16 +353,16 @@ BOOLEAN
 SfbShowFirstRunScreen (VOID)
 {
   STATIC SFB_MENU_ROW Rows[] = {
-    { L"Enter boot menu (Volume Up)", L" " },
+    { L"Enter boot menu (Volume Down)", L" " },
     { L"Enter Super Fastboot (default)", L" " }
   };
   SFB_MENU_TEMPLATE Template;
   BOOLEAN EnterMenu = FALSE;
 
   ZeroMem (&Template, sizeof (Template));
-  Template.Title = L"First run";
+  Template.Title = L"CANOE-BDS";
   Template.Subtitle = L"No boot image installed.";
-  Template.Footer = L"Volume Up: menu   Power/timeout: fastboot";
+  Template.Footer = L"Volume Up/timeout: Super Fastboot   Volume Down: boot menu";
   Template.Rows = Rows;
   Template.RowCount = ARRAY_SIZE (Rows);
   Template.Cursor = 1;
@@ -404,6 +381,9 @@ SfbShowFirstRunScreen (VOID)
  * of its own until it takes over, so without this the boot menu would linger on
  * screen through the load.
  */
+STATIC BOOLEAN mSfbShowBooting = TRUE;
+VOID SfbSetShowBooting (IN BOOLEAN ShowBooting) { mSfbShowBooting = ShowBooting; }
+
 VOID
 SfbShowBootingScreen (IN CONST CHAR16 *Name,
                       IN CONST CHAR16 *FilePath,
@@ -420,12 +400,8 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name,
   }
   gST->ConOut->EnableCursor (gST->ConOut, FALSE);
 
-  if (FilePath != NULL) {
-    CONST CHAR16 *FileName = SfbGetFileName (FilePath);
-    if (!SfbStrCaseEqual (FileName, L"boot.efi")) {
-      Print (L"Booting %s\r\n", (Name != NULL && Name[0] != L'\0') ? Name : L"...");
-    }
-  } else {
+  (VOID)FilePath;
+  if (mSfbShowBooting) {
     Print (L"Booting %s\r\n", (Name != NULL && Name[0] != L'\0') ? Name : L"...");
   }
 
@@ -454,24 +430,12 @@ SfbShowActionScreen (IN CONST CHAR16 *Text)
  * taking input. Long enough that a volume key held from power-on has been
  * released, so it does not immediately move the menu cursor.
  */
-#define SFB_ENTER_MENU_DELAY_S  3
 
 VOID
 SfbShowEnteringMenu (VOID)
 {
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
-  gST->ConOut->ClearScreen (gST->ConOut);
-  gST->ConOut->EnableCursor (gST->ConOut, FALSE);
-
-  Print (L"Entering Boot Menu\r\n");
-
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
-
-  /* Wait for the key to be released... */
-  gBS->Stall (SFB_ENTER_MENU_DELAY_S * 1000 * 1000);
-
-  /* ...then drop anything typed or held during the wait so it does not leak
-   * into the menu as a spurious keypress. */
+  /* The selected destination draws immediately; queued startup keys do not
+   * become a second menu action. No separate page or fixed startup dwell. */
   gST->ConIn->Reset (gST->ConIn, FALSE);
 }
 
@@ -567,6 +531,12 @@ SfbDrawMainMenuHeader (IN VOID *Context)
   case SfbEntryMassStorage:
     Detail = L"Choose storage to share with a host over USB.";
     break;
+  case SfbEntryAdvanced:
+    Detail = L"Defaults, Android modes, boot policy and EFI tools.";
+    break;
+  case SfbEntryReboot:
+    Detail = L"Restart into Fastbootd, bootloader, recovery or system.";
+    break;
   case SfbEntryRecovery:
     Detail = L"Restart the phone into recovery.";
     break;
@@ -602,6 +572,13 @@ SfbDrawMainMenuRow (IN VOID    *Context,
   CONST CHAR16          *Marker = (Row == State->Menu.DefaultIndex)
                                   ? L"*" : L" ";
   CONST CHAR16          *Prefix = Entry->IsUsb ? L"[E] " : L"";
+  if (Row == 0 || Entry->Kind == SfbEntryMassStorage ||
+      Entry->Kind == SfbEntryAdvanced || Entry->Kind == SfbEntryReboot ||
+      Entry->Kind == SfbEntryPowerOff) {
+    if (Row == 0 && Entry->Kind == SfbEntryMassStorage) { Print (L"  No boot entries.\r\n"); }
+    SfbDrawSelectionLine (L"----------------------------------------");
+  }
+
 
   if (Entry->Role != SfbConfigRoleOther || Entry->Passthrough) {
     CONST CHAR8 *AsciiSuffix = SfbConfigRoleSuffix (Entry->Role);
@@ -631,9 +608,8 @@ SfbDrawMainMenuRow (IN VOID    *Context,
     SfbDrawRow (Selected, Marker, Entry->Desc);
   }
 }
-STATIC
-VOID
-SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode);
+STATIC VOID SfbRunAdvancedMenu (IN CONST SFB_MENU_STATE *Menu);
+STATIC VOID SfbRunRebootMenu (VOID);
 
 STATIC
 EFI_STATUS
@@ -643,6 +619,7 @@ SfbRefreshMainMenu (IN VOID *Context)
 
   SfbFreeMenu (&State->Menu);
   SfbBuildMenu (&State->Menu, State->CurrentMode);
+  SfbSetShowBooting (State->Menu.ShowBooting);
   SfbSetLaunchLockPolicy (State->Menu.ConfigValid
                           ? State->Menu.LockPolicy
                           : SfbConfigLockAsNeeded);
@@ -668,126 +645,6 @@ SfbExitMainMenu (IN VOID *Context)
   SfbFreeMenu (&State->Menu);
 }
 
-typedef struct {
-  CONST SFB_BOOT_ENTRY *Entry;
-  SFB_BOOT_MODE Mode;
-  BOOLEAN Saved;
-} SFB_SAVE_CONFIRM_CONTEXT;
-
-STATIC SFB_MENU_ACTION
-SfbHandleSaveConfirmation (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
-{
-  SFB_SAVE_CONFIRM_CONTEXT *State = (SFB_SAVE_CONFIRM_CONTEXT *)Context;
-  EFI_FILE_PROTOCOL *Root = NULL;
-  EFI_STATUS Status;
-  UINTN CancelRow = State->Entry->Passthrough ? 1 : 3;
-  UINT8 Mode;
-  (VOID)Key;
-  if (Row >= CancelRow) { return SfbMenuActionExit; }
-  Mode = State->Entry->Passthrough ? (UINT8)State->Mode : (UINT8)Row;
-  if (!SfbIsContainerVolume (State->Entry->Volume) ||
-      State->Entry->DefaultTarget[0] == '\0') {
-    Status = EFI_INVALID_PARAMETER;
-  } else {
-    Status = SfbOpenVolumeRoot (State->Entry->Volume, &Root);
-    if (!EFI_ERROR (Status) && Root != NULL) {
-      Status = SfbStoreConfigDefault (Root, State->Entry->DefaultTarget, Mode);
-      Root->Close (Root);
-    } else if (!EFI_ERROR (Status)) {
-      Status = EFI_DEVICE_ERROR;
-    }
-  }
-  State->Saved = (BOOLEAN)!EFI_ERROR (Status);
-  SfbReportStatus (State->Saved ? L"Default saved" : L"Could not save default", Status);
-  return SfbMenuActionExit;
-}
-
-STATIC VOID
-SfbConfirmSaveDefault (IN CONST SFB_BOOT_ENTRY *Entry, IN SFB_BOOT_MODE Mode)
-{
-  SFB_MENU_ROW ManagedRows[] = {
-    { NULL, L" " }, { NULL, L" " }, { NULL, L" " },
-    { L"Cancel", L" " }
-  };
-  STATIC SFB_MENU_ROW OtherRows[] = {
-    { L"Save as default", L" " }, { L"Cancel", L" " }
-  };
-  CHAR16 ModeLabels[3][96];
-  UINTN Index;
-  SFB_SAVE_CONFIRM_CONTEXT State;
-  SFB_MENU_TEMPLATE Template;
-  ZeroMem (&State, sizeof (State));
-  ZeroMem (&Template, sizeof (Template));
-  State.Entry = Entry;
-  State.Mode = Entry->ModeFromConfig ? Entry->Mode : Mode;
-  for (Index = 0; Index < ARRAY_SIZE (ModeLabels); Index++) {
-    UnicodeSPrint (ModeLabels[Index], sizeof (ModeLabels[Index]),
-                   L"Save with %s%s", SfbBootModeLabel ((SFB_BOOT_MODE)Index),
-                   Index == (UINTN)State.Mode ? L" (current)" : L"");
-    ManagedRows[Index].Text = ModeLabels[Index];
-  }
-  Template.Title = Entry->Desc;
-  Template.Subtitle = Entry->Passthrough ? L"Save this entry for future boots?" :
-    L"Changing between Mode 0 and Mode 1/2 requires formatting phone data.";
-  Template.Footer = L"This saves a preference. It never boots or formats the phone.";
-  Template.Rows = Entry->Passthrough ? OtherRows : ManagedRows;
-  Template.RowCount = Entry->Passthrough ? ARRAY_SIZE (OtherRows) : ARRAY_SIZE (ManagedRows);
-  Template.Cursor = Template.RowCount - 1;
-  Template.Navigate = TRUE;
-  Template.Context = &State;
-  Template.Handler = SfbHandleSaveConfirmation;
-  (VOID)SfbRunMenu (&Template);
-}
-
-typedef struct {
-  CONST SFB_MENU_STATE *Menu;
-  UINTN Map[SFB_MAX_ENTRIES];
-  UINTN Count;
-} SFB_SAVE_MENU_CONTEXT;
-
-STATIC SFB_MENU_ACTION
-SfbHandleSaveChoice (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
-{
-  SFB_SAVE_MENU_CONTEXT *State = (SFB_SAVE_MENU_CONTEXT *)Context;
-  (VOID)Key;
-  if (Row < State->Count) {
-    SfbConfirmSaveDefault (&State->Menu->Entry[State->Map[Row]], State->Menu->Mode);
-  }
-  return SfbMenuActionExit;
-}
-
-STATIC VOID
-SfbRunSaveDefaultMenu (IN CONST SFB_MENU_STATE *Menu)
-{
-  SFB_SAVE_MENU_CONTEXT State;
-  SFB_MENU_TEMPLATE Template;
-  SFB_MENU_ROW Rows[SFB_MAX_ENTRIES + 1];
-  UINTN Index;
-  ZeroMem (&State, sizeof (State));
-  ZeroMem (&Template, sizeof (Template));
-  State.Menu = Menu;
-  for (Index = 0; Index < Menu->Count; Index++) {
-    CONST SFB_BOOT_ENTRY *Entry = &Menu->Entry[Index];
-    if (Entry->DefaultTarget[0] == '\0' || Entry->IsUsb ||
-        !SfbIsContainerVolume (Entry->Volume)) { continue; }
-    State.Map[State.Count] = Index;
-    Rows[State.Count].Text = Entry->Desc;
-    Rows[State.Count++].Marker = L" ";
-  }
-  Rows[State.Count].Text = L"Back";
-  Rows[State.Count].Marker = L" ";
-  Template.Title = L"Save as default";
-  Template.Subtitle = L"Choose an entry stored on this phone.";
-  Template.Footer = L"Vol Up/Down: move   Power: select";
-  Template.Rows = Rows;
-  Template.RowCount = State.Count + 1;
-  Template.Cursor = State.Count;
-  Template.Navigate = TRUE;
-  Template.Context = &State;
-  Template.Handler = SfbHandleSaveChoice;
-  (VOID)SfbRunMenu (&Template);
-}
-
 STATIC
 SFB_MENU_ACTION
 SfbHandleMainMenuRow (IN VOID *Context,
@@ -807,7 +664,8 @@ SfbHandleMainMenuRow (IN VOID *Context,
       Entry->Kind == SfbEntryBlsLinux ||
       Entry->Kind == SfbEntryBlsEfi) {
     if (Key == SfbKeyTimeout) {
-      SfbSetLaunchLockPolicy (State->Menu.ConfigValid
+      SfbSetShowBooting (State->Menu.ShowBooting);
+  SfbSetLaunchLockPolicy (State->Menu.ConfigValid
                               ? State->Menu.LockPolicy
                               : SfbConfigLockAsNeeded);
       Status = SfbLaunchEntry (Entry, FALSE, State->CurrentMode);
@@ -824,11 +682,11 @@ SfbHandleMainMenuRow (IN VOID *Context,
   case SfbEntryFastboot:
     State->EnterFastboot = TRUE;
     return SfbMenuActionExit;
-  case SfbEntrySaveDefault:
-    SfbRunSaveDefaultMenu (&State->Menu);
+  case SfbEntryAdvanced:
+    SfbRunAdvancedMenu (&State->Menu);
     return SfbMenuActionRebuild;
-  case SfbEntryMode:
-    SfbRunModeMenu (&State->CurrentMode);
+  case SfbEntryReboot:
+    SfbRunRebootMenu ();
     return SfbMenuActionRebuild;
   case SfbEntrySelector:
     SfbRunFileBrowser (State->CurrentMode);
@@ -858,58 +716,272 @@ SfbHandleMainMenuRow (IN VOID *Context,
   }
 }
 
-/* USB diagnostics moved out of the BDS: the UsbTools app under EFI Tools
- * owns the census screen and the host-mode attempt. */
-STATIC
-SFB_MENU_ACTION
-SfbHandleModeMenuRow (IN VOID *Context,
-                      IN UINTN Row,
-                      IN SFB_KEY Key)
-{
-  SFB_BOOT_MODE *CurrentMode = (SFB_BOOT_MODE *)Context;
+typedef struct {
+  CONST SFB_BOOT_ENTRY *Entry;
+  BOOLEAN ChangeMode;
+} SFB_ENTRY_PREFERENCE;
 
+STATIC SFB_MENU_ACTION
+SfbHandleEntryPreference (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  SFB_ENTRY_PREFERENCE *State = Context;
+  EFI_FILE_PROTOCOL *Root = NULL;
+  EFI_STATUS Status;
   (VOID)Key;
-  if (Row < 3) {
-    *CurrentMode = (SFB_BOOT_MODE)Row;
+  if (Row >= (State->ChangeMode ? 3u : 1u)) { return SfbMenuActionExit; }
+  Status = SfbOpenVolumeRoot (State->Entry->Volume, &Root);
+  if (!EFI_ERROR (Status) && Root != NULL) {
+    Status = State->ChangeMode
+      ? SfbStoreConfigMode (Root, State->Entry->DefaultTarget, (UINT8)Row)
+      : SfbStoreConfigDefault (Root, State->Entry->DefaultTarget);
+    Root->Close (Root);
+  } else if (!EFI_ERROR (Status)) { Status = EFI_DEVICE_ERROR; }
+  SfbReportStatus (EFI_ERROR (Status) ? L"Could not save preference" :
+                   (State->ChangeMode ? L"Entry mode saved" : L"Default saved"), Status);
+  return SfbMenuActionExit;
+}
+
+STATIC VOID
+SfbConfirmEntryPreference (CONST SFB_BOOT_ENTRY *Entry, BOOLEAN ChangeMode)
+{
+  SFB_MENU_ROW Rows[] = {{NULL,L" "},{NULL,L" "},{NULL,L" "},{L"Cancel",L" "}};
+  SFB_MENU_TEMPLATE Template;
+  SFB_ENTRY_PREFERENCE State;
+  UINTN Index;
+  ZeroMem (&Template, sizeof (Template));
+  State.Entry = Entry; State.ChangeMode = ChangeMode;
+  if (ChangeMode) {
+    for (Index = 0; Index < 3; Index++) {
+      Rows[Index].Text = SfbBootModeLabel ((SFB_BOOT_MODE)Index);
+      Rows[Index].Marker = Entry->Mode == Index ? L"*" : L" ";
+    }
+  } else { Rows[0].Text = L"Save as default"; Rows[1].Text = L"Cancel"; }
+  Template.Title = Entry->Desc;
+  Template.Subtitle = ChangeMode
+    ? L"Mode 0 to/from 1/2 requires formatting data. Custom ROMs use Mode 2."
+    : L"Use this entry on future boots; keep its mode unchanged.";
+  Template.Footer = L"Saves a preference; never boots or formats the phone.";
+  Template.Rows = Rows; Template.RowCount = ChangeMode ? 4 : 2;
+  Template.Cursor = Template.RowCount - 1; Template.Navigate = TRUE;
+  Template.Context = &State; Template.Handler = SfbHandleEntryPreference;
+  (VOID)SfbRunMenu (&Template);
+}
+
+typedef struct {
+  CONST SFB_MENU_STATE *Menu;
+  UINTN Map[SFB_MAX_ENTRIES];
+  UINTN Count;
+  BOOLEAN ChangeMode;
+} SFB_ENTRY_CHOICE;
+
+STATIC SFB_MENU_ACTION
+SfbHandleEntryChoice (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  SFB_ENTRY_CHOICE *State = Context;
+  (VOID)Key;
+  if (Row < State->Count) {
+    SfbConfirmEntryPreference (&State->Menu->Entry[State->Map[Row]], State->ChangeMode);
   }
   return SfbMenuActionExit;
 }
 
-/*
- * Select a session-only mode override. Nothing is written: canoe.cfg remains
- * the sole source of configured policy, and its entry modes win over this
- * fallback when the corresponding image is launched.
- */
-STATIC
-VOID
-SfbRunModeMenu (IN OUT SFB_BOOT_MODE *CurrentMode)
+STATIC VOID
+SfbRunEntryPreference (CONST SFB_MENU_STATE *Menu, BOOLEAN ChangeMode)
 {
-  SFB_MENU_ROW Rows[] = {
-    { NULL, L" " }, { NULL, L" " }, { NULL, L" " },
-    { L"Back", L" " }
-  };
+  SFB_ENTRY_CHOICE State;
   SFB_MENU_TEMPLATE Template;
+  SFB_MENU_ROW Rows[SFB_MAX_ENTRIES + 1];
   UINTN Index;
-
-  if (CurrentMode == NULL) {
-    return;
+  ZeroMem (&State, sizeof (State)); ZeroMem (&Template, sizeof (Template));
+  State.Menu = Menu; State.ChangeMode = ChangeMode;
+  for (Index = 0; Index < Menu->Count; Index++) {
+    CONST SFB_BOOT_ENTRY *Entry = &Menu->Entry[Index];
+    if (!SfbIsContainerVolume (Entry->Volume) || Entry->DefaultTarget[0] == '\0') { continue; }
+    if (ChangeMode && (!SfbIsManagedAblEntry (Entry) || !Entry->ModeFromConfig)) { continue; }
+    State.Map[State.Count] = Index;
+    Rows[State.Count].Text = Entry->Desc;
+    Rows[State.Count++].Marker = Index == Menu->DefaultIndex ? L"*" : L" ";
   }
-  for (Index = 0; Index < 3; Index++) {
-    Rows[Index].Text = SfbBootModeLabel ((SFB_BOOT_MODE)Index);
-  }
-  ZeroMem (&Template, sizeof (Template));
-  Template.Title = L"Unconfigured loader mode";
-  Template.Subtitle = L"This boot only; configured entry modes remain unchanged.";
-  Template.Footer = L"Vol Up/Down: move   Power: select";
-  Template.Rows = Rows;
-  Template.RowCount = ARRAY_SIZE (Rows);
-  Template.Navigate = TRUE;
-  Template.Context = CurrentMode;
-  Template.Enter = SfbMenuNoopEnter;
-  Template.Exit = SfbMenuNoopExit;
-  Template.Handler = SfbHandleModeMenuRow;
+  Rows[State.Count].Text = L"Back"; Rows[State.Count].Marker = L" ";
+  Template.Title = ChangeMode ? L"Change an Android entry's mode" : L"Save a default entry";
+  Template.Subtitle = State.Count ? L"Choose an entry." : L"No eligible boot entries.";
+  Template.Footer = L"Volume Up/Down: move   Power: select";
+  Template.Rows = Rows; Template.RowCount = State.Count + 1; Template.Navigate = TRUE;
+  Template.Context = &State; Template.Handler = SfbHandleEntryChoice;
   (VOID)SfbRunMenu (&Template);
 }
+
+typedef struct { UINT32 *Value; CONST UINT32 *Choices; UINTN Count; } SFB_NUMBER_CHOICE;
+STATIC SFB_MENU_ACTION
+SfbHandleNumber (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  SFB_NUMBER_CHOICE *State = Context;
+  (VOID)Key;
+  if (Row < State->Count) { *State->Value = State->Choices[Row]; }
+  return SfbMenuActionExit;
+}
+STATIC VOID
+SfbChooseNumber (CONST CHAR16 *Title, UINT32 *Value,
+                 CONST UINT32 *Choices, UINTN Count, CONST CHAR16 *Unit)
+{
+  SFB_MENU_TEMPLATE Template;
+  SFB_MENU_ROW Rows[9]; CHAR16 Labels[8][32]; UINTN Index;
+  SFB_NUMBER_CHOICE State;
+  if (Count > 8) { return; }
+  ZeroMem (&Template, sizeof (Template));
+  State.Value = Value; State.Choices = Choices; State.Count = Count;
+  for (Index = 0; Index < Count; Index++) {
+    UnicodeSPrint (Labels[Index], sizeof (Labels[Index]), L"%u %s", Choices[Index], Unit);
+    Rows[Index].Text = Labels[Index]; Rows[Index].Marker = *Value == Choices[Index] ? L"*" : L" ";
+  }
+  Rows[Count].Text = L"Back"; Rows[Count].Marker = L" ";
+  Template.Title = Title; Template.Subtitle = L"Zero disables this wait.";
+  Template.Footer = L"Volume Up/Down: move   Power: select";
+  Template.Rows = Rows; Template.RowCount = Count + 1; Template.Navigate = TRUE;
+  Template.Context = &State; Template.Handler = SfbHandleNumber;
+  (VOID)SfbRunMenu (&Template);
+}
+
+typedef struct { SFB_CONFIG Policy; EFI_FILE_PROTOCOL *Root; } SFB_POLICY_CONTEXT;
+STATIC SFB_MENU_ACTION
+SfbHandlePolicy (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  STATIC CONST UINT32 KeyWindows[] = {0,300,500,1200,2000,3000,5000,10000};
+  STATIC CONST UINT32 Timeouts[] = {0,3,5,10,30,60,300};
+  SFB_POLICY_CONTEXT *State = Context;
+  (VOID)Key;
+  switch (Row) {
+  case 0:
+    State->Policy.MenuMode = State->Policy.MenuMode == SfbConfigMenuSilent ? SfbConfigMenuMenu : SfbConfigMenuSilent;
+    break;
+  case 1:
+    SfbChooseNumber (L"Startup key window", &State->Policy.KeyWindowMs, KeyWindows, ARRAY_SIZE (KeyWindows), L"ms");
+    break;
+  case 2:
+    SfbChooseNumber (L"Boot-menu timeout", &State->Policy.MenuTimeoutSeconds, Timeouts, ARRAY_SIZE (Timeouts), L"seconds");
+    break;
+  case 3: State->Policy.ShowBooting = !State->Policy.ShowBooting; break;
+  case 4: {
+    EFI_STATUS Status = SfbStoreConfigPolicy (State->Root, &State->Policy);
+    SfbReportStatus (EFI_ERROR (Status) ? L"Could not save boot policy" : L"Boot policy saved", Status);
+    return SfbMenuActionExit;
+  }
+  default: return SfbMenuActionExit;
+  }
+  return SfbMenuActionContinue;
+}
+STATIC VOID
+SfbDrawPolicyRow (IN VOID *Context, IN UINTN Row, IN BOOLEAN Selected)
+{
+  SFB_POLICY_CONTEXT *State = Context; CHAR16 Text[96];
+  switch (Row) {
+  case 0: UnicodeSPrint (Text, sizeof (Text), L"Startup: %s", State->Policy.MenuMode == SfbConfigMenuSilent ? L"silent default" : L"boot menu"); break;
+  case 1: UnicodeSPrint (Text, sizeof (Text), L"Key window: %u ms", State->Policy.KeyWindowMs); break;
+  case 2: UnicodeSPrint (Text, sizeof (Text), L"Menu timeout: %u seconds", State->Policy.MenuTimeoutSeconds); break;
+  case 3: UnicodeSPrint (Text, sizeof (Text), L"[%s] Hide Booting...", State->Policy.ShowBooting ? L" " : L"x"); break;
+  case 4: StrCpyS (Text, ARRAY_SIZE (Text), L"Save boot policy"); break;
+  default: StrCpyS (Text, ARRAY_SIZE (Text), L"Cancel"); break;
+  }
+  SfbDrawRow (Selected, L" ", Text);
+}
+STATIC VOID
+SfbRunPolicyMenu (VOID)
+{
+  SFB_POLICY_CONTEXT *State;
+  SFB_MENU_TEMPLATE Template; EFI_HANDLE *Volumes = NULL;
+  UINTN Count = 0, Index, Size; BOOLEAN Previous; CHAR8 *Bytes;
+  EFI_STATUS Status;
+  State = AllocateZeroPool (sizeof (*State));
+  Bytes = AllocateZeroPool (SFB_CONFIG_MAX_BYTES + 1);
+  if (State == NULL || Bytes == NULL) { Status = EFI_OUT_OF_RESOURCES; goto Done; }
+  Status = SfbLocateVolumes (&Volumes, &Count);
+  if (EFI_ERROR (Status)) { goto Done; }
+  Status = EFI_NOT_FOUND;
+  for (Index = 0; Index < Count; Index++) {
+    if (SfbIsContainerVolume (Volumes[Index])) { Status = SfbOpenVolumeRoot (Volumes[Index], &State->Root); break; }
+  }
+  if (!EFI_ERROR (Status) && State->Root == NULL) { Status = EFI_DEVICE_ERROR; }
+  if (EFI_ERROR (Status)) { goto Done; }
+  Status = SfbReadStoredConfig (State->Root, Bytes, &Size, &State->Policy, &Previous);
+  if (Status == EFI_NOT_FOUND) {
+    (VOID)SfbConfigParse ("version 1\n", 10, &State->Policy);
+    Status = EFI_SUCCESS;
+  }
+  if (EFI_ERROR (Status)) { goto Done; }
+  ZeroMem (&Template, sizeof (Template));
+  Template.Title = L"Boot policy";
+  Template.Subtitle = L"Volume Up enters Super Fastboot; Volume Down opens the boot menu.";
+  Template.Footer = L"Changes take effect when saved. No boot entries are changed.";
+  Template.Context = State; Template.RowCount = 6; Template.Navigate = TRUE;
+  Template.Handler = SfbHandlePolicy; Template.DrawRow = SfbDrawPolicyRow;
+  (VOID)SfbRunMenu (&Template);
+Done:
+  if (EFI_ERROR (Status)) { SfbReportStatus (L"Boot policy needs an available efisp.fat", Status); }
+  if (State != NULL) { if (State->Root != NULL) { State->Root->Close (State->Root); } FreePool (State); }
+  if (Bytes != NULL) { FreePool (Bytes); }
+  if (Volumes != NULL) { FreePool (Volumes); }
+}
+
+STATIC SFB_MENU_ACTION
+SfbHandleAdvanced (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  CONST SFB_MENU_STATE *Menu = Context;
+  (VOID)Key;
+  switch (Row) {
+  case 0: SfbRunEntryPreference (Menu, FALSE); break;
+  case 1: SfbRunEntryPreference (Menu, TRUE); break;
+  case 2: SfbRunPolicyMenu (); break;
+  case 3: SfbRunToolsBrowser (Menu->Mode); break;
+  case 4: SfbRunFileBrowser (Menu->Mode); break;
+  default: break;
+  }
+  return SfbMenuActionExit;
+}
+STATIC VOID
+SfbRunAdvancedMenu (IN CONST SFB_MENU_STATE *Menu)
+{
+  STATIC SFB_MENU_ROW Rows[] = {
+    {L"Save a default entry", L" "}, {L"Change an Android entry's mode", L" "},
+    {L"Boot policy",L" "}, {L"Android EFI tools",L" "},
+    {L"Select an EFI file",L" "}, {L"Back",L" "}
+  };
+  SFB_MENU_TEMPLATE Template;
+  ZeroMem (&Template, sizeof (Template));
+  Template.Title = L"Advanced"; Template.Subtitle = L"Manage boot preferences or launch an EFI application.";
+  Template.Footer = L"Volume Up/Down: move   Power: select";
+  Template.Rows = Rows; Template.RowCount = ARRAY_SIZE (Rows); Template.Navigate = TRUE;
+  Template.Context = (VOID *)Menu; Template.Handler = SfbHandleAdvanced;
+  (VOID)SfbRunMenu (&Template);
+}
+STATIC SFB_MENU_ACTION
+SfbHandleReboot (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  UINT8 Reason; EFI_STATUS Status;
+  (VOID)Context; (VOID)Key;
+  if (Row >= RebootTargetCount) { return SfbMenuActionExit; }
+  Status = RebootTargetPrepare ((REBOOT_TARGET)Row, &Reason);
+  if (EFI_ERROR (Status)) { SfbReportStatus (L"Could not prepare reboot target", Status); return SfbMenuActionExit; }
+  SfbShowActionScreen (L"Restarting phone...");
+  RebootDevice (Reason);
+  SfbReportStatus (L"Restart returned", EFI_DEVICE_ERROR);
+  return SfbMenuActionExit;
+}
+STATIC VOID
+SfbRunRebootMenu (VOID)
+{
+  STATIC SFB_MENU_ROW Rows[] = {
+    {L"Fastbootd",L" "},{L"Bootloader",L" "},{L"Recovery",L" "},{L"System",L" "},{L"Back",L" "}
+  };
+  SFB_MENU_TEMPLATE Template;
+  ZeroMem (&Template, sizeof (Template));
+  Template.Title = L"Reboot";
+  Template.Subtitle = L"Restart the phone into the selected destination.";
+  Template.Footer = L"Volume Up/Down: move   Power: select";
+  Template.Rows = Rows; Template.RowCount = ARRAY_SIZE (Rows); Template.Navigate = TRUE;
+  Template.Handler = SfbHandleReboot;
+  (VOID)SfbRunMenu (&Template);
+}
+
 
 BOOLEAN
 SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
@@ -931,7 +1003,7 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
   State.AllowCountdown = AllowCountdown;
   State.Menu.DefaultIndex = SFB_NO_INDEX;
 
-  Template.Title = L"Boot Menu";
+  Template.Title = L"Boot menu";
   Template.Subtitle = SFB_MENU_CREDIT;
   Template.Footer = L"Vol Up/Down: move   Power: select";
   Template.Context = &State;

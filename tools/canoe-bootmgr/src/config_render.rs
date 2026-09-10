@@ -14,6 +14,10 @@ pub(crate) fn serialize(config: &ConfigDocument) -> Result<Vec<u8>, ConfigError>
         format!("menu-mode {}", config.menu_mode.as_str()),
         format!("key-window {}", config.key_window_ms),
         format!("menu-timeout {}", config.menu_timeout_s),
+        format!(
+            "show-booting {}",
+            if config.show_booting { "yes" } else { "no" }
+        ),
     ];
     if let Some(default) = &config.default {
         lines.push(format!("default {default}"));
@@ -48,15 +52,16 @@ pub(crate) fn serialize(config: &ConfigDocument) -> Result<Vec<u8>, ConfigError>
 }
 
 fn validate_document(config: &ConfigDocument) -> Result<(), ConfigError> {
-    if config.entries.is_empty() || config.entries.len() > MAX_ENTRIES {
+    if config.entries.len() > MAX_ENTRIES {
         return Err(ConfigError::Invalid(format!(
-            "config must contain 1..{MAX_ENTRIES} entries"
+            "config must contain at most {MAX_ENTRIES} entries"
         )));
     }
     validate_policy(PolicyUpdate {
         menu_mode: Some(config.menu_mode),
         key_window_ms: Some(config.key_window_ms),
         menu_timeout_s: Some(config.menu_timeout_s),
+        show_booting: Some(config.show_booting),
     })?;
     if config.mode > 2 {
         return Err(ConfigError::Invalid(
@@ -117,6 +122,7 @@ fn validate_raw(line: &crate::config::RawLine) -> Result<(), ConfigError> {
                 | "menu-mode"
                 | "key-window"
                 | "menu-timeout"
+                | "show-booting"
                 | "timeout"
                 | "default"
                 | "mode"

@@ -53,6 +53,8 @@ pub enum ConfigCommand {
         key_window_ms: Option<u32>,
         #[arg(long)]
         menu_timeout_s: Option<u32>,
+        #[arg(long)]
+        show_booting: Option<bool>,
     },
 }
 
@@ -232,12 +234,14 @@ pub fn execute(cli: &Cli) -> Result<Output, Box<dyn std::error::Error>> {
                     menu_mode,
                     key_window_ms,
                     menu_timeout_s,
+                    show_booting,
                 },
         } => {
             config.set_policy(PolicyUpdate {
                 menu_mode: *menu_mode,
                 key_window_ms: *key_window_ms,
                 menu_timeout_s: *menu_timeout_s,
+                show_booting: *show_booting,
             })?;
             json!({"ok": true, "generation": config.generation, "config": config})
         }

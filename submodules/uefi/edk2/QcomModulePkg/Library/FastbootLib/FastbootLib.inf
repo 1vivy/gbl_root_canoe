@@ -105,6 +105,7 @@
   QcomModulePkg/QcomModulePkg.dec
 
 [LibraryClasses]
+  RebootTargetLib
   UefiApplicationEntryPoint
   UefiLib
   PcdLib

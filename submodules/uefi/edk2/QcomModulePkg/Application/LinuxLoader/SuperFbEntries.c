@@ -1256,11 +1256,8 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   EFI_STATUS Status;
   EFI_HANDLE ConfigVolume = NULL;
   SFB_CONFIG Config;
-  /* Fastboot, Selector, Tools, fallback Mode, Mass Storage, Recovery,
-   * Power Off, Restart:
-   * the rows appended after truncation, whose space the discovered entries
-   * must not eat. */
-  UINTN MandatoryRows = 8;
+  /* Six always-available actions; advanced choices live in their submenu. */
+  UINTN MandatoryRows = 6;
   UINTN ReservedRows;
   UINTN Unconfigured;
   UINTN Index;
@@ -1272,6 +1269,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   Menu->MenuMode = SfbConfigMenuSilent;
   Menu->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
   Menu->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
+  Menu->ShowBooting = TRUE;
   Menu->LockPolicy = SfbConfigLockAsNeeded;
 
   SfbBootMark (L"menu:begin");
@@ -1284,6 +1282,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
     Menu->MenuMode = Config.MenuMode;
     Menu->KeyWindowMs = Config.KeyWindowMs;
     Menu->MenuTimeoutSeconds = Config.MenuTimeoutSeconds;
+    Menu->ShowBooting = Config.ShowBooting;
     Menu->LockPolicy = Config.LockPolicy;
     Menu->RejectedLines = Config.RejectedLines;
     SfbAppendConfigEntries (Menu, &Config, ConfigVolume);
@@ -1322,8 +1321,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
                    (Menu->RejectedLines != 0 || Config.DefaultSpecified))
                     ? 1 : 0) +
                  (Menu->SlotMismatch ? 1 : 0) +
-                 (Menu->ConfigPrevious ? 1 : 0) +
-                 (Menu->ConfigValid ? 1 : 0);
+                 (Menu->ConfigPrevious ? 1 : 0);
   while (Menu->Count > SFB_MAX_ENTRIES - ReservedRows) {
     Menu->Count--;
     SfbFreeEntry (&Menu->Entry[Menu->Count]);
@@ -1348,22 +1346,15 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   if (Menu->ConfigPrevious) {
     SfbAppendBuiltIn (Menu, SfbEntryBack, L"Using previous saved configuration");
   }
-  if (Menu->ConfigValid) {
-    SfbAppendBuiltIn (Menu, SfbEntrySaveDefault, L"Save a default entry and mode");
-  }
   if (Menu->SlotMismatch) {
     SfbAppendBuiltIn (Menu, SfbEntryBack, L"Config slot role is stale");
   }
 
+  SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB mass storage");
   SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Super Fastboot");
-  SfbAppendBuiltIn (Menu, SfbEntrySelector, L"Enter EFI Program Selector");
-  SfbAppendBuiltIn (Menu, SfbEntryTools, L"EFI Tools");
-  /* Keep the fallback control with the utilities. The selection header shows
-   * each entry's own policy; this control never overrides configured modes. */
-  SfbAppendBuiltIn (Menu, SfbEntryMode, L"Unconfigured loader mode");
-  SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");
-  SfbAppendBuiltIn (Menu, SfbEntryRecovery, L"Reboot to Recovery");
-  SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power Off");
+  SfbAppendBuiltIn (Menu, SfbEntryAdvanced, L"Advanced >");
+  SfbAppendBuiltIn (Menu, SfbEntryReboot, L"Reboot >");
+  SfbAppendBuiltIn (Menu, SfbEntryPowerOff, L"Power off");
   SfbAppendBuiltIn (Menu, SfbEntryRestart, L"Restart");
 
 

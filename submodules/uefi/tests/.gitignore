@@ -35,3 +35,5 @@ test_last_boot_store
 
 /test_ext4_lifecycle
 /test_raw_persist_export
+
+test_reboot_targets

@@ -13,6 +13,7 @@ impl ConfigDocument {
             menu_mode: MenuMode::Silent,
             key_window_ms: 1200,
             menu_timeout_s: 5,
+            show_booting: true,
             default: None,
             mode: 0,
             devinfo_repair: DeviceInfoRepair::AsNeeded,
@@ -200,6 +201,9 @@ impl ConfigDocument {
         }
         if let Some(menu_timeout_s) = update.menu_timeout_s {
             self.menu_timeout_s = menu_timeout_s;
+        }
+        if let Some(show_booting) = update.show_booting {
+            self.show_booting = show_booting;
         }
         self.bump_generation()
     }

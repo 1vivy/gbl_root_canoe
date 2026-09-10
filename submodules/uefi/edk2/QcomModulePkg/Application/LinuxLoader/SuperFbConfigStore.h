@@ -16,5 +16,7 @@ EFI_STATUS SfbReadStoredConfig (EFI_FILE_PROTOCOL *Root, CHAR8 *Buffer,
 /* Checked staged writes, with previous generation committed before current
  * replacement. Never called as a consequence of an ordinary boot selection. */
 EFI_STATUS SfbStoreConfigDefault (EFI_FILE_PROTOCOL *Root,
-                                  CONST CHAR8 *Target, UINT8 Mode);
+                                  CONST CHAR8 *Target);
+EFI_STATUS SfbStoreConfigMode (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target, UINT8 Mode);
+EFI_STATUS SfbStoreConfigPolicy (EFI_FILE_PROTOCOL *Root, CONST SFB_CONFIG *Policy);
 #endif

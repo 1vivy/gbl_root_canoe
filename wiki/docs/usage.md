@@ -18,7 +18,7 @@ successful receipts remain inspectable.
 ## Entering Super Fastboot
 
 Super Fastboot is the BDS's own fastboot session. Press **VOL UP during boot**
-to open the BDS menu, then choose **Enter Super Fastboot**.
+to enter Super Fastboot directly. **VOL DOWN** opens the BDS boot menu.
 
 From Super Fastboot, RAM-load the raw UEFI payload directly:
 
@@ -45,62 +45,41 @@ this BDS session; partitions inside `super` remain the exception. Stock
 userspace `fastbootd` is used only by Deploy's fresh-install Provision stage.
 ## First run and BDS menu
 
-When the boot root is missing or unreachable, has no launchable image, or has a
-configuration whose images are all absent, BDS treats it as first run. The
-first-run screen has these rows:
+When the boot root is absent or contains no launchable image, BDS retains the
+first-run detection and two-second timeout. **VOL UP** enters Super Fastboot
+immediately; timeout and Power also enter Super Fastboot. **VOL DOWN** opens the
+same boot menu used by installed systems. Missing entries and an empty tools
+directory remain ordinary empty menus. An unavailable filesystem is reported
+separately and enters Super Fastboot; it is not classified as a new installation.
 
-- **Enter boot menu (Volume Up)**
-- **Enter Super Fastboot (default)**
+A populated root uses the configured key window (default **1200 ms**): **VOL UP**
+enters Super Fastboot; **VOL DOWN** opens the boot menu. With no key, **Silent**
+launches a resolvable saved default. **Menu** opens the menu with a default
+five-second countdown; interaction cancels it. Missing defaults open the menu.
+Zero key-window or menu-timeout disables that respective wait.
 
-On the first-run screen, press **VOL UP** to enter the normal boot menu. The
-cursor starts on **Enter Super Fastboot (default)**. The two-second timeout,
-VOL DOWN, and Power preserve the safe Super Fastboot path; choosing the boot
-menu row lets an operator inspect the available entries.
+The menu shows build/version and details of the highlighted entry or action.
+Boot entries retain their existing discovery order. The grouped actions are:
 
-For a populated root, BDS reads `menu-mode` and samples keys for `key-window`
-milliseconds:
+- USB mass storage and Enter Super Fastboot.
+- **Advanced**: Save a default entry, Change an Android entry's mode, Boot policy,
+  Android EFI tools, and Select an EFI file.
+- **Reboot**: Fastbootd, Bootloader, Recovery, and System.
+- Power off and Restart.
 
-- **Silent** (fresh-install default): VOL UP opens the menu and then waits
-  indefinitely; VOL DOWN exits directly to Super Fastboot; with no key held,
-  BDS launches the configured default after the key window.
-- **Menu**: VOL DOWN during the key window exits directly to Super Fastboot.
-  Otherwise the menu opens and counts down for `menu-timeout` seconds before
-  launching the default; any key cancels the countdown and makes the menu wait
-  indefinitely.
-
-`key-window` is `0..=10000` milliseconds and defaults to `1200`; zero disables
-sampling. `menu-timeout` is `0..=300` seconds and defaults to `5`; it is used
-only in Menu mode, and zero means never auto-launch. An unresolved default,
-including an undiscovered `bls:<stem>`, opens the menu with the existing notice
-and waits instead of falling through to another row.
-
-A default may name an Android row or a discovered non-removable BLS Type #1 row,
-for example `default bls:pmos`. A USB-hosted BLS row cannot be an unattended
-default. The writer emits `menu-mode`, `key-window`, and `menu-timeout`; the
-legacy `timeout` line is accepted by BDS only as a pre-b2 compatibility alias
-and is never written.
-
-The menu is built in this order:
-
-1. A boot-mode override for this launch, with a separate explicit save action.
-2. Existing `canoe.cfg` rows whose `image` exists.
-3. If configuration is absent or invalid, compatibility rows for `boot.efi`,
-   `boot_a.efi`, `boot_b.efi`, and `boot_backup.efi` when present. New installs
-   use per-slot names; `boot.efi` is only a pre-b2 probe.
-4. Per-volume `\EFI\BOOT\BOOTAA64.EFI` rows, labelled from `\EFI\DESC` or
-   `NONAME<n>`.
-5. Valid BLS Type #1 rows from `\loader\entries\*.conf` on the persist boot
-   root or removable media.
-6. Built-in actions: **Enter Super Fastboot**, **Enter EFI Program Selector**,
-   **EFI Tools**, **USB Mass Storage**, **Reboot to Recovery**, **Power Off**,
-   and **Restart**.
+Save default preserves each entry's mode. Mode changes preserve the default.
+Boot policy edits the same `canoe.cfg` settings as CBM, including **Hide Booting…**.
+Preferences are local until explicitly saved. A populated FAT container can hold
+boot policy even when it has no entries; an absent container cannot save files.
+**Restart** uses the ordinary boot path; **Reboot → System** also clears a known
+recovery/Fastbootd BCB command. It preserves unrelated vendor BCB content.
 
 Missing configured images and invalid BLS rows are skipped. To launch a BLS
-row interactively, hold VOL UP during startup, select it, and press Power.
+row interactively, hold VOL DOWN during startup, select it, and press Power.
 BLS rows are passthrough launches; Mode 1/2 policy hooks and managed sidecars do
 not apply.
 
-The **EFI Tools** action lists the boot-root `tools/` directory. The bundled
+The **Advanced → Android EFI tools** action lists the boot-root `tools/` directory. The bundled
 `SurfaceTools.efi` passive inventory and read-only policy probe behavior is
 unchanged: the passive dump replaces only its explicitly named logfs file, and
 the policy probe requires its separate VOL UP confirmation. See the BDS logs
@@ -121,13 +100,14 @@ From a host, the supported reboot targets are:
 ```bash
 fastboot reboot              # Android
 fastboot reboot recovery     # recovery
-fastboot reboot bootloader   # back into Super Fastboot
+fastboot reboot bootloader   # bootloader target
+fastboot reboot fastboot     # userspace Fastbootd
 ```
 
-Other targets fail. This BDS session is not a stock userspace session, so
-`fastboot reboot fastboot` is refused here rather than being treated as a
-bootloader reboot. Deploy's fresh-install Provision stage is the only workflow
-in this guide that asks for stock userspace `fastbootd`.
+Other targets fail. Recovery and Fastbootd prepare the bootloader control block
+in `misc`, flush it, and restart through the ordinary boot path. Firmware and
+the selected boot chain must support that destination; this is not a stock-ABL
+escape. System clears a known recovery/Fastbootd command before restarting.
 
 
 ## Saving a BDS preference

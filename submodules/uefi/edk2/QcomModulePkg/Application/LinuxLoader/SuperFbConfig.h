@@ -93,6 +93,7 @@ typedef struct {
   SFB_CONFIG_MENU_MODE   MenuMode;
   SFB_UINT32             KeyWindowMs;
   SFB_UINT32             MenuTimeoutSeconds;
+  SFB_BOOLEAN            ShowBooting;
   SFB_UINT8              Mode;
   SFB_CONFIG_LOCK_POLICY LockPolicy;
   /*
@@ -145,12 +146,15 @@ SfbConfigEntryMode (
 const char *
 SfbConfigRoleSuffix (SFB_CONFIG_ROLE Role);
 
-/* Edit an existing valid configuration, preserving unrelated lines. Target is
- * a config entry id or bls:<stem>. For BLS, Mode is ignored. No boot or format
- * assessment is implied by this explicit firmware preference change. */
-SFB_BOOLEAN
-SfbConfigEditDefault (const char *Bytes, SFB_UINTN Size,
-                      const char *Target, SFB_UINT8 Mode,
-                      char *Output, SFB_UINTN *OutputSize);
+/* Explicit preference changes, preserving unrelated lines and entry policy. */
+SFB_BOOLEAN SfbConfigEditDefault (const char *Bytes, SFB_UINTN Size,
+                                 const char *Target,
+                                 char *Output, SFB_UINTN *OutputSize);
+SFB_BOOLEAN SfbConfigEditMode (const char *Bytes, SFB_UINTN Size,
+                              const char *Target, SFB_UINT8 Mode,
+                              char *Output, SFB_UINTN *OutputSize);
+SFB_BOOLEAN SfbConfigEditPolicy (const char *Bytes, SFB_UINTN Size,
+                                const SFB_CONFIG *Policy,
+                                char *Output, SFB_UINTN *OutputSize);
 
 #endif /* __SUPER_FB_CONFIG_H__ */
