@@ -98,6 +98,11 @@ impl Root {
         }
         Ok(bytes)
     }
+    /// Inspect a named entry without reading its contents or following links.
+    pub fn metadata(&self, path: &str) -> io::Result<cap_std::fs::Metadata> {
+        let (parent, name) = self.parent(path, false)?;
+        parent.symlink_metadata(name)
+    }
     pub fn names(&self, path: &str) -> io::Result<Vec<String>> {
         let dir = if path.is_empty() {
             self.directory.try_clone()?
@@ -242,4 +247,25 @@ pub(crate) fn sync_directory(directory: &Dir) -> io::Result<()> {
         let _ = directory;
         Ok(())
     } // publication uses MOVEFILE_WRITE_THROUGH
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    #[test]
+    fn metadata_observes_named_files_without_following_links() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("tools")).unwrap();
+        std::fs::write(dir.path().join("tools/test.efi"), b"test").unwrap();
+        let root = Root::open(dir.path()).unwrap();
+        assert_eq!(root.metadata("tools/test.efi").unwrap().len(), 4);
+        assert!(root.metadata("tools").unwrap().is_dir());
+        assert!(root.metadata("../outside").is_err());
+        #[cfg(unix)] {
+            std::os::unix::fs::symlink("test.efi", dir.path().join("tools/link.efi")).unwrap();
+            assert!(root.metadata("tools/link.efi").unwrap().is_symlink());
+            std::os::unix::fs::symlink("tools", dir.path().join("alias")).unwrap();
+            assert!(root.metadata("alias/test.efi").is_err());
+        }
+    }
 }
