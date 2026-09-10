@@ -21,10 +21,10 @@ The BDS never owns final OS handoff. A launched ABL/OS loader calls `ExitBootSer
 
 1. Copies the canonical Conf templates into EDK II.
 2. Runs `embed_variant.py` to generate `CanoeMsdVariantData.c`.
-3. Deletes the previous `LinuxLoader.efi` before invoking a build command whose status is tolerated.
+3. Deletes the BDS `Build/RELEASE_CLANG35` output tree and previous `build/BDS.efi` before invoking a build command whose status is tolerated. This vendor build has missed header dependencies; relinking alone can retain incompatible old objects.
 4. Requires a newly present `LinuxLoader.efi` and copies it to `build/BDS.efi`.
 
-Do not weaken the stale-artifact deletion or final existence check. EDK II may report nothing to build after the output was removed; force the touched source to rebuild rather than accepting an old artifact.
+Do not weaken the clean-output rebuild or final existence check. A newly linked EFI is insufficient evidence when its constituent objects can be stale. Standalone AndroidTools use their own clean output tree.
 
 The embedded mass-storage path has two valid states: a verified PE variant, or an explicit zero-size fallback to the resident platform protocol. A missing blob may be build-valid, but it is not release-valid when the requested feature is the bundled `1209:ca0e` driver.
 

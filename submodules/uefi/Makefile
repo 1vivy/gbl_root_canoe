@@ -14,20 +14,12 @@ build:
 		edk2/QcomModulePkg/Application/LinuxLoader/Generated/CanoeMsdVariantData.c
 	python3 embed_variant.py blobs/canoe-managed-msd.efi \
 		edk2/QcomModulePkg/Application/LinuxLoader/Generated/CanoeManagedMsdVariantData.c CanoeManagedMsd
-	# EDK2 tracks sources and headers, but a changed build flag is invisible to
-	# it. Bumping CANOE_VERSION alone leaves every object holding the previous
-	# -DSFB_BDS_VERSION, and the relink then ships a BDS that reports the old
-	# version as both the `canoe-bds` fastboot variable and the menu credit.
-	# Record what the tree was compiled with and start clean when it moves.
-	@stamp=edk2/Build/.canoe-version; \
-	if [ ! -f $$stamp ] || [ "$$(cat $$stamp)" != '$(CANOE_VERSION)' ]; then \
-		rm -rf edk2/Build/RELEASE_CLANG35; \
-	fi
-	# Remove the previous output first. The EDK2 invocation below is tolerated
-	# with `|| true`, so an existence check alone would accept a FAILED rebuild
-	# whenever a stale artifact was still lying around, and the packages would
-	# then ship it silently.
-	rm -f edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi
+	# This vendor EDK2 build has reused objects after included headers changed
+	# (a 48 MiB image-disk limit survived the 256 MiB header update). A fresh
+	# final EFI alone does not prove fresh code: rebuild the full BDS output tree.
+	# Standalone AndroidTools have their own output tree and clean build target.
+	rm -rf edk2/Build/RELEASE_CLANG35
+	rm -f ./build/BDS.efi
 	bash -c 'cd edk2 && . ./edksetup.sh && make BOARD_BOOTLOADER_PRODUCT_NAME=canoe CANOE_VERSION="$(CANOE_VERSION)" TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
   		CLANG_BIN=/usr/bin/ CLANG_PREFIX=aarch64-linux-gnu- VERIFIED_BOOT_ENABLED=1 \
   		VERIFIED_BOOT_LE=0 AB_RETRYCOUNT_DISABLE=0 TARGET_BOARD_TYPE_AUTO=0 \
@@ -41,7 +33,6 @@ build:
 	fi
 	mkdir -p ./build
 	cp edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ./build/BDS.efi
-	@mkdir -p edk2/Build && printf '%s\n' '$(CANOE_VERSION)' > edk2/Build/.canoe-version
 	@echo "BDS built successfully: build/BDS.efi"
 
 # Build the standalone AndroidToolsPkg applications (RebootTools, ArbTools,
