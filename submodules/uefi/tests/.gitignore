@@ -28,4 +28,5 @@ test_surface
 !fixtures/gpt-slot-reset-dump.img
 
 /test_hash
+/test_ext4_checksums
 test_last_boot_store

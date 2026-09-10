@@ -748,22 +748,6 @@ CalculateCrc32c (
   );
 
 /**
-   Calculates the CRC16 checksum of the given buffer.
-
-   @param[in]      Buffer        Pointer to the buffer.
-   @param[in]      Length        Length of the buffer, in bytes.
-   @param[in]      InitialValue  Initial value of the CRC.
-
-   @return The CRC16 checksum.
-*/
-UINT16
-CalculateCrc16 (
-  IN CONST VOID *Buffer,
-  IN UINTN Length,
-  IN UINT16 InitialValue
-  );
-
-/**
    Calculates the checksum of the given buffer.
    @param[in]      Partition     Pointer to the opened EXT4 partition.
    @param[in]      Buffer        Pointer to the buffer.
