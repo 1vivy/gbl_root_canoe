@@ -89,7 +89,9 @@ class FirmwareReleaseTests(unittest.TestCase):
                 if args[:3] == ["git", "rev-parse", "HEAD"]:
                     return COMMIT
                 if args[:2] == ["gh", "api"]:
-                    return "[]"
+                    self.assertIn("--slurp", args)
+                    self.assertNotIn("--jq", args)
+                    return "[[]]"
                 return ""
             with patch.object(release, "resolve_tag", return_value=("7.0.0-b5", COMMIT)), patch.object(release, "command", side_effect=invoke), patch.dict(os.environ, {"GITHUB_REPOSITORY": "fixture/firmware"}):
                 release.draft("release-7.0.0-b5", root)
@@ -99,10 +101,29 @@ class FirmwareReleaseTests(unittest.TestCase):
             self.assertIn("--prerelease", create)
             uploaded = next(args for args in calls if args[:3] == ["gh", "release", "upload"])
             self.assertEqual({Path(name).name for name in uploaded[7:]}, set(release.EFI_FILES) | {"manifest.json", "SHA256SUMS"})
-            with patch.object(release, "resolve_tag", return_value=("7.0.0-b5", COMMIT)), patch.object(release, "command", side_effect=[COMMIT, json.dumps([{"tag_name": "release-7.0.0-b5", "draft": False}])]) as blocked, patch.dict(os.environ, {"GITHUB_REPOSITORY": "fixture/firmware"}):
+            with patch.object(release, "resolve_tag", return_value=("7.0.0-b5", COMMIT)), patch.object(release, "command", side_effect=[COMMIT, json.dumps([[], [{"tag_name": "release-7.0.0-b5", "draft": False}]])]) as blocked, patch.dict(os.environ, {"GITHUB_REPOSITORY": "fixture/firmware"}):
                 with self.assertRaisesRegex(ValueError, "Published firmware releases are not replaced"):
                     release.draft("release-7.0.0-b5", root)
                 self.assertEqual(blocked.call_count, 2)
+
+    def test_existing_draft_on_later_page_is_uploaded_without_recreation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); fixture(root)
+            calls = []
+            def invoke(args, *_):
+                calls.append(args)
+                if args[:3] == ["git", "rev-parse", "HEAD"]:
+                    return COMMIT
+                if args[:2] == ["gh", "api"]:
+                    self.assertIn("--paginate", args)
+                    self.assertIn("--slurp", args)
+                    self.assertNotIn("--jq", args)
+                    return json.dumps([[{"tag_name": "older", "draft": False}], [{"tag_name": "release-7.0.0-b5", "draft": True}]])
+                return ""
+            with patch.object(release, "resolve_tag", return_value=("7.0.0-b5", COMMIT)), patch.object(release, "command", side_effect=invoke), patch.dict(os.environ, {"GITHUB_REPOSITORY": "fixture/firmware"}):
+                release.draft("release-7.0.0-b5", root)
+            self.assertFalse(any(args[:3] == ["gh", "release", "create"] for args in calls))
+            self.assertTrue(any(args[:3] == ["gh", "release", "upload"] for args in calls))
 
     def test_wrong_source_is_rejected_before_any_github_command(self):
         with tempfile.TemporaryDirectory() as temporary:

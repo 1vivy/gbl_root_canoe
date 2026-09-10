@@ -152,7 +152,8 @@ def draft(tag: str, directory: Path, root: Path = ROOT) -> None:
     repo = os.environ.get("GITHUB_REPOSITORY") or command(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], root)
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         raise ValueError("Invalid GitHub repository")
-    releases = json.loads(command(["gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases", "--jq", "flatten | map({tag_name,draft})"], root))
+    pages = json.loads(command(["gh", "api", "--paginate", "--slurp", f"repos/{repo}/releases"], root))
+    releases = [item for page in pages for item in page]
     existing = next((item for item in releases if item["tag_name"] == tag), None)
     if existing and not existing["draft"]:
         raise ValueError("Published firmware releases are not replaced; use a new version")
