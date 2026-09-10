@@ -854,18 +854,24 @@ SfbOpenVolumeRoot (IN EFI_HANDLE Volume, OUT EFI_FILE_PROTOCOL **Root)
   return Fs->OpenVolume (Fs, Root);
 }
 
-BOOLEAN
-SfbFileExists (IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
+EFI_STATUS
+SfbFileProbe (IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path,
+               OUT BOOLEAN *IsFile)
 {
   EFI_STATUS         Status;
+  EFI_STATUS         CloseStatus;
   EFI_FILE_PROTOCOL  *File = NULL;
   EFI_FILE_INFO      *Info;
   UINTN              InfoSize;
-  BOOLEAN            IsFile = FALSE;
+
+  if (Root == NULL || Path == NULL || IsFile == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *IsFile = FALSE;
 
   Status = Root->Open (Root, &File, (CHAR16 *)Path, EFI_FILE_MODE_READ, 0);
   if (EFI_ERROR (Status) || File == NULL) {
-    return FALSE;
+    return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
   }
 
   InfoSize = 0;
@@ -875,14 +881,25 @@ SfbFileExists (IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
     if (Info != NULL) {
       Status = File->GetInfo (File, &gEfiFileInfoGuid, &InfoSize, Info);
       if (!EFI_ERROR (Status)) {
-        IsFile = (BOOLEAN)((Info->Attribute & EFI_FILE_DIRECTORY) == 0);
+        *IsFile = (BOOLEAN)((Info->Attribute & EFI_FILE_DIRECTORY) == 0);
       }
       FreePool (Info);
+    } else {
+      Status = EFI_OUT_OF_RESOURCES;
     }
+  } else if (!EFI_ERROR (Status)) {
+    Status = EFI_DEVICE_ERROR;
   }
 
-  File->Close (File);
+  CloseStatus = File->Close (File);
+  return EFI_ERROR (Status) ? Status : CloseStatus;
+}
 
+BOOLEAN
+SfbFileExists (IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
+{
+  BOOLEAN IsFile = FALSE;
+  (VOID)SfbFileProbe (Root, Path, &IsFile);
   return IsFile;
 }
 

@@ -62,7 +62,7 @@ TestDefaultsWhenOmitted (void)
   assert (gConfig.Count == 1);
   assert (gConfig.MenuMode == SfbConfigMenuSilent);
   assert (gConfig.KeyWindowMs == SFB_CONFIG_KEY_WINDOW_DEFAULT);
-  assert (gConfig.MenuTimeoutSeconds == SFB_CONFIG_MENU_TIMEOUT_DEFAULT);
+  assert (gConfig.MenuTimeoutSeconds == 3);
   assert (gConfig.Mode == SFB_CONFIG_MODE_FAKE_LOCKED);
   assert (gConfig.LockPolicy == SfbConfigLockAsNeeded);
   assert (gConfig.DefaultIndex == SFB_CONFIG_NO_DEFAULT);
@@ -337,6 +337,8 @@ TestScalarBoundsAndGarbage (void)
   assert (gConfig.KeyWindowMs == SFB_CONFIG_KEY_WINDOW_DEFAULT);
   assert (gConfig.RejectedLines == 1);
 
+  assert (Parse ("version 1\nmenu-timeout 5\nentry a\n  image boot.efi\n"));
+  assert (gConfig.MenuTimeoutSeconds == 5);
   assert (Parse ("version 1\nmenu-timeout 0\nentry a\n  image boot.efi\n"));
   assert (gConfig.MenuTimeoutSeconds == 0);
   assert (Parse ("version 1\nmenu-timeout 300\nentry a\n  image boot.efi\n"));

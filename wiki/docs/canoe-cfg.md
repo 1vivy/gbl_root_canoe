@@ -32,7 +32,7 @@ In 7.0.0-b5 the boot policy is explicit. Global keys must appear before the firs
 | `generation` | `0..4294967295` | `0` | Monotonic installed-generation number |
 | `menu-mode` | `silent`, `menu` | `silent` for fresh installs | Startup policy |
 | `key-window` | `0..=10000` | `1200` | Volume-key sampling window in milliseconds |
-| `menu-timeout` | `0..=300` | `5` | Menu countdown in seconds; only in Menu mode |
+| `menu-timeout` | `0..=300` | `3` | Menu countdown in seconds; only in Menu mode |
 | `show-booting` | `yes`, `no` | `yes` | Display the Booting message when launching an image |
 | `default` | an entry ID or `bls:<stem>` | none | Row launched without menu input |
 | `mode` | `0`, `1`, `2` | `1` | Fallback mode for entries without their own mode |
@@ -42,10 +42,18 @@ In 7.0.0-b5 the boot policy is explicit. Global keys must appear before the firs
 Silent mode launches the default immediately, while Menu mode still opens the
 menu. VOL UP goes directly to Super Fastboot; VOL DOWN opens the ordinary boot
 menu. Without a key, Silent mode launches the configured default; Menu mode opens
-the menu and counts down for `menu-timeout` seconds. Any menu interaction cancels
-the countdown. An unresolved default opens the menu. An empty boot root retains
-its separate two-second first-run timeout to Super Fastboot; it does not also wait
-through `key-window`. VOL DOWN on first run opens the same boot menu.
+the menu and counts down for `menu-timeout` seconds when the saved default resolves
+to a boot entry. The title reads **Boot menu - Highlighted entry will boot in Xs.**
+Opening the menu with VOL DOWN or interacting with it disables this countdown;
+the title then reads **Boot menu - Timeout is disabled.** Returning from a submenu
+does not restart it. An unresolved default in a populated root opens the menu
+without a countdown. With no populated boot root, BDS opens this same menu with
+the temporary **Entering Super Fastboot** entry highlighted and a three-second
+countdown. The permanent **Enter Super Fastboot** action remains available.
+Both enter the same Fastboot session; the temporary entry is not saved. There is no
+separate first-run screen or additional key window. Power/Enter selects the
+highlighted action; the volume keys cancel the countdown and navigate normally.
+Changing the default duration does not replace an explicitly saved timeout.
 
 The default `show-booting yes` applies to all images, including legacy `boot.efi`.
 `show-booting no` suppresses the message, not image loading or diagnostics. A
@@ -85,7 +93,7 @@ version 1
 generation N
 menu-mode silent|menu
 key-window 1200
-menu-timeout 5
+menu-timeout 3
 show-booting yes
 default android-a          # or: default bls:pmos
 mode 0|1|2
@@ -183,7 +191,7 @@ version 1
 generation 4
 menu-mode silent
 key-window 1200
-menu-timeout 5
+menu-timeout 3
 show-booting yes
 default android-a
 mode 1
@@ -213,12 +221,11 @@ entry android-backup
 No file, an invalid `version`, or a file with no usable entry is not itself an
 error. BDS probes the known managed paths `boot.efi` (pre-b2 compatibility),
 `boot_a.efi`, `boot_b.efi`, and `boot_backup.efi`, then shows the menu rather
-than launching unattended when configuration is missing. An empty or
-unreachable boot root with none of those paths is first run: BDS shows the
-first-run screen with **Enter boot menu** and **Enter Super Fastboot
-(default)**. Press **VOL UP during boot** to reach the menu and inspect
-discovered rows; timeout, VOL DOWN, and Power preserve the
-**Enter Super Fastboot (default)** path.
+than launching unattended when configuration is missing. If the boot root is
+absent or empty, the same menu highlights the temporary **Entering Super Fastboot**
+entry with a three-second countdown. Power/Enter selects it; the volume keys cancel the
+countdown and navigate the menu. Filesystem access failures remain a separate
+unavailable state, not evidence of an empty installation.
 
 A missing or malformed current configuration can use the validated
 `canoe.cfg.prev`. Permission and I/O failures do not trigger fallback. Saving

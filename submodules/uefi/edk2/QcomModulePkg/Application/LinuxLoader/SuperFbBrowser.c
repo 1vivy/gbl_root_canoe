@@ -1,6 +1,6 @@
 /*
- * File browser for the super-fastboot boot menu: FAT of any width, plus the
- * ext4 persist volume.
+ * File browser for the super-fastboot boot menu: the managed FAT boot root
+ * and removable boot volumes.
  *
  * Pick a volume, walk directories with the volume keys, and launch an EFI
  * application for this boot only.
@@ -365,8 +365,6 @@ SfbDriverActionMenu (IN EFI_HANDLE   Volume,
   Template.RowCount = ARRAY_SIZE (Rows);
   Template.Navigate = TRUE;
   Template.Context = &Context;
-  Template.Enter = SfbMenuNoopEnter;
-  Template.Exit = SfbMenuNoopExit;
   Template.Handler = SfbHandleDriverMenuRow;
   (VOID)SfbRunMenu (&Template);
   return FALSE;
@@ -453,7 +451,6 @@ SfbEfiActionMenu (IN EFI_HANDLE    Volume,
   Template.RowCount = ARRAY_SIZE (Rows);
   Template.Navigate = TRUE;
   Template.Context = &Context;
-  Template.Enter = SfbMenuNoopEnter;
   Template.Exit = SfbExitEfiMenu;
   Template.Handler = SfbHandleEfiMenuRow;
   (VOID)SfbRunMenu (&Template);
@@ -462,157 +459,142 @@ SfbEfiActionMenu (IN EFI_HANDLE    Volume,
 
 /* ---- directory navigation ----------------------------------------------- */
 
-/* Returns TRUE when the browser should unwind back to the boot menu. */
-STATIC
-BOOLEAN
-SfbBrowseVolume (IN EFI_HANDLE    Volume,
-                 IN CONST CHAR16  *VolumeLabel,
-                 IN CONST CHAR16  *BrowseRoot,
-                 IN SFB_BOOT_MODE Mode)
-{
-  CHAR16         Path[SFB_PATH_CHARS];
-  SFB_DIR_ENTRY  *List;
-  UINTN          Count = 0;
-  UINTN          Cursor = 0;
-  BOOLEAN        Truncated = FALSE;
-  BOOLEAN        Reload = TRUE;
+typedef struct {
+  EFI_HANDLE          Volume;
+  CONST CHAR16       *BrowseRoot;
+  CHAR16              Path[SFB_PATH_CHARS];
+  SFB_DIR_ENTRY      *List;
+  UINTN               Count;
+  SFB_BOOT_MODE       Mode;
+  BOOLEAN             Truncated;
+  BOOLEAN             Unwind;
+  SFB_MENU_TEMPLATE  *Template;
+} SFB_DIRECTORY_CONTEXT;
 
-  List = AllocateZeroPool (SFB_MAX_DIR_ENTRIES * sizeof (*List));
-  if (List == NULL) {
+STATIC EFI_STATUS
+SfbRefreshDirectory (IN VOID *Context)
+{
+  SFB_DIRECTORY_CONTEXT *State = Context;
+  EFI_STATUS Status;
+
+  while (TRUE) {
+    EFI_FILE_PROTOCOL *Root = NULL;
+    EFI_FILE_PROTOCOL *Dir = NULL;
+    Status = SfbOpenDirectory (State->Volume, State->Path, &Root, &Dir);
+    if (!EFI_ERROR (Status)) {
+      Status = SfbReadDirectory (Dir, State->List, SFB_MAX_DIR_ENTRIES,
+                                 &State->Count, &State->Truncated);
+      if (Dir != Root) { Dir->Close (Dir); }
+      Root->Close (Root);
+    }
+    if (!EFI_ERROR (Status)) { break; }
+    SfbReportStatus (L"Cannot read directory", Status);
+    if (StrCmp (State->Path, State->BrowseRoot) == 0) { return Status; }
+    SfbParentPath (State->Path);
+    State->Template->Cursor = 0;
+  }
+  State->Template->RowCount = State->Count;
+  return EFI_SUCCESS;
+}
+
+STATIC VOID
+SfbDrawDirectoryHeader (IN VOID *Context)
+{
+  SFB_DIRECTORY_CONTEXT *State = Context;
+  SfbDrawWrappedInfo (State->Path);
+  if (State->Truncated) { SfbDrawWrappedInfo (L"Additional directory entries are not shown."); }
+}
+
+STATIC VOID
+SfbDrawDirectoryRow (IN VOID *Context, IN UINTN Row, IN BOOLEAN Selected)
+{
+  SFB_DIRECTORY_CONTEXT *State = Context;
+  CONST SFB_DIR_ENTRY *Entry = &State->List[Row];
+  CONST CHAR16 *Marker = Entry->IsDir ? L"D" : SfbIsEfiFile (Entry->Name) ? L"E" : L" ";
+  SfbDrawRow (Selected, Marker, Entry->Name);
+}
+
+STATIC SFB_MENU_ACTION
+SfbHandleDirectoryRow (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
+{
+  SFB_DIRECTORY_CONTEXT *State = Context;
+  CONST SFB_DIR_ENTRY *Selected;
+  CHAR16 FullPath[SFB_PATH_CHARS];
+  EFI_STATUS Status;
+  if (Key != SfbKeySelect || Row >= State->Count) { return SfbMenuActionContinue; }
+  Selected = &State->List[Row];
+  if (Selected->IsParent) {
+    if (StrCmp (State->Path, State->BrowseRoot) == 0) { return SfbMenuActionExit; }
+    SfbParentPath (State->Path);
+    State->Template->Cursor = 0;
+    return SfbMenuActionRebuild;
+  }
+  if (Selected->IsDir) {
+    Status = SfbJoinPath (State->Path, SFB_PATH_CHARS, Selected->Name);
+    if (EFI_ERROR (Status)) {
+      SfbReportStatus (L"Path too long", Status);
+      return SfbMenuActionContinue;
+    }
+    State->Template->Cursor = 0;
+    return SfbMenuActionRebuild;
+  }
+  if (!SfbIsEfiFile (Selected->Name)) {
+    SfbReportStatus (L"Not an EFI application", EFI_UNSUPPORTED);
+    return SfbMenuActionContinue;
+  }
+  StrCpyS (FullPath, SFB_PATH_CHARS, State->Path);
+  Status = SfbJoinPath (FullPath, SFB_PATH_CHARS, Selected->Name);
+  if (EFI_ERROR (Status)) {
+    SfbReportStatus (L"Path too long", Status);
+    return SfbMenuActionContinue;
+  }
+  if (SfbEfiActionMenu (State->Volume, FullPath, Selected->Name, State->Mode)) {
+    State->Unwind = TRUE;
+    return SfbMenuActionExit;
+  }
+  /* A temporary boot may have changed the volume underneath us. */
+  return SfbMenuActionRebuild;
+}
+
+STATIC VOID
+SfbExitDirectory (IN VOID *Context)
+{
+  SFB_DIRECTORY_CONTEXT *State = Context;
+  FreePool (State->List);
+  State->List = NULL;
+}
+
+/* Directory contents use the same drawing, scrolling, key dispatch and cleanup
+ * as every other menu. Only opening paths and interpreting files belong here. */
+STATIC BOOLEAN
+SfbBrowseVolume (IN EFI_HANDLE Volume, IN CONST CHAR16 *VolumeLabel,
+                 IN CONST CHAR16 *BrowseRoot, IN SFB_BOOT_MODE Mode)
+{
+  SFB_DIRECTORY_CONTEXT State;
+  SFB_MENU_TEMPLATE Template;
+  ZeroMem (&State, sizeof (State));
+  ZeroMem (&Template, sizeof (Template));
+  State.List = AllocateZeroPool (SFB_MAX_DIR_ENTRIES * sizeof (*State.List));
+  if (State.List == NULL) {
     SfbReportStatus (L"Out of memory", EFI_OUT_OF_RESOURCES);
     return FALSE;
   }
-
-  /* Start at the volume's browse root: "\" for FAT, "\efisp" for the ext4
-   * persist volume. It is also the floor: ".." there backs out to the volume
-   * list rather than climbing above it. */
-  StrCpyS (Path, SFB_PATH_CHARS, BrowseRoot);
-
-  while (TRUE) {
-    UINTN                Start;
-    UINTN                Last;
-    UINTN                Index;
-    SFB_KEY              Key;
-    CONST SFB_DIR_ENTRY  *Selected;
-    CHAR16               FullPath[SFB_PATH_CHARS];
-    EFI_STATUS            JoinStatus;
-
-    if (Reload) {
-      EFI_FILE_PROTOCOL  *Root = NULL;
-      EFI_FILE_PROTOCOL  *Dir = NULL;
-      EFI_STATUS         Status;
-
-      Status = SfbOpenDirectory (Volume, Path, &Root, &Dir);
-      if (!EFI_ERROR (Status)) {
-        Status = SfbReadDirectory (Dir, List, SFB_MAX_DIR_ENTRIES,
-                                   &Count, &Truncated);
-        if (Dir != Root) {
-          Dir->Close (Dir);
-        }
-        Root->Close (Root);
-      }
-
-      if (EFI_ERROR (Status)) {
-        SfbReportStatus (L"Cannot read directory", Status);
-        if (StrCmp (Path, BrowseRoot) == 0) {
-          /* The browse root itself is unusable; give up on this volume. */
-          break;
-        }
-        SfbParentPath (Path);
-        continue;
-      }
-
-      Cursor = 0;
-      Reload = FALSE;
-    }
-
-    SfbBeginScreen (VolumeLabel, Path);
-
-    Start = SfbWindowStart (Cursor, Count, SFB_VISIBLE_ROWS);
-    Last = Start + SFB_VISIBLE_ROWS;
-    if (Last > Count) {
-      Last = Count;
-    }
-
-    for (Index = Start; Index < Last; Index++) {
-      CONST CHAR16  *Marker;
-
-      if (List[Index].IsDir) {
-        Marker = L"[D]";
-      } else if (SfbIsEfiFile (List[Index].Name)) {
-        Marker = L"[E]";
-      } else {
-        Marker = L"   ";
-      }
-
-      SfbDrawRow ((BOOLEAN)(Index == Cursor), Marker, List[Index].Name);
-    }
-    if (Last < Count) {
-      Print (L"    ... %u more\r\n", (UINT32)(Count - Last));
-    }
-    if (Truncated) {
-      Print (L"    (directory has more than %u entries; rest not shown)\r\n",
-             (UINT32)SFB_MAX_DIR_ENTRIES);
-    }
-
-    SfbEndScreen (L"Vol Up/Down: move   Power: open");
-
-    Key = SfbWaitForKey (0);
-    if (Key == SfbKeyUp || Key == SfbKeyDown) {
-      SfbMoveCursor (&Cursor, Count, Key);
-      continue;
-    }
-
-    if (Count == 0) {
-      continue;
-    }
-
-    Selected = &List[Cursor];
-
-    if (Selected->IsParent) {
-      if (StrCmp (Path, BrowseRoot) == 0) {
-        /* Already at the browse root: back out to the volume list. */
-        break;
-      }
-      SfbParentPath (Path);
-      Reload = TRUE;
-      continue;
-    }
-
-    if (Selected->IsDir) {
-      JoinStatus = SfbJoinPath (Path, SFB_PATH_CHARS, Selected->Name);
-      if (EFI_ERROR (JoinStatus)) {
-        SfbReportStatus (L"Path too long", JoinStatus);
-        continue;
-      }
-      Reload = TRUE;
-      continue;
-    }
-
-    if (!SfbIsEfiFile (Selected->Name)) {
-      SfbReportStatus (L"Not an EFI application", EFI_UNSUPPORTED);
-      continue;
-    }
-
-    StrCpyS (FullPath, SFB_PATH_CHARS, Path);
-    JoinStatus = SfbJoinPath (FullPath, SFB_PATH_CHARS, Selected->Name);
-    if (EFI_ERROR (JoinStatus)) {
-      SfbReportStatus (L"Path too long", JoinStatus);
-      continue;
-    }
-
-    if (SfbEfiActionMenu (Volume, FullPath, Selected->Name, Mode)) {
-      FreePool (List);
-      return TRUE;
-    }
-
-    /* A temporary boot may have changed the volume underneath us. */
-    Reload = TRUE;
-  }
-
-  FreePool (List);
-
-  return FALSE;
+  State.Volume = Volume;
+  State.BrowseRoot = BrowseRoot;
+  State.Mode = Mode;
+  State.Template = &Template;
+  StrCpyS (State.Path, SFB_PATH_CHARS, BrowseRoot);
+  Template.Title = VolumeLabel;
+  Template.Footer = L"Vol Up/Down: move   Power: open";
+  Template.Context = &State;
+  Template.Navigate = TRUE;
+  Template.Refresh = SfbRefreshDirectory;
+  Template.Exit = SfbExitDirectory;
+  Template.Handler = SfbHandleDirectoryRow;
+  Template.DrawHeader = SfbDrawDirectoryHeader;
+  Template.DrawRow = SfbDrawDirectoryRow;
+  (VOID)SfbRunMenu (&Template);
+  return State.Unwind;
 }
 
 /* ---- volume selection --------------------------------------------------- */
@@ -639,7 +621,7 @@ SfbDrawProgramMenuRow (IN VOID    *Context,
   if (Row == State->VolumeCount) {
     SfbDrawRow (Selected, L" ", L"Back");
   } else {
-    SfbDrawRow (Selected, L"[V]", State->Rows[Row].Label);
+    SfbDrawRow (Selected, L"V", State->Rows[Row].Label);
   }
 }
 
@@ -726,14 +708,14 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
       Root->Close (Root);
     }
 
-    /* Tag the ext4 persist volume so it is told apart from FAT media. */
+    /* Distinguish the managed boot root from removable FAT media. */
     if (SfbIsContainerVolume (Context.Volumes[Index])) {
       if (Label[0] != L'\0') {
-        if (RETURN_ERROR (StrCatS (Label, SFB_DESC_CHARS, L" (ext4)"))) {
+        if (RETURN_ERROR (StrCatS (Label, SFB_DESC_CHARS, L" (boot root)"))) {
           Label[0] = L'\0';
         }
       } else {
-        StrCpyS (Label, SFB_DESC_CHARS, L"ext4");
+        StrCpyS (Label, SFB_DESC_CHARS, L"boot root");
       }
     }
 
@@ -754,7 +736,6 @@ SfbRunFileBrowser (IN SFB_BOOT_MODE Mode)
   Template.RowCount = Context.VolumeCount + 1;
   Template.Navigate = TRUE;
   Template.Context = &Context;
-  Template.Enter = SfbMenuNoopEnter;
   Template.Exit = SfbExitProgramMenu;
   Template.Handler = SfbHandleProgramMenuRow;
   Template.DrawRow = SfbDrawProgramMenuRow;
@@ -780,7 +761,7 @@ SfbHandleToolsMenuRow (IN VOID *Context,
   if (Row != 0) {
     return SfbMenuActionExit;
   }
-  if (SfbBrowseVolume (State->Volume, L"EFI Tools", State->ToolsPath,
+  if (SfbBrowseVolume (State->Volume, L"Android EFI tools", State->ToolsPath,
                        State->Mode)) {
     return SfbMenuActionExit;
   }
@@ -791,6 +772,7 @@ VOID
 SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
 {
   EFI_STATUS               Status;
+  EFI_STATUS               ProbeError = EFI_SUCCESS;
   EFI_HANDLE              *Volumes = NULL;
   UINTN                    VolumeCount = 0;
   UINTN                    Index;
@@ -814,26 +796,21 @@ SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
   }
 
   for (Index = 0; Index < VolumeCount; Index++) {
-    CONST CHAR16       *Prefix = SfbVolumeRootPrefix (Volumes[Index]);
     EFI_FILE_PROTOCOL  *Root = NULL;
     EFI_FILE_PROTOCOL  *Dir = NULL;
 
-    /*
-     * The shipped tools live under the persist boot root, which is the only
-     * volume with a non-empty root prefix. Tools on removable media are the
-     * ordinary browser's job, not this row's.
-     */
-    if (Prefix[0] == L'\0' ||
-        RETURN_ERROR (StrCpyS (Context.ToolsPath, SFB_PATH_CHARS, Prefix)) ||
-        EFI_ERROR (SfbJoinPath (Context.ToolsPath, SFB_PATH_CHARS,
-                                SFB_TOOLS_DIR_NAME))) {
-      continue;
-    }
+    /* The managed FAT container exposes tools directly at its root. A path
+     * prefix no longer identifies this volume; ordinary FAT roots share it. */
+    if (!SfbIsContainerVolume (Volumes[Index])) { continue; }
+    StrCpyS (Context.ToolsPath, SFB_PATH_CHARS, L"\\");
+    if (EFI_ERROR (SfbJoinPath (Context.ToolsPath, SFB_PATH_CHARS,
+                                SFB_TOOLS_DIR_NAME))) { continue; }
 
     /* Probe before browsing: an absent directory must read as "nothing is
      * installed", not as the browse loop's "cannot read directory". */
     Status = SfbOpenDirectory (Volumes[Index], Context.ToolsPath, &Root, &Dir);
     if (EFI_ERROR (Status)) {
+      if (Status != EFI_NOT_FOUND && !EFI_ERROR (ProbeError)) { ProbeError = Status; }
       continue;
     }
     if (Dir != Root) {
@@ -842,15 +819,13 @@ SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
     Root->Close (Root);
     Context.Volume = Volumes[Index];
     Context.Mode = Mode;
-    Template.Title = L"EFI Tools";
+    Template.Title = L"Android EFI tools";
     Template.Subtitle = L"Choose an action.";
     Template.Footer = L"Vol Up/Down: move   Power: select";
     Template.Rows = Rows;
     Template.RowCount = ARRAY_SIZE (Rows);
     Template.Navigate = TRUE;
     Template.Context = &Context;
-    Template.Enter = SfbMenuNoopEnter;
-    Template.Exit = SfbMenuNoopExit;
     Template.Handler = SfbHandleToolsMenuRow;
     (VOID)SfbRunMenu (&Template);
     FreePool (Volumes);
@@ -858,5 +833,6 @@ SfbRunToolsBrowser (IN SFB_BOOT_MODE Mode)
   }
 
   FreePool (Volumes);
-  SfbReportStatus (L"No EFI tools installed", EFI_NOT_FOUND);
+  SfbReportStatus (EFI_ERROR (ProbeError) ? L"Cannot read Android EFI tools" : L"No EFI tools installed",
+                   EFI_ERROR (ProbeError) ? ProbeError : EFI_NOT_FOUND);
 }

@@ -124,6 +124,12 @@ test_fat: test_fat.c \
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $<
 
 test_launch: test_launch.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBrowser.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenuScaffold.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfig.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLastBoot.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbTzMap.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbConfigStore.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.h \
@@ -169,6 +175,7 @@ test_surface: test_surface.c \
 
 clean:
 	rm -f test_menu_selection
+	rm -f test_root_observation
 	rm -f test_raw_persist_export test_ext4_lifecycle test_fastboot_response test_ext4_checksums test_last_boot_store test_usb_serial test_msd_lease test_image_map test_image_disk test_container test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
 
 .PHONY: test_ext4_checksums
@@ -176,6 +183,14 @@ test: test_ext4_checksums
 test_ext4_checksums:
 	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar -ffunction-sections -fdata-sections $(HOOK_INCLUDES) -I../edk2/EmbeddedPkg/Include -Wl,--gc-sections -o test_ext4_checksums test_ext4_checksums.c ../edk2/Ext4Pkg/Ext4Dxe/Superblock.c ../edk2/Ext4Pkg/Ext4Dxe/BlockGroup.c ../edk2/Ext4Pkg/Ext4Dxe/Crc32c.c ../edk2/MdePkg/Library/BaseLib/CheckSum.c
 	python3 test_ext4_checksums.py
+
+.PHONY: test_root_observation
+test: test_root_observation
+test_root_observation: test_root_observation.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbEntries.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbFat.c
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -Wno-unused-but-set-variable -Wno-empty-body -fno-builtin -fshort-wchar -ffunction-sections -fdata-sections $(HOOK_INCLUDES) -Wl,--gc-sections -o $@ $^
+	./$@
 
 .PHONY: test_image_map
 test: test_image_map

@@ -1,7 +1,7 @@
 use crate::config::{
-    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, EntryRequest, MAX_ENTRIES,
-    MAX_GENERATION, MenuMode, PolicyUpdate, Role, canonical_image, validate_mode, validate_policy,
-    validate_request,
+    ConfigDocument, ConfigEntry, ConfigError, DEFAULT_MENU_TIMEOUT_S, DeviceInfoRepair,
+    EntryRequest, MAX_ENTRIES, MAX_GENERATION, MenuMode, PolicyUpdate, Role, canonical_image,
+    validate_mode, validate_policy, validate_request,
 };
 
 impl ConfigDocument {
@@ -12,7 +12,7 @@ impl ConfigDocument {
             generation: 0,
             menu_mode: MenuMode::Silent,
             key_window_ms: 1200,
-            menu_timeout_s: 5,
+            menu_timeout_s: DEFAULT_MENU_TIMEOUT_S,
             show_booting: true,
             default: None,
             mode: 0,

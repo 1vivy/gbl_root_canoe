@@ -24,6 +24,7 @@
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiLib.h>
 #include <Protocol/SimpleTextIn.h>
+#include <Protocol/SimpleTextInEx.h>
 
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
@@ -46,13 +47,25 @@ CONST CHAR8 *gSfbMenuModuleTag = "SuperFbMenu";
 #define SFB_ROW_PREFIX_CHARS  4
 
 /*
- * One physical Power press may arrive as several carriage returns. Delay only
+ * One physical Power press may arrive as several key events. Delay only
  * completed select actions, then discard their queued duplicates before the
  * next BDS screen can interpret them as another action.
  */
 #define SFB_SELECT_DEBOUNCE_US  500000
 
 STATIC SFB_KEY mSfbPendingVolumeKey = SfbKeyTimeout;
+
+STATIC SFB_KEY
+SfbDecodeMenuKey (IN CONST EFI_INPUT_KEY *Key)
+{
+  if (Key->ScanCode == SCAN_UP) { return SfbKeyUp; }
+  if (Key->ScanCode == SCAN_DOWN) { return SfbKeyDown; }
+  /* Qualcomm ButtonsLib reports Power as SCAN_SUSPEND. Keyboard Enter uses
+   * CR/LF. Decode both here so every menu uses the same select action. */
+  return Key->ScanCode == SCAN_SUSPEND ||
+         Key->UnicodeChar == L'\r' || Key->UnicodeChar == L'\n'
+           ? SfbKeySelect : SfbKeyCancel;
+}
 
 /*
  * The one key wait in the loader.
@@ -69,9 +82,9 @@ STATIC SFB_KEY mSfbPendingVolumeKey = SfbKeyTimeout;
  * the buffer and would answer the scan instantly. The menu must NOT do it: a
  * keypress that arrives between the redraw and this call is a real press.
  *
- * Policy decides what a non-volume key means. SfbKeyPolicyConfirm treats it as
- * confirm, which is right on a three-key handset where there is nothing else
- * it can be. SfbKeyPolicyUpOnly skips every key except volume-up, while
+ * Policy decides what a non-volume key means. SfbKeyPolicyConfirm accepts
+ * Power/Enter and lets other keys cancel a countdown without selecting a row.
+ * SfbKeyPolicyUpOnly skips every key except volume-up, while
  * SfbKeyPolicyVolume accepts either volume key and skips power. The latter two
  * policies keep the power key used to switch the device on from being mistaken
  * for input or masking a volume key behind it.
@@ -127,6 +140,7 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
     Status = gBS->WaitForEvent (WaitCount, WaitList, &EventIndex);
     if (EFI_ERROR (Status)) {
       DEBUG ((EFI_D_ERROR, "SFB: WaitForEvent failed: %r\n", Status));
+      Result = SfbKeyCancel;
       break;
     }
 
@@ -136,12 +150,10 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
     }
 
     Status = gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
-    if (EFI_ERROR (Status)) {
-      continue;
-    }
+    if (Status == EFI_NOT_READY) { continue; }
+    if (EFI_ERROR (Status)) { Result = SfbKeyCancel; break; }
 
-    /* On the handset the Qualcomm keypad driver reports the volume keys as
-     * SCAN_UP and SCAN_DOWN, and power arrives as a carriage return. */
+    /* Startup scans accept volume keys only; menu input also accepts Power. */
     if (Key.ScanCode == SCAN_UP) {
       Result = SfbKeyUp;
       break;
@@ -154,13 +166,7 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
               Key.ScanCode, Key.UnicodeChar));
       continue;
     }
-    if (Key.ScanCode == SCAN_DOWN) {
-      Result = SfbKeyDown;
-    } else {
-      DEBUG ((EFI_D_VERBOSE, "SFB: confirm key scan=0x%x char=0x%x\n",
-              Key.ScanCode, Key.UnicodeChar));
-      Result = SfbKeySelect;
-    }
+    Result = SfbDecodeMenuKey (&Key);
     break;
   }
 
@@ -197,32 +203,226 @@ SfbWaitForKey (IN UINT32 TimeoutMs)
 
 /* ---- drawing ------------------------------------------------------------ */
 
-VOID
-SfbBeginScreen (IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle)
+/* Console-relative menu geometry only. Do not change the firmware's mode or
+ * framebuffer origin. A fixed gutter keeps labels, descriptions and headings
+ * aligned while the whole menu block stays centered on wider consoles. */
+#define SFB_MENU_BLOCK_MAX 72
+#define SFB_MENU_GUTTER 4
+#define SFB_MENU_PADDING 2
+STATIC UINTN mSfbMenuLeft = 4, mSfbMenuTextLeft = 10, mSfbMenuTextWidth = 64;
+STATIC UINTN mSfbMenuRows = 32, mSfbMenuWidth = 72;
+STATIC UINTN mSfbCountdownTop, mSfbCountdownRows;
+STATIC UINTN mSfbMenuPadding = SFB_MENU_PADDING;
+
+STATIC VOID
+SfbReadMenuGeometry (VOID)
 {
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
-  gST->ConOut->ClearScreen (gST->ConOut);
-  Print (L"%s\r\n", Title);
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
-  if (Subtitle != NULL) {
-    Print (L"%s\r\n", Subtitle);
+  UINTN Columns = 80, Rows = 32, Width, Gutter;
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *Out = gST->ConOut;
+  if (Out->Mode != NULL && Out->QueryMode != NULL &&
+      EFI_ERROR (Out->QueryMode (Out, (UINTN)Out->Mode->Mode, &Columns, &Rows))) {
+    Columns = 80; Rows = 32;
   }
+  Width = Columns > 4 ? Columns - 4 : 1;
+  if (Width > SFB_MENU_BLOCK_MAX) { Width = SFB_MENU_BLOCK_MAX; }
+  mSfbMenuPadding = Width > 2 * SFB_MENU_PADDING + SFB_MENU_GUTTER
+                     ? SFB_MENU_PADDING : 0;
+  Gutter = Width > SFB_MENU_GUTTER ? SFB_MENU_GUTTER : 0;
+  mSfbMenuLeft = Columns > Width ? (Columns - Width) / 2 : 0;
+  mSfbMenuTextLeft = mSfbMenuLeft + mSfbMenuPadding + Gutter;
+  mSfbMenuTextWidth = Width - 2 * mSfbMenuPadding - Gutter;
+  mSfbMenuWidth = Width;
+  mSfbMenuRows = Rows;
+}
+
+STATIC VOID
+SfbMenuColumn (IN UINTN Column)
+{
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *Out = gST->ConOut;
+  if (Out->Mode != NULL && Out->SetCursorPosition != NULL) {
+    (VOID)Out->SetCursorPosition (Out, Column, (UINTN)Out->Mode->CursorRow);
+  }
+}
+
+/* Share line breaking between measurement and drawing. Long unbroken paths
+ * still fit, while headings and instructions wrap at word boundaries. */
+STATIC UINTN
+SfbMenuLineChars (IN CONST CHAR16 *Text, IN UINTN Width)
+{
+  UINTN Length = 0, Space = 0;
+  while (Length < Width && Text[Length] != L'\0') {
+    if (Text[Length] == L' ' && Length != 0) { Space = Length; }
+    Length++;
+  }
+  return Text[Length] != L'\0' && Text[Length] != L' ' && Space != 0 ? Space : Length;
+}
+
+STATIC UINTN
+SfbMenuTextRows (IN CONST CHAR16 *Text)
+{
+  UINTN Rows = 0, Width = mSfbMenuWidth - 2 * mSfbMenuPadding;
+  do {
+    Text += SfbMenuLineChars (Text, Width);
+    while (*Text == L' ') { Text++; }
+    Rows++;
+  } while (*Text != L'\0');
+  return Rows;
+}
+
+STATIC VOID
+SfbDrawWrappedMenuText (IN CONST CHAR16 *Text, IN BOOLEAN Centered)
+{
+  CHAR16 Line[SFB_MENU_BLOCK_MAX + 1];
+  UINTN Width = Centered ? mSfbMenuWidth - 2 * mSfbMenuPadding : mSfbMenuTextWidth;
+  do {
+    UINTN Index, Length = SfbMenuLineChars (Text, Width);
+    for (Index = 0; Index < Length; Index++) { Line[Index] = Text[Index]; }
+    Line[Length] = L'\0';
+    SfbMenuColumn (Centered ? mSfbMenuLeft + (mSfbMenuWidth - Length) / 2 : mSfbMenuTextLeft);
+    Print (L"%s\r\n", Line);
+    Text += Length;
+    while (*Text == L' ') { Text++; }
+  } while (*Text != L'\0');
+}
+
+VOID
+SfbDrawWrappedInfo (IN CONST CHAR16 *Text)
+{
+  SfbDrawWrappedMenuText (Text, FALSE);
+}
+
+STATIC UINTN
+SfbCopyMenuLine (OUT CHAR16 *Line, IN CONST CHAR16 *Text)
+{
+  UINTN Index;
+  for (Index = 0; Index < mSfbMenuTextWidth && Text[Index] != L'\0'; Index++) {
+    Line[Index] = Text[Index];
+  }
+  if (Text[Index] != L'\0' && Index >= 3) {
+    Line[Index - 3] = Line[Index - 2] = Line[Index - 1] = L'.';
+  }
+  Line[Index] = L'\0';
+  return Index;
+}
+
+VOID
+SfbDrawInfoLine (IN CONST CHAR16 *Text)
+{
+  CHAR16 Line[SFB_MENU_BLOCK_MAX + 1];
+  SfbCopyMenuLine (Line, Text);
+  SfbMenuColumn (mSfbMenuTextLeft);
+  Print (L"%s\r\n", Line);
+}
+
+STATIC VOID
+SfbDrawMenuDivider (VOID)
+{
+  SfbDrawInfoLine (L"--------");
+}
+
+STATIC VOID
+SfbDrawCountdown (IN UINT32 RemainingMs)
+{
+  CHAR16 Text[64];
+  UINTN Rows;
+  if (RemainingMs == 0) {
+    StrCpyS (Text, ARRAY_SIZE (Text), L"Timeout is disabled.");
+  } else {
+    UnicodeSPrint (Text, sizeof (Text), L"Highlighted entry will boot in %us.",
+                           RemainingMs / 1000 + (RemainingMs % 1000 != 0));
+  }
+  SfbDrawWrappedMenuText (Text, TRUE);
+  /* Keep the status area the same height after the countdown is cancelled. */
+  for (Rows = SfbMenuTextRows (Text); Rows < mSfbCountdownRows; Rows++) {
+    Print (L"\r\n");
+  }
+}
+
+VOID
+SfbBeginScreen (IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle,
+                 IN CONST UINT32 *RemainingMs)
+{
+  SfbReadMenuGeometry ();
+  mSfbCountdownRows = 0;
+  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
+  gST->ConOut->ClearScreen (gST->ConOut);
   Print (L"\r\n");
+  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
+  SfbDrawWrappedMenuText (Title, TRUE);
+  if (RemainingMs != NULL) {
+    mSfbCountdownTop = gST->ConOut->Mode != NULL ? (UINTN)gST->ConOut->Mode->CursorRow : 1;
+    /* UINT32 milliseconds cannot exceed 4,294,968 rounded-up seconds. */
+    mSfbCountdownRows = SfbMenuTextRows (L"Highlighted entry will boot in 4294968s.");
+    SfbDrawCountdown (*RemainingMs);
+  }
+  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
+  if (Subtitle != NULL) { SfbDrawWrappedMenuText (Subtitle, TRUE); }
+  Print (L"\r\n");
+}
+
+BOOLEAN
+SfbUpdateMenuCountdown (IN UINT32 RemainingMs)
+{
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *Out = gST->ConOut;
+  CHAR16 Blank[SFB_MENU_BLOCK_MAX + 1];
+  UINTN Index, Column, Row, Attribute, Width = mSfbMenuWidth - 2 * mSfbMenuPadding;
+  EFI_STATUS Status = EFI_SUCCESS;
+  if (Out->Mode == NULL || Out->SetCursorPosition == NULL || mSfbCountdownRows == 0) { return FALSE; }
+  Column = (UINTN)Out->Mode->CursorColumn;
+  Row = (UINTN)Out->Mode->CursorRow;
+  Attribute = (UINTN)Out->Mode->Attribute;
+  for (Index = 0; Index < Width; Index++) { Blank[Index] = L' '; }
+  Blank[Index] = L'\0';
+  Out->SetAttribute (Out, SFB_ATTR_TITLE);
+  for (Index = 0; Index < mSfbCountdownRows; Index++) {
+    Status = Out->SetCursorPosition (Out, mSfbMenuLeft + mSfbMenuPadding, mSfbCountdownTop + Index);
+    if (EFI_ERROR (Status)) { break; }
+    Print (L"%s", Blank);
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = Out->SetCursorPosition (Out, mSfbMenuLeft + mSfbMenuPadding, mSfbCountdownTop);
+    if (!EFI_ERROR (Status)) { SfbDrawCountdown (RemainingMs); }
+  }
+  if (EFI_ERROR (Out->SetCursorPosition (Out, Column, Row))) { Status = EFI_DEVICE_ERROR; }
+  Out->SetAttribute (Out, Attribute);
+  return (BOOLEAN)!EFI_ERROR (Status);
 }
 
 VOID
 SfbEndScreen (IN CONST CHAR16 *Footer)
 {
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
-  Print (L"\r\n%s\r\n", Footer);
+  Print (L"\r\n");
+  SfbDrawWrappedMenuText (Footer, TRUE);
+}
+
+UINTN
+SfbMenuRowsAvailable (IN CONST CHAR16 *Footer, IN UINTN ExtraRows)
+{
+  UINTN Used;
+  if (gST->ConOut->Mode == NULL) { return SFB_VISIBLE_ROWS; }
+  /* Current header rows, footer gap, optional more row and final console row.
+   * Screens reserve their own list separators or overflow notices. */
+  Used = (UINTN)gST->ConOut->Mode->CursorRow + SfbMenuTextRows (Footer) +
+         3 + ExtraRows;
+  return mSfbMenuRows > Used ? mSfbMenuRows - Used : 1;
 }
 
 VOID
 SfbDrawRow (IN BOOLEAN Selected, IN CONST CHAR16 *Marker, IN CONST CHAR16 *Text)
 {
+  CHAR16 Line[SFB_MENU_BLOCK_MAX + 1];
+  UINTN Length = SfbCopyMenuLine (Line, Text);
+  /* Positioning precedes the highlight, so outer margins remain unselected. */
+  SfbMenuColumn (mSfbMenuLeft + mSfbMenuPadding);
   gST->ConOut->SetAttribute (gST->ConOut,
                              Selected ? SFB_ATTR_SELECTED : SFB_ATTR_NORMAL);
-  Print (L"%s %s %s", Selected ? L">" : L" ", Marker, Text);
+  if (mSfbMenuTextLeft != mSfbMenuLeft + mSfbMenuPadding) {
+    Print (L"%s %s ", Selected ? L">" : L" ", Marker);
+  }
+  while (Length < mSfbMenuTextWidth) { Line[Length++] = L' '; }
+  Line[Length] = L'\0';
+  Print (L"%s", Line);
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
   Print (L"\r\n");
 }
@@ -322,58 +522,7 @@ SfbReportStatus (IN CONST CHAR16 *What, IN EFI_STATUS Status)
 VOID
 SfbShowFastbootMode (VOID)
 {
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
-  gST->ConOut->ClearScreen (gST->ConOut);
-  gST->ConOut->EnableCursor (gST->ConOut, FALSE);
-
-  Print (L"FASTBOOT MODE\r\n");
-
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
-}
-
-STATIC
-SFB_MENU_ACTION
-SfbFirstRunMenuHandler (IN VOID *Context,
-                        IN UINTN Row,
-                        IN SFB_KEY Key)
-{
-  BOOLEAN *EnterMenu = (BOOLEAN *)Context;
-
-  (VOID)Row;
-  *EnterMenu = SfbFirstRunEntersMenu (Key);
-  return SfbMenuActionExit;
-}
-
-/*
- * An empty boot root is normally an installation state. Keep fastboot as the
- * default, but give a first-time operator one explicit way to inspect the
- * discovered entries before handing the device to the host.
- */
-BOOLEAN
-SfbShowFirstRunScreen (VOID)
-{
-  STATIC SFB_MENU_ROW Rows[] = {
-    { L"Enter boot menu (Volume Down)", L" " },
-    { L"Enter Super Fastboot (default)", L" " }
-  };
-  SFB_MENU_TEMPLATE Template;
-  BOOLEAN EnterMenu = FALSE;
-
-  ZeroMem (&Template, sizeof (Template));
-  Template.Title = L"CANOE-BDS";
-  Template.Subtitle = L"No boot image installed.";
-  Template.Footer = L"Volume Up/timeout: Super Fastboot   Volume Down: boot menu";
-  Template.Rows = Rows;
-  Template.RowCount = ARRAY_SIZE (Rows);
-  Template.Cursor = 1;
-  Template.TimeoutMs = 2 * 1000;
-  Template.Navigate = FALSE;
-  Template.Context = &EnterMenu;
-  Template.Enter = SfbMenuNoopEnter;
-  Template.Exit = SfbMenuNoopExit;
-  Template.Handler = SfbFirstRunMenuHandler;
-  (VOID)SfbRunMenu (&Template);
-  return EnterMenu;
+  SfbShowActionScreen (L"Super Fastboot");
 }
 
 /*
@@ -416,13 +565,8 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name,
 VOID
 SfbShowActionScreen (IN CONST CHAR16 *Text)
 {
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
-  gST->ConOut->ClearScreen (gST->ConOut);
+  SfbBeginScreen (Text, NULL, NULL);
   gST->ConOut->EnableCursor (gST->ConOut, FALSE);
-
-  Print (L"%s\r\n", Text);
-
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
 }
 
 /* Clear queued startup keys before the destination draws its own screen. */
@@ -442,54 +586,22 @@ typedef struct {
   SFB_BOOT_MODE      CurrentMode;
   BOOLEAN            AllowCountdown;
   BOOLEAN            EnterFastboot;
+  BOOLEAN            FirstRun;
 } SFB_MAIN_MENU_CONTEXT;
 
-/* Keep selection details to two console lines, including long file paths.
- * The last column is reserved to prevent automatic wrapping before CR/LF. */
-STATIC
-VOID
-SfbDrawSelectionLine (IN CONST CHAR16 *Text)
+STATIC BOOLEAN
+SfbIsBootMenuLaunch (IN CONST SFB_BOOT_ENTRY *Entry)
 {
-  CHAR16 Line[SFB_PATH_CHARS];
-  UINTN Columns = 80;
-  UINTN Rows;
-  UINTN Limit;
-  UINTN Index;
-
-  if (gST->ConOut->Mode != NULL && gST->ConOut->QueryMode != NULL &&
-      EFI_ERROR (gST->ConOut->QueryMode (gST->ConOut,
-                                        (UINTN)gST->ConOut->Mode->Mode,
-                                        &Columns, &Rows))) {
-    Columns = 80;
-  }
-  Limit = Columns > 1 ? Columns - 1 : 1;
-  if (Limit >= ARRAY_SIZE (Line)) { Limit = ARRAY_SIZE (Line) - 1; }
-  for (Index = 0; Index < Limit && Text[Index] != L'\0'; Index++) {
-    Line[Index] = Text[Index];
-  }
-  if (Text[Index] != L'\0' && Index >= 3) {
-    Line[Index - 3] = Line[Index - 2] = Line[Index - 1] = L'.';
-  }
-  Line[Index] = L'\0';
-  Print (L"%s\r\n", Line);
+  return Entry->Kind == SfbEntryEfiFile || Entry->Kind == SfbEntryBlsLinux ||
+         Entry->Kind == SfbEntryBlsEfi;
 }
+
+/* Selection details stay two bounded lines, including long file paths. */
+STATIC VOID SfbDrawSelectionLine (IN CONST CHAR16 *Text) { SfbDrawInfoLine (Text); }
 
 /* Drawing is deliberately observational: use the same configured/fallback
  * choice as SfbLaunchEntry without opening files or preparing launch hooks.
  * Launch-time profile/lock-policy failures remain launch-time decisions. */
-/* The main menu adds selected-entry details and group dividers. Reserve their
- * lines before handing scrolling to the shared scaffold. */
-STATIC UINTN
-SfbMainMenuVisibleRows (VOID)
-{
-  UINTN Columns, Rows = 32;
-  if (gST->ConOut->Mode != NULL && gST->ConOut->QueryMode != NULL &&
-      EFI_ERROR (gST->ConOut->QueryMode (gST->ConOut,
-        (UINTN)gST->ConOut->Mode->Mode, &Columns, &Rows))) { Rows = 32; }
-  Rows = Rows > 15 ? Rows - 15 : 1;
-  return Rows < SFB_VISIBLE_ROWS ? Rows : SFB_VISIBLE_ROWS;
-}
-
 STATIC
 VOID
 SfbDrawMainMenuHeader (IN VOID *Context)
@@ -527,6 +639,9 @@ SfbDrawMainMenuHeader (IN VOID *Context)
   case SfbEntryFastboot:
     Detail = L"Connect to a host for device maintenance.";
     break;
+  case SfbEntrySetupFastboot:
+    Detail = L"No boot root yet. Enter Super Fastboot to set up.";
+    break;
   case SfbEntrySelector:
     Detail = L"Browse and launch an EFI application.";
     break;
@@ -534,7 +649,7 @@ SfbDrawMainMenuHeader (IN VOID *Context)
     Detail = L"Browse the installed EFI tools.";
     break;
   case SfbEntrySaveDefault:
-    Detail = L"Choose the entry and mode used on future boots.";
+    Detail = L"Choose the entry used on future boots.";
     break;
   case SfbEntryMassStorage:
     Detail = L"Choose storage to share with a host over USB.";
@@ -583,8 +698,8 @@ SfbDrawMainMenuRow (IN VOID    *Context,
   if (Row == 0 || Entry->Kind == SfbEntryMassStorage ||
       Entry->Kind == SfbEntryAdvanced || Entry->Kind == SfbEntryReboot ||
       Entry->Kind == SfbEntryPowerOff) {
-    if (Row == 0 && Entry->Kind == SfbEntryMassStorage) { Print (L"  No boot entries.\r\n"); }
-    SfbDrawSelectionLine (L"----------------------------------------");
+    if (Row == 0 && Entry->Kind == SfbEntryMassStorage) { SfbDrawInfoLine (L"No boot entries."); }
+    SfbDrawMenuDivider ();
   }
 
 
@@ -658,19 +773,21 @@ SfbRefreshMainMenu (IN VOID *Context)
    * owned and released by SfbFreeMenu, never dereferenced by this copy. */
   if (HadSelection) { CopyMem (&Previous, &State->Menu.Entry[PreviousRow], sizeof (Previous)); }
   SfbFreeMenu (&State->Menu);
-  SfbBuildMenu (&State->Menu, State->CurrentMode);
+  SfbBuildMenu (&State->Menu, State->CurrentMode, State->FirstRun);
   SfbSetShowBooting (State->Menu.ShowBooting);
   SfbSetLaunchLockPolicy (State->Menu.ConfigValid
                           ? State->Menu.LockPolicy
                           : SfbConfigLockAsNeeded);
   State->Template->RowCount = State->Menu.Count;
-  State->Template->VisibleRows = SfbMainMenuVisibleRows ();
   State->Template->Cursor = SfbRestoreMainSelection (&State->Menu,
                              HadSelection ? &Previous : NULL, PreviousRow);
   State->Template->TimeoutMs =
     (State->AllowCountdown &&
-     State->Menu.MenuMode == SfbConfigMenuMenu &&
-     State->Menu.DefaultFromConfig &&
+     State->Menu.DefaultIndex < State->Menu.Count &&
+     State->Template->Cursor == State->Menu.DefaultIndex &&
+     ((State->FirstRun && State->Menu.Entry[State->Template->Cursor].Kind == SfbEntrySetupFastboot) ||
+      (State->Menu.MenuMode == SfbConfigMenuMenu && State->Menu.DefaultFromConfig &&
+       SfbIsBootMenuLaunch (&State->Menu.Entry[State->Template->Cursor]))) &&
      State->Menu.MenuTimeoutSeconds != 0)
     ? State->Menu.MenuTimeoutSeconds * 1000 : 0;
   State->AllowCountdown = FALSE;
@@ -701,9 +818,7 @@ SfbHandleMainMenuRow (IN VOID *Context,
   }
   Entry = &State->Menu.Entry[Row];
 
-  if (Entry->Kind == SfbEntryEfiFile ||
-      Entry->Kind == SfbEntryBlsLinux ||
-      Entry->Kind == SfbEntryBlsEfi) {
+  if (SfbIsBootMenuLaunch (Entry)) {
     if (Key == SfbKeyTimeout) {
       SfbSetShowBooting (State->Menu.ShowBooting);
   SfbSetLaunchLockPolicy (State->Menu.ConfigValid
@@ -718,9 +833,11 @@ SfbHandleMainMenuRow (IN VOID *Context,
     }
     return SfbMenuActionRebuild;
   }
+  if (Key == SfbKeyTimeout && Entry->Kind != SfbEntrySetupFastboot) { return SfbMenuActionContinue; }
 
   switch (Entry->Kind) {
   case SfbEntryFastboot:
+  case SfbEntrySetupFastboot:
     State->EnterFastboot = TRUE;
     return SfbMenuActionExit;
   case SfbEntryAdvanced:
@@ -1030,7 +1147,8 @@ SfbRunRebootMenu (VOID)
 
 BOOLEAN
 SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
-                IN BOOLEAN       AllowCountdown)
+                IN BOOLEAN       AllowCountdown,
+                IN BOOLEAN       FirstRun)
 {
   SFB_MAIN_MENU_CONTEXT State;
   SFB_MENU_TEMPLATE     Template;
@@ -1046,6 +1164,7 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
   State.Template = &Template;
   State.CurrentMode = InitialMode;
   State.AllowCountdown = AllowCountdown;
+  State.FirstRun = FirstRun;
   State.Menu.DefaultIndex = SFB_NO_INDEX;
 
   Template.Title = L"Boot menu";
@@ -1053,10 +1172,11 @@ SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
   Template.Footer = L"Vol Up/Down: move   Power: select";
   Template.Context = &State;
   Template.Navigate = TRUE;
-  Template.Enter = SfbMenuNoopEnter;
   Template.Refresh = SfbRefreshMainMenu;
   Template.Exit = SfbExitMainMenu;
   Template.Handler = SfbHandleMainMenuRow;
+  Template.ShowCountdown = TRUE;
+  Template.ExtraRows = 5;
   Template.DrawHeader = SfbDrawMainMenuHeader;
   Template.DrawRow = SfbDrawMainMenuRow;
   (VOID)SfbRunMenu (&Template);

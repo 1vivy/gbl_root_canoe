@@ -118,7 +118,9 @@ typedef enum {
   SfbEntryRestart,
   SfbEntryRecovery,
   SfbEntryAdvanced,
-  SfbEntryReboot
+  SfbEntryReboot,
+  /* Temporary setup row; never a configured/persistable boot target. */
+  SfbEntrySetupFastboot
 } SFB_ENTRY_KIND;
 
 /*
@@ -226,7 +228,8 @@ typedef enum {
   SfbKeyTimeout = 0,
   SfbKeyUp,
   SfbKeyDown,
-  SfbKeySelect
+  SfbKeySelect,
+  SfbKeyCancel
 } SFB_KEY;
 
 typedef enum {
@@ -257,17 +260,18 @@ SfbDecidePowerOn (
   return SfbBootDecisionMenu;
 }
 
-/* First-run's only opt-in is Volume Down. It is intentionally independent of the
- * persisted silent/menu policy and keeps the historical fastboot default. */
+/* Opening the menu with a key cancels unattended boot, just like navigating it.
+ * Only an automatic menu-policy expiry may start the menu's countdown. */
 static inline BOOLEAN
-SfbFirstRunEntersMenu (IN SFB_KEY Key)
+SfbPowerOnMenuCountdown (IN SFB_CONFIG_MENU_MODE MenuMode, IN SFB_KEY Key)
 {
-  return (BOOLEAN)(Key == SfbKeyDown);
+  return (BOOLEAN)(MenuMode == SfbConfigMenuMenu && Key == SfbKeyTimeout);
 }
 
 /*
  * What a key that is neither volume-up nor volume-down means to a given wait.
- * The menu treats it as confirm; the power-on scan skips it and keeps waiting.
+ * The menu confirms only Power/Enter; other keys cancel its countdown.
+ * The power-on scan skips non-volume keys and keeps waiting.
  */
 typedef enum {
   SfbKeyPolicyConfirm = 0,
@@ -306,7 +310,6 @@ typedef VOID (*SFB_MENU_DRAW_ROW)(
   IN BOOLEAN  Selected
   );
 typedef VOID (*SFB_MENU_DRAW_HEADER)(IN VOID *Context);
-
 typedef struct {
   CONST CHAR16       *Title;
   CONST CHAR16       *Subtitle;
@@ -314,6 +317,7 @@ typedef struct {
   SFB_MENU_ROW       *Rows;
   UINTN               RowCount;
   UINTN               VisibleRows; /* Zero uses the shared default. */
+  UINTN               ExtraRows;   /* Separators/notices drawn with list rows. */
   UINTN               Cursor;
   UINT32              TimeoutMs;
   BOOLEAN             Navigate;
@@ -322,18 +326,13 @@ typedef struct {
   SFB_MENU_REFRESH    Refresh;
   SFB_MENU_EXIT       Exit;
   SFB_MENU_HANDLER     Handler;
+  BOOLEAN              ShowCountdown;
   SFB_MENU_DRAW_HEADER DrawHeader;
   SFB_MENU_DRAW_ROW    DrawRow;
 } SFB_MENU_TEMPLATE;
 
 EFI_STATUS
 SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template);
-
-EFI_STATUS
-SfbMenuNoopEnter (IN VOID *Context);
-
-VOID
-SfbMenuNoopExit (IN VOID *Context);
 
 /* ---- SuperFbFat.c: embedded FAT/EXT4 stack and volume helpers ----------- */
 
@@ -427,6 +426,11 @@ SfbOpenVolumeRoot (IN EFI_HANDLE Volume, OUT EFI_FILE_PROTOCOL **Root);
 BOOLEAN
 SfbFileExists (IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path);
 
+/* Preserve filesystem errors when absence changes boot-root classification. */
+EFI_STATUS
+SfbFileProbe (IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path,
+               OUT BOOLEAN *IsFile);
+
 /*
  * Read up to MaxBytes of the file at Path (under Root) into Buffer. *BytesRead
  * is set to how much was read. Fails only if the file cannot be opened or read;
@@ -500,7 +504,8 @@ SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume,
 
 
 VOID
-SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode);
+SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode,
+              IN BOOLEAN FirstRun);
 
 VOID
 SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu);
@@ -564,7 +569,8 @@ SfbFreeEntry (IN OUT SFB_BOOT_ENTRY *Entry);
  */
 BOOLEAN
 SfbRunBootMenu (IN SFB_BOOT_MODE InitialMode,
-                IN BOOLEAN       AllowCountdown);
+                IN BOOLEAN       AllowCountdown,
+                IN BOOLEAN       FirstRun);
 
 /* File browser: pick a volume, walk directories, act on a .efi. */
 VOID
@@ -611,20 +617,10 @@ VOID
 SfbShowFastbootMode (VOID);
 
 /*
- * Clear the console, show "Entering Boot Menu", and hold for a few seconds so
- * a volume key still held from power-on is released before the menu starts
- * taking input. The input buffer is drained afterwards so that held key does
- * not leak in as a spurious keypress.
+ * Consume queued startup input before drawing its selected destination.
  */
 VOID
 SfbShowEnteringMenu (VOID);
-
-/*
- * Show the first-run choice. Returns TRUE only when Volume Up explicitly
- * enters the normal boot menu; timeout and every other key preserve fastboot.
- */
-BOOLEAN
-SfbShowFirstRunScreen (VOID);
 
 /*
  * Announce that an entry is being launched, so the menu the user picked from
@@ -689,7 +685,21 @@ SfbExportPartitionBound (IN CONST CHAR16 *Target, IN CONST CHAR8 *Identity);
 #define SFB_VISIBLE_ROWS  12
 
 VOID
-SfbBeginScreen (IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle OPTIONAL);
+SfbBeginScreen (IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle OPTIONAL,
+                 IN CONST UINT32 *RemainingMs OPTIONAL);
+
+/* Repaint the dedicated countdown line, preserving the rest of the screen. */
+BOOLEAN
+SfbUpdateMenuCountdown (IN UINT32 RemainingMs);
+
+UINTN
+SfbMenuRowsAvailable (IN CONST CHAR16 *Footer, IN UINTN ExtraRows);
+
+VOID
+SfbDrawInfoLine (IN CONST CHAR16 *Text);
+
+VOID
+SfbDrawWrappedInfo (IN CONST CHAR16 *Text);
 
 VOID
 SfbEndScreen (IN CONST CHAR16 *Footer);

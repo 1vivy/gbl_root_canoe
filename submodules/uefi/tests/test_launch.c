@@ -39,6 +39,7 @@ static UINTN mSidecarBytes;
 static UINT8 mEntriesFixture[SFB_LIST_MAX_BYTES + 1];
 static UINTN mEntriesFixtureBytes;
 static BOOLEAN mEntriesFixtureEnabled;
+static BOOLEAN mAllowEmptyRootAllocation;
 static UINT8 mBlsFixture[SFB_BLS_MAX_BYTES + 1];
 static UINTN mBlsFixtureBytes;
 static BOOLEAN mBlsFixtureEnabled;
@@ -121,6 +122,14 @@ static CHAR16 mBlsOpenedPath[SFB_PATH_CHARS];
  * was applied is invisible in the menu row, but it is exactly what this
  * records. */
 static CHAR16 mBlsImageProbed[SFB_PATH_CHARS];
+
+/* Script only browser inputs; other launch fixtures never depend on UI keys. */
+static const SFB_KEY *mBrowserKeys;
+static UINTN mBrowserKeyCount, mBrowserKeyIndex;
+static UINTN mBrowserRootOpens, mBrowserFatOpens, mBrowserFailOpenAt;
+static VOID *mBrowserListAllocation;
+static UINTN mBrowserListFrees;
+static EFI_STATUS mBrowserReportedStatus;
 
 /* Suffix match on a wide string; the fixture needs it before StrLen is in
  * scope from the production sources included at the end of this file. */
@@ -410,7 +419,7 @@ Print(IN CONST CHAR16 *Format, ...)
 VOID EFIAPI
 FreePool(IN VOID *Buffer)
 {
-  (void)Buffer;
+  if (Buffer != NULL && Buffer == mBrowserListAllocation) { mBrowserListFrees++; }
 }
 
 VOID * EFIAPI
@@ -633,6 +642,13 @@ FakeRootOpen(IN EFI_FILE_PROTOCOL *This, OUT EFI_FILE_PROTOCOL **NewHandle,
   (VOID)Attributes;
   assert(This == &mRoot || This == &mFatRoot);
   assert(NewHandle != NULL && FileName != NULL);
+  if (mBrowserKeys != NULL) {
+    if (This == &mFatRoot) { mBrowserFatOpens++; }
+    else { mBrowserRootOpens++; }
+    if (mBrowserFailOpenAt != 0 && mBrowserRootOpens >= mBrowserFailOpenAt) {
+      return EFI_DEVICE_ERROR;
+    }
+  }
 
   FakeCopyChars (mBlsOpenedPath, FileName, ARRAY_SIZE (mBlsOpenedPath));
 
@@ -1319,7 +1335,7 @@ TestConfigOptionsBecomeLoadOptions(void)
   mVolumesAvailable = TRUE;
   mBootRootConfigPresent = TRUE;
 
-  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked);
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked, FALSE);
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
       Found = Index;
@@ -1373,7 +1389,7 @@ TestConfigWithoutOptionsPublishesNone(void)
   mVolumesAvailable = TRUE;
   mBootRootConfigPresent = TRUE;
 
-  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked);
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked, FALSE);
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
       Found = Index;
@@ -1420,7 +1436,7 @@ TestUnmanagedPassthrough(void)
   mVolumesAvailable = TRUE;
   mBootRootConfigPresent = TRUE;
 
-  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked);
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked, FALSE);
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
       Found = Index;
@@ -1472,15 +1488,31 @@ TestBootRootEmpty(void)
     "image boot.efi\n";
 
   mEntriesFixtureEnabled = FALSE;
+  mAllowEmptyRootAllocation = TRUE;
   mVolumesAvailable = TRUE;
   mBootRootConfigPresent = FALSE;
   mBootRootManagedPresent = FALSE;
   assert(SfbBootRootObserve () == SfbBootRootEmptyRoot);
-  /* Volume Up is the sole first-run opt-in; all default paths stay fastboot. */
-  assert(SfbFirstRunEntersMenu (SfbKeyDown));
-  assert(!SfbFirstRunEntersMenu (SfbKeyTimeout));
-  assert(!SfbFirstRunEntersMenu (SfbKeyUp));
-  assert(!SfbFirstRunEntersMenu (SfbKeySelect));
+
+  /* Setup is a transient menu row, never a stored entry/default and never a
+   * reason for boot-root discovery to report an installed system. */
+  {
+    SFB_MENU_STATE Menu;
+    SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked, TRUE);
+    assert(Menu.Count == 7 && Menu.DefaultIndex == 0 && !Menu.DefaultFromConfig);
+    assert(Menu.Entry[0].Kind == SfbEntrySetupFastboot);
+    assert(StrCmp (Menu.Entry[0].Desc, L"Entering Super Fastboot") == 0);
+    assert(Menu.Entry[0].DefaultTarget[0] == '\0' && Menu.Entry[0].Path[0] == L'\0');
+    assert(Menu.Entry[2].Kind == SfbEntryFastboot);
+    assert(StrCmp (Menu.Entry[2].Desc, L"Enter Super Fastboot") == 0);
+    assert(Menu.MenuTimeoutSeconds == 3);
+    SfbFreeMenu (&Menu);
+    assert(SfbBootRootObserve () == SfbBootRootEmptyRoot);
+    SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked, FALSE);
+    assert(Menu.Count == 6 && Menu.Entry[0].Kind == SfbEntryMassStorage);
+    SfbFreeMenu (&Menu);
+  }
+
 
   mBootRootSlotAPresent = TRUE;
   assert(SfbBootRootObserve () == SfbBootRootPopulatedManaged);
@@ -1496,6 +1528,18 @@ TestBootRootEmpty(void)
   mEntriesFixtureEnabled = TRUE;
   mBootRootManagedPresent = TRUE;
   assert(SfbBootRootObserve () == SfbBootRootPopulatedConfig);
+
+  for (UINT32 Seconds = 0; Seconds <= 5; Seconds += 5) {
+    SFB_MENU_STATE Menu;
+    mEntriesFixtureBytes = (UINTN)snprintf ((char *)mEntriesFixture, sizeof mEntriesFixture,
+      "version 1\nmenu-timeout %u\n", Seconds);
+    mBootRootManagedPresent = FALSE;
+    assert(SfbBootRootObserve () == SfbBootRootEmptyRoot);
+    SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked, TRUE);
+    assert(Menu.ConfigValid && Menu.Count == 7 && Menu.MenuTimeoutSeconds == Seconds);
+    assert(!Menu.DefaultFromConfig && Menu.Entry[0].Kind == SfbEntrySetupFastboot);
+    SfbFreeMenu (&Menu);
+  }
 
   mEntriesFixtureEnabled = FALSE;
   mBootRootConfigPresent = FALSE;
@@ -1518,6 +1562,7 @@ TestBootRootEmpty(void)
   mOpenStatus = EFI_SUCCESS;
   mVolumesAvailable = FALSE;
   mBootRootManagedPresent = FALSE;
+  mAllowEmptyRootAllocation = FALSE;
 }
 
 static void
@@ -1550,7 +1595,7 @@ TestConfigEntries(void)
   assert(Volume == mVolume);
   assert(Config.Valid && Config.Count == 1);
 
-  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked);
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked, FALSE);
   for (Index = 0; Index < Menu.Count; Index++) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
       assert(Menu.Entry[Index].Mode == SfbBootModeKmProfile);
@@ -1704,7 +1749,7 @@ TestBootRootProbe(void)
   mBootRootManagedPresent = TRUE;
   mBootRootBootentriesPresent = TRUE;
 
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
       Files++;
@@ -1732,7 +1777,7 @@ TestBootRootProbe(void)
   /* The demoted generation is offered as soon as it exists. */
   mBootRootBackupPresent = TRUE;
   Files = 0;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
       Files++;
@@ -1747,7 +1792,7 @@ TestBootRootProbe(void)
   mBootRootSlotAPresent = TRUE;
   mBootRootSlotBPresent = TRUE;
   Files = 0;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile) {
       Files++;
@@ -1810,7 +1855,7 @@ TestAdditiveDiscovery(void)
    * TestBootRootEspIsDiscovered owns that behaviour. */
   mBootRootBootaaPresent = FALSE;
 
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   SnapshotMenu (&Menu, &Alone);
   SfbFreeMenu (&Menu);
   assert(Alone.DefaultFromConfig);
@@ -1818,7 +1863,7 @@ TestAdditiveDiscovery(void)
   mFatVolumePresent = TRUE;
   mFatBootFilePresent = TRUE;
 
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   SnapshotMenu (&Menu, &WithMedia);
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind != SfbEntryEfiFile) {
@@ -1849,7 +1894,7 @@ TestAdditiveDiscovery(void)
 
   /* Same medium with nothing bootable on it changes the menu not at all. */
   mFatBootFilePresent = FALSE;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   SnapshotMenu (&Menu, &MediaWithoutLoader);
   SfbFreeMenu (&Menu);
   assert(SameMenu (&MediaWithoutLoader, &Alone));
@@ -1892,7 +1937,7 @@ TestBootRootBlsEntryIsDiscovered(void)
   mBlsConfNames[0] = L"pmos.conf";
   mBlsConfCount = 1;
 
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
 
   /* The directory that was opened is the one under the boot root, not the one
    * at the volume root: getting this wrong is silent, the open simply fails. */
@@ -1918,7 +1963,7 @@ TestBootRootBlsEntryIsDiscovered(void)
   /* Without the tree the menu gains nothing, which is what every other boot
    * on this device looks like. */
   mBlsDirPresent = FALSE;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   for (Index = 0; Index < Menu.Count; ++Index) {
     assert(Menu.Entry[Index].Kind != SfbEntryBlsLinux);
   }
@@ -1960,7 +2005,7 @@ TestBlsDefaultResolution (void)
   sprintf (ConfigText, ConfigTemplate, "PMOS");
   memcpy (mEntriesFixture, ConfigText, strlen (ConfigText));
   mEntriesFixtureBytes = strlen (ConfigText);
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   Found = SFB_NO_INDEX;
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryBlsLinux) {
@@ -1978,7 +2023,7 @@ TestBlsDefaultResolution (void)
   sprintf (ConfigText, ConfigTemplate, "missing");
   memcpy (mEntriesFixture, ConfigText, strlen (ConfigText));
   mEntriesFixtureBytes = strlen (ConfigText);
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   assert (!Menu.DefaultFromConfig);
   assert (Menu.DefaultIndex == SFB_NO_INDEX);
   assert (Menu.RejectedLines != 0);
@@ -1998,7 +2043,7 @@ TestBlsDefaultResolution (void)
   sprintf (ConfigText, ConfigTemplate, "pmos");
   memcpy (mEntriesFixture, ConfigText, strlen (ConfigText));
   mEntriesFixtureBytes = strlen (ConfigText);
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   Found = SFB_NO_INDEX;
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryBlsLinux) {
@@ -2041,7 +2086,7 @@ StageBlsRow(const CHAR8 *ConfText, UINTN ConfBytes, SFB_MENU_STATE *Menu)
   mBlsConfNames[0] = L"pmos.conf";
   mBlsConfCount = 1;
 
-  SfbBuildMenu (Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (Menu, SfbBootModeAblFakeLocked, FALSE);
   for (Index = 0; Index < Menu->Count; ++Index) {
     if (Menu->Entry[Index].Kind == SfbEntryBlsLinux ||
         Menu->Entry[Index].Kind == SfbEntryBlsEfi) {
@@ -2255,7 +2300,7 @@ TestBootRootEspIsDiscovered(void)
   mBootRootPrefixIsEfisp = TRUE;
   mBootRootBootaaPresent = TRUE;
 
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
 
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryEfiFile &&
@@ -2271,7 +2316,7 @@ TestBootRootEspIsDiscovered(void)
   /* Absent, and the menu gains nothing: the probe is not answering yes to
    * whatever it is handed. */
   mBootRootBootaaPresent = FALSE;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   for (Index = 0; Index < Menu.Count; ++Index) {
     assert(StrCmp (Menu.Entry[Index].Path,
                    L"\\efisp\\EFI\\BOOT\\BOOTAA64.EFI") != 0);
@@ -2324,7 +2369,7 @@ TestStaleSlotRole(void)
 
   /* The config says slot A is active; the GPT says B. */
   mFakeActiveSlot = SfbSlotB;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   Warned = FALSE;
   for (Index = 0; Index < Menu.Count; ++Index) {
     if (Menu.Entry[Index].Kind == SfbEntryBack &&
@@ -2341,14 +2386,14 @@ TestStaleSlotRole(void)
 
   /* Agreement is silent. */
   mFakeActiveSlot = SfbSlotA;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   assert(!Menu.SlotMismatch);
   assert(Menu.DefaultFromConfig);
   SfbFreeMenu (&Menu);
 
   /* An unrecognised partition layout must never suppress a boot. */
   mFakeActiveSlot = SfbSlotUnknown;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   assert(!Menu.SlotMismatch);
   assert(Menu.DefaultFromConfig);
   SfbFreeMenu (&Menu);
@@ -2362,13 +2407,55 @@ TestStaleSlotRole(void)
   memcpy (mEntriesFixture, NoSlotText, sizeof (NoSlotText) - 1);
   mEntriesFixtureBytes = sizeof (NoSlotText) - 1;
   mFakeActiveSlot = SfbSlotB;
-  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked);
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   assert(!Menu.SlotMismatch);
   assert(Menu.DefaultFromConfig);
   SfbFreeMenu (&Menu);
 
   ResetVolumes ();
   mEntriesFixtureEnabled = FALSE;
+}
+
+static void
+TestContainerToolsBrowser(void)
+{
+  static const SFB_KEY BrowseKeys[] = {
+    SfbKeySelect, /* Browse tools. */
+    SfbKeyCancel, SfbKeyDown, SfbKeySelect, /* Open ArbTools.efi action menu. */
+    SfbKeyDown, SfbKeySelect, /* Back without launching. */
+    SfbKeyUp, SfbKeySelect, /* Same file stays selected; navigate to parent to return. */
+    SfbKeyDown, SfbKeySelect /* Back to Advanced. */
+  };
+  static const SFB_KEY EmptyKeys[] = {SfbKeySelect, SfbKeySelect, SfbKeyDown, SfbKeySelect};
+  static const SFB_KEY FailedKeys[] = {SfbKeySelect, SfbKeyDown, SfbKeySelect};
+
+  for (UINTN Case = 0; Case < 5; Case++) {
+    ResetLaunchBackend (); ResetVolumes ();
+    mAllowEmptyRootAllocation = TRUE;
+    mVolumesAvailable = TRUE; mFatVolumePresent = TRUE;
+    mBlsDirPresent = Case != 4;
+    mBlsConfNames[0] = L"ArbTools.efi";
+    mBlsConfCount = Case == 1 ? 0 : 1;
+    /* Production's FAT container has an empty prefix just like removable FAT.
+     * Its actual container identity, not prefix spelling, selects tools/. */
+    mBootRootPrefixIsEfisp = FALSE;
+    mBrowserKeys = Case == 0 ? BrowseKeys : Case == 1 ? EmptyKeys : FailedKeys;
+    mBrowserKeyCount = Case == 0 ? ARRAY_SIZE (BrowseKeys) : Case == 1 ? ARRAY_SIZE (EmptyKeys) : Case == 2 ? ARRAY_SIZE (FailedKeys) : 0;
+    mBrowserKeyIndex = mBrowserRootOpens = mBrowserFatOpens = mBrowserListFrees = 0;
+    mBrowserListAllocation = NULL; mBrowserReportedStatus = EFI_SUCCESS;
+    mBrowserFailOpenAt = Case == 2 ? 2 : Case == 3 ? 1 : 0;
+    SfbRunToolsBrowser (SfbBootModeAblFakeLocked);
+    assert(mBrowserKeyIndex == mBrowserKeyCount);
+    assert(mBrowserRootOpens == (Case == 0 ? 3 : Case < 3 ? 2 : 1));
+    assert(mBrowserFatOpens == 0 && mBrowserListFrees == (Case < 3 ? 1 : 0));
+    if (Case != 3) { assert(StrCmp (mBlsOpenedPath, L"\\tools") == 0); }
+    assert(mBrowserReportedStatus == (Case == 2 || Case == 3 ? EFI_DEVICE_ERROR : Case == 4 ? EFI_NOT_FOUND : EFI_SUCCESS));
+    assert(mLoadCount == 0 && mStartCount == 0 && mPrepareCount == 0);
+    mBrowserKeys = NULL; mBrowserListAllocation = NULL;
+    mBrowserFailOpenAt = 0; mAllowEmptyRootAllocation = FALSE;
+    ResetVolumes ();
+  }
+  printf("tools browser: FAT container root, child return selection, empty directory, read/probe failures and cleanup passed\n");
 }
 
 static void
@@ -2384,14 +2471,19 @@ TestPowerOnDecisionTable (void)
   assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyUp, TRUE) ==
           SfbBootDecisionFastboot);
 
-  /* Menu mode always opens the menu after expiry, where the shared scaffold
-   * owns menu-timeout; Volume Down retains the fastboot escape. */
+  /* Menu mode opens after expiry with a countdown. Volume Down opens the
+   * same menu with that timeout cancelled; Volume Up goes to fastboot. */
   assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyTimeout, TRUE) ==
           SfbBootDecisionMenu);
   assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyDown, TRUE) ==
           SfbBootDecisionMenu);
   assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyUp, TRUE) ==
           SfbBootDecisionFastboot);
+  for (SFB_KEY Key = SfbKeyTimeout; Key <= SfbKeySelect; Key++) {
+    assert (!SfbPowerOnMenuCountdown (SfbConfigMenuSilent, Key));
+    assert (SfbPowerOnMenuCountdown (SfbConfigMenuMenu, Key) ==
+            (Key == SfbKeyTimeout));
+  }
 }
 
 int
@@ -2422,6 +2514,7 @@ main(void)
   TestBlsLinuxWithoutPayloadsStillLaunches ();
   TestStaleSlotRole ();
   TestPowerOnDecisionTable ();
+  TestContainerToolsBrowser ();
   return 0;
 }
 
@@ -2501,7 +2594,7 @@ AllocateZeroPool(IN UINTN AllocationSize)
   UINTN Aligned = (AllocationSize + 15u) & ~(UINTN)15u;
   VOID  *Block;
 
-  if (!mEntriesFixtureEnabled) {
+  if (!mEntriesFixtureEnabled && !mAllowEmptyRootAllocation) {
     return NULL;
   }
   /* Nothing frees in this harness - FreePool is a no-op - so exhausting the
@@ -2510,6 +2603,7 @@ AllocateZeroPool(IN UINTN AllocationSize)
   assert(Aligned != 0 && mArenaUsed + Aligned <= sizeof (mArena));
 
   Block = &mArena[mArenaUsed];
+  if (mBrowserKeys != NULL && AllocationSize == SFB_MAX_DIR_ENTRIES * sizeof (SFB_DIR_ENTRY)) { mBrowserListAllocation = Block; }
   mArenaUsed += Aligned;
   memset (Block, 0, AllocationSize);
   return Block;
@@ -2610,6 +2704,13 @@ SfbFileExists(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
     return (BOOLEAN)(mBootRootBootaaPresent && !mBootRootPrefixIsEfisp);
   }
   return mEntriesFixtureEnabled;
+}
+
+EFI_STATUS
+SfbFileProbe (EFI_FILE_PROTOCOL *Root, CONST CHAR16 *Path, BOOLEAN *IsFile)
+{
+  *IsFile = SfbFileExists (Root, Path);
+  return *IsFile ? EFI_SUCCESS : EFI_NOT_FOUND;
 }
 
 CONST CHAR16 *
@@ -2778,16 +2879,29 @@ SfbIsEfiDriverFile(IN EFI_FILE_PROTOCOL *Root, IN CONST CHAR16 *Path)
 SFB_KEY
 SfbWaitForKey(IN UINT32 TimeoutMs)
 {
-  (void)TimeoutMs;
+  assert(TimeoutMs == 0);
+  if (mBrowserKeys != NULL) {
+    assert(mBrowserKeyIndex < mBrowserKeyCount);
+    return mBrowserKeys[mBrowserKeyIndex++];
+  }
   return SfbKeySelect;
 }
 
 VOID
-SfbBeginScreen(IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle)
+SfbBeginScreen(IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle, IN CONST UINT32 *RemainingMs)
 {
-  (void)Title;
-  (void)Subtitle;
+  (void)Title; (void)Subtitle; (void)RemainingMs;
 }
+
+BOOLEAN SfbUpdateMenuCountdown(IN UINT32 RemainingMs) { (VOID)RemainingMs; return TRUE; }
+VOID SfbDrawWrappedInfo(IN CONST CHAR16 *Text) { (VOID)Text; }
+
+UINTN
+SfbMenuRowsAvailable(IN CONST CHAR16 *Footer, IN UINTN ExtraRows)
+{ (VOID)Footer; (VOID)ExtraRows; return SFB_VISIBLE_ROWS; }
+
+VOID
+SfbDrawInfoLine(IN CONST CHAR16 *Text) { (VOID)Text; }
 
 VOID
 SfbEndScreen(IN CONST CHAR16 *Footer)
@@ -2817,16 +2931,16 @@ SfbWindowStart(IN UINTN Cursor, IN UINTN Count, IN UINTN Rows)
 VOID
 SfbMoveCursor(IN OUT UINTN *Cursor, IN UINTN Count, IN SFB_KEY Key)
 {
-  (void)Cursor;
-  (void)Count;
-  (void)Key;
+  if (Count == 0) { *Cursor = 0; }
+  else if (Key == SfbKeyUp) { *Cursor = *Cursor == 0 ? Count - 1 : *Cursor - 1; }
+  else if (Key == SfbKeyDown) { *Cursor = (*Cursor + 1) % Count; }
 }
 
 VOID
 SfbReportStatus(IN CONST CHAR16 *What, IN EFI_STATUS Status)
 {
   (void)What;
-  (void)Status;
+  if (mBrowserKeys != NULL) { mBrowserReportedStatus = Status; }
 }
 
 VOID

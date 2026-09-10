@@ -106,21 +106,22 @@ SfbLoadBootConfig (OUT SFB_CONFIG *Config, OUT EFI_HANDLE *Volume,
  * transaction must not suppress the first-run fastboot path.
  */
 STATIC
-BOOLEAN
+EFI_STATUS
 SfbRootHasUsableConfig (IN EFI_FILE_PROTOCOL *Root,
                         IN CONST CHAR16      *RootPrefix,
-                        IN CONST CHAR16      *ConfigPath)
+                        OUT BOOLEAN          *Usable)
 {
   CHAR8        *Buffer;
   SFB_CONFIG   *Config;
   UINTN         BytesRead = 0;
   UINTN         Index;
-  BOOLEAN       Usable = FALSE;
+  EFI_STATUS    Status;
   BOOLEAN       Previous;
 
-  if (Root == NULL || RootPrefix == NULL || ConfigPath == NULL) {
-    return FALSE;
+  if (Root == NULL || RootPrefix == NULL || Usable == NULL) {
+    return EFI_INVALID_PARAMETER;
   }
+  *Usable = FALSE;
 
   Buffer = AllocateZeroPool (SFB_LIST_MAX_BYTES + 1);
   Config = AllocateZeroPool (sizeof (*Config));
@@ -131,29 +132,41 @@ SfbRootHasUsableConfig (IN EFI_FILE_PROTOCOL *Root,
     if (Config != NULL) {
       FreePool (Config);
     }
-    return FALSE;
+    return EFI_OUT_OF_RESOURCES;
   }
 
-  if (!EFI_ERROR (SfbReadStoredConfig (Root, Buffer, &BytesRead, Config,
-                                      &Previous))) {
+  Status = SfbReadStoredConfig (Root, Buffer, &BytesRead, Config, &Previous);
+  if (!EFI_ERROR (Status)) {
     for (Index = 0; Index < Config->Count; Index++) {
       CHAR16 Relative[SFB_PATH_CHARS];
       CHAR16 ImagePath[SFB_PATH_CHARS];
+      EFI_STATUS ProbeStatus;
+      BOOLEAN IsFile;
 
       SfbAsciiToUnicode (Config->Entry[Index].Image, Relative,
                          ARRAY_SIZE (Relative));
       if (!EFI_ERROR (SfbJoinRoot (RootPrefix, Relative, ImagePath,
-                                   ARRAY_SIZE (ImagePath))) &&
-          SfbFileExists (Root, ImagePath)) {
-        Usable = TRUE;
-        break;
+                                   ARRAY_SIZE (ImagePath)))) {
+        ProbeStatus = SfbFileProbe (Root, ImagePath, &IsFile);
+        if (!EFI_ERROR (ProbeStatus) && IsFile) {
+          *Usable = TRUE;
+          Status = EFI_SUCCESS;
+          break;
+        }
+        if (EFI_ERROR (ProbeStatus) && ProbeStatus != EFI_NOT_FOUND &&
+            !EFI_ERROR (Status)) {
+          Status = ProbeStatus;
+        }
       }
     }
+  } else if (Status == EFI_NOT_FOUND || Status == EFI_COMPROMISED_DATA) {
+    /* Keep the existing fallback for absent or unparseable configuration. */
+    Status = EFI_SUCCESS;
   }
 
   FreePool (Config);
   FreePool (Buffer);
-  return Usable;
+  return Status;
 }
 
 /* Observe the canonical container directly. Other FAT volumes remain available
@@ -170,8 +183,10 @@ SfbBootRootObserve (VOID)
   };
   EFI_FILE_PROTOCOL *Root = NULL;
   EFI_STATUS Status;
+  EFI_STATUS ProbeError;
   SFB_BOOT_ROOT_STATE State = SfbBootRootEmptyRoot;
   UINTN Which;
+  BOOLEAN Usable;
 
   Status = SfbContainerOpenRoot (&Root);
   if (EFI_ERROR (Status) || Root == NULL) {
@@ -179,14 +194,24 @@ SfbBootRootObserve (VOID)
     DEBUG ((EFI_D_WARN, "SFB: MARK boot-root open-status=%r state=%u\n", Status, State));
     return State;
   }
-  if (SfbRootHasUsableConfig (Root, L"", SFB_CONFIG_FILE_PATH)) {
+  ProbeError = SfbRootHasUsableConfig (Root, L"", &Usable);
+  if (Usable) {
     State = SfbBootRootPopulatedConfig;
   } else {
     for (Which = 0; Which < ARRAY_SIZE (ManagedNames); Which++) {
-      if (SfbFileExists (Root, ManagedNames[Which])) {
+      Status = SfbFileProbe (Root, ManagedNames[Which], &Usable);
+      if (!EFI_ERROR (Status) && Usable) {
         State = SfbBootRootPopulatedManaged;
         break;
       }
+      if (EFI_ERROR (Status) && Status != EFI_NOT_FOUND &&
+          !EFI_ERROR (ProbeError)) {
+        ProbeError = Status;
+      }
+    }
+    if (State == SfbBootRootEmptyRoot && EFI_ERROR (ProbeError)) {
+      State = SfbBootRootUnavailable;
+      DEBUG ((EFI_D_WARN, "SFB: MARK boot-root probe-status=%r\n", ProbeError));
     }
   }
   Root->Close (Root);
@@ -1251,7 +1276,7 @@ SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu,
 }
 
 VOID
-SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
+SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstRun)
 {
   EFI_STATUS Status;
   EFI_HANDLE ConfigVolume = NULL;
@@ -1271,6 +1296,10 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
   Menu->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
   Menu->ShowBooting = TRUE;
   Menu->LockPolicy = SfbConfigLockAsNeeded;
+
+  if (FirstRun) {
+    SfbAppendBuiltIn (Menu, SfbEntrySetupFastboot, L"Entering Super Fastboot");
+  }
 
   SfbBootMark (L"menu:begin");
   SfbBootMark (L"menu:config");
@@ -1333,6 +1362,11 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
    * RejectedLines so the existing notice row explains why the menu was shown.
    */
   SfbResolveDefault (Menu, &Config);
+  if (FirstRun) {
+    /* The setup fallback is transient, including for policy-only configs. */
+    Menu->DefaultIndex = 0;
+    Menu->DefaultFromConfig = FALSE;
+  }
 
   if (Menu->ConfigValid && Menu->RejectedLines != 0) {
     CHAR16 Rejected[SFB_DESC_CHARS];
@@ -1350,7 +1384,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode)
     SfbAppendBuiltIn (Menu, SfbEntryBack, L"Config slot role is stale");
   }
 
-  SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB mass storage");
+  SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");
   SfbAppendBuiltIn (Menu, SfbEntryFastboot, L"Enter Super Fastboot");
   SfbAppendBuiltIn (Menu, SfbEntryAdvanced, L"Advanced >");
   SfbAppendBuiltIn (Menu, SfbEntryReboot, L"Reboot >");
@@ -1770,7 +1804,7 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
 
   /*
    * Every launch reaches this one function - a menu row, the menu countdown
-   * expiring, a silent-mode default and the first-run screen all arrive here -
+   * expiring and a silent-mode default all arrive here -
    * so the log is written here rather than at any of those call sites. A child
    * that reaches an OS never returns and one that hangs takes the session with
    * it, and the flush placed before the mark above would have omitted it, so it
@@ -1827,7 +1861,7 @@ SfbLaunchDefaultEntry (IN SFB_BOOT_MODE Mode)
   SFB_MENU_STATE Menu;
   BOOLEAN HasDefault;
 
-  SfbBuildMenu (&Menu, Mode);
+  SfbBuildMenu (&Menu, Mode, FALSE);
   HasDefault = (BOOLEAN)(Menu.DefaultFromConfig &&
                          Menu.DefaultIndex != SFB_NO_INDEX);
   if (HasDefault) {

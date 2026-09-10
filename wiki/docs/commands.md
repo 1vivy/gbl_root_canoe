@@ -41,7 +41,7 @@ choose a fresh directory before retrying.
 canoe-bootmgr --boot-root /mnt/canoe config show
 canoe-bootmgr --boot-root /mnt/canoe entry list
 canoe-bootmgr --boot-root /mnt/canoe entry mode --id android-a --mode 2
-canoe-bootmgr --boot-root /mnt/canoe config set-policy --menu-mode menu --menu-timeout-s 5
+canoe-bootmgr --boot-root /mnt/canoe config set-policy --menu-mode menu --menu-timeout-s 3
 canoe-bootmgr --boot-root /mnt/canoe default set android-a
 canoe-bootmgr --boot-root /mnt/canoe bls install --name pmos --entry pmos.conf \
   --artifact vmlinuz-canoe=Image --artifact initramfs-canoe=initramfs

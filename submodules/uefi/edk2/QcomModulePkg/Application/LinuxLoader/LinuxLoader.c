@@ -245,9 +245,8 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     /*
      * Boot-root availability is checked before key intent. Mount errors retain
      * the fastboot escape without declaring a new install. A missing root or
-     * one with no launchable image/config enters the first-run flow. Volume Down on the first-run screen is an explicit
-     * opt-in to the normal menu, which can enumerate anything discovered in
-     * the meantime.
+     * one with no launchable image/config opens the shared menu with a temporary
+     * Super Fastboot entry selected. Ordinary menu input cancels its countdown.
      */
     BootRootState = SfbBootRootObserve ();
     SfbRecordBootRootState (BootRootState);
@@ -270,12 +269,10 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       EnterFastboot = TRUE;
     } else if (SfbBootRootIsEmptyState (BootRootState)) {
       DEBUG ((EFI_D_INFO, "SFB: MARK bootflow first-run=1\n"));
-      if (SfbShowFirstRunScreen ()) {
-        SfbShowEnteringMenu ();
-        if (!SfbRunBootMenu (Mode, FALSE)) {
-          Status = EFI_SUCCESS;
-          goto stack_guard_update_default;
-        }
+      SfbShowEnteringMenu ();
+      if (!SfbRunBootMenu (Mode, TRUE, TRUE)) {
+        Status = EFI_SUCCESS;
+        goto stack_guard_update_default;
       }
       EnterFastboot = TRUE;
     } else if (Decision == SfbBootDecisionFastboot) {
@@ -296,7 +293,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       SfbShowEnteringMenu ();
       if (!SfbRunBootMenu (
             Mode,
-            (BOOLEAN)(Config.MenuMode == SfbConfigMenuMenu))) {
+            SfbPowerOnMenuCountdown (Config.MenuMode, PowerOnKey), FALSE)) {
         Status = EFI_SUCCESS;
         goto stack_guard_update_default;
       }

@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use crate::config::{
-    ConfigDocument, ConfigEntry, ConfigError, DeviceInfoRepair, MAX_BYTES, MAX_GENERATION,
-    MAX_KEY_WINDOW_MS, MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, MenuMode, RawLine, Role,
-    canonical_image, printable, valid_id, validate_policy_range, validate_title,
+    ConfigDocument, ConfigEntry, ConfigError, DEFAULT_MENU_TIMEOUT_S, DeviceInfoRepair, MAX_BYTES,
+    MAX_GENERATION, MAX_KEY_WINDOW_MS, MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, MenuMode, RawLine,
+    Role, canonical_image, printable, valid_id, validate_policy_range, validate_title,
 };
 
 #[derive(Default)]
@@ -37,7 +37,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
     let mut generation = 0;
     let mut menu_mode = MenuMode::Silent;
     let mut key_window_ms = 1200;
-    let mut menu_timeout_s = 5;
+    let mut menu_timeout_s = DEFAULT_MENU_TIMEOUT_S;
     let mut show_booting = true;
     let mut global_mode = 1;
     let mut repair = DeviceInfoRepair::AsNeeded;

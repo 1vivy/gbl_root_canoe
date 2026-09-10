@@ -224,6 +224,7 @@ ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity
   UINT32                NotReady = 0;
   UINT32                Errors = 0;
   UINT32                Consecutive = 0;
+  CHAR16                Detail[96];
 
   if (Name == NULL) {
     return EFI_INVALID_PARAMETER;
@@ -315,10 +316,13 @@ ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity
    * before the drain hands control to the export loop.
    */
   SfbBeginScreen (Managed ? L"CANOE BOOT MANAGER" : L"USB Mass Storage",
-    Managed ? L"The app controls this storage session." : L"The host may now mount the disk.");
-  Print (L"Partition: %a\r\n", (Tag != NULL) ? Tag : "?");
-  Print (L"Size: %Lu bytes\r\n", SfbMassStoragePartitionBytes (BlockIo));
-  Print (L"\r\nVolume Down ends this session.\r\n");
+    Managed ? L"The app controls this storage session." : L"The host may now mount the disk.", NULL);
+  UnicodeSPrint (Detail, sizeof (Detail), L"Partition: %a", (Tag != NULL) ? Tag : "?");
+  SfbDrawInfoLine (Detail);
+  UnicodeSPrint (Detail, sizeof (Detail), L"Size: %Lu bytes", SfbMassStoragePartitionBytes (BlockIo));
+  SfbDrawInfoLine (Detail);
+  Print (L"\r\n");
+  SfbDrawInfoLine (L"Volume Down ends this session.");
   SfbEndScreen (L"Volume Down: stop export");
 
   /* Nothing queued may reach the cancel test: the confirm press that opened
@@ -465,8 +469,7 @@ VOID
 SfbDrawPersistWarning (IN VOID *Context)
 {
   (VOID)Context;
-  Print (L"A host writing persist while the device is elsewhere can\r\n");
-  Print (L"corrupt canoe.cfg, boot.efi, or its sidecars.\r\n");
+  SfbDrawWrappedInfo (L"A host writing persist while the device is elsewhere can corrupt canoe.cfg, boot.efi, or its sidecars.");
   Print (L"\r\n");
 }
 
@@ -501,8 +504,6 @@ SfbMassStorageConfirmPersist (VOID)
   Template.RowCount = ARRAY_SIZE (Rows);
   Template.Navigate = TRUE;
   Template.Context = &Confirmed;
-  Template.Enter = SfbMenuNoopEnter;
-  Template.Exit = SfbMenuNoopExit;
   Template.Handler = SfbHandlePersistConfirm;
   Template.DrawHeader = SfbDrawPersistWarning;
   (VOID)SfbRunMenu (&Template);
@@ -529,7 +530,7 @@ SfbRefreshMassStorageMenu (IN VOID *Context)
   UINTN Index;
 
   /*
-   * Resolve on every redraw, not once on entry. An export tears down and
+   * Resolve on entry and after an export returns. An export tears down and
    * rebuilds the partition tree, so a pointer cached before it is stale.
    */
   State->Count = 0;
@@ -617,8 +618,6 @@ SfbRunMassStorageMenu (VOID)
   Template.Footer = L"Vol Up/Down: move   Power: select";
   Template.Navigate = TRUE;
   Template.Context = &Context;
-  Template.Enter = SfbMenuNoopEnter;
-  Template.Exit = SfbMenuNoopExit;
   Template.Refresh = SfbRefreshMassStorageMenu;
   Template.Handler = SfbHandleMassStorageMenuRow;
   Template.DrawRow = SfbDrawMassStorageMenuRow;

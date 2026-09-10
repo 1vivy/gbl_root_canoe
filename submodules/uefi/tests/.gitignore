@@ -11,6 +11,7 @@ test_slot_retries
 test_slot_attributes
 test_last_launch
 test_boot_root
+test_root_observation
 test_image_map
 test_image_disk
 test_container

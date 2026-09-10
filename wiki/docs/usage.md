@@ -17,8 +17,9 @@ successful receipts remain inspectable.
 
 ## Entering Super Fastboot
 
-Super Fastboot is the BDS's own fastboot session. Press **VOL UP during boot**
-to enter Super Fastboot directly. **VOL DOWN** opens the BDS boot menu.
+Super Fastboot is the BDS's own fastboot session. With an existing boot setup,
+press **VOL UP during boot** to enter Super Fastboot directly. **VOL DOWN** opens
+the BDS boot menu. An empty installation uses the menu countdown described below.
 
 From Super Fastboot, RAM-load the raw UEFI payload directly:
 
@@ -45,23 +46,40 @@ this BDS session; partitions inside `super` remain the exception. Stock
 userspace `fastbootd` is used only by Deploy's fresh-install Provision stage.
 ## First run and BDS menu
 
-When the boot root is absent or contains no launchable image, BDS retains the
-first-run detection and two-second timeout. **VOL UP** enters Super Fastboot
-immediately; timeout and Power also enter Super Fastboot. **VOL DOWN** opens the
-same boot menu used by installed systems. Missing entries and an empty tools
-directory remain ordinary empty menus. An unavailable filesystem is reported
-separately and enters Super Fastboot; it is not classified as a new installation.
+When the boot root is absent or contains no launchable image, BDS opens its normal
+boot menu with a temporary **Entering Super Fastboot** entry highlighted and a
+three-second countdown. The permanent **Enter Super Fastboot** action stays
+available; both use the same action and neither saves a preference.
+Power/Enter selects it; the volume keys cancel the countdown and navigate
+normally. There is no separate first-run screen or additional key window.
+Missing entries and an empty tools directory remain ordinary empty menus.
+An unavailable filesystem is reported separately and enters Super Fastboot;
+it is not classified as a new installation.
 
 A populated root uses the configured key window (default **1200 ms**): **VOL UP**
 enters Super Fastboot; **VOL DOWN** opens the boot menu. With no key, **Silent**
 launches a resolvable saved default. **Menu** opens the menu with a default
-five-second countdown; interaction cancels it. Missing defaults open the menu.
+three-second countdown when its saved default resolves to a boot entry. Beneath
+the **Boot menu** title, a separate line shows **Highlighted entry will boot in
+Xs.** Opening the menu with VOL DOWN or interacting with it cancels the countdown
+and changes that line to **Timeout is disabled.** Returning from a submenu does
+not restart it. Missing
+defaults open the menu without a countdown.
 Zero key-window or menu-timeout disables that respective wait.
+An explicitly saved timeout keeps its configured value.
 
-The menu shows build/version and details of the highlighted entry or action.
+The menu uses a centered text block with no visible border, retaining equal inner
+margins and a selection gutter. The bright **Boot menu** title and its separate
+countdown line are centered, with a subdued build/version line below. Entry
+details and actions align left; eight-dash separators divide their groups. The
+selected row is highlighted across the full usable width. The subdued operating
+instructions are centered beneath the actions. Long headings and instructions
+wrap within the block; entry labels stay on one line and longer menus scroll.
+The same renderer and navigation runner serve BDS submenus and the EFI file
+browser. Standalone Android EFI tools keep their own interfaces.
 Boot entries retain their existing discovery order. The grouped actions are:
 
-- USB mass storage and Enter Super Fastboot.
+- USB Mass Storage and Enter Super Fastboot.
 - **Advanced**: Save a default entry, Change an Android entry's mode, Boot policy,
   Android EFI tools, and Select an EFI file.
 - **Reboot**: Fastbootd, Bootloader, Recovery, and System.

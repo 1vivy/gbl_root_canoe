@@ -19,6 +19,7 @@ UINTN EFIAPI
 Print (IN CONST CHAR16 *Format, ...);
 #else
 #include <Library/UefiLib.h>
+#include <Library/PrintLib.h>
 #endif
 
 STATIC
@@ -36,24 +37,12 @@ SfbDefaultMenuDrawRow (IN VOID    *Context,
 }
 
 EFI_STATUS
-SfbMenuNoopEnter (IN VOID *Context)
-{
-  (VOID)Context;
-  return EFI_SUCCESS;
-}
-
-VOID
-SfbMenuNoopExit (IN VOID *Context)
-{
-  (VOID)Context;
-}
-
-EFI_STATUS
 SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template)
 {
   EFI_STATUS Status = EFI_SUCCESS;
   BOOLEAN    FirstWait = TRUE;
   BOOLEAN    NeedRefresh = TRUE;
+  UINT32     RemainingMs = 0;
 
   if (Template == NULL || Template->Handler == NULL ||
       (Template->Rows == NULL && Template->DrawRow == NULL)) {
@@ -70,6 +59,7 @@ SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template)
   while (TRUE) {
     SFB_KEY         Key;
     SFB_MENU_ACTION Action;
+    UINT32         WaitMs;
 
     if (NeedRefresh && Template->Refresh != NULL) {
       Status = Template->Refresh (Template->Context);
@@ -84,17 +74,24 @@ SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template)
       }
     }
 
-    SfbBeginScreen (Template->Title, Template->Subtitle);
+    if (FirstWait) {
+      RemainingMs = Template->TimeoutMs;
+      FirstWait = FALSE;
+    }
+    SfbBeginScreen (Template->Title, Template->Subtitle,
+                    Template->ShowCountdown ? &RemainingMs : NULL);
     if (Template->DrawHeader != NULL) {
       Template->DrawHeader (Template->Context);
     }
     if (Template->RowCount == 0) {
-      Print (L"  No entries found.\r\n");
+      SfbDrawInfoLine (L"No entries found.");
     } else {
       UINTN Visible = Template->VisibleRows != 0 ? Template->VisibleRows : SFB_VISIBLE_ROWS;
-      UINTN Start = SfbWindowStart (Template->Cursor, Template->RowCount, Visible);
-      UINTN Last = Start + Visible;
-      UINTN Row;
+      UINTN Available = SfbMenuRowsAvailable (Template->Footer, Template->ExtraRows);
+      UINTN Start, Last, Row;
+      if (Visible > Available) { Visible = Available; }
+      Start = SfbWindowStart (Template->Cursor, Template->RowCount, Visible);
+      Last = Start + Visible;
 
       if (Last > Template->RowCount) {
         Last = Template->RowCount;
@@ -109,15 +106,26 @@ SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template)
         }
       }
       if (Last < Template->RowCount) {
-        Print (L"    ... %u more\r\n",
-               (UINT32)(Template->RowCount - Last));
+        CHAR16 More[32];
+        UnicodeSPrint (More, sizeof (More), L"... %u more", (UINT32)(Template->RowCount - Last));
+        SfbDrawInfoLine (More);
       }
     }
     SfbEndScreen (Template->Footer);
 
-    Key = (FirstWait && Template->TimeoutMs != 0)
-          ? SfbWaitForKey (Template->TimeoutMs) : SfbWaitForKey (0);
-    FirstWait = FALSE;
+    /* Only an opted-in countdown needs intermediate redraws. Other menus retain
+     * their original single wait. Interaction permanently consumes this
+     * invocation's countdown, including after child returns and refreshes. */
+    while (TRUE) {
+      WaitMs = RemainingMs;
+      if (Template->ShowCountdown && WaitMs > 1000) { WaitMs = 1000; }
+      Key = SfbWaitForKey (WaitMs);
+      if (Key != SfbKeyTimeout || RemainingMs == 0) { RemainingMs = 0; break; }
+      RemainingMs -= WaitMs;
+      if (RemainingMs == 0 || !Template->ShowCountdown ||
+          !SfbUpdateMenuCountdown (RemainingMs)) { break; }
+    }
+    if ((Key == SfbKeyTimeout && RemainingMs != 0) || Key == SfbKeyCancel) { continue; }
 
     if (Template->Navigate && (Key == SfbKeyUp || Key == SfbKeyDown)) {
       SfbMoveCursor (&Template->Cursor, Template->RowCount, Key);
