@@ -56,22 +56,18 @@ needed.
 
 ## KernelSU first setup and updates
 
-During a first module installation, volume keys offer **Install manager only**,
-**Deploy Canoe now**, or cancellation. Release each key between presses. A
-selection timeout leaves a manager-only installation. Module updates do not
-implicitly deploy or change partitions.
+Installing or updating the KernelSU module installs the manager and its bundled
+tools only. It never deploys CANOE-BDS, changes boot partitions, imports a previous
+modification, or formats phone data. There is no volume-key deployment dialog.
 
-Deploy now executes the newly extracted tools from the module installation
-path. It prepares the active slot from its on-slot images and offers Mode 1/2,
-explicit custom recovery, and applicable vendor_boot preparation. Required
-images are inspected before writes. If grafting or donor input is missing,
-read the specific reason and choose manager-only installation or cancellation.
-Full installation in the activated WebUI supports native Android file pickers.
+Follow KernelSU's normal reboot/activation instructions, then open the WebUI.
+A WebUI visible before an update activates may still belong to the old module.
+The activated WebUI retains full Deploy and native Android file pickers; provide
+your firmware images again when needed. Other efisp modifications are not imported.
 
-The final installer review lists the slot, mode, targets, image identities and
-userdata assessment. Only its explicit Apply choice writes. Recovery records
-remain in `/data/adb/canoe-manager/operations`, outside installer temporary files
-and the manager module.
+For a fully unlocked first deployment that requires formatting phone data, the
+hosted manager is convenient because it remains available off-phone after the
+format. Installing the KSU manager itself never introduces a format requirement.
 
 For an installed system, use [OTA preparation](./ota.md), the General boot-image
 shortcut, or [Uninstall Canoe](./uninstall.md). Installing or updating only the

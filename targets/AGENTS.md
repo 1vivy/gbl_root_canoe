@@ -23,7 +23,7 @@
 
 Most package assembly is host-only. Installed package scripts are not:
 
-- Magisk customize/OTA flows may write ABL, raw `efisp`, `persist/efisp.fat`, or `vendor_boot`.
+- Module customize.sh is manager-only and must never invoke deployment, partition reads/writes, volume-key workflows, or boot events. Activated WebUI workflows may write ABL, raw `efisp`, `persist/efisp.fat`, or `vendor_boot` after review.
 - Android temporary-root tooling is documented as boot-root-only; the operator owns raw ABL/BDS writes.
 - Hosted managed USB does not mount a host filesystem; its implementation is outside this package tree.
 

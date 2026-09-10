@@ -5,7 +5,7 @@
 - `canoe-bootmgr/`: small mounted boot-root command/library. Canonical config/BLS and prepared loader operations; no application deployment protocol, ext4 backend, USB, or GUI dependency resolution.
 - `canoe-image/`: explicit image inspection, derivation, graft and vendor_boot operations, using existing native helpers on Android; portable byte algorithms are shared with WASM.
 - `canoe-provision/`: explicit container inspect/create/remove on mounted persist or offline images. No device discovery or deployment wizard.
-- The sibling manager application owns its Android native worker, hosted WASM runtime, userdata assessment, snapshots, readback, operation journals, retry/revert and guided uninstall. KSU install-time input uses that same engine.
+- The sibling manager application owns its Android native worker, hosted WASM runtime, userdata assessment, snapshots, readback, operation journals, retry/revert and guided uninstall. KSU installation only installs the manager; the activated WebUI uses the engine.
 - `canoe/`: retired by the approved overhaul. Remove its interactive wrapper and packaging rather than maintaining a second guided frontend.
 - `canoe-ext4/`: historical libext2fs helper, excluded from b5 release/default test paths. Browser storage belongs to the shared Rust forks.
 - `mode2-profile/`, `abl-tzmap/`, patcher and extractor: shared image producers/parsers.
