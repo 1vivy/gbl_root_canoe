@@ -33,6 +33,7 @@ build:
 	fi
 	mkdir -p ./build
 	cp edk2/Build/RELEASE_CLANG35/AARCH64/LinuxLoader.efi ./build/BDS.efi
+	printf '%s\n' '$(CANOE_VERSION)' > edk2/Build/.canoe-version
 	@echo "BDS built successfully: build/BDS.efi"
 
 # Build the standalone AndroidToolsPkg applications (RebootTools, ArbTools,
