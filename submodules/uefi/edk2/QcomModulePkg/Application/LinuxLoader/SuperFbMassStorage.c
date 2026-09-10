@@ -26,6 +26,7 @@
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/DebugLib.h>
+#include <Library/Ext4ImageMap.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
@@ -169,6 +170,43 @@ SfbMassStoragePartitionBytes (IN EFI_BLOCK_IO_PROTOCOL *BlockIo)
 }
 
 STATIC EFI_STATUS
+PrepareRawDisk (CONST CHAR16 *Name, EFI_BLOCK_IO_PROTOCOL *BlockIo)
+{
+  EFI_STATUS Status;
+  EFI_HANDLE *Handles = NULL;
+  UINTN Count = 0, Index;
+  if (BlockIo == NULL || BlockIo->FlushBlocks == NULL) return EFI_UNSUPPORTED;
+  if (StrCmp (Name, L"persist") == 0) {
+    /* The all-controller connection pass may mount persist before Container
+     * owns a map. Release that cache at the raw-export boundary as well. Resolve
+     * only this selected disk, after USB setup has finished reconnecting. */
+    Status = gBS->LocateHandleBuffer (ByProtocol, &gEfiBlockIoProtocolGuid,
+                                      NULL, &Count, &Handles);
+    if (EFI_ERROR (Status)) return Status;
+    if (Handles == NULL) return EFI_NOT_FOUND;
+    Status = EFI_NOT_FOUND;
+    for (Index = 0; Index < Count; ++Index) {
+      EFI_BLOCK_IO_PROTOCOL *Candidate = NULL;
+      EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *Fs = NULL;
+      if (EFI_ERROR (gBS->HandleProtocol (Handles[Index], &gEfiBlockIoProtocolGuid,
+                                         (VOID **)&Candidate)) || Candidate != BlockIo) continue;
+      Status = Ext4ReleaseImageFileSystem (Handles[Index]);
+      if (EFI_ERROR (Status)) break;
+      Status = gBS->HandleProtocol (Handles[Index], &gEfiSimpleFileSystemProtocolGuid,
+                                    (VOID **)&Fs);
+      /* A foreign provider is not ours to stop through the paired image API.
+       * Never hand its still-mounted filesystem to an external raw writer. */
+      if (!EFI_ERROR (Status)) Status = EFI_ACCESS_DENIED;
+      else if (Status == EFI_NOT_FOUND || Status == EFI_UNSUPPORTED) Status = EFI_SUCCESS;
+      break;
+    }
+    FreePool (Handles);
+    if (EFI_ERROR (Status)) return Status;
+  }
+  return BlockIo->FlushBlocks (BlockIo);
+}
+
+STATIC EFI_STATUS
 ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity, IN BOOLEAN Managed)
 {
   EFI_STATUS            Status;
@@ -257,8 +295,7 @@ ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity
     if (EFI_ERROR (Status)) return Status;
   }
   if (!Container) {
-    if (BlockIo->FlushBlocks == NULL) return EFI_UNSUPPORTED;
-    Status = BlockIo->FlushBlocks (BlockIo);
+    Status = PrepareRawDisk (Name, BlockIo);
     if (EFI_ERROR (Status)) return Status;
   }
   Status = SfbMsdLeaseAssign (Msd, BlockIo, Container ? SfbContainerUsbEnd : NULL);

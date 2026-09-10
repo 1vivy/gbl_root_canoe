@@ -174,7 +174,11 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *Protocol, EXT4_IMAGE_MAP **Out) {
                           EXT4_FEATURE_INCOMPAT_64BIT | EXT4_FEATURE_INCOMPAT_FLEX_BG;
   if (Out == NULL) return EFI_INVALID_PARAMETER;
   *Out = NULL;
-  if (Protocol == NULL || Protocol->Read != Ext4ReadFile) return EFI_UNSUPPORTED;
+  if (Protocol == NULL || Protocol->Read != Ext4ReadFile) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK image-map reason=foreign-file-protocol read=%p expected=%p\n",
+            Protocol == NULL ? NULL : Protocol->Read, Ext4ReadFile));
+    return EFI_UNSUPPORTED;
+  }
   File = (EXT4_FILE *)Protocol;
   P = File->Partition;
   if (P == NULL || P->Unmounting || P->BlockIo == NULL || P->BlockIo->Media == NULL ||
@@ -190,11 +194,22 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *Protocol, EXT4_IMAGE_MAP **Out) {
       ((P->FeaturesIncompat & EXT4_FEATURE_INCOMPAT_64BIT) && P->DescSize != 64) ||
       P->NumberBlocks > DeviceBytes / P->BlockSize ||
       P->SuperBlock.s_first_data_block >= P->NumberBlocks || P->SuperBlock.s_blocks_per_group == 0 || P->SuperBlock.s_blocks_per_group % 8 != 0 ||
-      P->SuperBlock.s_blocks_per_group > P->BlockSize * 8 ||
-      P->FeaturesIncompat & ~AllowedIncompat ||
-      P->FeaturesRoCompat & ~AllowedRo || P->FeaturesCompat & ~AllowedCompat ||
-      P->SuperBlock.s_state != EXT4_FS_STATE_UNMOUNTED || P->SuperBlock.s_last_orphan != 0)
+      P->SuperBlock.s_blocks_per_group > P->BlockSize * 8) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK image-map reason=geometry block=%u groups=%Lu descriptor=%u\n",
+            P->BlockSize, P->NumberBlockGroups, P->DescSize));
     return EFI_UNSUPPORTED;
+  }
+  if (P->FeaturesIncompat & ~AllowedIncompat ||
+      P->FeaturesRoCompat & ~AllowedRo || P->FeaturesCompat & ~AllowedCompat) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK image-map reason=features incompat=%x ro=%x compat=%x\n",
+            P->FeaturesIncompat, P->FeaturesRoCompat, P->FeaturesCompat));
+    return EFI_UNSUPPORTED;
+  }
+  if (P->SuperBlock.s_state != EXT4_FS_STATE_UNMOUNTED || P->SuperBlock.s_last_orphan != 0) {
+    DEBUG ((EFI_D_ERROR, "SFB: MARK image-map reason=filesystem-state state=%x orphan=%u\n",
+            P->SuperBlock.s_state, P->SuperBlock.s_last_orphan));
+    return EFI_UNSUPPORTED;
+  }
   if (P->NumberBlockGroups != (P->NumberBlocks - P->SuperBlock.s_first_data_block - 1) /
       P->SuperBlock.s_blocks_per_group + 1) return EFI_VOLUME_CORRUPTED;
   Status = Ext4ReadDiskIo (P, &FreshSuper, sizeof (FreshSuper), EXT4_SUPERBLOCK_OFFSET);

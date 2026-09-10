@@ -19,10 +19,9 @@ static EFI_BLOCK_IO_PROTOCOL Parent, *Published;
 static EFI_SIMPLE_FILE_SYSTEM_PROTOCOL Fs;
 static EFI_FILE_PROTOCOL Root, File;
 static EFI_DEVICE_PATH_PROTOCOL Path;
-static BOOLEAN Connected, Busy, ParentBusy, FailFlush, Missing, BadFat;
+static BOOLEAN Connected, Busy, ParentBusy, FailFlush, Missing, MountRejected, ConnectNotFound;
 static UINTN Maps, Opens, ParentDisconnects;
 static UINT8 Incarnation;
-static UINT8 Bytes[256 * 1024];
 static UINT64 ImageBytes = EXT4_IMAGE_BYTES;
 VOID *EFIAPI CopyMem (VOID *a, CONST VOID *b, UINTN n) { return memcpy (a, b, n); }
 INTN EFIAPI CompareMem (CONST VOID *a, CONST VOID *b, UINTN n) { return memcmp (a, b, n); }
@@ -61,10 +60,8 @@ EFI_DEVICE_PATH_PROTOCOL *EFIAPI AppendDevicePathNode (CONST EFI_DEVICE_PATH_PRO
 static EFI_STATUS EFIAPI read_blocks (EFI_BLOCK_IO_PROTOCOL *p, UINT32 id, EFI_LBA lba, UINTN n,
                                       VOID *out)
 {
-  assert (p == &Parent && id == 5 && (lba + 1) * n <= sizeof (Bytes) && n == 4096);
-  memcpy (out, Bytes + lba * n, n);
-  if (BadFat)
-    ((UINT8 *)out)[510] = 0;
+  assert (p == &Parent && id == 5 && lba < ImageBytes / 4096 && n == 4096);
+  memset (out, 0, n);
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI write_blocks (EFI_BLOCK_IO_PROTOCOL *p, UINT32 id, EFI_LBA lba, UINTN n,
@@ -102,6 +99,18 @@ EFI_STATUS Ext4MapImage (EFI_FILE_PROTOCOL *f, EXT4_IMAGE_MAP **out)
   (*out)->Bytes = ImageBytes;
   (*out)->Ranges[0] = (EXT4_IMAGE_RANGE){0, 0, ImageBytes};
   return EFI_SUCCESS;
+}
+EFI_STATUS Ext4OpenImageFileSystem (EFI_HANDLE Controller, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL **Out)
+{
+  assert (Controller == Persist);
+  *Out = &Fs;
+  return EFI_SUCCESS;
+}
+EFI_STATUS Ext4ReleaseImageFileSystem (EFI_HANDLE Controller)
+{
+  assert (Controller == Persist);
+  ParentDisconnects++;
+  return ParentBusy ? EFI_ACCESS_DENIED : EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI close_file (EFI_FILE_PROTOCOL *f)
 {
@@ -151,10 +160,13 @@ static EFI_STATUS EFIAPI connect (EFI_HANDLE h, EFI_HANDLE *drivers, EFI_DEVICE_
   (void)path;
   assert (recursive);
   if (h == Virtual)
+  {
+    if (MountRejected) return EFI_VOLUME_CORRUPTED;
     Connected = TRUE;
+  }
   else
     assert (h == Persist);
-  return EFI_SUCCESS;
+  return ConnectNotFound ? EFI_NOT_FOUND : EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI disconnect (EFI_HANDLE h, EFI_HANDLE driver, EFI_HANDLE child)
 {
@@ -166,12 +178,7 @@ static EFI_STATUS EFIAPI disconnect (EFI_HANDLE h, EFI_HANDLE driver, EFI_HANDLE
     Connected = FALSE;
   }
   else
-  {
-    assert (h == Persist);
-    ParentDisconnects++;
-    if (ParentBusy)
-      return EFI_ACCESS_DENIED;
-  }
+    assert (!"container must release ext4 through its owning driver");
   return EFI_SUCCESS;
 }
 static EFI_STATUS EFIAPI install (EFI_HANDLE *h, ...)
@@ -215,20 +222,6 @@ int main (void)
   Root.Open = open_file;
   Root.Close = close_file;
   File.Close = close_file;
-  Bytes[12] = 2;
-  Bytes[13] = 4;
-  Bytes[14] = 1;
-  Bytes[16] = 2;
-  Bytes[18] = 2;
-  Bytes[22] = 64;
-  Bytes[34] = 1;
-  Bytes[510] = 0x55;
-  Bytes[511] = 0xaa;
-  Bytes[512] = 0xf8;
-  Bytes[513] = 255;
-  Bytes[514] = 255;
-  Bytes[515] = 255;
-  memcpy (Bytes + 65 * 512, Bytes + 512, 64 * 512);
   Missing = TRUE;
   assert (SfbContainerMount () == EFI_NOT_FOUND);
   assert (Opens == 1 && Maps == 0 && !Published);
@@ -238,19 +231,15 @@ int main (void)
   ParentBusy = FALSE;
   assert (SfbContainerUnmount () == EFI_SUCCESS);
   Missing = FALSE;
-  BadFat = TRUE;
+  MountRejected = TRUE;
   assert (SfbContainerMount () == EFI_VOLUME_CORRUPTED);
   assert (!Published);
-  BadFat = FALSE;
-  Bytes[65 * 512 + 32] = 1;
-  assert (SfbContainerMount () == EFI_VOLUME_CORRUPTED);
-  assert (!Published);
-  Bytes[65 * 512 + 32] = 0;
-  Bytes[515] = 0x3f;
-  assert (SfbContainerMount () == EFI_VOLUME_CORRUPTED);
-  assert (!Published);
-  Bytes[515] = 0xff;
+  MountRejected = FALSE;
+  /* Filesystem publication, not a newly-started-driver count, proves mount.
+   * Protocol notifications may have already connected it by this point. */
+  ConnectNotFound = TRUE;
   assert (SfbContainerMount () == EFI_SUCCESS);
+  ConnectNotFound = FALSE;
   assert (SfbIsContainerVolume (Virtual) && Connected && Published);
   assert (SfbContainerMatchesIdentity ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYX"));
   assert (!SfbContainerMatchesIdentity ("AAECAwQFBgcICQoLDA0ODxAREhMUFRYA"));
@@ -309,25 +298,12 @@ int main (void)
   }
   for (ImageBytes = EXT4_IMAGE_MIN_BYTES; ImageBytes <= EXT4_IMAGE_MAX_BYTES; ImageBytes += EXT4_IMAGE_STEP_BYTES) {
     UINT32 Total = (UINT32)(ImageBytes / 512);
-    UINT8 Spc = ImageBytes < 64U*1024U*1024U ? 2 : ImageBytes < 128U*1024U*1024U ? 4 : ImageBytes < 256U*1024U*1024U ? 8 : 16;
-    UINT32 FatSectors = (Total / Spc + 2 + 255) / 256;
     Media.LastBlock = ImageBytes / 4096 - 1;
-    memset (Bytes, 0, sizeof (Bytes));
-    Bytes[12] = 2; Bytes[13] = Spc; Bytes[14] = 1; Bytes[16] = 2; Bytes[18] = 2;
-    Bytes[22] = (UINT8)FatSectors; Bytes[23] = (UINT8)(FatSectors >> 8);
-    if (Total < 65536) { Bytes[19] = (UINT8)Total; Bytes[20] = (UINT8)(Total >> 8); }
-    else { for (UINTN I = 0; I < 4; I++) Bytes[32 + I] = (UINT8)(Total >> (8 * I)); }
-    Bytes[510] = 0x55; Bytes[511] = 0xaa;
-    Bytes[512] = 0xf8; Bytes[513] = Bytes[514] = Bytes[515] = 0xff;
-    memcpy (Bytes + (1 + FatSectors) * 512, Bytes + 512, FatSectors * 512);
     assert (SfbContainerMount () == EFI_SUCCESS);
     assert (Published && Published->Media->LastBlock == Total - 1);
     assert (SfbContainerUnmount () == EFI_SUCCESS);
-    Bytes[(1 + FatSectors) * 512 + 32] = 1;
-    assert (SfbContainerMount () == EFI_VOLUME_CORRUPTED);
-    assert (!Published);
   }
-  puts ("PASS container lifecycle: exact path, invalid FAT, reuse, busy/flush handoff refusal, "
+  puts ("PASS container lifecycle: exact path, filesystem-driver rejection, reuse, busy/flush handoff refusal, "
         "retry and cache teardown");
   return 0;
 }

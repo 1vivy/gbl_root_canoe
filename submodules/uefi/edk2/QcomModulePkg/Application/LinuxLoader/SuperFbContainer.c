@@ -19,6 +19,22 @@ STATIC EFI_DEVICE_PATH_PROTOCOL *mPath;
 STATIC EFI_GUID mContainerGuid = {
     0xf1086281, 0xc184, 0x47f7, {0xbb, 0xae, 0x30, 0x61, 0x1f, 0x90, 0xe2, 0xa4}};
 
+STATIC EFI_STATUS GetFileSystem (EFI_HANDLE Handle, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL **Fs)
+{
+  EFI_STATUS Status, Connect;
+  *Fs = NULL;
+  Status = gBS->HandleProtocol (Handle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)Fs);
+  if (!EFI_ERROR (Status) && *Fs != NULL)
+    return EFI_SUCCESS;
+  Connect = gBS->ConnectController (Handle, NULL, NULL, TRUE);
+  Status = gBS->HandleProtocol (Handle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)Fs);
+  /* ConnectController reports whether a driver was newly started. An already
+   * published filesystem is the result we need, including after a reconnect. */
+  if (!EFI_ERROR (Status) && *Fs != NULL)
+    return EFI_SUCCESS;
+  return EFI_ERROR (Connect) ? Connect : (EFI_ERROR (Status) ? Status : EFI_NOT_FOUND);
+}
+
 BOOLEAN SfbContainerMatchesIdentity (CONST CHAR8 *Token)
 {
   STATIC CONST CHAR8 Alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -41,48 +57,6 @@ BOOLEAN SfbIsContainerVolume (EFI_HANDLE Handle)
 {
   return !mUsbOwned && mHandle != NULL && Handle == mHandle && mDisk.Active;
 }
-STATIC UINT16 Le16 (CONST UINT8 *P) { return (UINT16)(P[0] | (P[1] << 8)); }
-STATIC UINT32 Le32 (CONST UINT8 *P) { return (UINT32)Le16 (P) | ((UINT32)Le16 (P + 2) << 16); }
-STATIC EFI_STATUS CheckFat (VOID)
-{
-  UINT8 Header[512], Mirror[512];
-  UINTN Sector;
-  UINT32 Total, FatSectors, Clusters, DataStart;
-  UINT8 SectorsPerCluster;
-  EFI_STATUS Status =
-      mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 0, sizeof (Header), Header);
-  if (EFI_ERROR (Status)) return Status;
-  Total = Le16 (Header + 19);
-  if (Total != 0 && Le32 (Header + 32) != 0) return EFI_VOLUME_CORRUPTED;
-  if (Total == 0) Total = Le32 (Header + 32);
-  FatSectors = Le16 (Header + 22);
-  SectorsPerCluster = Header[13];
-  if (Le16 (Header + 11) != 512 || Le16 (Header + 14) != 1 || Header[16] != 2 ||
-      Le16 (Header + 17) != 512 || Total != mMap->Bytes / 512 ||
-      (SectorsPerCluster == 0 || SectorsPerCluster > 16 || (SectorsPerCluster & (SectorsPerCluster - 1)) != 0) ||
-      FatSectors == 0 || FatSectors > 256 || Le16 (Header + 510) != 0xaa55)
-    return EFI_VOLUME_CORRUPTED;
-  DataStart = 1 + 2 * FatSectors + 32;
-  if (Total <= DataStart) return EFI_VOLUME_CORRUPTED;
-  Clusters = (Total - DataStart) / SectorsPerCluster;
-  if (Clusters < 4085 || Clusters >= 65525 || Clusters + 2 > FatSectors * 256)
-    return EFI_VOLUME_CORRUPTED;
-  Status = mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 1, sizeof (Header), Header);
-  if (EFI_ERROR (Status)) return Status;
-  if (Le16 (Header) != 0xfff8 || (Le16 (Header + 2) & 0xc000) != 0xc000)
-    return EFI_VOLUME_CORRUPTED;
-  for (Sector = 0; Sector < FatSectors; Sector++)
-  {
-    Status = mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 1 + Sector, sizeof (Header), Header);
-    if (EFI_ERROR (Status)) return Status;
-    Status = mDisk.Block.ReadBlocks (&mDisk.Block, mDisk.Media.MediaId, 1 + FatSectors + Sector,
-                                     sizeof (Mirror), Mirror);
-    if (EFI_ERROR (Status)) return Status;
-    if (CompareMem (Header, Mirror, sizeof (Header)) != 0) return EFI_VOLUME_CORRUPTED;
-  }
-  return EFI_SUCCESS;
-}
-
 STATIC EFI_STATUS UnmountInternal (VOID)
 {
   EFI_STATUS Status;
@@ -117,7 +91,7 @@ STATIC EFI_STATUS UnmountInternal (VOID)
   {
     /* Invalidate the read-only ext4 driver's cached inode/superblock before a
      * host can allocate or remove the container through a persist export. */
-    Status = gBS->DisconnectController (mPersist, NULL, NULL);
+    Status = Ext4ReleaseImageFileSystem (mPersist);
     if (EFI_ERROR (Status) && Status != EFI_NOT_FOUND)
       return Status;
     mPersist = NULL;
@@ -140,14 +114,8 @@ EFI_STATUS SfbContainerMount (VOID)
     return EFI_ACCESS_DENIED;
   if (mHandle != NULL)
   {
-    Status = gBS->HandleProtocol (mHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
-    if (!EFI_ERROR (Status) && Fs != NULL)
-      return EFI_SUCCESS;
     /* A prior failed flush may have disconnected FAT but retained the disk. */
-    Status = gBS->ConnectController (mHandle, NULL, NULL, TRUE);
-    if (EFI_ERROR (Status))
-      return Status;
-    return gBS->HandleProtocol (mHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
+    return GetFileSystem (mHandle, &Fs);
   }
   if (mMap != NULL || mPath != NULL)
   {
@@ -175,11 +143,8 @@ EFI_STATUS SfbContainerMount (VOID)
   FreePool (Handles);
   if (mPersist == NULL)
     return EFI_NOT_FOUND;
-  Status = gBS->ConnectController (mPersist, NULL, NULL, TRUE);
-  if (EFI_ERROR (Status) && Status != EFI_ALREADY_STARTED)
-    goto Failed;
   Stage = "persist-filesystem";
-  Status = gBS->HandleProtocol (mPersist, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
+  Status = Ext4OpenImageFileSystem (mPersist, &Fs);
   if (EFI_ERROR (Status) || Fs == NULL)
     goto Failed;
   Stage = "persist-root";
@@ -200,10 +165,6 @@ EFI_STATUS SfbContainerMount (VOID)
     goto Failed;
   Stage = "image-disk";
   Status = SfbImageDiskInit (&mDisk, mMap);
-  if (EFI_ERROR (Status))
-    goto Failed;
-  Stage = "fat-check";
-  Status = CheckFat ();
   if (EFI_ERROR (Status))
     goto Failed;
   Stage = "persist-path";
@@ -230,12 +191,8 @@ EFI_STATUS SfbContainerMount (VOID)
                                                    &gEfiDevicePathProtocolGuid, mPath, NULL);
   if (EFI_ERROR (Status))
     goto Failed;
-  Stage = "fat-connect";
-  Status = gBS->ConnectController (mHandle, NULL, NULL, TRUE);
-  if (EFI_ERROR (Status))
-    goto Failed;
   Stage = "fat-filesystem";
-  Status = gBS->HandleProtocol (mHandle, &gEfiSimpleFileSystemProtocolGuid, (VOID **)&Fs);
+  Status = GetFileSystem (mHandle, &Fs);
   if (EFI_ERROR (Status) || Fs == NULL)
     goto Failed;
   DEBUG ((EFI_D_INFO, "SFB: MARK container mounted=1 bytes=%Lu\n", mMap->Bytes));

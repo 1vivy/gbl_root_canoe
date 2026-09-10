@@ -2641,8 +2641,16 @@ CmdBoot (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
    * 新增：检测并处理 EFI 可执行文件
    * ============================================ */
   if (IsEfiInBootImg (hdr, Size, &EfiData, &EfiSize)) {
+    EFI_STATUS Status;
     DEBUG ((EFI_D_INFO, "CmdBoot: EFI image in boot.img, size=%u\n", EfiSize));
 
+    /* A RAM-loaded BDS or other EFI child may mount the same backing disk.
+     * Release this image's file caches/map before transferring control. */
+    Status = SfbContainerUnmount ();
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("Unable to release boot files before EFI boot");
+      return;
+    }
     FastbootOkay ("Booting EFI image...");
     FastbootUsbDeviceStop ();
 

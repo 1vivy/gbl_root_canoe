@@ -27,6 +27,12 @@ typedef struct {
   UINTN Count;
   EXT4_IMAGE_RANGE Ranges[EXT4_IMAGE_MAX_EXTENTS];
 } EXT4_IMAGE_MAP;
+/* Open through this image's ext4 provider. A foreign provider is released only
+ * through its identified driver; underlying disk protocols remain connected. */
+EFI_STATUS Ext4OpenImageFileSystem (EFI_HANDLE Controller, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL **Fs);
+/* Release only this image's ext4 binding. Already unowned is success; a driver
+ * refusal is retained. DiskIo, BlockIo and foreign filesystem owners stay up. */
+EFI_STATUS Ext4ReleaseImageFileSystem (EFI_HANDLE Controller);
 /* File must come from this embedded ext4 driver. Caller frees the returned map.
  * It is session evidence only: release before exporting persist or remounting.
  * No filesystem allocation, repair, or writes are performed here. */
