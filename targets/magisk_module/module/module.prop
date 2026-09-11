@@ -1,6 +1,6 @@
 id=fake_bl_efisp
 name=Canoe Boot Manager
-version=7.0.0-b6
-versionCode=19
+version=7.0.0-b7
+versionCode=20
 author=1vivy
 description=Manage CANOE-BDS boot entries, loaders, EFI tools, and inactive-slot OTA preparation through WebUI X.

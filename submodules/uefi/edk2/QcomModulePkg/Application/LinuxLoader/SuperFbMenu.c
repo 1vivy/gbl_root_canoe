@@ -1075,7 +1075,7 @@ SfbRunPolicyMenu (VOID)
   if (EFI_ERROR (Status)) { goto Done; }
   ZeroMem (&Template, sizeof (Template));
   Template.Title = L"Boot policy";
-  Template.Subtitle = L"Volume Up or Volume Down opens the boot menu during startup.";
+  Template.Subtitle = L"Volume Up opens the boot menu during Silent startup.";
   Template.Footer = L"Changes take effect when saved. No boot entries are changed.";
   Template.Context = State; Template.RowCount = 6; Template.Navigate = TRUE;
   Template.Handler = SfbHandlePolicy; Template.DrawRow = SfbDrawPolicyRow;

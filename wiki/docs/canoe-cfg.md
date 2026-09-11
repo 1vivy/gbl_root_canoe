@@ -24,7 +24,7 @@ components, doubled separators, or a trailing separator. `/` is folded to `\`.
 
 ## Global keys
 
-In 7.0.0-b6 the boot policy is explicit. Global keys must appear before the first `entry`:
+In 7.0.0-b7 the boot policy is explicit. Global keys must appear before the first `entry`:
 
 | Key | Values | Default | Meaning |
 | --- | --- | --- | --- |
@@ -141,7 +141,7 @@ Payload-specific memory addresses/options remain the payload's responsibility.
 
 ## Managed A/B triplets
 
-The 7.0.0-b6 writer manages a loader and its two matching sidecars for each installed slot.
+The 7.0.0-b7 writer manages a loader and its two matching sidecars for each installed slot.
 
 Each installed slot has `boot_a.efi` or `boot_b.efi`, with a matching 120-byte
 `.gm2p` and 256-byte `.tzmap`. Do not mix sidecars between generations. The

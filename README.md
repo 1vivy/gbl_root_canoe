@@ -29,7 +29,7 @@ The boot root is a FAT16 container on ext4 persist, sized from available space i
 triplets and discovers EFI/BLS entries. Ordinary selections affect this boot;
 Advanced saves the default, managed-entry mode or boot policy independently.
 
-The 7.0.0-b6 release surface is the hosted Canoe Boot Manager and activated
+The 7.0.0-b7 release surface is the hosted Canoe Boot Manager and activated
 KernelSU WebUI. The [hosted app](https://canoe-boot-manager.1vv.ca) uses WASM and
 managed USB; the module bundles its WebUI and native Android worker. Module
 installation installs the manager only. Desktop executables and filesystem

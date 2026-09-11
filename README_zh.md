@@ -28,7 +28,7 @@ CANOE-BDS 为受支持的高通设备提供受管理的启动环境。Mode 1/2 �
 EFI/BLS 启动项。普通选择仅影响本次启动；高级菜单分别保存默认项、受管理启动项
 的模式或启动策略。
 
-7.0.0-b6 的发布界面是在线 Canoe Boot Manager 与激活后的 KernelSU WebUI。
+7.0.0-b7 的发布界面是在线 Canoe Boot Manager 与激活后的 KernelSU WebUI。
 [在线应用](https://canoe-boot-manager.1vv.ca) 使用 WASM 与受管理 USB；模块内置
 WebUI 和 Android 原生工作进程。安装模块只安装管理器。桌面可执行程序和文件系统
 辅助进程已退役；`7.0.0-b4-final` 标签保留此前的实现。
