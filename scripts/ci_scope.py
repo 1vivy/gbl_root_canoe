@@ -65,8 +65,20 @@ def classify(paths, full=False):
         crates.update(CRATES)
         portable.update(PORTABLE)
     duties['versions'] |= duties['firmware']
+    packages = set()
+    if duties['uefi_tests'] or duties['patcher_tests'] or crates:
+        packages.add('build-essential')
+    if duties['uefi_tests'] or 'canoe-provision' in crates:
+        packages.add('e2fsprogs')
+    if 'canoe-provision' in crates or 'canoe-provision' in portable:
+        packages.add('dosfstools')
+    if 'canoe-image' in portable:
+        packages.update(('clang', 'lld'))
+    # The canonical EFI build gets its toolchain inside Docker. Host Python
+    # checks use the standard library; no pytest or EFI SDK host packages.
     return {**duties, 'rust_crates': ' '.join(c for c in CRATES if c in crates),
-            'portable_crates': ' '.join(c for c in PORTABLE if c in portable)}
+            'portable_crates': ' '.join(c for c in PORTABLE if c in portable),
+            'apt_packages': ' '.join(sorted(packages))}
 
 
 def changed_paths(event):
