@@ -275,8 +275,6 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
         goto stack_guard_update_default;
       }
       EnterFastboot = TRUE;
-    } else if (Decision == SfbBootDecisionFastboot) {
-      EnterFastboot = TRUE;
     } else {
       if (Decision == SfbBootDecisionDefault) {
         /*

@@ -32,7 +32,7 @@ features:
     details: canoe is the operator CLI and canoe-bootmgr is the JSON-protocol writer; both expose the same boot-root operations
     link: /usage
   - title: Super Fastboot
-    details: Enter Super Fastboot during boot with VOL UP for the BDS fastboot session, flashing, reboot, and USB export
+    details: Open the boot menu during startup with VOL UP, then select Enter Super Fastboot for flashing, reboot, and USB export
     link: /usage
   - title: USB Mass Storage
     details: Drive persist or logfs export from the app or CLI, with safe ext4 handling and a device-side Volume-Down exit

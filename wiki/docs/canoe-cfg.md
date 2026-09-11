@@ -40,12 +40,13 @@ In 7.0.0-b6 the boot policy is explicit. Global keys must appear before the firs
 
 `key-window` is inclusive at both bounds. `key-window 0` means no sampling:
 Silent mode launches the default immediately, while Menu mode still opens the
-menu. VOL UP goes directly to Super Fastboot; VOL DOWN opens the ordinary boot
-menu. Without a key, Silent mode launches the configured default; Menu mode opens
-the menu and counts down for `menu-timeout` seconds when the saved default resolves
+menu. VOL UP or VOL DOWN opens the boot menu. Select **Enter Super Fastboot**
+from that menu to enter its Fastboot session. Without a key, Silent mode launches
+the configured default; Menu mode opens the menu and counts down for
+`menu-timeout` seconds when the saved default resolves
 to a boot entry. The title reads **Boot menu - Highlighted entry will boot in Xs.**
-Opening the menu with VOL DOWN or interacting with it disables this countdown;
-the title then reads **Boot menu - Timeout is disabled.** Returning from a submenu
+Opening the menu with either volume key or interacting with it disables this
+countdown; the title then reads **Boot menu - Timeout is disabled.** Returning from a submenu
 does not restart it. An unresolved default in a populated root opens the menu
 without a countdown. With no populated boot root, BDS opens this same menu with
 the temporary **Entering Super Fastboot** entry highlighted and a three-second

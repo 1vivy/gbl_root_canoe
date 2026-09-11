@@ -32,7 +32,7 @@ features:
     details: canoe 是操作员 CLI，canoe-bootmgr 是 JSON 协议写入器；两者提供相同的启动根目录操作
     link: /zh/usage
   - title: Super Fastboot
-    details: 启动时按音量上进入 Super Fastboot 的 BDS fastboot 会话，用于刷写、重启与 USB 导出
+    details: 启动时按音量上打开启动菜单，再选择 Enter Super Fastboot，用于刷写、重启与 USB 导出
     link: /zh/usage
   - title: USB Mass Storage
     details: 通过应用或 CLI 驱动 persist、logfs 导出，并用设备上的音量下结束会话

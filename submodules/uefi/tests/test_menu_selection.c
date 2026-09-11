@@ -548,7 +548,7 @@ int main (int argc, char **argv)
   Template.Cursor = 3; mDiscoveredMenu.Count = 1;
   assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS && Template.Cursor == 0 && Template.TimeoutMs == 0);
 
-  /* A startup Volume Down is already interaction: opening the menu cannot
+  /* Either startup volume key is already interaction: opening the menu cannot
    * arm the configured five-second wait. Automatic entry still can. */
   for (SFB_KEY Key = SfbKeyTimeout; Key <= SfbKeySelect; Key++) {
     Initialize(&State, &Template);
@@ -560,7 +560,7 @@ int main (int argc, char **argv)
     State.AllowCountdown = SfbPowerOnMenuCountdown(SfbConfigMenuMenu, Key);
     assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS);
     assert(Template.TimeoutMs == (Key == SfbKeyTimeout ? 5000 : 0));
-    if (Key == SfbKeyDown) {
+    if (Key == SfbKeyUp || Key == SfbKeyDown) {
       Template.ShowCountdown = TRUE;
 
       CountdownFrame(0, SfbKeySelect);

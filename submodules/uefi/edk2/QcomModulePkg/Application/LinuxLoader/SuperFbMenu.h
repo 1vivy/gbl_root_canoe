@@ -234,14 +234,14 @@ typedef enum {
 
 typedef enum {
   SfbBootDecisionDefault = 0,
-  SfbBootDecisionMenu,
-  SfbBootDecisionFastboot
+  SfbBootDecisionMenu
 } SFB_BOOT_DECISION;
 
 /*
  * Decide what the power-on key window does after first-run handling. An
  * explicit default is required for silent expiry; a menu-mode expiry always
- * enters the menu so its shared scaffold can run the countdown.
+ * enters the menu so its shared scaffold can run the countdown. Either volume
+ * key opens the boot menu with unattended boot cancelled.
  */
 static inline SFB_BOOT_DECISION
 SfbDecidePowerOn (
@@ -250,9 +250,6 @@ SfbDecidePowerOn (
   IN BOOLEAN              HasDefault
   )
 {
-  if (Key == SfbKeyUp) {
-    return SfbBootDecisionFastboot;
-  }
   if (MenuMode == SfbConfigMenuSilent &&
       Key == SfbKeyTimeout && HasDefault) {
     return SfbBootDecisionDefault;

@@ -2454,16 +2454,16 @@ TestPowerOnDecisionTable (void)
   assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyDown, TRUE) ==
           SfbBootDecisionMenu);
   assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyUp, TRUE) ==
-          SfbBootDecisionFastboot);
+          SfbBootDecisionMenu);
 
-  /* Menu mode opens after expiry with a countdown. Volume Down opens the
-   * same menu with that timeout cancelled; Volume Up goes to fastboot. */
+  /* Menu mode opens after expiry with a countdown. Either volume key opens
+   * the same menu with that timeout cancelled. */
   assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyTimeout, TRUE) ==
           SfbBootDecisionMenu);
   assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyDown, TRUE) ==
           SfbBootDecisionMenu);
   assert (SfbDecidePowerOn (SfbConfigMenuMenu, SfbKeyUp, TRUE) ==
-          SfbBootDecisionFastboot);
+          SfbBootDecisionMenu);
   for (SFB_KEY Key = SfbKeyTimeout; Key <= SfbKeySelect; Key++) {
     assert (!SfbPowerOnMenuCountdown (SfbConfigMenuSilent, Key));
     assert (SfbPowerOnMenuCountdown (SfbConfigMenuMenu, Key) ==

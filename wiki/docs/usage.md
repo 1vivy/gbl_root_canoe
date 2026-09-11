@@ -18,8 +18,9 @@ successful receipts remain inspectable.
 ## Entering Super Fastboot
 
 Super Fastboot is the BDS's own fastboot session. With an existing boot setup,
-press **VOL UP during boot** to enter Super Fastboot directly. **VOL DOWN** opens
-the BDS boot menu. An empty installation uses the menu countdown described below.
+press **VOL UP during boot** to open the CANOE-BDS boot menu, then select
+**Enter Super Fastboot**. **VOL DOWN** also opens the boot menu. An empty
+installation uses the menu countdown described below.
 
 From Super Fastboot, RAM-load the raw UEFI payload directly:
 
@@ -57,12 +58,12 @@ An unavailable filesystem is reported separately and enters Super Fastboot;
 it is not classified as a new installation.
 
 A populated root uses the configured key window (default **1200 ms**): **VOL UP**
-enters Super Fastboot; **VOL DOWN** opens the boot menu. With no key, **Silent**
+or **VOL DOWN** opens the boot menu. With no key, **Silent**
 launches a resolvable saved default. **Menu** opens the menu with a default
 three-second countdown when its saved default resolves to a boot entry. Beneath
 the **Boot menu** title, a separate line shows **Highlighted entry will boot in
-Xs.** Opening the menu with VOL DOWN or interacting with it cancels the countdown
-and changes that line to **Timeout is disabled.** Returning from a submenu does
+Xs.** Opening the menu with either volume key or interacting with it cancels the
+countdown and changes that line to **Timeout is disabled.** Returning from a submenu does
 not restart it. Missing
 defaults open the menu without a countdown.
 Zero key-window or menu-timeout disables that respective wait.
@@ -93,7 +94,7 @@ boot policy even when it has no entries; an absent container cannot save files.
 recovery/Fastbootd BCB command. It preserves unrelated vendor BCB content.
 
 Missing configured images and invalid BLS rows are skipped. To launch a BLS
-row interactively, hold VOL DOWN during startup, select it, and press Power.
+row interactively, hold VOL UP during startup, select it, and press Power.
 BLS rows are passthrough launches; Mode 1/2 policy hooks and managed sidecars do
 not apply.
 
