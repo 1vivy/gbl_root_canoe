@@ -20,8 +20,10 @@ permissions:
 env:
   CARGO_BUILD_JOBS: 2
 concurrency:
-  group: firmware-ci-${{ github.workflow }}-${{ inputs.source_ref || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ inputs.source_ref == '' && github.event_name != 'workflow_dispatch' }}
+  group: firmware-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  # A later push may select fewer duties than its predecessor. Do not cancel
+  # or replace that predecessor's queued checks; PR diffs cover their whole base.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && inputs.source_ref == '' }}
 jobs:
   firmware:
     runs-on: ubuntu-24.04
