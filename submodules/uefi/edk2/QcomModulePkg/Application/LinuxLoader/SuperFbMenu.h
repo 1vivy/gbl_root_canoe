@@ -240,8 +240,8 @@ typedef enum {
 /*
  * Decide what the power-on key window does after first-run handling. An
  * explicit default is required for silent expiry; a menu-mode expiry always
- * enters the menu so its shared scaffold can run the countdown. Either volume
- * key opens the boot menu with unattended boot cancelled.
+ * enters the menu so its shared scaffold can run the countdown. Only Volume Up
+ * escapes Silent; Volume Down is ignored until ordinary menu navigation.
  */
 static inline SFB_BOOT_DECISION
 SfbDecidePowerOn (
@@ -251,7 +251,7 @@ SfbDecidePowerOn (
   )
 {
   if (MenuMode == SfbConfigMenuSilent &&
-      Key == SfbKeyTimeout && HasDefault) {
+      (Key == SfbKeyTimeout || Key == SfbKeyDown) && HasDefault) {
     return SfbBootDecisionDefault;
   }
   return SfbBootDecisionMenu;
@@ -268,12 +268,11 @@ SfbPowerOnMenuCountdown (IN SFB_CONFIG_MENU_MODE MenuMode, IN SFB_KEY Key)
 /*
  * What a key that is neither volume-up nor volume-down means to a given wait.
  * The menu confirms only Power/Enter; other keys cancel its countdown.
- * The power-on scan skips non-volume keys and keeps waiting.
+ * The Silent startup scan accepts only Volume Up and keeps waiting otherwise.
  */
 typedef enum {
   SfbKeyPolicyConfirm = 0,
-  SfbKeyPolicyUpOnly,
-  SfbKeyPolicyVolume
+  SfbKeyPolicyUpOnly
 } SFB_KEY_POLICY;
 
 /*
@@ -638,14 +637,12 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name,
 VOID
 SfbShowActionScreen (IN CONST CHAR16 *Text);
 
-/*
- * Wait for a key. TimeoutMs of 0 waits indefinitely.
- *
- * FlushFirst drains the input buffer before waiting, which a power-on volume
- * scan needs and an interactive menu must not do. Policy decides what a key that
- * is neither volume key means. This is the single implementation; the power-on
- * volume scan in LinuxLoader.c uses the same timer-event loop.
- */
+/* Silent startup always offers a bounded Volume Up escape to the boot menu. */
+SFB_KEY
+SfbWaitForPowerOnKey (IN UINT32 TimeoutMs);
+
+/* Wait for a key; zero waits indefinitely in an interactive menu. FlushFirst
+ * resets queued startup events; Policy distinguishes Up-only from menu input. */
 SFB_KEY
 SfbWaitForKeyEx (IN UINT32          TimeoutMs,
                  IN BOOLEAN         FlushFirst,

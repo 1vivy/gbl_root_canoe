@@ -11,7 +11,7 @@ impl ConfigDocument {
             entries: Vec::new(),
             generation: 0,
             menu_mode: MenuMode::Silent,
-            key_window_ms: 1200,
+            key_window_ms: super::config::DEFAULT_KEY_WINDOW_MS,
             menu_timeout_s: DEFAULT_MENU_TIMEOUT_S,
             show_booting: true,
             default: None,

@@ -174,6 +174,34 @@ FakeWaitKey (UINTN Count, EFI_EVENT *Events, UINTN *Index)
   (void)Count; (void)Events; *Index = 0; return EFI_SUCCESS;
 }
 
+static UINT64 mTimerTicks;
+static UINTN mTimerCloses, mInputResets;
+static EFI_STATUS EFIAPI
+FakeCreateTimer (UINT32 Type, EFI_TPL Tpl, EFI_EVENT_NOTIFY Notify, VOID *Context, EFI_EVENT *Event)
+{
+  (void)Type; (void)Tpl; (void)Notify; (void)Context;
+  *Event = (EFI_EVENT)1; return EFI_SUCCESS;
+}
+static EFI_STATUS EFIAPI
+FakeSetTimer (EFI_EVENT Event, EFI_TIMER_DELAY Type, UINT64 Ticks)
+{
+  (void)Event; (void)Type; mTimerTicks = Ticks; return EFI_SUCCESS;
+}
+static EFI_STATUS EFIAPI
+FakeCloseTimer (EFI_EVENT Event) { (void)Event; mTimerCloses++; return EFI_SUCCESS; }
+static EFI_STATUS EFIAPI
+FakeResetInput (EFI_SIMPLE_TEXT_INPUT_PROTOCOL *This, BOOLEAN Extended)
+{
+  (void)This; (void)Extended; mInputResets++; return EFI_SUCCESS;
+}
+static EFI_STATUS EFIAPI
+FakeWaitStartup (UINTN Count, EFI_EVENT *Events, UINTN *Index)
+{
+  (void)Events; assert(Count == 2);
+  *Index = mQueuedInputIndex < mQueuedInputCount ? 0 : 1;
+  return EFI_SUCCESS;
+}
+
 static UINTN mReadCalls;
 static EFI_STATUS EFIAPI
 FakeReadKeyFailure (EFI_SIMPLE_TEXT_INPUT_PROTOCOL *This, EFI_INPUT_KEY *Key)
@@ -492,9 +520,32 @@ int main (int argc, char **argv)
   Input.UnicodeChar = L'x'; assert(SfbDecodeMenuKey(&Input) == SfbKeyCancel);
   Input.UnicodeChar = 0; Input.ScanCode = SCAN_ESC; assert(SfbDecodeMenuKey(&Input) == SfbKeyCancel);
   assert(SfbWaitForKeyEx(3000, FALSE, SfbKeyPolicyConfirm) == SfbKeyCancel);
+  Services.CreateEvent = FakeCreateTimer; Services.SetTimer = FakeSetTimer;
+  Services.CloseEvent = FakeCloseTimer;
   Services.WaitForEvent = FakeWaitKey; In.ReadKeyStroke = FakeReadKeyFailure;
   mReadCalls = 0;
   assert(SfbWaitForKeyEx(3000, FALSE, SfbKeyPolicyConfirm) == SfbKeyCancel && mReadCalls == 2);
+
+  /* Production Silent startup accepts Up only, waits through Down/Power, and
+   * retains its 500..5000 ms escape window even for legacy in-memory values. */
+  Services.WaitForEvent = FakeWaitStartup;
+  In.ReadKeyStroke = FakeReadQueuedKey; In.Reset = FakeResetInput;
+  const UINT32 Windows[] = {0, 300, 499, 500, 1200, 5000, 10000};
+  const UINT32 ExpectedWindows[] = {500, 500, 500, 500, 1200, 5000, 5000};
+  for (UINTN I = 0; I < ARRAY_SIZE(Windows); I++) {
+    for (UINTN Up = 0; Up < 2; Up++) {
+      mQueuedInput[0] = (EFI_INPUT_KEY){.ScanCode = SCAN_DOWN};
+      mQueuedInput[1] = (EFI_INPUT_KEY){.ScanCode = SCAN_SUSPEND};
+      mQueuedInput[2] = (EFI_INPUT_KEY){.ScanCode = SCAN_UP};
+      mQueuedInputCount = Up ? 3 : 2; mQueuedInputIndex = 0;
+      mTimerCloses = mInputResets = 0;
+      assert(SfbWaitForPowerOnKey(Windows[I]) == (Up ? SfbKeyUp : SfbKeyTimeout));
+      assert(mQueuedInputIndex == mQueuedInputCount && mInputResets == 1);
+      assert(mTimerTicks == (UINT64)ExpectedWindows[I] * 10000 && mTimerCloses == 1);
+    }
+  }
+  Services.CreateEvent = FakeCreateEvent;
+  assert(SfbWaitForPowerOnKey(0) == SfbKeyCancel); /* Timer failure exposes menu. */
   Initialize(&State, &Template);
   Add(&State, SfbEntryEfiFile, L"\\boot_a.efi", L"Android A", SfbBootModeAblFakeLocked, TRUE, FALSE);
   Add(&State, SfbEntryMassStorage, L"", L"USB Mass Storage", 0, FALSE, FALSE);

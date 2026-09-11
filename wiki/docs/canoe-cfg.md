@@ -31,21 +31,24 @@ In 7.0.0-b6 the boot policy is explicit. Global keys must appear before the firs
 | `version` | `1` | required | Configuration format version |
 | `generation` | `0..4294967295` | `0` | Monotonic installed-generation number |
 | `menu-mode` | `silent`, `menu` | `silent` for fresh installs | Startup policy |
-| `key-window` | `0..=10000` | `1200` | Volume-key sampling window in milliseconds |
+| `key-window` | `500..=5000` | `1200` | Silent startup Volume Up window in milliseconds |
 | `menu-timeout` | `0..=300` | `3` | Menu countdown in seconds; only in Menu mode |
 | `show-booting` | `yes`, `no` | `yes` | Display the Booting message when launching an image |
 | `default` | an entry ID or `bls:<stem>` | none | Row launched without menu input |
 | `mode` | `0`, `1`, `2` | `1` | Fallback mode for entries without their own mode |
 | `devinfo-repair` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo` |
 
-`key-window` is inclusive at both bounds. `key-window 0` means no sampling:
-Silent mode launches the default immediately, while Menu mode still opens the
-menu. VOL UP or VOL DOWN opens the boot menu. Select **Enter Super Fastboot**
-from that menu to enter its Fastboot session. Without a key, Silent mode launches
-the configured default; Menu mode opens the menu and counts down for
+`key-window` is inclusive at both bounds and cannot be disabled. Older numeric
+values are clamped on read: `key-window 0` becomes 500 ms, and values above 5000
+become 5000 ms. New policy saves require 500–5000 ms. During Silent startup,
+only VOL UP opens the boot menu; VOL DOWN and Power do not interrupt the wait.
+Select **Enter Super Fastboot** from the menu to enter its Fastboot session;
+no startup key selects it directly. Without Volume Up, Silent mode launches the
+configured default. Menu mode opens the menu immediately, uses both volume keys
+for navigation, and counts down for
 `menu-timeout` seconds when the saved default resolves
 to a boot entry. The title reads **Boot menu - Highlighted entry will boot in Xs.**
-Opening the menu with either volume key or interacting with it disables this
+Opening the menu with Volume Up or interacting with it disables this
 countdown; the title then reads **Boot menu - Timeout is disabled.** Returning from a submenu
 does not restart it. An unresolved default in a populated root opens the menu
 without a countdown. With no populated boot root, BDS opens this same menu with

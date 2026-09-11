@@ -326,11 +326,15 @@ TestScalarBoundsAndGarbage (void)
   assert (gConfig.Mode == SFB_CONFIG_MODE_FAKE_LOCKED);
   assert (gConfig.RejectedLines == 1);
 
-  assert (Parse ("version 1\nkey-window 0\nentry a\n  image boot.efi\n"));
-  assert (gConfig.KeyWindowMs == 0);
-  assert (Parse ("version 1\nkey-window 10000\nentry a\n  image boot.efi\n"));
-  assert (gConfig.KeyWindowMs == 10000);
-  assert (Parse ("version 1\nkey-window 10001\nentry a\n  image boot.efi\n"));
+  const unsigned Windows[] = {0, 300, 499, 500, 1200, 5000, 5001, 10000, 0xffffffffu};
+  const unsigned Expected[] = {500, 500, 500, 500, 1200, 5000, 5000, 5000, 5000};
+  for (unsigned I = 0; I < sizeof Windows / sizeof Windows[0]; I++) {
+    char Text[100];
+    snprintf (Text, sizeof Text, "version 1\nkey-window %u\nentry a\n image boot.efi\n", Windows[I]);
+    assert (Parse (Text));
+    assert (gConfig.KeyWindowMs == Expected[I] && gConfig.RejectedLines == 0);
+  }
+  assert (Parse ("version 1\nkey-window invalid\nentry a\n image boot.efi\n"));
   assert (gConfig.KeyWindowMs == SFB_CONFIG_KEY_WINDOW_DEFAULT);
   assert (gConfig.RejectedLines == 1);
 
@@ -512,6 +516,14 @@ TestExplicitDefaultEdit (void)
     Size = SFB_CONFIG_MAX_BYTES;
     assert (SfbConfigEditPolicy ("version 1\n", 10, &Policy, Output, &Size));
     assert (SfbConfigParse (Output, Size, &gConfig) && gConfig.Count == 0 && !gConfig.ShowBooting);
+    const unsigned Invalid[] = {0, 499, 5001, 10000};
+    for (unsigned I = 0; I < sizeof Invalid / sizeof Invalid[0]; I++) {
+      Policy.KeyWindowMs = Invalid[I]; Size = SFB_CONFIG_MAX_BYTES;
+      assert (!SfbConfigEditPolicy (Input, strlen (Input), &Policy, Output, &Size));
+      assert (Size == 0);
+    }
+    Policy.KeyWindowMs = 5000; Size = SFB_CONFIG_MAX_BYTES;
+    assert (SfbConfigEditPolicy (Input, strlen (Input), &Policy, Output, &Size));
   }
   Size = 10;
   assert (!SfbConfigEditDefault (Input, strlen (Input), "a", Output, &Size));

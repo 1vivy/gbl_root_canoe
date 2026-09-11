@@ -606,11 +606,12 @@ SfbConfigParse (
       continue;
     }
     if (SfbCfgKeyIs (Begin, KeyEnd, "key-window")) {
-      if (!SfbCfgParseU32 (Value, ValueLength, SFB_CONFIG_KEY_WINDOW_MAX,
+      if (!SfbCfgParseU32 (Value, ValueLength, 0xffffffffu,
                            &Config->KeyWindowMs)) {
         Config->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
         Config->RejectedLines++;
       }
+      Config->KeyWindowMs = SfbConfigKeyWindow (Config->KeyWindowMs);
       continue;
     }
     if (SfbCfgKeyIs (Begin, KeyEnd, "menu-timeout")) {
@@ -790,8 +791,10 @@ SfbCfgEdit (const char *Bytes, SFB_UINTN Size, SFB_CFG_EDIT Edit,
       Size > SFB_CONFIG_MAX_BYTES || !SfbConfigParse (Bytes, Size, &Config) ||
       Config.Generation == 0xffffffffu) { return FALSE; }
   if (Edit == SfbEditPolicy) {
-    if (Policy == NULL || Policy->KeyWindowMs > 10000 ||
-        Policy->MenuTimeoutSeconds > 300 || Policy->MenuMode > SfbConfigMenuMenu) { return FALSE; }
+    if (Policy == NULL || Policy->KeyWindowMs < SFB_CONFIG_KEY_WINDOW_MIN ||
+        Policy->KeyWindowMs > SFB_CONFIG_KEY_WINDOW_MAX ||
+        Policy->MenuTimeoutSeconds > SFB_CONFIG_MENU_TIMEOUT_MAX ||
+        Policy->MenuMode > SfbConfigMenuMenu) { return FALSE; }
   } else {
     if (Target == NULL || !SfbCfgParseDefault (Target, SfbCfgLength (Target), Id, Stem, &IsBls) ||
         (Edit == SfbEditMode && (IsBls || Mode > SFB_CONFIG_MODE_MAX))) { return FALSE; }

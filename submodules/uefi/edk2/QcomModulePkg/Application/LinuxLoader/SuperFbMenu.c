@@ -84,10 +84,8 @@ SfbDecodeMenuKey (IN CONST EFI_INPUT_KEY *Key)
  *
  * Policy decides what a non-volume key means. SfbKeyPolicyConfirm accepts
  * Power/Enter and lets other keys cancel a countdown without selecting a row.
- * SfbKeyPolicyUpOnly skips every key except volume-up, while
- * SfbKeyPolicyVolume accepts either volume key and skips power. The latter two
- * policies keep the power key used to switch the device on from being mistaken
- * for input or masking a volume key behind it.
+ * SfbKeyPolicyUpOnly skips every key except Volume Up. Power and Volume Down
+ * cannot interrupt Silent startup or mask an Up event behind them.
  */
 SFB_KEY
 SfbWaitForKeyEx (IN UINT32          TimeoutMs,
@@ -129,6 +127,10 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
     }
   }
 
+  if (TimeoutMs != 0 && TimerEvent == NULL) {
+    return SfbKeyCancel;
+  }
+
   WaitList[0] = gST->ConIn->WaitForKey;
   WaitCount = 1;
   if (TimerEvent != NULL) {
@@ -158,12 +160,9 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
       Result = SfbKeyUp;
       break;
     }
-    if (Policy == SfbKeyPolicyUpOnly ||
-        (Policy == SfbKeyPolicyVolume && Key.ScanCode != SCAN_DOWN)) {
+    if (Policy == SfbKeyPolicyUpOnly) {
       /* Not the key being scanned for. Keep waiting rather than reporting it:
        * the timer, not this key, decides when the scan is over. */
-      DEBUG ((EFI_D_INFO, "SFB: ignoring scan=0x%x char=0x%x; still scanning\n",
-              Key.ScanCode, Key.UnicodeChar));
       continue;
     }
     Result = SfbDecodeMenuKey (&Key);
@@ -193,6 +192,14 @@ SfbWaitForKeyEx (IN UINT32          TimeoutMs,
   }
 
   return Result;
+}
+
+/* Clamp here as well as in the disk reader: no in-memory policy can remove
+ * the Silent escape floor, and no startup key can directly enter Fastboot. */
+SFB_KEY
+SfbWaitForPowerOnKey (IN UINT32 TimeoutMs)
+{
+  return SfbWaitForKeyEx (SfbConfigKeyWindow (TimeoutMs), TRUE, SfbKeyPolicyUpOnly);
 }
 
 SFB_KEY
@@ -1004,7 +1011,7 @@ typedef struct { SFB_CONFIG Policy; EFI_FILE_PROTOCOL *Root; } SFB_POLICY_CONTEX
 STATIC SFB_MENU_ACTION
 SfbHandlePolicy (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
 {
-  STATIC CONST UINT32 KeyWindows[] = {0,300,500,1200,2000,3000,5000,10000};
+  STATIC CONST UINT32 KeyWindows[] = {500,1200,2000,3000,5000};
   STATIC CONST UINT32 Timeouts[] = {0,3,5,10,30,60,300};
   SFB_POLICY_CONTEXT *State = Context;
   (VOID)Key;

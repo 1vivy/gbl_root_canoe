@@ -4,7 +4,8 @@ use thiserror::Error;
 pub const MAX_BYTES: usize = 8192;
 pub const MAX_ENTRIES: usize = 24;
 pub const MAX_GENERATION: u32 = u32::MAX;
-pub const MAX_KEY_WINDOW_MS: u32 = 10_000;
+pub const MIN_KEY_WINDOW_MS: u32 = 500;
+pub const MAX_KEY_WINDOW_MS: u32 = 5_000;
 pub const MAX_MENU_TIMEOUT_S: u32 = 300;
 pub const DEFAULT_KEY_WINDOW_MS: u32 = 1200;
 pub const DEFAULT_MENU_TIMEOUT_S: u32 = 3;
@@ -18,8 +19,8 @@ pub enum ConfigError {
     Invalid(String),
     #[error("canoe.cfg field {field}: {reason}")]
     Field { field: String, reason: String },
-    #[error("policy.range: {field} must be in 0..={maximum}")]
-    PolicyRange { field: &'static str, maximum: u32 },
+    #[error("policy.range: {field} must be in {minimum}..={maximum}")]
+    PolicyRange { field: &'static str, minimum: u32, maximum: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,10 +211,10 @@ pub(crate) fn valid_default_target(value: &str) -> bool {
 
 pub(crate) fn validate_policy(update: PolicyUpdate) -> Result<(), ConfigError> {
     if let Some(value) = update.key_window_ms {
-        validate_policy_range("key_window_ms", value, MAX_KEY_WINDOW_MS)?;
+        validate_policy_range("key_window_ms", value, MIN_KEY_WINDOW_MS, MAX_KEY_WINDOW_MS)?;
     }
     if let Some(value) = update.menu_timeout_s {
-        validate_policy_range("menu_timeout_s", value, MAX_MENU_TIMEOUT_S)?;
+        validate_policy_range("menu_timeout_s", value, 0, MAX_MENU_TIMEOUT_S)?;
     }
     Ok(())
 }
@@ -221,10 +222,11 @@ pub(crate) fn validate_policy(update: PolicyUpdate) -> Result<(), ConfigError> {
 pub(crate) fn validate_policy_range(
     field: &'static str,
     value: u32,
+    minimum: u32,
     maximum: u32,
 ) -> Result<(), ConfigError> {
-    if value > maximum {
-        return Err(ConfigError::PolicyRange { field, maximum });
+    if value < minimum || value > maximum {
+        return Err(ConfigError::PolicyRange { field, minimum, maximum });
     }
     Ok(())
 }

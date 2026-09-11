@@ -2452,7 +2452,7 @@ TestPowerOnDecisionTable (void)
   assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyTimeout, FALSE) ==
           SfbBootDecisionMenu);
   assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyDown, TRUE) ==
-          SfbBootDecisionMenu);
+          SfbBootDecisionDefault);
   assert (SfbDecidePowerOn (SfbConfigMenuSilent, SfbKeyUp, TRUE) ==
           SfbBootDecisionMenu);
 

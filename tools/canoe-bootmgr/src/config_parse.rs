@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use crate::config::{
-    ConfigDocument, ConfigEntry, ConfigError, DEFAULT_MENU_TIMEOUT_S, DeviceInfoRepair, MAX_BYTES,
-    MAX_GENERATION, MAX_KEY_WINDOW_MS, MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, MenuMode, RawLine,
+    ConfigDocument, ConfigEntry, ConfigError, DEFAULT_KEY_WINDOW_MS, DEFAULT_MENU_TIMEOUT_S, DeviceInfoRepair, MAX_BYTES,
+    MAX_GENERATION, MIN_KEY_WINDOW_MS, MAX_KEY_WINDOW_MS, MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, MenuMode, RawLine,
     Role, canonical_image, printable, valid_id, validate_policy_range, validate_title,
 };
 
@@ -36,7 +36,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
     let mut entry_seen = false;
     let mut generation = 0;
     let mut menu_mode = MenuMode::Silent;
-    let mut key_window_ms = 1200;
+    let mut key_window_ms = DEFAULT_KEY_WINDOW_MS;
     let mut menu_timeout_s = DEFAULT_MENU_TIMEOUT_S;
     let mut show_booting = true;
     let mut global_mode = 1;
@@ -108,7 +108,10 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
                 menu_mode = MenuMode::parse(value)?;
             }
             "key-window" => {
-                key_window_ms = parse_policy_number(value, "key_window_ms", MAX_KEY_WINDOW_MS)?;
+                // Legacy numeric values remain readable, with the same escape floor
+                // and upper bound as firmware. New policy writes are strict.
+                key_window_ms = parse_policy_number(value, "key_window_ms", u32::MAX)?
+                    .clamp(MIN_KEY_WINDOW_MS, MAX_KEY_WINDOW_MS);
             }
             "menu-timeout" => {
                 menu_timeout_s = parse_policy_number(value, "menu_timeout_s", MAX_MENU_TIMEOUT_S)?;
@@ -213,7 +216,7 @@ fn parse_policy_number(value: &str, field: &'static str, maximum: u32) -> Result
         field: field.to_owned(),
         reason: format!("expected an unsigned integer, got {value:?}"),
     })?;
-    validate_policy_range(field, parsed, maximum)?;
+    validate_policy_range(field, parsed, 0, maximum)?;
     Ok(parsed)
 }
 

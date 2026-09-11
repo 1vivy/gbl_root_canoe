@@ -97,30 +97,6 @@
   @retval other             Some error occurs when executing this entry point.
 
  **/
-/*
- * 开机时扫描音量键。
- *
- * 先清空输入缓冲区，再在超时窗口内等待一次音量上键或音量下键。关键在于：非目标
- * 按键（尤其是开机时按住、随后松开的电源键）会被跳过并继续等待，而不是结束
- * 扫描——所以电源键既不会被误当成输入，也不会遮挡音量键。
- *
- * These strategies are shared through SfbWaitForKeyEx's timeout, flush and
- * policy parameters. A key-handling bug had to be fixed twice, and this loop
- * is the only way into the loader menu.
- * @param TimeoutMs   扫描窗口（毫秒）
- * @return SFB_KEY     detected volume key or timeout
- */
-STATIC SFB_KEY
-WaitForPowerOnKey (IN UINT32 TimeoutMs)
-{
-  if (TimeoutMs == 0) {
-    /* A zero key-window is an immediate decision, not an indefinite wait. */
-    gST->ConIn->Reset (gST->ConIn, FALSE);
-    return SfbKeyTimeout;
-  }
-  return SfbWaitForKeyEx (TimeoutMs, TRUE, SfbKeyPolicyVolume);
-}
-
 EFI_STATUS EFIAPI  __attribute__ ( (no_sanitize ("safe-stack")))
 LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 {
@@ -167,7 +143,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     SFB_BOOT_MODE       Mode = SfbBootModeAblFakeLocked;
     SFB_CONFIG          Config;
     EFI_HANDLE          ConfigVolume = NULL;
-    SFB_KEY             PowerOnKey;
+    SFB_KEY             PowerOnKey = SfbKeyTimeout;
     SFB_BOOT_DECISION   Decision;
     SFB_BOOT_ROOT_STATE BootRootState;
 
@@ -254,7 +230,11 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     SfbSetShowBooting (ConfigAvailable ? Config.ShowBooting : TRUE);
     Decision = SfbBootDecisionMenu;
     if (BootRootState != SfbBootRootUnavailable && !SfbBootRootIsEmptyState (BootRootState)) {
-      PowerOnKey = WaitForPowerOnKey (Config.KeyWindowMs);
+      /* Menu mode starts its own navigation/countdown immediately. Only Silent
+       * needs an escape window; its input never selects Super Fastboot. */
+      if (Config.MenuMode == SfbConfigMenuSilent) {
+        PowerOnKey = SfbWaitForPowerOnKey (Config.KeyWindowMs);
+      }
       Decision = SfbDecidePowerOn (
                    Config.MenuMode,
                    PowerOnKey,
