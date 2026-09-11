@@ -2,6 +2,20 @@
 
 [English](README.md)
 
+Linux 主机：一次性安装[专用 USB 访问规则](wiki/docs/zh/linux-usb.md)
+（udev/systemd-logind；[查看规则内容](https://github.com/1vivy/canoe-nusb-storage/blob/bbc4efa4dc9a47cf51319ac3a1b5d224b7e344f4/contrib/udev/70-canoe-managed-usb.rules)）：
+
+```sh
+(
+  rule_dir=$(mktemp -d) &&
+  trap 'rm -rf "$rule_dir"' EXIT &&
+  curl -fL https://raw.githubusercontent.com/1vivy/canoe-nusb-storage/bbc4efa4dc9a47cf51319ac3a1b5d224b7e344f4/contrib/udev/70-canoe-managed-usb.rules -o "$rule_dir/70-canoe-managed-usb.rules" &&
+  sudo install -m 0644 "$rule_dir/70-canoe-managed-usb.rules" /etc/udev/rules.d/70-canoe-managed-usb.rules &&
+  sudo udevadm control --reload-rules &&
+  sudo udevadm trigger --action=change --subsystem-match=usb --attr-match=idVendor=1209 --attr-match=idProduct=ca0f --settle
+)
+```
+
 CANOE-BDS 为受支持的高通设备提供受管理的启动环境。Mode 1/2 可以向 Android
 呈现锁定状态，但不会重新锁定实际 Bootloader。
 

@@ -49,7 +49,7 @@ a local rebuild for an approved catalogue.
 Record host tests, build checks and physical-device qualification separately.
 Building or publishing does not authorize flashing or rebooting a phone. Publish
 the verified firmware prerelease deliberately once the agreed beta checks pass.
-See [firmware CI contracts](../../scripts/FIRMWARE_RELEASES.md) for the manifest
+See [firmware CI contracts](https://github.com/1vivy/gbl_root_canoe/blob/main/scripts/FIRMWARE_RELEASES.md) for the manifest
 schema and draft helper.
 
 ## 3. Build and release the manager

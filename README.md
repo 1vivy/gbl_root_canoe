@@ -2,6 +2,20 @@
 
 [中文版](README_zh.md)
 
+Linux host: install the [scoped USB access rule](wiki/docs/linux-usb.md) once
+(udev/systemd-logind; [review the rule](https://github.com/1vivy/canoe-nusb-storage/blob/bbc4efa4dc9a47cf51319ac3a1b5d224b7e344f4/contrib/udev/70-canoe-managed-usb.rules)):
+
+```sh
+(
+  rule_dir=$(mktemp -d) &&
+  trap 'rm -rf "$rule_dir"' EXIT &&
+  curl -fL https://raw.githubusercontent.com/1vivy/canoe-nusb-storage/bbc4efa4dc9a47cf51319ac3a1b5d224b7e344f4/contrib/udev/70-canoe-managed-usb.rules -o "$rule_dir/70-canoe-managed-usb.rules" &&
+  sudo install -m 0644 "$rule_dir/70-canoe-managed-usb.rules" /etc/udev/rules.d/70-canoe-managed-usb.rules &&
+  sudo udevadm control --reload-rules &&
+  sudo udevadm trigger --action=change --subsystem-match=usb --attr-match=idVendor=1209 --attr-match=idProduct=ca0f --settle
+)
+```
+
 CANOE-BDS supplies a managed boot environment for supported Qualcomm devices.
 Mode 1/2 can present a locked device to Android without relocking the physical
 bootloader.

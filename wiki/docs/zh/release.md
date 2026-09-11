@@ -43,7 +43,7 @@ python3 scripts/firmware_release.py verify /path/to/downloaded-firmware
 
 分别记录主机测试、构建检查和真机验证。构建或发布并不授权对手机刷写或重启。
 约定的 beta 检查通过后，再明确公开固件预发布。清单格式与草稿工具参见
-[固件 CI 契约](../../../scripts/FIRMWARE_RELEASES.md)。
+[固件 CI 契约](https://github.com/1vivy/gbl_root_canoe/blob/main/scripts/FIRMWARE_RELEASES.md)。
 
 ## 3. 构建并发布管理器
 

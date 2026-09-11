@@ -20,6 +20,7 @@ export default defineConfig({
               items: [
                 { text: 'Intro', link: '/intro' },
                 { text: 'Install', link: '/install' },
+                { text: 'Linux USB access', link: '/linux-usb' },
                 { text: 'Reinstall older mods', link: '/reinstall' },
                 { text: 'Command-line tools', link: '/commands' },
                 { text: 'Format-data matrix', link: '/format-data' },
@@ -51,6 +52,7 @@ export default defineConfig({
               items: [
                 { text: '总览', link: '/zh/intro' },
                 { text: '安装', link: '/zh/install' },
+                { text: 'Linux USB 访问权限', link: '/zh/linux-usb' },
                 { text: 'OTA 更新', link: '/zh/ota' },
                 { text: '使用说明', link: '/zh/usage' },
                 { text: '卸载', link: '/zh/uninstall' },
