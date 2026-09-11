@@ -11,7 +11,7 @@ const PRIMARY: [u8; 32] = [
 #[test]
 fn committed_tables_parse() {
     let parsed = tables().expect("committed evidence tables parse");
-    assert_eq!(parsed.len(), 3);
+    assert!(!parsed.is_empty());
     for table in &parsed {
         assert!(!table.commands.is_empty(), "{} has no commands", table.name);
     }

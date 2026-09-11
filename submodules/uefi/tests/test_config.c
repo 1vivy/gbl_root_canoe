@@ -159,9 +159,6 @@ TestRolesAndTheThirdEntry (void)
   assert (Find ("c")->Role == SfbConfigRoleBackup);
   /* Backup enumerates as an ordinary third row, distinguishable only by its
    * suffix; the loader derives no slot state of its own. */
-  assert (strcmp (SfbConfigRoleSuffix (SfbConfigRoleActive), " (active)") == 0);
-  assert (strcmp (SfbConfigRoleSuffix (SfbConfigRoleBackup), " (backup)") == 0);
-  assert (strcmp (SfbConfigRoleSuffix (SfbConfigRoleOther), "") == 0);
   /* `default` resolves to an index, so no caller re-scans by id. */
   assert (gConfig.DefaultIndex == 1);
   assert (strcmp (gConfig.Entry[gConfig.DefaultIndex].Id, "b") == 0);

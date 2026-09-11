@@ -28,6 +28,12 @@ Do not weaken the clean-output rebuild or final existence check. A newly linked 
 
 The embedded mass-storage path has two valid states: a verified PE variant, or an explicit zero-size fallback to the resident platform protocol. A missing blob may be build-valid, but it is not release-valid when the requested feature is the bundled `1209:ca0e` driver.
 
+## Test ownership
+
+Before adding a test, identify the production contract, owning repository and smallest suitable test layer. Reuse existing coverage. Do not encode subjective acceptance, incidental presentation or the current implementation as requirements. Do not add regression tests for every reversible edit by default. Use human or agent exploration for usability assessment, and report its evidence separately.
+
+See `../../docs/testing-audit/README.md` for the case inventory and separate exploration/acceptance limits. Filesystem primitives belong to their owning dependency/crate; image byte algorithms belong to their producer/parser. Keep firmware policy and ABI checks at the firmware boundary. A package/adapter test may check the handoff without duplicating the dependency’s internals.
+
 ## Required verification
 
 After UEFI source or build metadata changes:

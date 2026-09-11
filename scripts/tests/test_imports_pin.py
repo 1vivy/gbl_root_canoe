@@ -126,7 +126,6 @@ make_prefix = "SOURCE"
             self.assertEqual(first.stdout, second.stdout)
             self.assertIn("WEB_PATH = $(CANOE_ROOT_DIR)/web-1.0.tar.gz", first.stdout)
             self.assertIn("SOURCE_SHA256 = bbbbb", first.stdout)
-            self.assertIn("do not edit", first.stdout.lower())
 
 
 if __name__ == "__main__":

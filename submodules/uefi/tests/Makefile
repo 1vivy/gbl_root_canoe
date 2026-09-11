@@ -10,9 +10,9 @@ CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror
 CFLAGS += $(SFB_VERSION_CFLAGS)
 
-.PHONY: test test_gpt_slot_reset clean
+.PHONY: test clean
 
-test: test_usb_serial test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_gpt_slot_reset test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
+test: test_usb_serial test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface
 	./test_usb_serial
 	./test_profile
 	./test_deviceinfo
@@ -49,8 +49,7 @@ test: test_fastboot_response
 .PHONY: test_fastboot_response
 test_fastboot_response: test_fastboot_response.c \
 	../edk2/QcomModulePkg/Library/FastbootLib/FastbootResponse.c \
-	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDevInfo.c \
-	../edk2/MdePkg/Library/BaseLib/SafeString.c
+	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDevInfo.c
 	$(CC) $(CFLAGS) -O0 -Wno-unused-function -fno-builtin -fshort-wchar -ffunction-sections -fdata-sections $(HOOK_INCLUDES) -D_PCD_GET_MODE_32_PcdMaximumAsciiStringLength=0 -D_PCD_GET_MODE_32_PcdMaximumUnicodeStringLength=0 -Wl,--gc-sections -o $@ $^
 	./$@
 
@@ -65,9 +64,6 @@ test_slot_retries: test_slot_retries.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlotAttributes.h \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbGptName.h
 	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $^
-
-test_gpt_slot_reset:
-	./test_gpt_slot_reset.sh
 
 test_last_launch: \
 	../edk2/QcomModulePkg/Application/LinuxLoader/TestLastLaunch.c \

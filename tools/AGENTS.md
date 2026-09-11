@@ -30,6 +30,12 @@ Changes to a sidecar format require synchronized Rust tests, C firmware parser t
 
 Do not commit tool caches, Rust `target/`, pulled partitions, generated images, boot logs, mounted boot roots, or extracted ABL contents. Test fixtures must be minimal, non-secret, and explicitly tracked.
 
+## Test ownership
+
+Before adding a test, identify the production contract, owning repository and smallest suitable test layer. Reuse existing coverage. Do not encode subjective acceptance, incidental presentation or the current implementation as requirements. Do not add regression tests for every reversible edit by default. Use human or agent exploration for usability assessment, and report its evidence separately.
+
+See `../docs/testing-audit/README.md` for the case inventory and separate exploration/acceptance limits. Filesystem primitives belong to their owning dependency/crate; image byte algorithms belong to their producer/parser. Keep firmware policy and ABI checks at the firmware boundary. A package/adapter test may check the handoff without duplicating the dependency’s internals.
+
 ## Verification
 
 Use the affected package's real entry point:
@@ -41,4 +47,4 @@ cargo test --locked --manifest-path tools/abl-tzmap/Cargo.toml
 make version-check
 ```
 
-Tests that write an executable and then exec it must not race a sibling test thread's fork: `cargo` runs tests as threads of one process, and an inherited write descriptor makes `exec` fail with ETXTBSY. Serialize those pairs (see `canoe-bootmgr/tests/fastboot.rs`) and never mutate the process `PATH` from a test — pass a search path explicitly instead. For shell changes, test the exact host/device flow with isolated temporary trees; never use a real mounted `persist` volume as a test fixture.
+Tests that write an executable and then exec it must not race a sibling test thread's fork: `cargo` runs tests as threads of one process, and an inherited write descriptor makes `exec` fail with ETXTBSY. Serialize those pairs in their owning CLI fixture and never mutate the process `PATH` from a test — pass a search path explicitly instead. For shell changes, test the exact host/device flow with isolated temporary trees; never use a real mounted `persist` volume as a test fixture.

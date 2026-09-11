@@ -1,4 +1,4 @@
-use canoe_bootmgr::confined::Root;
+use canoe_fs::confined::Root;
 use std::fs;
 
 #[test]

@@ -57,6 +57,12 @@ Declare a symbol used across files in the shared header, never hand-copied into 
 
 Host, device and GUI surfaces no longer need behavioral alignment work: they share one implementation through the `canoe-bootmgr` protocol, so a divergence is a bug in a caller rather than a contract to maintain twice. Preserve input images: supplied ABL/vbmeta files are derivation inputs, never implicit flash payloads.
 
+## Test ownership
+
+Before adding a test, identify the production contract, owning repository and smallest suitable test layer. Reuse existing coverage. Do not encode subjective acceptance, incidental presentation or the current implementation as requirements. Do not add regression tests for every reversible edit by default. Use human or agent exploration for usability assessment, and report its evidence separately.
+
+See `docs/testing-audit/README.md` for the case inventory and separate exploration/acceptance limits. Filesystem primitives belong to their owning dependency/crate; image byte algorithms belong to their producer/parser. Keep firmware policy and ABI checks at the firmware boundary. A package/adapter test may check the handoff without duplicating the dependency’s internals.
+
 ## Verification
 
 Run the narrow contract first, then the relevant aggregate:
@@ -66,7 +72,7 @@ Run the narrow contract first, then the relevant aggregate:
 - Patcher: `make -C submodules/patcher test`.
 - App surfaces (separate repo `canoe-boot-manager`): `bun run typecheck` must report 0 errors AND 0 warnings, then `bun test`, then `bun run build` including its asset guard.
 - Rust tools: `cargo test --locked --manifest-path` for `tools/canoe-bootmgr/Cargo.toml`, `tools/mode2-profile/Cargo.toml`, `tools/abl-tzmap/Cargo.toml`.
-- Userspace ext4 helper: `make -C tools/canoe-ext4 test`; set `CANOE_EXT4_WINDOWS_BIN` to also exercise the Windows binary under Wine.
+- Historical userspace ext4 helper: excluded from release/default checks. Its archived qualification is not release acceptance for the browser Rust driver.
 - Shipped Windows binaries: `x86_64-w64-mingw32-objdump -p <exe> | grep 'DLL Name'` must list only system DLLs; a MinGW runtime import is a shipping bug.
 - Device/module flows: the exact shell tests named by the top-level `make test` target.
 - Cross-project mass-storage changes: rebuild and verify in `../canoe-msd`, copy the verified blob, then rebuild BDS.

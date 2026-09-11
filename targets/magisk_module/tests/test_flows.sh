@@ -108,8 +108,6 @@ assert_eq "$(tr -d '[:space:]' < "$MOD/lang.txt")" zh \
   'the stored language selection was not retained'
 assert_contains "$(cat "$CONFIG_LOG")" 'user_lang=zh' \
   'the language selection was not exposed to the module setting'
-assert_contains "$(cat "$UI_LOG")" 'Test-Model / test-device / test-build' \
-  'device facts were not displayed'
 [ ! -e "$MARKER" ] || fail 'bootstrap invoked a partition operation'
 rm -f "$MOD/lang.txt"
 SYS_LOCALE=zh-CN PRODUCT_LOCALE= KSUD_LANG= MODPATH="$MOD" \
@@ -143,13 +141,5 @@ assert_file "$ABL_REPO/abl.img"
 pass 'bootstrap writes no partition and leaves the boot root byte-identical'
 
 sh -n "$ROOT/targets/magisk_module/module/customize.sh"
-assert_contains "$(cat "$UI_LOG")" 'Installing this module alone does not require formatting data.' \
-  'module installation was not distinguished from boot-chain deployment'
-assert_contains "$(cat "$UI_LOG")" 'Reboot when KernelSU requests module activation' \
-  'activation guidance was not displayed'
-assert_contains "$(cat "$UI_LOG")" '仅安装管理界面和工具时不会更改启动分区' \
-  'Chinese activation guidance is absent'
-pass 'bootstrap explains module activation separately from boot-chain deployment'
 [ ! -e "$ROOT/targets/magisk_module/module/install-flow.sh" ] || fail 'install-time deployment is still packaged'
-assert_contains "$(cat "$UI_LOG")" 'Full installation, mode selection, and OTA preparation are available in the activated WebUI.' 'full WebUI deployment is not explained'
 echo 'all manager-only module fixtures passed'

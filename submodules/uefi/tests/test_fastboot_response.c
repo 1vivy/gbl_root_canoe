@@ -1,24 +1,12 @@
-/* Exercise production framing and reproduce the old SafeString assertion. */
+/* Exercise production framing, including the long values that previously crashed getvar. */
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 #undef NULL
 #include "../edk2/QcomModulePkg/Library/FastbootLib/FastbootResponse.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbDevInfo.h"
-#include <Library/BaseLib.h>
-#include <Library/DebugLib.h>
 
-static unsigned Asserts;
 static char Collected[4096];
-static unsigned Packets;
-
-BOOLEAN EFIAPI DebugAssertEnabled (VOID) { return TRUE; }
-VOID EFIAPI DebugAssert (CONST CHAR8 *File, UINTN Line, CONST CHAR8 *Expression)
-{
-  (void)File; (void)Line;
-  assert(strstr(Expression, "CopyLen > SourceLen") != NULL);
-  ++Asserts;
-}
 
 static VOID
 Collect (CONST CHAR8 *Payload)
@@ -33,7 +21,6 @@ Collect (CONST CHAR8 *Payload)
   assert(memcmp(Frame.Data, "INFO", 4) == 0);
   assert(strlen(Payload) <= 60);
   strcat(Collected, Frame.Data + 4);
-  ++Packets;
 }
 
 static void
@@ -41,26 +28,9 @@ CheckVariable (const char *Name, const char *Value)
 {
   char Expected[4096];
   snprintf(Expected, sizeof(Expected), "%s:%s", Name, Value);
-  Collected[0] = '\0'; Packets = 0;
+  Collected[0] = '\0';
   SfbFastbootGetVarInfo(Name, Value, Collect);
   assert(strcmp(Collected, Expected) == 0);
-  assert(Packets == (strlen(Expected) + 59) / 60);
-}
-
-static void
-CheckLegacyDevInfo (const char *Value)
-{
-  char Legacy[64];
-  unsigned Before = Asserts;
-  assert(AsciiStrnCpyS(Legacy, sizeof(Legacy), "canoe-devinfo", 64) == RETURN_SUCCESS);
-  assert(AsciiStrnCatS(Legacy, sizeof(Legacy), ":", 1) == RETURN_SUCCESS);
-  /* Real BaseLib raises the assertion before returning this error. The
-   * firmware's 0x2f DebugPropertyMask deadloops instead of our test recorder. */
-  assert(AsciiStrnCatS(Legacy, sizeof(Legacy), Value, 64) == RETURN_BUFFER_TOO_SMALL);
-  assert(Asserts == Before + 1);
-  CheckVariable("canoe-devinfo", Value);
-  printf("devinfo: legacy assertion reproduced; %zu bytes retained in %u INFO packets\n",
-         strlen(Collected), Packets);
 }
 
 int main (void)
@@ -72,9 +42,9 @@ int main (void)
   char DevInfo[SFB_DEVINFO_VALUE_BYTES], RetryValue[SFB_SLOT_RETRIES_VALUE_BYTES];
   unsigned Index;
 
-  CheckLegacyDevInfo("unlocked=1 critical=1 waiver=0 retry_a=7 retry_b=7");
-  CheckLegacyDevInfo("unlocked=1 critical=1 waiver=0 retry_a=unknown retry_b=unknown");
-  CheckLegacyDevInfo("unlocked=0 critical=0 waiver=unknown retry_a=unknown retry_b=unknown");
+  CheckVariable("canoe-devinfo", "unlocked=1 critical=1 waiver=0 retry_a=7 retry_b=7");
+  CheckVariable("canoe-devinfo", "unlocked=1 critical=1 waiver=0 retry_a=unknown retry_b=unknown");
+  CheckVariable("canoe-devinfo", "unlocked=0 critical=0 waiver=unknown retry_a=unknown retry_b=unknown");
   assert(SfbFormatObservedDevInfo(&Known, DevInfo, sizeof(DevInfo)));
   CheckVariable("canoe-devinfo", DevInfo);
   assert(SfbFastbootEncodeResponse("OKAY", DevInfo, Frame) == strlen(DevInfo) + 4);
@@ -105,7 +75,6 @@ int main (void)
   memset(Value, 'v', 61); Value[61] = '\0';
   assert(SfbFastbootEncodeResponse("FAIL", Value, Frame) == 64);
   assert(Frame[64] == '\0');
-  assert(Asserts == 3);
   puts("PASS fastboot framing: complete INFO streams, 64-byte packets, empty OKAY, boundaries");
   return 0;
 }

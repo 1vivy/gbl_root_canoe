@@ -17,6 +17,9 @@ on:
         value: ${{ jobs.firmware.outputs.artifact }}
 permissions:
   contents: read
+concurrency:
+  group: firmware-ci-${{ github.workflow }}-${{ inputs.source_ref || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ inputs.source_ref == '' && github.event_name != 'workflow_dispatch' }}
 jobs:
   firmware:
     runs-on: ubuntu-24.04
@@ -32,34 +35,73 @@ jobs:
           persist-credentials: false
       - id: source
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Select validation duties
+        id: scope
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: python3 scripts/ci_scope.py
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        if: steps.scope.outputs.rust_crates != ''
         with:
           toolchain: 1.98.0
-          targets: wasm32-unknown-unknown
-      - run: |
+          targets: ${{ steps.scope.outputs.portable_crates != '' && 'wasm32-unknown-unknown' || '' }}
+      - name: Install native build dependencies
+        if: steps.scope.outputs.firmware == 'true' || steps.scope.outputs.uefi_tests == 'true' || steps.scope.outputs.patcher_tests == 'true' || steps.scope.outputs.rust_crates != ''
+        run: |
           # Firmware CI does not use Chrome. Its unused runner repository can
           # contain stale indexes that block unrelated Ubuntu dependencies.
           sudo rm -f /etc/cron.daily/google-chrome /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources
           sudo apt-get update
           sudo apt-get install -y build-essential dosfstools e2fsprogs liblzma-dev clang lld uuid-dev python3-pytest
-      - run: make test
-      - name: Qualify portable image libraries
+      - name: Check Rust tool contracts
+        if: steps.scope.outputs.rust_crates != ''
+        env:
+          CRATES: ${{ steps.scope.outputs.rust_crates }}
         run: |
-          for crate in mode2-profile canoe-image abl-tzmap canoe-provision; do
+          for crate in $CRATES; do
+            cargo test --locked --manifest-path "tools/$crate/Cargo.toml"
+          done
+      - name: Check BDS contracts
+        if: steps.scope.outputs.uefi_tests == 'true'
+        run: make -C submodules/uefi test
+      - name: Check ABL patch contracts
+        if: steps.scope.outputs.patcher_tests == 'true'
+        run: make -C submodules/patcher test
+      - name: Check manager installation
+        if: steps.scope.outputs.module_tests == 'true'
+        run: sh targets/magisk_module/tests/test_flows.sh
+      - name: Check release and import commands
+        if: steps.scope.outputs.script_tests == 'true'
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Qualify portable image libraries
+        if: steps.scope.outputs.portable_crates != ''
+        env:
+          CRATES: ${{ steps.scope.outputs.portable_crates }}
+        run: |
+          for crate in $CRATES; do
             cargo check --locked --manifest-path tools/$crate/Cargo.toml --no-default-features --lib --target wasm32-unknown-unknown
           done
-          cargo build --locked --manifest-path tools/canoe-image/qualification/vendorboot/Cargo.toml --target wasm32-unknown-unknown --release
-          node tools/canoe-image/qualification/vendorboot/run.mjs
-      - run: docker build -t gbl_builder .
+          if [[ " $CRATES " == *" canoe-image "* ]]; then
+            cargo build --locked --manifest-path tools/canoe-image/qualification/vendorboot/Cargo.toml --target wasm32-unknown-unknown --release
+            node tools/canoe-image/qualification/vendorboot/run.mjs
+          fi
+      - name: Prepare firmware toolchain
+        if: steps.scope.outputs.firmware == 'true'
+        run: docker build -t gbl_builder .
       - name: Build CANOE-BDS and EFI tools
+        if: steps.scope.outputs.firmware == 'true'
         run: |
           docker image inspect gbl_builder --format '{{.Id}}'
           docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc 'make -C submodules/uefi clean && make -C submodules/uefi build && make -C submodules/uefi tools'
       - run: make version-check
+        if: steps.scope.outputs.versions == 'true'
       - name: Capture the exact firmware build and source identity
+        if: steps.scope.outputs.firmware == 'true'
         run: python3 scripts/firmware_release.py package
       - run: python3 scripts/firmware_release.py verify .work/firmware-release
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.scope.outputs.firmware == 'true'
+      - if: steps.scope.outputs.firmware == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: firmware-${{ steps.source.outputs.commit }}
           path: .work/firmware-release/
