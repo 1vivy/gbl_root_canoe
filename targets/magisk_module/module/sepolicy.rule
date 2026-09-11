@@ -1,6 +1,6 @@
 # persist/efisp.fat inherits mnt_vendor_file. Buffered loop I/O runs in the
 # kernel domain, which needs its own access after the root worker opens it.
-# Read permits inspection; write permits reviewed mounted boot-root updates.
+# Read permits inspection. Write permits reviewed mounted boot-root updates.
 # Android uses the same scoped file grants for loop-backed images:
 # https://android.googlesource.com/platform/system/sepolicy/+/d4a7f392598cee96d9479a8ac0f84259c19b043a/private/kernel.te#92
 # https://android.googlesource.com/kernel/common/+/b2a876903b495c444a94b16f50d1463ffe953957/drivers/block/loop.c#236
