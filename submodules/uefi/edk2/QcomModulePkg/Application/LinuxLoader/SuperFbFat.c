@@ -84,25 +84,20 @@ SfbCreateDriverHandle (OUT EFI_HANDLE *Handle)
 }
 
 /*
- * Event groups the platform's DXEs may be waiting on.
+ * Vendor storage-detect event group. The fastboot-only boot path never reaches
+ * the stock BDS, so nothing else signals it; its name says what it triggers.
  *
- * The fastboot-only boot path never reaches the stock BDS, so nothing ever
- * signals these. Qualcomm's own minimal ABL replacement signals all three
- * before it enumerates filesystems (qualcomm/abl2esp, src/main.rs), and vendor
- * drivers commonly defer the last stage of initialisation to EndOfDxe or
- * ReadyToBoot. DetectSdCard is a vendor group whose name says what it triggers.
- *
- * Signalling a group nobody listens to is a no-op, so the cost of being wrong
- * about which of these matters is nil.
+ * EndOfDxe and ReadyToBoot are deliberately not signalled by this application.
+ * Qualcomm's abl2esp signals them immediately before its only payload, but the
+ * observed platform BDS default-app path and the on-slot ABL's efisp handoff
+ * emit neither, and on this platform ReadyToBoot is not a no-op: it runs real
+ * teardown callbacks (PMIC cleanup with SPMI access revocation, DPP
+ * provisioning, AllocatePages replacement) that must not fire while this
+ * application may sit in its menu indefinitely. Signalling it here produced a
+ * burst of rejected TZ_SPMI_REVOKE_ACCESS_ID SMCs before the menu on both
+ * SM8850 and SM8845. The chainloaded ABL owns ExitBootServices, which is where
+ * those callbacks belong. No inspected storage driver depends on either group.
  */
-STATIC CONST EFI_GUID mSfbReadyToBootGuid = {
-  0x7ce88fb3, 0x4bd7, 0x4679,
-  { 0x87, 0xa8, 0xa8, 0xd8, 0xde, 0xe5, 0x0d, 0x2b }
-};
-STATIC CONST EFI_GUID mSfbEndOfDxeGuid = {
-  0x02ce967a, 0xdd7e, 0x4ffc,
-  { 0x9e, 0xe7, 0x81, 0x0c, 0xf0, 0x47, 0x08, 0x80 }
-};
 STATIC CONST EFI_GUID mSfbDetectSdCardGuid = {
   0xb7972c36, 0x8a4c, 0x4a56,
   { 0x8b, 0x02, 0x11, 0x59, 0xb5, 0x2d, 0x4b, 0xfb }
@@ -150,23 +145,6 @@ SfbSignalStorageDetect (VOID)
   mSfbLastDetectStatus = Status;
   DEBUG ((EFI_D_INFO, "SFB: MARK event-signal group=detect-sd-card status=%r\n",
           Status));
-}
-
-VOID
-SfbSignalBootPhase (VOID)
-{
-  EFI_STATUS  EndOfDxe;
-  EFI_STATUS  ReadyToBoot;
-
-  /*
-   * EndOfDxe first, then ReadyToBoot: that is the order the platform BDS would
-   * have used, and a driver that gates on both expects to see them that way.
-   */
-  EndOfDxe = SfbSignalEventGroup (&mSfbEndOfDxeGuid);
-  ReadyToBoot = SfbSignalEventGroup (&mSfbReadyToBootGuid);
-  DEBUG ((EFI_D_INFO,
-          "SFB: MARK event-signal end-of-dxe=%r ready-to-boot=%r\n",
-          EndOfDxe, ReadyToBoot));
 }
 
 /*
@@ -333,13 +311,6 @@ SfbStartFatStack (VOID)
 
   SfbConnectAll ();
 
-  /*
-   * Now that every controller is connected, tell the platform the DXE phase is
-   * over and a boot is imminent. A driver that published its protocol during
-   * dispatch but deferred the rest of its bring-up to one of these groups gets
-   * its chance here, before any volume is scanned or any entry is launched.
-   */
-  SfbSignalBootPhase ();
   DEBUG ((EFI_D_INFO,
           "SFB: MARK fat-stack-start reused=0 started=1 ext4=%r "
           "detect=%r connect=%r status=%r\n",

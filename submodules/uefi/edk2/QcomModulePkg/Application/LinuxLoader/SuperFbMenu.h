@@ -351,16 +351,6 @@ VOID
 SfbSignalStorageDetect (VOID);
 
 /*
- * Signal EndOfDxe then ReadyToBoot. The fastboot-only boot path never reaches
- * the stock BDS, so without this nothing ever tells the platform's drivers that
- * dispatch is over and a boot is imminent - and vendor drivers commonly defer
- * the last stage of initialisation to exactly those groups. Called by
- * SfbStartFatStack () once the connection pass has run.
- */
-VOID
-SfbSignalBootPhase (VOID);
-
-/*
  * Find the Block I/O instance for the GPT partition named Name. Returns
  * EFI_NOT_FOUND when no partition carries that name, which on this platform is
  * an ordinary outcome rather than a fault: `logfs` in particular does not exist
