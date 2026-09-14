@@ -7,14 +7,13 @@ Canoe 由两个仓库组成，并有明确的所有权边界：
 - 固件仓库在 `QcomModulePkg/Application/LinuxLoader` 中负责启动和菜单行为。
 - `canoe-bootmgr` 负责启动根目录写入和 `canoe.cfg` 语法。它是唯一写入器；
   调用方必须使用它的 JSON wire protocol，不能另行实现事务路径。
-- 独立的 `canoe-boot-manager` 仓库负责界面：Svelte 5 + Vite 应用同时供
-  Tauri 桌面 shell 和 KernelSU Android WebUI 使用。它不负责修改启动根目录。
-- `targets/` 负责打包、启动器文件、构件 pin，以及将桌面二进制与
-  `canoe-bootmgr` sidecar 放置在一起。
+- 独立的 `canoe-boot-manager` 仓库负责界面：Svelte 5 + Vite 应用同时作为
+  在线浏览器应用和 KernelSU Android WebUI 提供。它不负责修改启动根目录。
+- `targets/` 负责打包、构件 pin，以及将版本匹配的 `dist/ksu` bundle 暂存进
+  KernelSU 模块。
 
-请在拥有该行为的仓库中修改。界面改动应留在
-`/home/vivy/Projects/efisp-projects/canoe-boot-manager`；BDS 或启动菜单改动应留在
-本固件仓库。不要在这里增加第二套界面或写入器实现。
+请在拥有该行为的仓库中修改。界面改动应留在 `canoe-boot-manager` checkout；
+BDS 或启动菜单改动应留在本固件仓库。不要在这里增加第二套界面或写入器实现。
 
 ## 按层验证
 
@@ -27,15 +26,12 @@ Canoe 由两个仓库组成，并有明确的所有权边界：
 
 ```bash
 make test
-UEFI_REBUILD=1 CANOE_APP_LINUX_BIN=/absolute/path/to/canoe-boot-manager/src-tauri/target/release/canoe-boot-manager \
-  make target_toolkit_linux
+UEFI_REBUILD=1 make target_magisk_module
 ```
 
-如果检查的包是 Windows、Android 或模块，请使用相应的根级
-`target_toolkit_windows`、`target_toolkit_android` 或
-`target_magisk_module` 目标。当应用 checkout 不是默认兄弟 checkout 时，
-包目标必须接收绝对路径的 `CANOE_APP_LINUX_BIN` 或
-`CANOE_APP_WINDOWS_BIN`。
+如果检查的是临时 root 包，请改用 `target_toolkit_android`。当应用 checkout
+不是默认兄弟 checkout 时，模块目标必须接收绝对路径的 `CANOE_KSU_DIST`。
+已退役的 `target_toolkit_linux` 与 `target_toolkit_windows` 会拒绝执行。
 
 ### `canoe-bootmgr` 与配置语法
 
@@ -49,22 +45,21 @@ cargo test --locked --manifest-path tools/canoe-bootmgr/Cargo.toml
 启动管理器始终是唯一写入器。修改它的公开 protocol 时，必须迁移应用仓库
 在内的全部调用方，而不能增加第二个或兼容性写入器。
 
-### 桌面和 Android 界面
+### 在线与 Android 界面
 
-在 `/home/vivy/Projects/efisp-projects/canoe-boot-manager` 中安装锁定的
-Bun 依赖，并运行应用仓库中签入的检查：
+在 `canoe-boot-manager` checkout 中安装锁定的 Bun 依赖，并运行应用仓库中
+签入的检查：
 
 ```bash
 bun install --frozen-lockfile
-bun run typecheck
 bun run build
+bun run check
 bun test
 ```
 
-`bun run build` 验证 Tauri 与 KernelSU 所需的静态资源路径。
-`bun test` 运行应用测试和相同的资源检查。只有在
-`src-tauri/binaries/` 中放置好匹配目标的真实 `canoe-bootmgr` sidecar 后，
-才构建真实 Tauri 二进制。
+`bun run build` 生成 `dist/hosted` 与 `dist/ksu` 两份 bundle。`bun run check`
+即 `svelte-check --fail-on-warnings`，仓库中没有 `typecheck` 脚本。
+`bun test` 运行应用测试和相同的资源检查。
 
 ### 打包
 
@@ -72,16 +67,12 @@ bun test
 
 ```bash
 make version-check
-make target_toolkit_linux
-make target_toolkit_windows
 make target_toolkit_android
 make target_magisk_module
 ```
 
-打包配方通过 `fetch-verified` 使用固定的应用 `dist/` 归档生成 Android 模块；
-不能重新生成不同的界面。配方还会断言桌面应用与
-`canoe-bootmgr` sidecar 保持相邻，以及 BDS 和独立 EFI 工具在各包之间保持
-字节一致。
+模块配方通过 `scripts/stage_ksu.py` 暂存版本匹配的 `dist/ksu`；不能重新生成
+不同的界面。配方还会断言 BDS 和独立 EFI 工具在各包之间保持字节一致。
 
 ## 贡献流程
 
@@ -91,7 +82,7 @@ make target_magisk_module
    的包目标。
 4. 检查生成的归档和改动文件；不要提交生成文件或无关文件。
 5. 提交 Pull Request，列出已经运行的检查以及仍存在的平台限制。不要声称
-   Linux Windows 交叉构建已经证明真实 Windows 安装上的 WebView2 行为。
+   主机端构建已经证明浏览器或设备上的实际行为。
 
 ## 版权和授权
 

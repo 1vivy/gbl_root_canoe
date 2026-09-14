@@ -1,35 +1,54 @@
 # USB Mass Storage
 
-BDS can export the **boot root** as ordinary removable FAT storage. This is the
-mounted view of `persist/efisp.fat`; Windows cannot see the file while only its
-containing ext4 persist partition is exported.
+BDS exports storage over USB with three targets: `boot-root`, `persist` and
+`logfs`. The BDS USB menu lists whichever currently resolve. `boot-root` is the
+mounted view of `persist/efisp.fat`, and paths there start at the FAT root, not
+at `efisp/`.
 
-For normal edits outside the GUI, choose the boot-root export in the BDS USB
-menu or use the explicit Super Fastboot command:
+## Managed export
+
+The app drives this mode. It enumerates as a vendor-class device (`1209:ca0f`)
+with interface-scoped WinUSB descriptors, so no OS filesystem driver claims it
+and the app is the exclusive writer. There is nothing to mount, eject or race
+against, and no ext4 driver to install. If the managed driver cannot start, the
+export fails rather than falling back to an OS-mountable disk.
+
+The app binds the export to the selected device, verifies the container
+identity, preserves unrelated files, refuses conflicting managed-file changes,
+and flushes before release.
+
+## Manual export
+
+To edit outside the app, pick a target in the BDS USB menu or use Super
+Fastboot:
 
 ```sh
 fastboot oem mass-storage:boot-root
 ```
 
-Use the filesystem mounted by your OS. On Windows this may have a drive letter;
-on Linux use its vfat mount point. Run `canoe-bootmgr --boot-root <mount> ...`
-or edit ordinary files there. Paths start at the FAT root, not at `efisp/`.
-Safely eject/unmount before returning to fastboot or booting Android.
+This enumerates as ordinary mass storage (`1209:ca0e`) and your OS mounts it: a
+drive letter on Windows, a vfat mount point on Linux. Run
+`canoe-bootmgr --boot-root <mount> ...` or edit files directly, then eject or
+unmount safely before returning to fastboot or booting Android. Here you are one
+writer among several, so do not edit the same boot root from another program at
+the same time.
 
-The application binds the export to the selected USB device and verifies the
-container identity. It preserves unrelated files and OS-created metadata,
-refuses conflicting managed-file changes, and flushes the filesystem before
-normal dismount and USB release. If another program holds a file open, close it
-and retry. This is not a claim of exclusivity against arbitrary external writers.
-Do not edit the same boot root in another program while applying a GUI operation.
+## Persist
 
-Raw **persist** export is separate. It is used only for provisioning/removing
-the container or deliberate offline ext4 work. Routine entry/configuration edits
-use FAT and the native OS filesystem. The Windows adapter uses unchanged
-libext2fs for the ext4 allocation/removal boundary; no Windows ext4 driver,
-Ext4Windows installation, WinFsp, or patched e2fsprogs is required.
+Raw `persist` export is for provisioning or removing the container and for
+deliberate offline ext4 work; routine entry and configuration edits belong on
+the FAT boot root. Do not mount or write it while Android is using persist, and
+do not write raw FAT sectors while the filesystem is mounted. The app releases
+mass storage before fastboot operations and reacquires the right export when
+later cleanup requires it.
 
-Do not mount or write a raw persist export while Android is using persist.
-Do not write raw FAT sectors while its filesystem is mounted. The app releases
-mass storage before fastboot operations and reacquires the appropriate export
-when later filesystem cleanup requires it.
+## Pull logs after a failed reboot
+
+Return to the CANOE-BDS boot menu, open **USB Mass Storage**, and choose
+**Export logfs**. Connect the phone to a host and copy the files from the
+removable drive. Safely eject or unmount it before leaving the export.
+
+This is the preferred bug-report path after a failed boot. Send the logfs files
+with the device model, exact firmware/region, selected Canoe mode and a short
+description of what appeared on screen. No Android, recovery mount command or
+ADB pull is required.

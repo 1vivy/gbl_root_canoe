@@ -29,26 +29,29 @@ The boot root is a FAT16 container on ext4 persist, sized from available space i
 triplets and discovers EFI/BLS entries. Ordinary selections affect this boot;
 Advanced saves the default, managed-entry mode or boot policy independently.
 
-The 7.0.0-b7 release surface is the hosted Canoe Boot Manager and activated
+The 7.0.1 release surface is the hosted Canoe Boot Manager and activated
 KernelSU WebUI. The [hosted app](https://canoe-boot-manager.1vv.ca) uses WASM and
 managed USB; the module bundles its WebUI and native Android worker. Module
 installation installs the manager only. Desktop executables and filesystem
 sidecars are retired; the `7.0.0-b4-final` tag preserves the preceding stack.
 
 - [Install from a host or KernelSU](wiki/docs/install.md)
-- [Reinstall from gbl-chainload or CANOE-BDS ≤6.3.5](wiki/docs/reinstall.md)
+- [Reinstall from gbl-chainload, 6.3.5, or another EFISP mod](wiki/docs/reinstall.md)
 - [Commands](wiki/docs/commands.md) and [configuration](wiki/docs/canoe-cfg.md)
 - [OTA](wiki/docs/ota.md) and [format-data assessment](wiki/docs/format-data.md)
 - [USB mass storage](wiki/docs/mass-storage.md) and [uninstall](wiki/docs/uninstall.md)
 - [Release pipeline](wiki/docs/release.md)
 
-Legacy ext4 `efisp/` directories are ignored and never imported. Recreate entries;
-the app offers reviewed cleanup of old mod files. A matching signer does not
-prove OEM identity or that a firmware image suits another slot. Beta release
-notes state the qualification performed on each published build.
+Legacy ext4 `efisp/` directories are ignored and never imported. Deployment
+publishes the managed Android entries itself; only extra EFI/BLS rows are
+recreated by hand. The app offers reviewed cleanup of old mod files, which is
+worth doing before provisioning because the container is sized from free persist
+space. A matching signer does not
+prove OEM identity or that a firmware image suits another slot. Release notes
+state the qualification performed on each published build.
 
 ## License and history
 
 The project is GPL-2.0-or-later. [ARCHIVE.md](ARCHIVE.md) records historical 6.x
 material; [the b5 reconstruction audit](docs/b5-reconstruction.md) describes the
-architecture change that preceded this beta.
+architecture change that this release completes.

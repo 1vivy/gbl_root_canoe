@@ -12,7 +12,7 @@ Run from the firmware repository root. `version.mk` owns the version; regenerate
 its dependent files rather than editing their version fields separately:
 
 ```sh
-make bump VERSION=7.0.0-b7 VERSION_CODE=20
+make bump VERSION=7.0.1 VERSION_CODE=21
 make test
 docker build -t gbl_builder .
 docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc \
@@ -28,8 +28,9 @@ moved out of their build directories before the version gate.
 Commit the release-ready source and create the requested version checkpoint tag.
 The pipeline tag is `release-<version>` at that same commit. Frozen prior tags and
 branches remain unchanged. Pushing the pipeline tag starts **Prepare firmware
-draft release**, which runs the full firmware CI and creates a draft prerelease
-for beta versions. It never publishes automatically.
+draft release**, which runs the full firmware CI and creates a draft release.
+Only a version carrying a `-suffix` is additionally marked prerelease, so 7.0.1
+drafts as an ordinary release. It never publishes automatically.
 
 ## 2. Verify the exact draft assets
 
@@ -48,7 +49,7 @@ a local rebuild for an approved catalogue.
 
 Record host tests, build checks and physical-device qualification separately.
 Building or publishing does not authorize flashing or rebooting a phone. Publish
-the verified firmware prerelease deliberately once the agreed beta checks pass.
+the verified firmware release deliberately once the agreed checks pass.
 See [firmware CI contracts](https://github.com/1vivy/gbl_root_canoe/blob/main/scripts/FIRMWARE_RELEASES.md) for the manifest
 schema and draft helper.
 

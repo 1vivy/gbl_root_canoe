@@ -1,6 +1,6 @@
 # Uninstall Canoe
 
-Open **Settings → Uninstall Canoe** on desktop or in the KSU WebUI. Select a
+Open **Settings → Uninstall Canoe** in the hosted app or the KSU WebUI. Select a
 stock firmware ABL suitable for the active slot. **Also restore inactive slot**
 is optional and unchecked; it has a separate picker and an unchecked **Use the
 same ABL image** choice. The app cannot establish the inactive slot's firmware

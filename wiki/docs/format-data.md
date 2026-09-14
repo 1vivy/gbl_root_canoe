@@ -1,6 +1,6 @@
 # Format phone data
 
-The manager's native userdata evaluator is shared by desktop, WebUI and the
+The manager's userdata evaluator is shared by the hosted app, the WebUI and the
 KSU installer. It considers the **effective boot presentation and identity**,
 not whether a vbmeta file changed byte-for-byte. Module installation alone is
 independent of that transition.

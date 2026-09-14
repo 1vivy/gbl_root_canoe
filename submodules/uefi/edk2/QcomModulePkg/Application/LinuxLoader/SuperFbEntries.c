@@ -1434,8 +1434,8 @@ SfbIsManagedAblEntry (IN CONST SFB_BOOT_ENTRY *Entry)
   /*
    * Managed launches are a property of the on-device boot root, never of the
    * media. Without the IsUsb test a stick with \boot.efi at its root would be
-   * launched with the full policy projection and the efisp hide armed, purely
-   * because its filename matched.
+   * launched with the full managed policy projection, purely because its
+   * filename matched.
    */
   return (BOOLEAN)(!Entry->IsUsb && SfbIsManagedAblPath (Entry->Path));
 }

@@ -10,9 +10,10 @@ verification/donor material comes from the inactive target slot. Custom recovery
 remains an explicit choice. Expand the image controls to choose files when
 necessary, then prepare/check and review the exact resulting writes.
 
-Only this Android OTA flow offers cross-slot sourcing. Desktop A/B/Both is for
-manual reconciliation; each slot is prepared independently from its own images
-or selected files. Slot selection itself creates no format-data requirement.
+Only this Android OTA flow offers cross-slot sourcing. The hosted app's A/B/Both
+selection is for manual reconciliation; each slot is prepared independently from
+its own images or selected files. Slot selection itself creates no format-data
+requirement.
 
 Reboot after the operation completes and its readback is verified. If a step
 fails, retain the saved operation and inspect Retry or Revert. Do not assume

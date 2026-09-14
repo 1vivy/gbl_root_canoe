@@ -2,16 +2,18 @@
 
 ## Two repositories, one release
 
-A Canoe release is built from two repositories. The firmware repository contains
-BDS, the boot manager, workers, host CLI, and package recipes. The separate
-`canoe-boot-manager` repository contains the Svelte 5 + Vite application. Build
-the app checkout first; its one static `dist/` is consumed twice:
+A Canoe release is built from two repositories. This firmware repository
+contains BDS, the standalone EFI tools, the mounted-root commands, and the
+package recipes. The separate `canoe-boot-manager` repository contains the
+Svelte 5 + Vite application and its native Android worker. Build the app
+checkout first; it emits two independent bundles:
 
-- the Tauri desktop shell packages the same app for Linux or Windows; and
-- the KernelSU module serves the same files as its Android WebUI.
+- `dist/hosted`, served over HTTPS as the hosted Canoe Boot Manager; and
+- `dist/ksu`, a self-contained bundle packaged into the KernelSU module.
 
-The app speaks the JSON wire protocol to its `canoe-manager` sidecar. Mounted-root
-commands and image producers remain shared libraries outside the application workflows.
+There is no Tauri shell and no desktop executable sidecar. `7.0.0-b4-final`
+preserves that stack. Mounted-root commands and image producers remain shared
+libraries outside the application workflows.
 
 ### Build the app repository
 
@@ -19,121 +21,39 @@ From `/path/to/canoe-boot-manager`:
 
 ```bash
 bun install --frozen-lockfile
-bun run typecheck
 bun run build
+cargo build --locked --manifest-path native/canoe-manager/Cargo.toml
+bun run check
 bun test
 ```
 
-The commands above are the app repository's actual package scripts. `build`
-runs Vite and the asset guard; `test` also runs the asset guard before the
-Bun tests. A successful build produces `dist/index.html` and the bundled
-assets. The relative asset paths are intentional: the same `dist/` must load
-from both a Tauri WebView and a KernelSU `file://` WebUI.
+These are the app repository's actual package scripts; there is no `typecheck`
+script. `check` runs `svelte-check --fail-on-warnings`, so a warning fails it as
+well as an error. Building needs Rust with the `wasm32-unknown-unknown` target
+and `wasm-bindgen-cli` 0.2.128; set `WASM_BINDGEN` when that executable is
+outside `PATH`. A successful build produces `dist/hosted` and `dist/ksu`. The
+hosted output must keep the COOP/COEP headers in `dist/hosted/_headers`, which
+not every server applies automatically. The KSU bundle uses local CSS and its
+native worker, without hosted scripts, dynamic modules or SharedArrayBuffer.
 
-The desktop binary is built separately with Tauri. Before that compile, stage
-every target-compatible sidecar and helper in the app checkout's
-`src-tauri/binaries/` directory. `src-tauri/build.rs` hashes each staged file
-and embeds its SHA-256; a missing, non-regular, non-executable, or mismatched
-target input fails the Tauri build. The Linux names are:
+### Stage the KSU bundle for the module
 
-```text
-canoe-manager-x86_64-unknown-linux-gnu
-canoe-ext4-x86_64-unknown-linux-gnu
-extractfv-x86_64-unknown-linux-gnu
-patch_abl-x86_64-unknown-linux-gnu
-mode2_profile-x86_64-unknown-linux-gnu
-abl_tzmap-x86_64-unknown-linux-gnu
-```
-
-After building the Linux toolkit helpers, stage them with their target-triple
-names:
+The module package consumes `dist/ksu` directly through `CANOE_KSU_DIST`, which
+defaults to a sibling `canoe-boot-manager` checkout:
 
 ```bash
-APP=/absolute/path/to/canoe-boot-manager
-for name in canoe-manager canoe-bootmgr canoe-image canoe-provision canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
-  cp "targets/toolkit_linux/build/toolkit/bin/$name" \
-    "$APP/src-tauri/binaries/${name}-x86_64-unknown-linux-gnu"
-done
+CANOE_KSU_DIST=/absolute/path/to/canoe-boot-manager/dist/ksu make target_magisk_module
 ```
 
-Linux `fastboot` is deliberately not staged in `src-tauri/binaries`: runtime
-selects an executable `fastboot` (or `fastboot.exe`) from the inherited `PATH`,
-then opens and seals that selected external input for the session.
+`scripts/stage_ksu.py` refuses anything that is not a version-matched KSU build.
+The directory needs `index.html`; its `manifest.json` must declare
+`product=canoe-boot-manager`, the current `CANOE_VERSION`, and `runtime=ksu`;
+and the tree must contain no symlinks. A hosted bundle, or a WebUI archive from
+an earlier version, is rejected rather than packaged.
 
-The Windows GNU names are:
-
-```text
-canoe-manager-x86_64-pc-windows-gnu.exe
-canoe-ext4-x86_64-pc-windows-gnu.exe
-extractfv-x86_64-pc-windows-gnu.exe
-patch_abl-x86_64-pc-windows-gnu.exe
-mode2_profile-x86_64-pc-windows-gnu.exe
-abl_tzmap-x86_64-pc-windows-gnu.exe
-fastboot-x86_64-pc-windows-gnu.exe
-AdbWinApi-x86_64-pc-windows-gnu.dll
-AdbWinUsbApi-x86_64-pc-windows-gnu.dll
-```
-
-Stage the Windows GNU inputs from the toolkit's private runtime adjacency:
-
-```bash
-APP=/absolute/path/to/canoe-boot-manager
-for name in canoe-manager canoe-bootmgr canoe-image canoe-provision canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
-  cp "targets/toolkit_windows/build/toolkit/bin/$name.exe" \
-    "$APP/src-tauri/binaries/${name}-x86_64-pc-windows-gnu.exe"
-done
-cp targets/toolkit_windows/build/toolkit/Platform-Tools/fastboot.exe \
-  "$APP/src-tauri/binaries/fastboot-x86_64-pc-windows-gnu.exe"
-cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinApi.dll \
-  "$APP/src-tauri/binaries/AdbWinApi-x86_64-pc-windows-gnu.dll"
-cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinUsbApi.dll \
-  "$APP/src-tauri/binaries/AdbWinUsbApi-x86_64-pc-windows-gnu.dll"
-```
-
-The Windows MSVC app CI compile fixture uses the same nine stems with
-`x86_64-pc-windows-msvc` in place of `x86_64-pc-windows-gnu` (and keeps
-`.exe`/`.dll` extensions). Those fixture files are compile-only inputs, not
-release artifacts. Do not use a placeholder for a release sidecar: Tauri
-validates every required input before compiling.
-
-For reference, the nine MSVC fixture names are:
-
-```text
-canoe-manager-x86_64-pc-windows-msvc.exe
-canoe-ext4-x86_64-pc-windows-msvc.exe
-extractfv-x86_64-pc-windows-msvc.exe
-patch_abl-x86_64-pc-windows-msvc.exe
-mode2_profile-x86_64-pc-windows-msvc.exe
-abl_tzmap-x86_64-pc-windows-msvc.exe
-fastboot-x86_64-pc-windows-msvc.exe
-AdbWinApi-x86_64-pc-windows-msvc.dll
-AdbWinUsbApi-x86_64-pc-windows-msvc.dll
-```
-
-Build the desktop application from the app checkout:
-
-```bash
-# Linux
-bunx tauri build --no-bundle --ci
-
-# Windows GNU cross-build
-bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci
-```
-
-The Windows GNU command is verified on the release build host and produces a
-PE32+ executable. WebView2 runtime behavior on real Windows is not proven by a
-Linux cross-build; test the resulting application on Windows before publishing.
-The MSVC route requires `cargo-xwin` and a real MSVC-compatible environment.
-
-On a tag, the app repository publishes a deterministic
-`canoe-boot-manager-<version>.tar.gz` containing `dist/`, plus the Linux and
-Windows desktop binaries. The firmware repository consumes those assets by URL
-and SHA-256 through its existing `fetch-verified` target. Until a published app
-asset is selected, the checked-in
-`targets/magisk_module/webui-cache/canoe-boot-manager-<CANOE_WEBUI_VERSION>.tar.gz`
-is the last-known-good fallback. `make version-check` verifies that the fallback
-bytes match `CANOE_WEBUI_SHA256`; it must not be silently replaced with an
-unrelated bundle.
+`imports.toml` records this input as the `external` row `ksu-app`. `make
+version-check` reports it as `EXTERNAL` and neither hashes nor fetches it, so
+staging the correct bundle is the operator's responsibility.
 
 ## Build prerequisites
 
@@ -142,14 +62,12 @@ A working release environment has all of the following:
 - Docker, for the canonical EDK2/BDS build;
 - the Android NDK, with `NDK_PATH` (or `ANDROID_NDK_LATEST_HOME`) set, for the
   Android toolkit and KernelSU module;
-- `mingw-w64`, including `x86_64-w64-mingw32-gcc`, for Windows helpers and the
-  Windows GNU builds;
 - a rustup-managed Rust toolchain, including the
   `aarch64-linux-android` standard library. A distro `cargo` shim without that
-  rustup target fails with `can't find crate for std`. The Windows GNU target
-  is also needed for Windows Rust helpers;
-- an e2fsprogs source tree and zlib headers/library for `canoe-ext4.exe`; and
-- Bun for the app repository.
+  rustup target fails with `can't find crate for std`;
+- `mingw-w64`, including `x86_64-w64-mingw32-gcc`, only for the optional
+  `tools_vbmetafixer_windows` target; and
+- Bun, plus Rust's `wasm32-unknown-unknown` target, for the app repository.
 
 Check the Rust targets with the rustup toolchain's `rustup target list --installed`.
 The Rust crates currently require Rust 1.85 or newer. The NDK builds
@@ -157,48 +75,24 @@ specifically use the NDK's `aarch64-linux-android31-clang` linker.
 
 ## Build the release packages
 
-From the firmware repository root, after the app `dist/` and required desktop
-binary have been built, build the four supported packages with these root
-Makefile targets:
+From the firmware repository root, after the app's `dist/ksu` has been built,
+build the two supported packages with these root Makefile targets:
 
 ```bash
-make target_toolkit_linux
-make target_toolkit_windows
 make target_toolkit_android
 make target_magisk_module
 ```
 
-Android and module builds require `NDK_PATH` to point to an Android NDK.
-Archives are written below each `targets/toolkit_*/build/` directory and
-`targets/magisk_module/build/`.
+Both require `NDK_PATH` to point to an Android NDK. Archives are written below
+`targets/toolkit_android/build/` and `targets/magisk_module/build/`.
 
-The Linux and Windows package recipes accept absolute app-binary overrides:
+`target_toolkit_linux` and `target_toolkit_windows` are still declared, but they
+refuse to run: each prints `Desktop packages retired in b5; use the hosted CANOE
+BOOT MANAGER.` and exits 2. Do not reintroduce them.
 
-```bash
-CANOE_APP_LINUX_BIN=/absolute/path/to/canoe-boot-manager/src-tauri/target/release/canoe-boot-manager \
-  make target_toolkit_linux
-CANOE_APP_WINDOWS_BIN=/absolute/path/to/canoe-boot-manager/src-tauri/target/x86_64-pc-windows-gnu/release/canoe-boot-manager.exe \
-  make target_toolkit_windows
-```
-
-Without an override, each recipe looks for a sibling checkout of
-`canoe-boot-manager`. A linked firmware git worktree is not at the repository
-root that this default assumes, so a worktree build must pass the explicit
-absolute `CANOE_APP_LINUX_BIN` or `CANOE_APP_WINDOWS_BIN` path.
-
-The app binary is copied to `bin/canoe-boot-manager` (or `.exe`) next to
-`bin/canoe-manager`. The launchers in the toolkit root resolve that adjacency:
-`canoe-boot-manager.sh` on Linux and `canoe-boot-manager.bat` on Windows.
-
-The GNU-target Tauri build also emits `WebView2Loader.dll` beside the Windows
-application. The Windows package requires and copies that loader into `bin/`.
-When `CANOE_APP_WINDOWS_BIN` is overridden, the loader is taken from the same
-directory unless `CANOE_WEBVIEW2_LOADER_WINDOWS` is set explicitly.
-
-The standalone WebUI archive is pinned independently of the desktop binary.
-The module's package recipe invokes the root `fetch-verified` target, verifies
-its SHA-256 before and after fetching, and extracts the app's `dist/` without
-rewriting it. This keeps the module UI byte-identical to the app build.
+The module recipe stages `CANOE_KSU_DIST` into the module webroot through
+`scripts/stage_ksu.py`, which keeps the packaged UI byte-identical to the app's
+KSU build and rejects a product, version or runtime mismatch.
 
 ## Imports
 
@@ -307,19 +201,13 @@ crates under `tools/canoe-bootmgr`, `tools/canoe-image`, `tools/canoe-provision`
 and the sibling application's `native/canoe-manager` worker with locked Cargo
 manifests. `tools/canoe-fs` shares confined file I/O without application policy.
 
-The application sidecar is `canoe-manager`, not the mounted-root CLI. Package
-its native dependencies beside it. Windows uses native FAT access and the
-unchanged libext2fs helper only for offline ext4 provisioning/removal:
-
-```sh
-E2FSPROGS_SRC=/path/to/e2fsprogs ZLIB_PREFIX=/path/to/zlib \
-  tools/canoe-ext4/build-windows.sh
-```
-
-No Ext4Windows/WinFsp driver or e2fsprogs fork is required. Validate Windows
-imports, native UAC/USB behavior and detached readback; compilation alone does
-not establish those behaviors. Android harness builds use x86_64; the shipped
-module uses ARM64. Both must contain current native tools and the same WebUI.
+`canoe-manager` is the Android native root worker, not the mounted-root CLI;
+package its native dependencies beside it. Browser ext4 and FAT access belong to
+the hosted app's Rust drivers over managed USB, so no libext2fs helper,
+Ext4Windows/WinFsp driver or e2fsprogs fork is built or shipped.
+`tools/canoe-ext4` is retained for reference only and is absent from release and
+default test paths. Android harness builds use x86_64; the shipped module uses
+ARM64. Both must contain current native tools and the same KSU bundle.
 
 ## What `patch_abl` changes
 
@@ -336,10 +224,10 @@ The `abl` partition must then be downgraded with a compatible vulnerable image.
 
 ## Device-series artifact provenance
 
-The device-series Linux artifacts are maintained outside this repository. The
-current provenance is `FantomTchi7/kaanapali-mainline-linux`, branch
-`OnePlus-15-WIP`, commit `2d1ab8738563b8771e18b5939f00bb3361dd873a2` (2026-04-22).
-The board DTS is
+The device-series Linux artifacts are maintained outside this repository, in
+[FantomTchi7/kaanapali-mainline-linux](https://github.com/FantomTchi7/kaanapali-mainline-linux),
+branch `OnePlus-15-WIP`, commit `2d1ab8738563b8771e18b5939f00bb3361dd873a2`
+(2026-04-22). The board DTS is
 `arch/arm64/boot/dts/qcom/kaanapali-oneplus-infiniti.dts`; build its DTB with
 `make ARCH=arm64 ... arch/arm64/boot/dts/qcom/kaanapali-oneplus-infiniti.dtb`.
 It declares `compatible = "oneplus,infiniti"` and `dr_mode = "peripheral"`;
@@ -347,6 +235,4 @@ there is no `stdout-path`, and `uart7`/`uart18` are disabled. The arm64
 defconfig materializes `EFI=y` and `EFI_STUB=y`; use an uncompressed `Image`.
 H3 BLS paths under `persist` are `\\vmlinuz-canoe`,
 `\\initramfs-canoe`, and
-`\\dtbs\\kaanapali-oneplus-infiniti.dtb`. The marker endpoint is
-`telnet 192.168.42.1:2323`. Full provenance and the preparation script remain
-under `.work/device-series`; they are not repository source files.
+`\\dtbs\\kaanapali-oneplus-infiniti.dtb`.

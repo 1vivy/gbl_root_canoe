@@ -73,7 +73,9 @@ side project.
 ## Not a managed launch
 
 A row that is not one of the current managed boot-root paths is a passthrough:
-the `efisp` recursion guard and the Mode 1/2 policy hooks are not armed around
-it. This includes every BLS row and every removable-media row. That is correct,
-because the payload owns the machine afterwards and those hooks would have
-nothing left to govern.
+the Mode 1/2 policy hooks are not armed around it. This includes every BLS row
+and every removable-media row. That is correct, because the payload owns the
+machine afterwards and those hooks would have nothing left to govern.
+
+There is no runtime efisp guard to disarm either. Recursion prevention belongs
+to the patched managed ABL, whose efisp lookup is disabled before it ships.

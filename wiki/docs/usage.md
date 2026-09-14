@@ -1,7 +1,7 @@
 # Using Canoe
 
-General/Overview reports the connected device, installed state and saved
-operations. Deploy contains preparation, review and apply. Boot entries manages
+Overview reports the connected device, installed state and saved
+operations. Deploy contains preparation, review and apply. Entries manages
 EFI/BLS entries and defaults. Settings contains policy, language and uninstall;
 Diagnostics exposes observations and operation records.
 
@@ -14,6 +14,10 @@ manual slots independently when needed.
 [USB storage](./mass-storage.md) and [CLI commands](./commands.md) describe the
 respective operations. Revert is available for incomplete saved operations;
 successful receipts remain inspectable.
+
+After a failed reboot, return to the BDS menu and use **USB Mass Storage →
+Export logfs**. Copy that removable drive on the host; this replaces the older
+Android/recovery mount-and-pull procedure.
 
 ## Entering Super Fastboot
 

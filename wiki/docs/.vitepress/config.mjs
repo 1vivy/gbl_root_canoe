@@ -19,6 +19,7 @@ export default defineConfig({
             {
               items: [
                 { text: 'Intro', link: '/intro' },
+                { text: 'Changelog', link: '/changelog' },
                 { text: 'Install', link: '/install' },
                 { text: 'Linux USB access', link: '/linux-usb' },
                 { text: 'Reinstall older mods', link: '/reinstall' },
@@ -26,6 +27,9 @@ export default defineConfig({
                 { text: 'Format-data matrix', link: '/format-data' },
                 { text: 'OTA', link: '/ota' },
                 { text: 'Usage', link: '/usage' },
+                { text: 'USB mass storage', link: '/mass-storage' },
+                { text: 'BDS configuration', link: '/canoe-cfg' },
+                { text: 'Chainloading', link: '/chainload' },
                 { text: 'Uninstall', link: '/uninstall' },
                 { text: 'Build', link: '/build' },
                 { text: 'Release', link: '/release' },
@@ -51,10 +55,14 @@ export default defineConfig({
             {
               items: [
                 { text: '总览', link: '/zh/intro' },
+                { text: '更新日志', link: '/zh/changelog' },
                 { text: '安装', link: '/zh/install' },
                 { text: 'Linux USB 访问权限', link: '/zh/linux-usb' },
                 { text: 'OTA 更新', link: '/zh/ota' },
                 { text: '使用说明', link: '/zh/usage' },
+                { text: 'USB 大容量存储', link: '/zh/mass-storage' },
+                { text: 'BDS 配置', link: '/zh/canoe-cfg' },
+                { text: '链式启动', link: '/zh/chainload' },
                 { text: '卸载', link: '/zh/uninstall' },
                 { text: '构建', link: '/zh/build' },
                 { text: '发布', link: '/zh/release' },

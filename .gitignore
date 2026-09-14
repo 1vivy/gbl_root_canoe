@@ -52,6 +52,7 @@ extracted/
 AGENTS.md
 .omo/
 .pi/
+.senpi/
 
 submodules/uefi/edk2/build_modulepkg.log
 # Locally built ext4 helper binary

@@ -1,8 +1,8 @@
 # Install Canoe
 
-Use Canoe Boot Manager on Linux or Windows, or its WebUI in KernelSU. The
-application and the module installer use the same native deployment engine.
-The standalone commands are described in [Command-line tools](./commands.md).
+Use the hosted Canoe Boot Manager in a browser, or its WebUI in KernelSU. Both
+runtimes share one deployment engine. The standalone commands are described in
+[Command-line tools](./commands.md).
 
 ## Storage
 
@@ -13,23 +13,34 @@ signed vulnerable ABL → raw efisp:BDS.efi → persist/efisp.fat → selected l
 ```
 
 `efisp` is a raw partition containing BDS. `efisp.fat` is a fully initialized
-32 MiB FAT16 file inside ext4 persist. Provisioning requires a further 8 MiB of
-free space. Its mounted root contains `canoe.cfg`, per-slot loader triplets,
-EFI tools and any manually installed BLS entries. No GPT change is needed.
+FAT16 file inside ext4 persist, sized from the available space in 8 MiB
+increments between 8 and 256 MiB. Its mounted root contains `canoe.cfg`,
+per-slot loader triplets, EFI tools and any manually installed BLS entries.
+No GPT change is needed.
 
 The old `/persist/efisp` directory is ignored and preserved. There is no import
 or automatic migration. Users of gbl-chainload or Canoe 6.3.5 and earlier
 must [reinstall and recreate entries](./reinstall.md).
 
-## Desktop
+## Hosted app
 
-Launch `canoe-boot-manager.sh` on Linux or `canoe-boot-manager.bat` on Windows.
-Linux needs WebKitGTK 4.1 and its normal runtime dependencies; Windows needs
-WebView2. Keep the packaged application and its helpers together. The GUI
-requests privileges for protected device access and retains the authorized
-helper for the session.
+Open [canoe-boot-manager.1vv.ca](https://canoe-boot-manager.1vv.ca) in a
+Chromium browser. WebUSB requires HTTPS or localhost, and the USB chooser needs
+a click for each initially ungranted USB identity; remembered grants are reused
+automatically when fastboot or CANOE-BDS managed storage returns. Linux needs
+the one-time [scoped USB access rule](./linux-usb.md). Windows needs a fastboot
+driver for its fastboot stage, while CANOE-BDS's managed interface requests the
+built-in WinUSB driver automatically. Close other tools that own the same USB
+interface. The app installs no OS ext4 driver and never mounts managed storage
+as a disk.
 
-1. Start Deploy and answer the installation-history question **before** any
+From Overview, choose **Fresh install / redeploy**. This is the single entry for
+a first Canoe deployment and for replacing any earlier EFISP modification. The
+questions and observations that follow determine the images, cleanup, backup,
+slot work and format-data assessment for this phone; do not try to select a
+different workflow from an old scenario guide.
+
+1. Answer the installation-history question **before** any
    initial ABL/BDS writes. A newly flashed efisp cannot establish whether the
    phone previously used another EFISP mod.
 2. For a first installation, enter Android **Fastbootd**. Select a compatible
@@ -48,7 +59,12 @@ Initial writes and the later deployment share one saved operation. Closing the
 app does not discard its receipts. Incomplete operations offer retry and,
 where recovery inputs are available, reviewed Revert.
 
-Desktop slot selection is manual: A, B, or Both. Each selected slot has its own
+Fresh installation requires an independently saved persist backup before any
+direct managed-USB ext4 edit. The hosted app offers a backup download or a
+confirmation that you already hold one; Android saves through its own native
+flow. Neither path flashes the whole persist partition.
+
+Slot selection here is manual: A, B, or Both. Each selected slot has its own
 preparation. Both-slot deployment writes the inactive slot before the active
 slot. This is for manual reconciliation, not a system-OTA shortcut. An image
 from another slot is not offered as an ordinary source; choose a file when
@@ -69,8 +85,8 @@ For a fully unlocked first deployment that requires formatting phone data, the
 hosted manager is convenient because it remains available off-phone after the
 format. Installing the KSU manager itself never introduces a format requirement.
 
-For an installed system, use [OTA preparation](./ota.md), the General boot-image
-shortcut, or [Uninstall Canoe](./uninstall.md). Installing or updating only the
+For an installed system, use [OTA preparation](./ota.md), the Overview
+boot-image shortcut, or [Uninstall Canoe](./uninstall.md). Installing or updating only the
 manager does not require a data format.
 
 ## Image and data compatibility

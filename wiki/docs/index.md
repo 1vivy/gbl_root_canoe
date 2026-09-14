@@ -20,16 +20,16 @@ hero:
 
 features:
   - title: One Canoe Boot Manager
-    details: One Svelte application, one JSON protocol, and one writer across Linux, Windows, and KernelSU Android
+    details: One Svelte application and one deployment engine, shared by the hosted browser runtime and the KernelSU Android WebUI
     link: /intro
-  - title: Desktop (Linux and Windows)
-    details: Start the app in Overview, then use Deploy's Provision, Prepare, and Action stages alongside Entries, Settings, and Diagnostics
+  - title: Hosted browser app
+    details: Start in Overview, then use Deploy's Provision, Prepare, and Review stages alongside Entries, Settings, and Diagnostics
     link: /usage
   - title: KernelSU Android
     details: The same app reads the local boot root directly; Overview reports its state and Deploy offers the appropriate lane
     link: /usage
   - title: CLI
-    details: canoe is the operator CLI and canoe-bootmgr is the JSON-protocol writer; both expose the same boot-root operations
+    details: canoe-bootmgr writes the mounted boot root, canoe-image prepares supplied images, and canoe-provision manages the container
     link: /usage
   - title: Super Fastboot
     details: Open the boot menu during startup with VOL UP, then select Enter Super Fastboot for flashing, reboot, and USB export
@@ -44,7 +44,7 @@ features:
     details: Use canoe.cfg for policy and third-party UEFI rows; BDS remains a selector, not a payload loader
     link: /canoe-cfg
   - title: Build
-    details: Build the Linux, Windows, Android, and KernelSU packages from source
+    details: Build CANOE-BDS, the standalone EFI tools, and the KernelSU module from source
     link: /build
   - title: Contribute
     details: Fork, modify, submit PR — GPL licensed

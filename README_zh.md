@@ -28,7 +28,7 @@ CANOE-BDS 为受支持的高通设备提供受管理的启动环境。Mode 1/2 �
 EFI/BLS 启动项。普通选择仅影响本次启动；高级菜单分别保存默认项、受管理启动项
 的模式或启动策略。
 
-7.0.0-b7 的发布界面是在线 Canoe Boot Manager 与激活后的 KernelSU WebUI。
+7.0.1 的发布界面是在线 Canoe Boot Manager 与激活后的 KernelSU WebUI。
 [在线应用](https://canoe-boot-manager.1vv.ca) 使用 WASM 与受管理 USB；模块内置
 WebUI 和 Android 原生工作进程。安装模块只安装管理器。桌面可执行程序和文件系统
 辅助进程已退役；`7.0.0-b4-final` 标签保留此前的实现。
@@ -40,9 +40,10 @@ WebUI 和 Android 原生工作进程。安装模块只安装管理器。桌面�
 - [USB 大容量存储](wiki/docs/mass-storage.md)与[卸载](wiki/docs/zh/uninstall.md)
 - [发布流程](wiki/docs/zh/release.md)
 
-旧的 ext4 `efisp/` 目录会被忽略，不会导入。请重新创建启动项；应用可在审阅后
-清理旧修改的文件。签名密钥相同不能证明 OEM 身份，也不能证明镜像适用于另一
-槽位。每个 beta 的发布说明会注明该构建实际完成的验证。
+旧的 ext4 `efisp/` 目录会被忽略，不会导入。部署会自行发布受管理的 Android 启动项，
+只有自行添加的 EFI/BLS 行需要手动重建。应用可在审阅后清理旧修改的文件；建议在制备
+容器前完成清理，因为容器大小取自 persist 的可用空间。签名密钥相同不能证明 OEM
+身份，也不能证明镜像适用于另一槽位。发布说明会注明该构建实际完成的验证。
 
 项目许可证为 GPL-2.0-or-later。历史资料见 [ARCHIVE.md](ARCHIVE.md)；
-[b5 重构审计](docs/b5-reconstruction.md)记录了本次 beta 之前的架构调整。
+[b5 重构审计](docs/b5-reconstruction.md)记录了本次发布所完成的架构调整。

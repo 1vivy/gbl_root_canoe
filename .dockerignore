@@ -1,0 +1,7 @@
+.work/
+.cache/
+wiki/node_modules/
+wiki/docs/.vitepress/dist/
+**/target/
+submodules/uefi/Build/
+submodules/uefi/Conf/

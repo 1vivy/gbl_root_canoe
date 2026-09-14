@@ -24,7 +24,7 @@ components, doubled separators, or a trailing separator. `/` is folded to `\`.
 
 ## Global keys
 
-In 7.0.0-b7 the boot policy is explicit. Global keys must appear before the first `entry`:
+In 7.0.1 the boot policy is explicit. Global keys must appear before the first `entry`:
 
 | Key | Values | Default | Meaning |
 | --- | --- | --- | --- |
@@ -141,7 +141,7 @@ Payload-specific memory addresses/options remain the payload's responsibility.
 
 ## Managed A/B triplets
 
-The 7.0.0-b7 writer manages a loader and its two matching sidecars for each installed slot.
+The 7.0.1 writer manages a loader and its two matching sidecars for each installed slot.
 
 Each installed slot has `boot_a.efi` or `boot_b.efi`, with a matching 120-byte
 `.gm2p` and 256-byte `.tzmap`. Do not mix sidecars between generations. The
@@ -164,10 +164,16 @@ sidecars interpreted by BDS. Per-image sidecars on hand-added rows are not
 honoured. A row with one of the managed paths on removable media is still a
 passthrough row; managed policy is for the device boot root only.
 
-Mode 0 is honest-unlocked, with the universal efisp recursion guard. Mode 1 projects the locked DeviceInfo view
-and enables the normal managed hooks. Mode 2 additionally uses the matching
-profile for that managed loader. A menu mode is a one-shot override unless explicitly saved using Save as default. A per-entry mode applies to that
+Mode 0 is honest-unlocked and installs no managed projection; it restores any
+wrapper a previous managed attempt left armed. Mode 1 projects the locked
+DeviceInfo view and enables the normal managed hooks. Mode 2 additionally uses
+the matching profile for that managed loader. A menu mode is a one-shot override unless explicitly saved using Save as default. A per-entry mode applies to that
 entry, with global `mode` as the fallback.
+
+Recursion prevention is not a runtime hook. A prepared managed ABL image has its
+efisp lookup disabled by the patcher, so BDS installs no efisp Block I/O hiding
+wrapper in any mode. An unmodified on-slot ABL is correspondingly not safe to
+chainload.
 
 A successful Mode 2 derivation means only that `vbmeta` parsed and carries a
 signature and public-key blob. It does not prove that the key is the OEM's; no
@@ -178,11 +184,25 @@ explicit allowance for that supplied firmware.
 
 ## DeviceInfo repair
 
-A Mode 1 or Mode 2 launch may repair `DeviceInfo` when the observed state does
-not satisfy the requested mode. `devinfo-repair asneeded` permits that repair;
-`devinfo-repair never` refuses it and continues honestly in Mode 0. Mode 0
-neither reads nor writes `DeviceInfo`. The boot log records the observation and
-the chosen action before the decision.
+`devinfo-repair` gates one step inside a managed Mode 1 or Mode 2 preparation.
+That step reads `DeviceInfo`, records what it observed, and then takes one of
+three paths:
+
+- the observed state already satisfies the requested mode: nothing is written,
+  whichever policy is set;
+- it does not satisfy it and `devinfo-repair asneeded` applies: the lock state
+  is repaired; or
+- it does not satisfy it and `devinfo-repair never` applies: the repair is
+  refused.
+
+Only that refusal demotes rather than aborts. The launch continues as
+honest-unlocked and the demotion is recorded, because declining a write is not
+declining a boot. Every other preflight failure aborts the launch instead.
+
+Mode 0 is not part of this mechanism, and `devinfo-repair` has no effect on a
+Mode 0 entry. Mode 0 installs no managed projection and mutates no hooks, so it
+returns before the repair step is reached and neither reads nor writes
+`DeviceInfo`. The boot log records the observation and the chosen action.
 
 ## Example
 

@@ -2,15 +2,15 @@
 
 ## 两个仓库、一个发布版本
 
-Canoe 发布版本由两个仓库构建。固件仓库包含 BDS、启动管理器、worker、主机
-命令行客户端和打包配方；独立的 `canoe-boot-manager` 仓库包含 Svelte 5 +
-Vite 应用。先构建应用仓库；它生成的一份静态 `dist/` 会被使用两次：
+Canoe 发布版本由两个仓库构建。本固件仓库包含 BDS、独立 EFI 工具、已挂载
+根目录命令和打包配方；独立的 `canoe-boot-manager` 仓库包含 Svelte 5 + Vite
+应用及其原生 Android worker。先构建应用仓库；它生成两份独立的 bundle：
 
-- Tauri 桌面 shell 将同一应用打包为 Linux 或 Windows 桌面程序；
-- KernelSU 模块提供同一文件作为 Android WebUI。
+- `dist/hosted`，通过 HTTPS 提供在线版 Canoe Boot Manager；
+- `dist/ksu`，自包含 bundle，打包进 KernelSU 模块。
 
-应用只说 JSON wire protocol。`canoe-bootmgr` 始终是启动根目录的唯一写入器，
-Tauri shell 会将它作为 sidecar 启动。
+不再有 Tauri 桌面 shell，也没有桌面可执行 sidecar；`7.0.0-b4-final` 标签保留了
+此前的实现。已挂载根目录命令和镜像生产者仍是应用工作流之外的共享库。
 
 ### 构建应用仓库
 
@@ -18,116 +18,36 @@ Tauri shell 会将它作为 sidecar 启动。
 
 ```bash
 bun install --frozen-lockfile
-bun run typecheck
 bun run build
+cargo build --locked --manifest-path native/canoe-manager/Cargo.toml
+bun run check
 bun test
 ```
 
-以上命令都是应用仓库 `package.json` 中实际存在的脚本。`build` 运行 Vite
-和资源检查；`test` 也会在 Bun 测试前运行资源检查。成功构建会生成
-`dist/index.html` 和打包后的资源。相对资源路径是有意设计的：同一份
-`dist/` 必须既能从 Tauri WebView 加载，也能从 KernelSU 的 `file://` WebUI
-加载。
+以上命令都是应用仓库 `package.json` 中实际存在的脚本；其中没有 `typecheck`。
+`check` 即 `svelte-check --fail-on-warnings`，警告同样会使它失败。构建需要带
+`wasm32-unknown-unknown` target 的 Rust 和 `wasm-bindgen-cli` 0.2.128；该可执行
+文件不在 `PATH` 中时需设置 `WASM_BINDGEN`。成功构建会生成 `dist/hosted` 和
+`dist/ksu`。在线输出必须保留 `dist/hosted/_headers` 中的 COOP/COEP 头，并非
+所有服务器都会自动应用它。KSU bundle 使用本地 CSS 和原生 worker，不含在线
+脚本、动态模块或 SharedArrayBuffer。
 
-在编译 Tauri 之前，必须将所有与目标匹配的 sidecar 和 helper 放入应用仓库
-的 `src-tauri/binaries/` 目录。`src-tauri/build.rs` 会为每个暂存文件计算
-SHA-256 并嵌入构建结果；缺少文件、文件不是普通文件、不可执行或目标不匹配
-都会使 Tauri 构建失败。Linux 所需名称为：
+### 为模块暂存 KSU bundle
 
-```text
-canoe-manager-x86_64-unknown-linux-gnu
-canoe-ext4-x86_64-unknown-linux-gnu
-extractfv-x86_64-unknown-linux-gnu
-patch_abl-x86_64-unknown-linux-gnu
-mode2_profile-x86_64-unknown-linux-gnu
-abl_tzmap-x86_64-unknown-linux-gnu
-```
-
-构建 Linux 工具包 helper 后，使用目标 triple 名称暂存：
+模块打包通过 `CANOE_KSU_DIST` 直接消费 `dist/ksu`，其默认值为兄弟
+`canoe-boot-manager` checkout：
 
 ```bash
-APP=/absolute/path/to/canoe-boot-manager
-for name in canoe-manager canoe-bootmgr canoe-image canoe-provision canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
-  cp "targets/toolkit_linux/build/toolkit/bin/$name" \
-    "$APP/src-tauri/binaries/${name}-x86_64-unknown-linux-gnu"
-done
+CANOE_KSU_DIST=/absolute/path/to/canoe-boot-manager/dist/ksu make target_magisk_module
 ```
 
-Linux 的 `fastboot` 不会暂存到 `src-tauri/binaries`：运行时从继承的
-`PATH` 中选择可执行的 `fastboot`（或 `fastboot.exe`），然后为本次会话打开并
-封存这个外部输入。
+`scripts/stage_ksu.py` 会拒绝任何不是版本匹配 KSU 构建的输入：目录必须包含
+`index.html`，其 `manifest.json` 必须声明 `product=canoe-boot-manager`、当前的
+`CANOE_VERSION` 和 `runtime=ksu`，且目录树不得包含符号链接。在线 bundle 或
+早期版本的 WebUI 归档会被拒绝而不是被打包。
 
-Windows GNU 所需名称为：
-
-```text
-canoe-manager-x86_64-pc-windows-gnu.exe
-canoe-ext4-x86_64-pc-windows-gnu.exe
-extractfv-x86_64-pc-windows-gnu.exe
-patch_abl-x86_64-pc-windows-gnu.exe
-mode2_profile-x86_64-pc-windows-gnu.exe
-abl_tzmap-x86_64-pc-windows-gnu.exe
-fastboot-x86_64-pc-windows-gnu.exe
-AdbWinApi-x86_64-pc-windows-gnu.dll
-AdbWinUsbApi-x86_64-pc-windows-gnu.dll
-```
-
-从工具包的私有运行时相邻目录暂存 Windows GNU 输入：
-
-```bash
-APP=/absolute/path/to/canoe-boot-manager
-for name in canoe-manager canoe-bootmgr canoe-image canoe-provision canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
-  cp "targets/toolkit_windows/build/toolkit/bin/$name.exe" \
-    "$APP/src-tauri/binaries/${name}-x86_64-pc-windows-gnu.exe"
-done
-cp targets/toolkit_windows/build/toolkit/Platform-Tools/fastboot.exe \
-  "$APP/src-tauri/binaries/fastboot-x86_64-pc-windows-gnu.exe"
-cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinApi.dll \
-  "$APP/src-tauri/binaries/AdbWinApi-x86_64-pc-windows-gnu.dll"
-cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinUsbApi.dll \
-  "$APP/src-tauri/binaries/AdbWinUsbApi-x86_64-pc-windows-gnu.dll"
-```
-
-Windows MSVC app CI 的编译 fixture 使用同样的九个 stem，只将
-`x86_64-pc-windows-gnu` 换成 `x86_64-pc-windows-msvc`（并保留 `.exe`/`.dll`
-扩展名）。这些 fixture 仅用于编译，不是发布构件。发布时不要使用占位
-sidecar：Tauri 会在编译前验证每个必需输入。
-
-九个 MSVC fixture 名称如下：
-
-```text
-canoe-manager-x86_64-pc-windows-msvc.exe
-canoe-ext4-x86_64-pc-windows-msvc.exe
-extractfv-x86_64-pc-windows-msvc.exe
-patch_abl-x86_64-pc-windows-msvc.exe
-mode2_profile-x86_64-pc-windows-msvc.exe
-abl_tzmap-x86_64-pc-windows-msvc.exe
-fastboot-x86_64-pc-windows-msvc.exe
-AdbWinApi-x86_64-pc-windows-msvc.dll
-AdbWinUsbApi-x86_64-pc-windows-msvc.dll
-```
-
-在应用仓库中构建桌面程序：
-
-```bash
-# Linux
-bunx tauri build --no-bundle --ci
-
-# Windows GNU 交叉构建
-bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci
-```
-
-Windows GNU 命令已在发布构建主机上验证，会生成 PE32+ 可执行文件。Linux
-交叉构建不能证明真实 Windows 上的 WebView2 运行时行为；发布前必须在
-Windows 上测试生成的应用。MSVC 路线需要 `cargo-xwin` 和真实的 MSVC 兼容
-环境。
-
-应用仓库在 tag 上发布确定性的
-`canoe-boot-manager-<version>.tar.gz`，其中包含 `dist/`，另有 Linux 和
-Windows 桌面二进制。固件仓库通过现有的 `fetch-verified` 目标，按 URL 和
-SHA-256 消费这些构件。在选定已发布的应用构件之前，仓库中签入的
-`targets/magisk_module/webui-cache/canoe-boot-manager-<CANOE_WEBUI_VERSION>.tar.gz`
-是最后已知良好的备用版本。`make version-check` 会验证备用版本字节与
-`CANOE_WEBUI_SHA256` 一致；不能静默替换为无关的 bundle。
+`imports.toml` 将该输入记录为 `external` 行 `ksu-app`。`make version-check`
+将其报告为 `EXTERNAL`，既不哈希也不下载，因此暂存正确的 bundle 由操作员负责。
 
 ## 构建前置条件
 
@@ -136,14 +56,12 @@ SHA-256 消费这些构件。在选定已发布的应用构件之前，仓库中
 - Docker，用于规范的 EDK2/BDS 构建；
 - Android NDK，并设置 `NDK_PATH`（或 `ANDROID_NDK_LATEST_HOME`），用于
   Android 工具包和 KernelSU 模块；
-- `mingw-w64`，包括 `x86_64-w64-mingw32-gcc`，用于 Windows helper 和
-  Windows GNU 构建；
 - 由 rustup 管理的 Rust 工具链，并包含
   `aarch64-linux-android` 标准库。没有该 rustup target 的发行版 `cargo`
-  shim 会因 `can't find crate for std` 失败。Windows GNU helper 还需要
-  Windows GNU target；
-- e2fsprogs 源码树和 zlib 头文件/库，用于 `canoe-ext4.exe`；
-- Bun，用于应用仓库。
+  shim 会因 `can't find crate for std` 失败；
+- `mingw-w64`，包括 `x86_64-w64-mingw32-gcc`，仅用于可选的
+  `tools_vbmetafixer_windows` 目标；
+- Bun 以及 Rust 的 `wasm32-unknown-unknown` target，用于应用仓库。
 
 使用 rustup 工具链的 `rustup target list --installed` 检查 Rust target。
 当前 Rust crate 要求 Rust 1.85 或更新版本。Android 构建具体使用 NDK 的
@@ -151,45 +69,23 @@ SHA-256 消费这些构件。在选定已发布的应用构件之前，仓库中
 
 ## 构建发布包
 
-先完成应用 `dist/` 和所需桌面二进制，再从固件仓库根目录使用以下根
-Makefile 目标构建四个支持的发布包：
+先完成应用的 `dist/ksu`，再从固件仓库根目录使用以下根 Makefile 目标构建两个
+支持的发布包：
 
 ```bash
-make target_toolkit_linux
-make target_toolkit_windows
 make target_toolkit_android
 make target_magisk_module
 ```
 
-Android 工具包和模块构建要求 `NDK_PATH` 指向 Android NDK。归档位于各
-`targets/toolkit_*/build/` 目录，模块归档位于 `targets/magisk_module/build/`。
+两者都要求 `NDK_PATH` 指向 Android NDK。归档分别位于
+`targets/toolkit_android/build/` 和 `targets/magisk_module/build/`。
 
-Linux 和 Windows 打包配方接受绝对路径的应用二进制覆盖参数：
+`target_toolkit_linux` 与 `target_toolkit_windows` 仍然声明，但会拒绝执行：
+它们打印 `Desktop packages retired in b5; use the hosted CANOE BOOT MANAGER.`
+并以 2 退出。不要恢复它们。
 
-```bash
-CANOE_APP_LINUX_BIN=/absolute/path/to/canoe-boot-manager/src-tauri/target/release/canoe-boot-manager \
-  make target_toolkit_linux
-CANOE_APP_WINDOWS_BIN=/absolute/path/to/canoe-boot-manager/src-tauri/target/x86_64-pc-windows-gnu/release/canoe-boot-manager.exe \
-  make target_toolkit_windows
-```
-
-不提供覆盖参数时，每个配方会查找 `canoe-boot-manager` 的兄弟 checkout。
-链接的固件 git worktree 不在该默认路径假设的仓库根目录中，因此 worktree
-构建必须传入明确的绝对 `CANOE_APP_LINUX_BIN` 或
-`CANOE_APP_WINDOWS_BIN` 路径。
-
-应用二进制会被复制到 `bin/canoe-boot-manager`（Windows 为 `.exe`），并与
-`bin/canoe-bootmgr` 放在一起。工具包根目录的启动器依赖这一相邻布局：
-Linux 使用 `canoe-boot-manager.sh`，Windows 使用 `canoe-boot-manager.bat`。
-
-GNU target 的 Tauri 构建还会在 Windows 应用旁生成
-`WebView2Loader.dll`。Windows 打包配方要求该文件存在，并将其复制到
-`bin/`。覆盖 `CANOE_APP_WINDOWS_BIN` 时，配方默认从同一目录取 loader；
-也可显式设置 `CANOE_WEBVIEW2_LOADER_WINDOWS`。
-
-独立的 WebUI 归档与桌面二进制分别固定版本。模块打包配方调用根
-`fetch-verified` 目标，在下载前后验证 SHA-256，并直接解开应用的 `dist/`
-而不重写它。这样模块 UI 就与应用构建保持字节一致。
+模块配方通过 `scripts/stage_ksu.py` 将 `CANOE_KSU_DIST` 暂存到模块 webroot，
+使打包的 UI 与应用的 KSU 构建保持字节一致，并拒绝产品、版本或运行时不匹配。
 
 ## 导入项
 
@@ -262,17 +158,17 @@ BDS 字节。
 修改 UEFI 源码后，针对打包命令强制执行一次干净的 BDS 重建：
 
 ```bash
-UEFI_REBUILD=1 make target_toolkit_linux
+UEFI_REBUILD=1 make target_magisk_module
 ```
 
-如果最终包是 Windows、Android 或模块，请使用对应的包目标。不要为每个包
-分别强制重建。
+如果最终包是 Android 工具包，请使用对应的包目标。不要为每个包分别强制重建。
 
 ## 命令组件
 
 当前命令为 canoe-bootmgr（已挂载目录）、canoe-image（镜像准备）和 canoe-provision（容器）。
-应用侧 canoe-manager 负责部署和 OS 适配。旧 canoe 与 Android build.sh 已移除。
-Windows 常规 FAT 操作用原生文件系统，离线 ext4 操作用未修改的 libext2fs，无需 Ext4Windows/WinFsp。
+canoe-manager 是 KernelSU 应用的 Android 原生 root worker。旧 canoe 与 Android build.sh 已移除。
+浏览器端 ext4 与 FAT 访问由在线应用通过受管 USB 上的 Rust 驱动完成，不再构建或发布
+libext2fs helper，也无需 Ext4Windows/WinFsp；`tools/canoe-ext4` 仅作参考保留。
 具体构建与打包边界参见[构建指南](../build.md)和[命令指南](../commands.md)。
 
 ## `patch_abl` 修改内容
@@ -289,8 +185,9 @@ Windows 常规 FAT 操作用原生文件系统，离线 ext4 操作用未修改�
 
 ## 设备系列构件来源
 
-设备系列 Linux 构件在本仓库之外维护。当前来源为
-`FantomTchi7/kaanapali-mainline-linux` 的 `OnePlus-15-WIP` 分支，提交
+设备系列 Linux 构件在本仓库之外维护，来源为
+[FantomTchi7/kaanapali-mainline-linux](https://github.com/FantomTchi7/kaanapali-mainline-linux)
+的 `OnePlus-15-WIP` 分支，提交
 `2d1ab8738563b8771e18b5939f00bb3361dd873a2`（2026-04-22）。板级 DTS 是
 `arch/arm64/boot/dts/qcom/kaanapali-oneplus-infiniti.dts`，使用
 `make ARCH=arm64 ... arch/arm64/boot/dts/qcom/kaanapali-oneplus-infiniti.dtb`
@@ -298,6 +195,4 @@ Windows 常规 FAT 操作用原生文件系统，离线 ext4 操作用未修改�
 没有 `stdout-path`，且禁用 `uart7`/`uart18`。arm64 defconfig 具体启用
 `EFI=y`/`EFI_STUB=y`，使用未压缩 `Image`。`persist` 下 H3 BLS 路径为
 `\\vmlinuz-canoe`、`\\initramfs-canoe` 和
-`\\dtbs\\kaanapali-oneplus-infiniti.dtb`；标记端点为
-`telnet 192.168.42.1:2323`。完整来源与准备脚本位于 `.work/device-series`，
-不属于仓库源码。
+`\\dtbs\\kaanapali-oneplus-infiniti.dtb`。
