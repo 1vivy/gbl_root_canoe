@@ -42,13 +42,14 @@ do not write raw FAT sectors while the filesystem is mounted. The app releases
 mass storage before fastboot operations and reacquires the right export when
 later cleanup requires it.
 
-## Pull logs after a failed reboot
+## Pull logs when troubleshooting
 
-Return to the CANOE-BDS boot menu, open **USB Mass Storage**, and choose
-**Export logfs**. Connect the phone to a host and copy the files from the
-removable drive. Safely eject or unmount it before leaving the export.
+If you encounter an issue and need logs, return to the CANOE-BDS boot menu,
+open **USB Mass Storage**, and choose **Export logfs**. Connect the phone to a
+host and copy the files from the removable drive. Safely eject or unmount it
+before leaving the export.
 
-This is the preferred bug-report path after a failed boot. Send the logfs files
-with the device model, exact firmware/region, selected Canoe mode and a short
-description of what appeared on screen. No Android, recovery mount command or
-ADB pull is required.
+This is the preferred bug-report path when troubleshooting. Send the logfs
+files with the device model, exact firmware/region, selected Canoe mode and a
+short description of the issue and what appeared on screen. No Android,
+recovery mount command or ADB pull is required.

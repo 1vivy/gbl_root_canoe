@@ -6,6 +6,6 @@ BDS 可将 persist/efisp.fat 作为普通可移动 FAT 启动根目录导出。W
 
 不要在 Android 使用 persist 时从主机同时写入它，也不要对已挂载 FAT 做原始扇区写入。
 
-启动失败后，回到 CANOE-BDS 菜单并选择 **USB Mass Storage → Export logfs**。在主机上复制可移动磁盘里的文件，再安全弹出；提交问题时附上这些日志、设备型号、准确固件/地区、所选模式与屏幕现象。无需在 Android 或 Recovery 中手动挂载，也无需 ADB pull。
+遇到问题且需要日志时，回到 CANOE-BDS 菜单并选择 **USB Mass Storage → Export logfs**。在主机上复制可移动磁盘里的文件，再安全弹出；提交问题时附上这些日志、设备型号、准确固件/地区、所选模式、问题说明与屏幕现象。无需在 Android 或 Recovery 中手动挂载，也无需 ADB pull。
 
 参见[完整说明](../mass-storage.md)、[命令](../commands.md)、[旧版重装](../reinstall.md)与[数据格式化矩阵](../format-data.md)。

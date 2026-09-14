@@ -15,9 +15,9 @@ manual slots independently when needed.
 respective operations. Revert is available for incomplete saved operations;
 successful receipts remain inspectable.
 
-After a failed reboot, return to the BDS menu and use **USB Mass Storage →
-Export logfs**. Copy that removable drive on the host; this replaces the older
-Android/recovery mount-and-pull procedure.
+If you encounter an issue and need logs, return to the BDS menu and use **USB
+Mass Storage → Export logfs**. Copy that removable drive on the host; this
+replaces the older Android/recovery mount-and-pull procedure.
 
 ## Entering Super Fastboot
 
