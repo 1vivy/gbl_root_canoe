@@ -23,7 +23,7 @@ replaces the older Android/recovery mount-and-pull procedure.
 
 Super Fastboot is the BDS's own fastboot session. With an existing boot setup,
 press **VOL UP during boot** to open the CANOE-BDS boot menu, then select
-**Enter Super Fastboot**. **VOL DOWN** also opens the boot menu. An empty
+**Enter Super Fastboot**. An empty
 installation uses the menu countdown described below.
 
 From Super Fastboot, RAM-load the raw UEFI payload directly:
@@ -62,15 +62,16 @@ An unavailable filesystem is reported separately and enters Super Fastboot;
 it is not classified as a new installation.
 
 A populated root uses the configured key window (default **1200 ms**): **VOL UP**
-or **VOL DOWN** opens the boot menu. With no key, **Silent**
+opens the boot menu. With no key, **Silent**
 launches a resolvable saved default. **Menu** opens the menu with a default
 three-second countdown when its saved default resolves to a boot entry. Beneath
 the **Boot menu** title, a separate line shows **Highlighted entry will boot in
-Xs.** Opening the menu with either volume key or interacting with it cancels the
+Xs.** Opening the menu with Volume Up or interacting with it cancels the
 countdown and changes that line to **Timeout is disabled.** Returning from a submenu does
 not restart it. Missing
 defaults open the menu without a countdown.
-Zero key-window or menu-timeout disables that respective wait.
+The startup key window is bounded to **500–5000 ms**; legacy values outside that
+range are clamped when read. `menu-timeout 0` disables the menu countdown.
 An explicitly saved timeout keeps its configured value.
 
 The menu uses a centered text block with no visible border, retaining equal inner

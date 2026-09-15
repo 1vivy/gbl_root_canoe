@@ -1,7 +1,8 @@
 # Start here
 
 GBL Root Canoe supports only 8gen5 (SM8845) and 8elite5 (SM8850). If you are a
-beginner, do not use this project by yourself; use a qualified flashing service.
+beginner or are not prepared to recover a phone that will not boot, consider
+not installing an EFISP mod.
 
 This project requires an already unlocked bootloader or a way to obtain
 temporary root access. Read the device-specific safety notes in the install and
@@ -22,14 +23,13 @@ The app has these five named routes:
 
 - **Overview** is the safe entry point. It reports connection, observed facts,
   boot-root state, and the next available operation without guessing.
-- **Deploy** owns the stages **Provision → Prepare → Review** and hosts the
-  guided uninstall. Its Prepare stage contains the optional Mode 1 graft task;
+- **Deploy** owns the stages **Provision → Prepare → Review**. Its Prepare stage contains the optional Mode 1 graft task;
   it is not a separate route.
 - **Entries** lists managed entries and discovered BLS evidence. Managed rows
   expose their read-only mode badge, default, remove, and Deploy preparation
   actions; discovered rows have no mutation controls.
-- **Settings** edits the existing `canoe.cfg` policy keys (`menu-mode`,
-  `key-window`, `menu-timeout`, and `show-booting`).
+- **Settings** contains language, uninstall, and the existing `canoe.cfg`
+  policy keys (`menu-mode`, `key-window`, `menu-timeout`, and `show-booting`).
 - **Diagnostics** exposes protocol activity, evidence, paths, digests, and
   export recovery details that are not needed for ordinary operations.
 
@@ -60,7 +60,6 @@ This project must **not** be used for cheating. Hiding bootloader state is
 useless: the TEE still exposes the real device identity and can cause device
 blacklisting. Device TEE keys cannot be replaced like TrickyStore.
 
-Root itself does not reduce device security, but unverified modules and modified
-ROMs absolutely can. Netflix playback can work, but video processing remains in
-the TEE and cannot be dumped. Gaming is not a ban-avoidance mechanism: do not
-cheat, and remember that repeated reports can still blacklist a device.
+Root alone is not the whole security story: untrusted modules and modified ROMs
+can lower security. Bootloader-state presentation does not guarantee that an app
+or service will accept the device, and it is not a ban-avoidance mechanism.

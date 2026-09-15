@@ -1,5 +1,9 @@
 # Repository Contributors
 
+These credits describe the project's history, including upstream contributions.
+Historical device tests and implementation details below are not the current
+fork's support matrix or installation instructions.
+
 ## superturtlee@github
 Primary code author, embedded disassembly engine and auto-patcher
 
