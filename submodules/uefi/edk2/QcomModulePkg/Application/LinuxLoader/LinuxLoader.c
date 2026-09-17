@@ -257,15 +257,16 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       EnterFastboot = TRUE;
     } else {
       if (Decision == SfbBootDecisionDefault) {
-        /*
-         * SfbLaunchDefaultEntry resolves the target again after discovery.
-         * A missing entry, missing image, or USB-only BLS target returns FALSE
-         * and falls through to the menu without trying another row.
-         *
-         * The log is flushed inside SfbLaunchEntry, which every launch path
-         * reaches; flushing here as well would only cover this one.
-         */
-        (VOID)SfbLaunchDefaultEntry (Mode);
+        SFB_DEFAULT_RESULT DefaultResult;
+
+        /* Resolve again after discovery. Missing file/BLS targets fall through
+         * to the menu; a configured resident action bypasses image launching
+         * and enters the same fastboot loop as the permanent menu row. */
+        DefaultResult = SfbLaunchDefaultEntry (Mode);
+        if (DefaultResult == SfbDefaultFastboot) {
+          EnterFastboot = TRUE;
+          goto enter_fastboot;
+        }
       }
 
       SfbShowEnteringMenu ();
@@ -278,6 +279,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       EnterFastboot = TRUE;
     }
 
+enter_fastboot:
     if (EnterFastboot) {
       SfbShowFastbootMode ();
       DEBUG ((EFI_D_INFO, "SFB: bootflow fastboot=1\n"));

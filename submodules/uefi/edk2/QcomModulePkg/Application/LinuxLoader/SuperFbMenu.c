@@ -603,6 +603,13 @@ SfbIsBootMenuLaunch (IN CONST SFB_BOOT_ENTRY *Entry)
          Entry->Kind == SfbEntryBlsEfi;
 }
 
+STATIC BOOLEAN
+SfbIsConfiguredFastboot (IN CONST SFB_BOOT_ENTRY *Entry)
+{
+  return (BOOLEAN)(Entry->Kind == SfbEntryFastboot &&
+                   Entry->DefaultTarget[0] != '\0');
+}
+
 /* Selection details stay two bounded lines, including long file paths. */
 STATIC VOID SfbDrawSelectionLine (IN CONST CHAR16 *Text) { SfbDrawInfoLine (Text); }
 
@@ -794,7 +801,8 @@ SfbRefreshMainMenu (IN VOID *Context)
      State->Template->Cursor == State->Menu.DefaultIndex &&
      ((State->FirstRun && State->Menu.Entry[State->Template->Cursor].Kind == SfbEntrySetupFastboot) ||
       (State->Menu.MenuMode == SfbConfigMenuMenu && State->Menu.DefaultFromConfig &&
-       SfbIsBootMenuLaunch (&State->Menu.Entry[State->Template->Cursor]))) &&
+       (SfbIsBootMenuLaunch (&State->Menu.Entry[State->Template->Cursor]) ||
+        SfbIsConfiguredFastboot (&State->Menu.Entry[State->Template->Cursor])))) &&
      State->Menu.MenuTimeoutSeconds != 0)
     ? State->Menu.MenuTimeoutSeconds * 1000 : 0;
   State->AllowCountdown = FALSE;
@@ -840,7 +848,10 @@ SfbHandleMainMenuRow (IN VOID *Context,
     }
     return SfbMenuActionRebuild;
   }
-  if (Key == SfbKeyTimeout && Entry->Kind != SfbEntrySetupFastboot) { return SfbMenuActionContinue; }
+  if (Key == SfbKeyTimeout && Entry->Kind != SfbEntrySetupFastboot &&
+      !SfbIsConfiguredFastboot (Entry)) {
+    return SfbMenuActionContinue;
+  }
 
   switch (Entry->Kind) {
   case SfbEntryFastboot:

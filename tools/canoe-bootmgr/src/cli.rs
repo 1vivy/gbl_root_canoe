@@ -4,7 +4,9 @@ use clap::{Args, Parser, Subcommand};
 use serde_json::{Value, json};
 
 use crate::backend::{BootRoot, LocalDir};
-use crate::config::{ConfigDocument, DeviceInfoRepair, EntryRequest, MenuMode, PolicyUpdate, Role};
+use crate::config::{
+    ConfigDocument, DeviceInfoRepair, EntryAction, EntryRequest, MenuMode, PolicyUpdate, Role,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "canoe-bootmgr", version = crate::version::VERSION, about = "Manage a mounted CANOE-BDS boot root")]
@@ -81,8 +83,10 @@ pub struct EntrySet {
     pub id: String,
     #[arg(long)]
     pub title: String,
-    #[arg(long)]
-    pub image: String,
+    #[arg(long, conflicts_with = "action", required_unless_present = "action")]
+    pub image: Option<String>,
+    #[arg(long, value_parser = EntryAction::parse, conflicts_with = "image", required_unless_present = "image")]
+    pub action: Option<EntryAction>,
     #[arg(long)]
     pub options: Option<String>,
     #[arg(long, value_parser = Role::parse, default_value = "other")]
@@ -252,6 +256,7 @@ pub fn execute(cli: &Cli) -> Result<Output, Box<dyn std::error::Error>> {
                 id: args.id.clone(),
                 title: args.title.clone(),
                 image: args.image.clone(),
+                action: args.action,
                 options: args.options.clone(),
                 role: args.role,
                 mode: args.mode,

@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
 use crate::config::{
-    ConfigDocument, ConfigEntry, ConfigError, DEFAULT_KEY_WINDOW_MS, DEFAULT_MENU_TIMEOUT_S, DeviceInfoRepair, MAX_BYTES,
-    MAX_GENERATION, MIN_KEY_WINDOW_MS, MAX_KEY_WINDOW_MS, MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, MenuMode, RawLine,
-    Role, canonical_image, printable, valid_id, validate_policy_range, validate_title,
+    ConfigDocument, ConfigEntry, ConfigError, DEFAULT_KEY_WINDOW_MS, DEFAULT_MENU_TIMEOUT_S,
+    DeviceInfoRepair, EntryAction, MAX_BYTES, MAX_GENERATION, MAX_KEY_WINDOW_MS,
+    MAX_MENU_TIMEOUT_S, MAX_OPTIONS_CHARS, MIN_KEY_WINDOW_MS, MenuMode, RawLine, Role,
+    canonical_image, printable, valid_id, validate_policy_range, validate_title,
 };
 
 #[derive(Default)]
@@ -11,6 +12,7 @@ struct PendingEntry {
     id: String,
     title: Option<String>,
     image: Option<String>,
+    action: Option<EntryAction>,
     options: Option<String>,
     mode: Option<u8>,
     role: Option<Role>,
@@ -88,6 +90,10 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
                     }
                 }
                 "image" => current.image = Some(value.to_owned()),
+                "action" => match EntryAction::parse(value) {
+                    Ok(action) => current.action = Some(action),
+                    Err(_) => current.usable = false,
+                },
                 "options" => {
                     if !value.is_empty() && value.len() <= MAX_OPTIONS_CHARS && printable(value) {
                         current.options = Some(value.to_owned());
@@ -174,13 +180,19 @@ fn finish_entry(
     if !current.usable {
         return;
     }
-    let Some(image) = current.image else {
-        seen.remove(&current.id);
-        return;
-    };
-    let Ok(image) = canonical_image(&image) else {
-        seen.remove(&current.id);
-        return;
+    let (image, action) = match (current.image, current.action) {
+        (Some(image), None) => {
+            let Ok(image) = canonical_image(&image) else {
+                seen.remove(&current.id);
+                return;
+            };
+            (image, None)
+        }
+        (None, Some(action)) if current.options.is_none() => (String::new(), Some(action)),
+        _ => {
+            seen.remove(&current.id);
+            return;
+        }
     };
     let title = current.title.unwrap_or_else(|| current.id.clone());
     let mode = current.mode.unwrap_or(global_mode);
@@ -188,6 +200,7 @@ fn finish_entry(
         id: current.id,
         title,
         image,
+        action,
         options: current.options,
         mode,
         role: current.role.unwrap_or(Role::Other),

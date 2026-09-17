@@ -61,7 +61,13 @@ impl ConfigDocument {
         let entry = ConfigEntry {
             id: request.id,
             title: request.title,
-            image: canonical_image(&request.image)?,
+            image: request
+                .image
+                .as_deref()
+                .map(canonical_image)
+                .transpose()?
+                .unwrap_or_default(),
+            action: request.action,
             options: request.options,
             mode,
             role: request.role,
@@ -114,7 +120,8 @@ impl ConfigDocument {
             validate_request(&EntryRequest {
                 id: row.id.clone(),
                 title: row.title.clone(),
-                image: row.image.clone(),
+                image: (!row.image.is_empty()).then(|| row.image.clone()),
+                action: row.action,
                 options: row.options.clone(),
                 role: row.role,
                 mode: Some(row.mode),

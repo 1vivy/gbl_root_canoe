@@ -547,6 +547,14 @@ SfbConfigParse (
         }
         continue;
       }
+      if (SfbCfgKeyIs (Begin, KeyEnd, "action")) {
+        if (SfbCfgKeyIs (Value, End, "fastboot")) {
+          Current->Action = SfbConfigActionFastboot;
+        } else {
+          Config->RejectedLines++;
+        }
+        continue;
+      }
       if (SfbCfgKeyIs (Begin, KeyEnd, "options")) {
         /* Copied verbatim: no path folding, no separator rewriting. The
          * value is an argument string whose grammar belongs to the image
@@ -673,13 +681,18 @@ SfbConfigParse (
     return FALSE;
   }
 
-  /* Drop entries with no usable image. Done in one compaction pass so an
-   * earlier rejection cannot renumber a later `default` resolution. */
+  /* Keep exactly one typed destination. An image and a resident action are
+   * mutually exclusive; accepting both would make dispatch depend on parser
+   * precedence instead of the file's explicit type. Done in one compaction
+   * pass so an earlier rejection cannot renumber a later default resolution. */
   {
     SFB_UINTN Keep = 0;
 
     for (Index = 0; Index < Config->Count; Index++) {
-      if (Config->Entry[Index].Image[0] == '\0') {
+      if ((Config->Entry[Index].Image[0] == '\0') ==
+          (Config->Entry[Index].Action == SfbConfigActionNone) ||
+          (Config->Entry[Index].Action != SfbConfigActionNone &&
+           Config->Entry[Index].Options[0] != '\0')) {
         Config->RejectedLines++;
         continue;
       }
