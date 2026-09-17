@@ -78,6 +78,29 @@ TestDefaultsWhenOmitted (void)
 }
 
 static void
+TestFastbootAction (void)
+{
+  static const char Text[] =
+    "version 1\n"
+    "default super-fastboot\n"
+    "entry super-fastboot\n"
+    "  title Super Fastboot\n"
+    "  action fastboot\n";
+
+  assert (Parse (Text));
+  assert (gConfig.Count == 1);
+  assert (gConfig.DefaultIndex == 0);
+  assert (Find ("super-fastboot")->Action == SfbConfigActionFastboot);
+  assert (Find ("super-fastboot")->Image[0] == '\0');
+  assert (gConfig.RejectedLines == 0);
+
+  /* Destination typing is exclusive and unknown actions fail closed. */
+  assert (!Parse ("version 1\nentry bad\n image boot.efi\n action fastboot\n"));
+  assert (!Parse ("version 1\nentry bad\n action reboot\n"));
+  assert (!Parse ("version 1\nentry bad\n action fastboot\n options nope\n"));
+}
+
+static void
 TestPerEntryModePrecedence (void)
 {
   static const char Text[] =
@@ -536,6 +559,7 @@ main (void)
   TestExplicitDefaultEdit ();
   TestVersionIsMandatory ();
   TestDefaultsWhenOmitted ();
+  TestFastbootAction ();
   TestPerEntryModePrecedence ();
   TestKeyScopingAfterTheFirstEntry ();
   TestRolesAndTheThirdEntry ();

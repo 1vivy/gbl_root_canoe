@@ -1,4 +1,17 @@
-use canoe_bootmgr::config::{ConfigDocument, PolicyUpdate};
+use canoe_bootmgr::config::{ConfigDocument, EntryAction, PolicyUpdate};
+
+#[test]
+fn typed_fastboot_action_round_trips_and_is_exclusive() {
+    let bytes = b"version 1\nmenu-mode silent\ndefault super-fastboot\nentry super-fastboot\n title Super Fastboot\n action fastboot\n";
+    let config = ConfigDocument::parse(bytes).unwrap();
+    let entry = config.entry("super-fastboot").unwrap();
+    assert_eq!(entry.action, Some(EntryAction::Fastboot));
+    assert!(entry.image.is_empty());
+    let rendered = config.serialize().unwrap();
+    assert!(String::from_utf8(rendered.clone()).unwrap().contains("  action fastboot\n"));
+    assert_eq!(ConfigDocument::parse(&rendered).unwrap(), config);
+    assert!(ConfigDocument::parse(b"version 1\nentry bad\n image x.efi\n action fastboot\n").is_err());
+}
 
 #[test]
 fn three_second_default_preserves_explicit_and_legacy_timeouts() {

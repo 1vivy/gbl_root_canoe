@@ -18,9 +18,10 @@ and an over-long line is skipped rather than truncated.
 
 A line consists of a key, one run of spaces or tabs, and a value extending to
 end of line. `entry <id>` opens an entry block. IDs contain 1–31 characters from
-`[A-Za-z0-9._-]`; titles contain 1–47 printable ASCII characters. An `image`
-path is required, may be at most 198 characters, and cannot contain `.` or `..`
-components, doubled separators, or a trailing separator. `/` is folded to `\`.
+`[A-Za-z0-9._-]`; titles contain 1–47 printable ASCII characters. An entry has
+exactly one destination: an `image`, or the resident `action fastboot`. Image
+paths may be at most 198 characters and cannot contain `.` or `..` components,
+doubled separators, or a trailing separator. `/` is folded to `\`.
 
 ## Global keys
 
@@ -86,9 +87,14 @@ unattended defaults. If the configured default cannot be resolved, BDS opens the
 menu, shows the existing rejected/notice surface, and waits; it never falls
 through to another row.
 
-Inside an entry block, `title`, `image`, `options`, `mode`, and `role` are valid.
-A per-entry `mode` overrides the global fallback. File-global keys appearing in
-an entry are rejected rather than retroactively applied.
+Inside an entry block, `title`, `image`, `action`, `options`, `mode`, and `role`
+are valid. `image` and `action` are mutually exclusive, the only action is
+`fastboot`, and resident actions do not accept image `options`. Unknown actions
+fail closed. A configured fastboot action may be selected as the Silent default
+or by the Menu countdown and enters the same resident session as **Enter Super
+Fastboot**; the permanent built-in row remains interactive-only. A per-entry
+`mode` overrides the global fallback. File-global keys appearing in an entry
+are rejected rather than retroactively applied.
 
 The complete writer grammar is:
 
@@ -123,6 +129,10 @@ entry mu
 entry grub
   title GRUB
   image grub/grubaa64.efi
+
+entry super-fastboot
+  title Super Fastboot
+  action fastboot
 ```
 
 Neither image is shipped by this project. BDS carries no payload loaders — see
