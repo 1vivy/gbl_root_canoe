@@ -4,6 +4,7 @@
 #include <Uefi.h>
 #include <Protocol/BlockIo.h>
 
+EFI_STATUS SfbHashBuffer (CONST VOID *Data, UINTN Size, UINT8 Digest[32]);
 EFI_STATUS SfbHashParse (CONST CHAR8 *Arg, CHAR16 Name[36], UINT64 *Offset, UINT64 *Length);
 EFI_STATUS SfbHashPartition (EFI_BLOCK_IO_PROTOCOL *Disk, UINT64 Offset, UINT64 Length,
                             CHAR8 Result[44]);
