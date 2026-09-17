@@ -634,6 +634,22 @@ int main (int argc, char **argv)
     Template.Cursor = 1;
     assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS && Template.Cursor == 1 && Template.TimeoutMs == 0);
   }
+  /* A typed configured action participates in the normal menu countdown and
+   * exits through the resident fastboot dispatch without launching an image. */
+  Initialize(&State, &Template);
+  Add(&State, SfbEntryFastboot, L"", L"Super Fastboot", 0, FALSE, FALSE);
+  strcpy(State.Menu.Entry[0].DefaultTarget, "super-fastboot");
+  assert(SfbIsConfiguredFastboot(&State.Menu.Entry[0]));
+  assert(!SfbIsBootMenuLaunch(&State.Menu.Entry[0]));
+  State.Menu.DefaultIndex = 0; State.Menu.DefaultFromConfig = TRUE;
+  State.Menu.MenuMode = SfbConfigMenuMenu; State.Menu.MenuTimeoutSeconds = 1;
+  memcpy(&mDiscoveredMenu, &State.Menu, sizeof mDiscoveredMenu);
+  memset(&State.Menu, 0, sizeof State.Menu); State.AllowCountdown = TRUE;
+  assert(SfbRefreshMainMenu(&State) == EFI_SUCCESS && Template.TimeoutMs == 1000);
+  CountdownFrame(1000, SfbKeyTimeout);
+  assert(SfbRunMenu(&Template) == EFI_SUCCESS &&
+         mSelectedRow == 0 && mSelectedKey == SfbKeyTimeout);
+
   /* Neither an unresolved default nor a permanent built-in is an auto-boot row. */
   for (unsigned Missing = 0; Missing < 2; Missing++) {
     Initialize(&State, &Template);

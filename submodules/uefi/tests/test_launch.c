@@ -1299,6 +1299,39 @@ TestLockRefusalDemotes(void)
   assert(mLoadCount == 0);
 }
 
+static void
+TestConfiguredFastbootAction(void)
+{
+  static const CHAR8 ConfigText[] =
+    "version 1\n"
+    "menu-mode silent\n"
+    "default super-fastboot\n"
+    "entry super-fastboot\n"
+    "title Super Fastboot\n"
+    "action fastboot\n";
+  SFB_MENU_STATE Menu;
+
+  ResetLaunchBackend ();
+  ResetVolumes ();
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
+  mEntriesFixtureBytes = sizeof (ConfigText) - 1;
+  mEntriesFixtureEnabled = TRUE;
+  mVolumesAvailable = TRUE;
+  mBootRootConfigPresent = TRUE;
+
+  SfbBuildMenu (&Menu, SfbBootModeHonestUnlocked, FALSE);
+  assert(Menu.DefaultFromConfig);
+  assert(Menu.DefaultIndex < Menu.Count);
+  assert(Menu.Entry[Menu.DefaultIndex].Kind == SfbEntryFastboot);
+  assert(strcmp (Menu.Entry[Menu.DefaultIndex].DefaultTarget,
+                 "super-fastboot") == 0);
+  SfbFreeMenu (&Menu);
+  assert(SfbLaunchDefaultEntry (SfbBootModeHonestUnlocked) ==
+         SfbDefaultFastboot);
+  assert(mLoadCount == 0 && mStartCount == 0);
+}
+
 /*
  * A config row that names a payload-side launcher as its image and a payload
  * in `options` must reach StartImage with that string as its LoadOptions.
@@ -2486,6 +2519,7 @@ main(void)
   TestLockRefusalDemotes ();
   TestBootRootProbe ();
   TestUnmanagedPassthrough ();
+  TestConfiguredFastbootAction ();
   TestConfigOptionsBecomeLoadOptions ();
   TestConfigWithoutOptionsPublishesNone ();
   TestAdditiveDiscovery ();

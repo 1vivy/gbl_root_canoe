@@ -31,9 +31,17 @@ static EFI_STATUS EFIAPI read_blocks (EFI_BLOCK_IO_PROTOCOL *D, UINT32 Id, EFI_L
 }
 int main (int argc, char **argv) {
   EFI_BLOCK_IO_MEDIA M = {0}; EFI_BLOCK_IO_PROTOCOL D = {0};
+  static const UINT8 AbcSha256[32] = {
+    0xba,0x78,0x16,0xbf,0x8f,0x01,0xcf,0xea,0x41,0x41,0x40,0xde,0x5d,0xae,0x22,0x23,
+    0xb0,0x03,0x61,0xa3,0x96,0x17,0x7a,0x9c,0xb4,0x10,0xff,0x61,0xf2,0x00,0x15,0xad
+  };
+  UINT8 Digest[32];
   CHAR8 Result[44]; CHAR16 Name[36]; UINT64 Offset, Length;
   M.MediaPresent=TRUE; M.MediaId=7; M.BlockSize=4096; M.LastBlock=262143; M.IoAlign=65536;
   D.Media=&M; D.ReadBlocks=read_blocks; D.FlushBlocks=flush;
+  assert (SfbHashBuffer ("abc", 3, Digest) == EFI_SUCCESS);
+  assert (memcmp (Digest, AbcSha256, sizeof Digest) == 0);
+  assert (SfbHashBuffer (NULL, 3, Digest) == EFI_INVALID_PARAMETER);
   assert (SfbHashParse("persist:1:10",Name,&Offset,&Length)==EFI_SUCCESS && Offset==1 && Length==16);
   const char *bad[]={"", "persist", "persist:", "persist:0", "persist:0:", ":0:0", "../persist:0:0", "persist:0x0:1", "persist:0:1:2", "persist:10000000000000000:1"};
   for (size_t I=0; I<sizeof(bad)/sizeof(*bad); I++) assert(EFI_ERROR(SfbHashParse(bad[I],Name,&Offset,&Length)));
