@@ -89,6 +89,7 @@ found at
 #include <Library/UefiRuntimeServicesTableLib.h>
 
 #include <Guid/EventGroup.h>
+#include <Guid/CanoeRamSource.h>
 
 #include <Protocol/BlockIo.h>
 #include <Protocol/DiskIo.h>
@@ -2594,8 +2595,37 @@ IsEfiInBootImg (boot_img_hdr *Hdr, UINT32 Size, VOID **EfiData, UINT32 *EfiSize)
 STATIC EFI_STATUS
 BootEfiImage (VOID *Data, UINT32 Size)
 {
+  STATIC CONST EFI_GUID         RamSourceGuid = CANOE_RAM_SOURCE_TABLE_GUID;
+  STATIC CANOE_RAM_SOURCE_TABLE RamSource;
   EFI_STATUS  Status;
+  EFI_STATUS  RemoveStatus;
   EFI_HANDLE  ImageHandle = NULL;
+
+  if (Data == NULL || Size == 0) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  RamSource.Magic = CANOE_RAM_SOURCE_MAGIC;
+  RamSource.Version = CANOE_RAM_SOURCE_VERSION;
+  RamSource.HeaderSize = sizeof (RamSource);
+  RamSource.Flags = CANOE_RAM_SOURCE_FLAG_SHA256;
+  RamSource.Reserved = 0;
+  RamSource.Base = (UINT64)(UINTN)Data;
+  RamSource.Size = Size;
+  Status = SfbHashBuffer (Data, Size, RamSource.Sha256);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  /* LoadImage maps only PE sections. Publish the exact source bytes separately
+   * so a RAM child can validate and open an appended payload without guessing
+   * the installed efisp partition or hashing its relocated mapped image. */
+  Status = gBS->InstallConfigurationTable ((EFI_GUID *)&RamSourceGuid,
+                                            &RamSource);
+  if (EFI_ERROR (Status)) {
+    DEBUG ((EFI_D_ERROR, "RAM source table install failed: %r\n", Status));
+    return Status;
+  }
 
   Status = gBS->LoadImage (
                   FALSE,
@@ -2607,7 +2637,7 @@ BootEfiImage (VOID *Data, UINT32 Size)
                   );
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR, "LoadImage failed: %r\n", Status));
-    return Status;
+    goto Done;
   }
 
   Status = gBS->StartImage (ImageHandle, NULL, NULL);
@@ -2615,6 +2645,16 @@ BootEfiImage (VOID *Data, UINT32 Size)
     DEBUG ((EFI_D_ERROR, "StartImage failed: %r\n", Status));
   }
 
+Done:
+  RemoveStatus = gBS->InstallConfigurationTable ((EFI_GUID *)&RamSourceGuid,
+                                                  NULL);
+  if (EFI_ERROR (RemoveStatus)) {
+    DEBUG ((EFI_D_ERROR, "RAM source table removal failed: %r\n", RemoveStatus));
+    if (!EFI_ERROR (Status)) {
+      Status = RemoveStatus;
+    }
+  }
+  ZeroMem (&RamSource, sizeof (RamSource));
   return Status;
 }
 

@@ -9,6 +9,21 @@
 void *avb_memcpy(void *Dest, const void *Src, size_t Length) { return CopyMem(Dest, Src, Length); }
 void *avb_memset(void *Dest, const int Value, size_t Length) { return SetMem(Dest, Length, (UINT8)Value); }
 
+EFI_STATUS SfbHashBuffer (CONST VOID *Data, UINTN Size, UINT8 Digest[32])
+{
+  union { UINT64 Align; AvbSHA256Ctx Context; } Hash;
+  UINT8 *Value;
+
+  if (Data == NULL || Size == 0 || Digest == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  avb_sha256_init (&Hash.Context);
+  avb_sha256_update (&Hash.Context, Data, Size);
+  Value = avb_sha256_final (&Hash.Context);
+  CopyMem (Digest, Value, 32);
+  return EFI_SUCCESS;
+}
+
 STATIC EFI_STATUS Hex (CONST CHAR8 **Cursor, UINT64 *Value, CHAR8 End)
 {
   UINTN Digits = 0;
