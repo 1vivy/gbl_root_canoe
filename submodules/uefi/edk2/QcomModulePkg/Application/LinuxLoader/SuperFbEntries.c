@@ -143,6 +143,11 @@ SfbRootHasUsableConfig (IN EFI_FILE_PROTOCOL *Root,
       EFI_STATUS ProbeStatus;
       BOOLEAN IsFile;
 
+      if (Config->Entry[Index].Action == SfbConfigActionFastboot) {
+        *Usable = TRUE;
+        Status = EFI_SUCCESS;
+        break;
+      }
       SfbAsciiToUnicode (Config->Entry[Index].Image, Relative,
                          ARRAY_SIZE (Relative));
       if (!EFI_ERROR (SfbJoinRoot (RootPrefix, Relative, ImagePath,
@@ -1022,6 +1027,23 @@ SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
     SFB_BOOT_ENTRY *Slot;
     Path[0] = L'\0';
 
+    SfbAsciiToUnicode (Config->Entry[ConfigIndex].Title, Title,
+                       ARRAY_SIZE (Title));
+    if (Config->Entry[ConfigIndex].Action == SfbConfigActionFastboot) {
+      Slot = &Menu->Entry[Menu->Count];
+      ZeroMem (Slot, sizeof (*Slot));
+      Slot->Kind = SfbEntryFastboot;
+      Slot->BlsIndex = SFB_NO_BLS;
+      StrnCpyS (Slot->Desc, SFB_DESC_CHARS, Title, SFB_DESC_CHARS - 1);
+      AsciiStrCpyS (Slot->DefaultTarget, sizeof (Slot->DefaultTarget),
+                    Config->Entry[ConfigIndex].Id);
+      if (Config->DefaultIndex == ConfigIndex) {
+        Menu->DefaultIndex = Menu->Count;
+      }
+      Menu->Count++;
+      continue;
+    }
+
     SfbAsciiToUnicode (Config->Entry[ConfigIndex].Image, RelPath,
                        ARRAY_SIZE (RelPath));
     if (EFI_ERROR (SfbJoinRoot (SfbVolumeRootPrefix (Volume), RelPath, Path,
@@ -1032,8 +1054,6 @@ SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
       continue;
     }
 
-    SfbAsciiToUnicode (Config->Entry[ConfigIndex].Title, Title,
-                       ARRAY_SIZE (Title));
     Slot = &Menu->Entry[Menu->Count];
     if (EFI_ERROR (SfbMakeFileEntry (Volume, Path, Title, Slot))) {
       continue;
@@ -1855,22 +1875,25 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
   return Status;
 }
 
-BOOLEAN
+SFB_DEFAULT_RESULT
 SfbLaunchDefaultEntry (IN SFB_BOOT_MODE Mode)
 {
   SFB_MENU_STATE Menu;
-  BOOLEAN HasDefault;
+  SFB_DEFAULT_RESULT Result = SfbDefaultNotFound;
 
   SfbBuildMenu (&Menu, Mode, FALSE);
-  HasDefault = (BOOLEAN)(Menu.DefaultFromConfig &&
-                         Menu.DefaultIndex != SFB_NO_INDEX);
-  if (HasDefault) {
+  if (Menu.DefaultFromConfig && Menu.DefaultIndex != SFB_NO_INDEX) {
     DEBUG ((EFI_D_INFO, "SFB: launching default entry '%s'\n",
             Menu.Entry[Menu.DefaultIndex].Desc));
-    SfbSetLaunchLockPolicy (Menu.ConfigValid ? Menu.LockPolicy
-                                             : SfbConfigLockAsNeeded);
-    SfbLaunchEntry (&Menu.Entry[Menu.DefaultIndex], FALSE, Mode);
+    if (Menu.Entry[Menu.DefaultIndex].Kind == SfbEntryFastboot) {
+      Result = SfbDefaultFastboot;
+    } else {
+      SfbSetLaunchLockPolicy (Menu.ConfigValid ? Menu.LockPolicy
+                                               : SfbConfigLockAsNeeded);
+      SfbLaunchEntry (&Menu.Entry[Menu.DefaultIndex], FALSE, Mode);
+      Result = SfbDefaultReturned;
+    }
   }
   SfbFreeMenu (&Menu);
-  return HasDefault;
+  return Result;
 }

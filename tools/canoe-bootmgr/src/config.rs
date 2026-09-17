@@ -20,7 +20,11 @@ pub enum ConfigError {
     #[error("canoe.cfg field {field}: {reason}")]
     Field { field: String, reason: String },
     #[error("policy.range: {field} must be in {minimum}..={maximum}")]
-    PolicyRange { field: &'static str, minimum: u32, maximum: u32 },
+    PolicyRange {
+        field: &'static str,
+        minimum: u32,
+        maximum: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,11 +118,36 @@ pub struct RawLine {
     pub value: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EntryAction {
+    Fastboot,
+}
+
+impl EntryAction {
+    pub fn parse(value: &str) -> Result<Self, ConfigError> {
+        match value {
+            "fastboot" => Ok(Self::Fastboot),
+            _ => Err(ConfigError::Invalid(format!(
+                "unknown entry action: {value}"
+            ))),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fastboot => "fastboot",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigEntry {
     pub id: String,
     pub title: String,
     pub image: String,
+    #[serde(default)]
+    pub action: Option<EntryAction>,
     pub options: Option<String>,
     pub mode: u8,
     pub role: Role,
@@ -144,7 +173,8 @@ pub struct ConfigDocument {
 pub struct EntryRequest {
     pub id: String,
     pub title: String,
-    pub image: String,
+    pub image: Option<String>,
+    pub action: Option<EntryAction>,
     pub options: Option<String>,
     pub role: Role,
     pub mode: Option<u8>,
@@ -170,7 +200,22 @@ pub(crate) fn validate_request(request: &EntryRequest) -> Result<(), ConfigError
     }
     validate_title(&request.title)?;
     let _ = Role::parse(request.role.as_str())?;
-    let _ = canonical_image(&request.image)?;
+    match (&request.image, request.action) {
+        (Some(image), None) => {
+            let _ = canonical_image(image)?;
+        }
+        (None, Some(EntryAction::Fastboot)) => {}
+        _ => {
+            return Err(ConfigError::Invalid(
+                "entry requires exactly one of image or action".to_owned(),
+            ));
+        }
+    }
+    if request.action.is_some() && request.options.is_some() {
+        return Err(ConfigError::Invalid(
+            "resident actions do not accept image options".to_owned(),
+        ));
+    }
     if let Some(options) = &request.options {
         if options.is_empty() || options.len() > MAX_OPTIONS_CHARS || !printable(options) {
             return Err(ConfigError::Invalid(format!(
@@ -226,7 +271,11 @@ pub(crate) fn validate_policy_range(
     maximum: u32,
 ) -> Result<(), ConfigError> {
     if value < minimum || value > maximum {
-        return Err(ConfigError::PolicyRange { field, minimum, maximum });
+        return Err(ConfigError::PolicyRange {
+            field,
+            minimum,
+            maximum,
+        });
     }
     Ok(())
 }

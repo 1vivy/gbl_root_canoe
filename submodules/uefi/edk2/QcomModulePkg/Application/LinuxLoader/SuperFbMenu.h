@@ -237,6 +237,12 @@ typedef enum {
   SfbBootDecisionMenu
 } SFB_BOOT_DECISION;
 
+typedef enum {
+  SfbDefaultNotFound = 0,
+  SfbDefaultReturned,
+  SfbDefaultFastboot
+} SFB_DEFAULT_RESULT;
+
 /*
  * Decide what the power-on key window does after first-run handling. An
  * explicit default is required for silent expiry; a menu-mode expiry always
@@ -531,7 +537,7 @@ SfbLoadDriver (IN EFI_HANDLE Volume, IN CONST CHAR16 *Path);
  * and the caller should fall back to the menu). Returns FALSE when no default
  * is configured, so the caller shows the menu instead.
  */
-BOOLEAN
+SFB_DEFAULT_RESULT
 SfbLaunchDefaultEntry (IN SFB_BOOT_MODE Mode);
 
 /* Fill in an entry describing PathOnVolume on Volume. */

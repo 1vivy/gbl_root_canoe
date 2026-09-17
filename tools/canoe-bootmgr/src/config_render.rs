@@ -29,7 +29,11 @@ pub(crate) fn serialize(config: &ConfigDocument) -> Result<Vec<u8>, ConfigError>
         lines.push(String::new());
         lines.push(format!("entry {}", entry.id));
         lines.push(format!("  title {}", entry.title));
-        lines.push(format!("  image {}", entry.image));
+        if let Some(action) = entry.action {
+            lines.push(format!("  action {}", action.as_str()));
+        } else {
+            lines.push(format!("  image {}", entry.image));
+        }
         if let Some(options) = &entry.options {
             lines.push(format!("  options {options}"));
         }
@@ -85,12 +89,21 @@ fn validate_document(config: &ConfigDocument) -> Result<(), ConfigError> {
             ));
         }
         validate_title(&entry.title)?;
-        if canonical_image(&entry.image)? != entry.image {
-            return Err(ConfigError::Invalid(
-                "image path is not canonical".to_owned(),
-            ));
+        match (entry.image.is_empty(), entry.action) {
+            (false, None) if canonical_image(&entry.image)? == entry.image => {}
+            (true, Some(_)) => {}
+            _ => {
+                return Err(ConfigError::Invalid(
+                    "entry requires exactly one canonical image or action".to_owned(),
+                ));
+            }
         }
         validate_mode(entry.mode)?;
+        if entry.action.is_some() && entry.options.is_some() {
+            return Err(ConfigError::Invalid(
+                "resident actions do not accept image options".to_owned(),
+            ));
+        }
         if let Some(options) = &entry.options {
             if options.is_empty()
                 || options.len() > MAX_OPTIONS_CHARS
@@ -130,6 +143,7 @@ fn validate_raw(line: &crate::config::RawLine) -> Result<(), ConfigError> {
                 | "entry"
                 | "title"
                 | "image"
+                | "action"
                 | "options"
                 | "role"
         )

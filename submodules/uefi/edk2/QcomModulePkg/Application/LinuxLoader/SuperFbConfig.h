@@ -67,6 +67,11 @@ typedef enum {
 } SFB_CONFIG_MENU_MODE;
 
 typedef enum {
+  SfbConfigActionNone = 0,
+  SfbConfigActionFastboot
+} SFB_CONFIG_ACTION;
+
+typedef enum {
   /* Repair the backing DeviceInfo only when the requested mode needs it. */
   SfbConfigLockAsNeeded = 0,
   /* Never authorize a DeviceInfo repair; a launch that needed it falls back
@@ -80,6 +85,8 @@ typedef struct {
   /* Boot-root-relative, already canonicalised to backslash separators and
    * carrying a leading separator, so joining is a concatenation. */
   char            Image[SFB_CONFIG_PATH_CHARS];
+  /* A resident action is mutually exclusive with Image. */
+  SFB_CONFIG_ACTION Action;
   /*
    * Verbatim LoadOptions for the image, or empty. Not a path and never
    * folded like one: it is passed through byte for byte, because the image
