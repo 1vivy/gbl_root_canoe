@@ -70,6 +70,8 @@
 
 [Sources]
 	LinuxLoader.c
+	SuperFbBootOnce.h
+	SuperFbBootOnce.c
 	SuperFbMenu.h
 	SuperFbGptName.h
 	SuperFbLog.h

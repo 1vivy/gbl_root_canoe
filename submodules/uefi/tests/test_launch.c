@@ -23,6 +23,7 @@
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBootRoot.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.h"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBootOnce.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlots.h"
 
@@ -31,6 +32,7 @@ EFI_HANDLE gImageHandle;
 EFI_GUID gEfiSecurityArchProtocolGuid;
 EFI_GUID gEfiSecurity2ArchProtocolGuid;
 EFI_GUID gEfiLoadedImageProtocolGuid;
+BOOLEAN SfbBootOnceTakeRejectedNotice (VOID) { return FALSE; }
 
 static EFI_FILE_PROTOCOL mRoot;
 static EFI_HANDLE mVolume = (EFI_HANDLE)(UINTN)0x1234;

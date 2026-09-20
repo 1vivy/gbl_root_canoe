@@ -111,6 +111,7 @@ found at
 #include "../../Application/LinuxLoader/Hook/SuperFbDevInfo.h"
 #include "../../Application/LinuxLoader/SuperFbBootRoot.h"
 #include "../../Application/LinuxLoader/SuperFbContainer.h"
+#include "../../Application/LinuxLoader/SuperFbBootOnce.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -2371,6 +2372,28 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     FastbootFail ("unknown oem command");
     return;
   }
+  if (AsciiStrCmp (Arg, "boot-once-clear") == 0) {
+    WaitForFlashFinished ();
+    Status = RebootTargetBootOnceClear ();
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("could not clear boot-once target");
+    } else {
+      FastbootOkay ("");
+    }
+    return;
+  }
+
+  if (AsciiStrnCmp (Arg, "boot-once:", 10) == 0) {
+    WaitForFlashFinished ();
+    Status = SfbBootOnceArm (Arg + 10);
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("unknown or invalid boot-once target");
+    } else {
+      FastbootOkay ("");
+    }
+    return;
+  }
+
 
   /*
    * oem log-flush: persist the session so far into the next rotation slot on

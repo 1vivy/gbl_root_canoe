@@ -82,6 +82,7 @@
 #include "SuperFbLastBoot.h"
 #include "SuperFbOemWatchdog.h"
 #include "SuperFbLog.h"
+#include "SuperFbBootOnce.h"
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -146,6 +147,7 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     SFB_KEY             PowerOnKey = SfbKeyTimeout;
     SFB_BOOT_DECISION   Decision;
     SFB_BOOT_ROOT_STATE BootRootState;
+    SFB_BOOT_ONCE_RESULT BootOnceResult;
 
     ZeroMem (&Config, sizeof (Config));
     Config.MenuMode = SfbConfigMenuSilent;
@@ -228,6 +230,24 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
     SfbRecordBootRootState (BootRootState);
     SfbPublishBootRootTable ();
     SfbSetShowBooting (ConfigAvailable ? Config.ShowBooting : TRUE);
+    /*
+     * misc boot-once is consumed before either power-on policy. Its command
+     * field is already cleared and flushed when this returns a destination.
+     */
+    BootOnceResult = SfbBootOnceConsume (Mode);
+    if (BootOnceResult == SfbBootOnceFastboot) {
+      EnterFastboot = TRUE;
+      goto enter_fastboot;
+    }
+    if (BootOnceResult == SfbBootOnceMenu) {
+      SfbShowEnteringMenu ();
+      if (!SfbRunBootMenu (Mode, FALSE, FALSE)) {
+        Status = EFI_SUCCESS;
+        goto stack_guard_update_default;
+      }
+      EnterFastboot = TRUE;
+      goto enter_fastboot;
+    }
     Decision = SfbBootDecisionMenu;
     if (BootRootState != SfbBootRootUnavailable && !SfbBootRootIsEmptyState (BootRootState)) {
       /* Menu mode starts its own navigation/countdown immediately. Only Silent

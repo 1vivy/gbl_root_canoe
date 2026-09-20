@@ -86,8 +86,8 @@ browser. Standalone Android EFI tools keep their own interfaces.
 Boot entries retain their existing discovery order. The grouped actions are:
 
 - USB Mass Storage and Enter Super Fastboot.
-- **Advanced**: Save a default entry, Change an Android entry's mode, Boot policy,
-  Android EFI tools, and Select an EFI file.
+- **Advanced**: Save a default entry, Arm boot once, Change an Android entry's
+  mode, Boot policy, Android EFI tools, and Select an EFI file.
 - **Reboot**: Fastbootd, Bootloader, Recovery, and System.
 - Power off and Restart.
 
@@ -109,6 +109,27 @@ unchanged: the passive dump replaces only its explicitly named logfs file, and
 the policy probe requires its separate VOL UP confirmation. See the BDS logs
 for its bounded `key=value` report and remember that an `authorized` readback
 does not prove physical debugging effectiveness.
+
+## Boot once
+
+To select a destination for only the next BDS start, open **Advanced → Arm boot
+once** and choose an entry. Super Fastboot exposes the same operation as
+`fastboot oem boot-once:<selector>`; use `fastboot oem boot-once-clear` to
+cancel it. A selector is a resolvable `canoe.cfg` entry id, `bls:<stem>`, or
+`fastboot` for the resident Super Fastboot action.
+
+The request is stored as the NUL-terminated ASCII command
+`canoe-once:<selector>` in the 32-byte Android BCB command field at misc LBA 0.
+Selectors use `[A-Za-z0-9._:-]` and are at most 20 bytes; values that do not fit
+are refused rather than truncated. BDS clears and flushes the command field
+before resolving or launching the target. A failed clear therefore falls back
+to normal boot policy instead of risking a boot loop. Bytes after the command
+field are preserved.
+
+Boot once neither resets the phone when armed nor writes `canoe.cfg`. It is
+consumed on the next BDS start even if the selected child fails or returns; an
+entry that no longer resolves opens the normal menu with a notice instead of
+launching another row.
 
 ## The Super Fastboot screen
 

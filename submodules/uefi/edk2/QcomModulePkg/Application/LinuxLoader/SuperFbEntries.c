@@ -13,6 +13,7 @@
 #include "SuperFbConfigStore.h"
 #include "SuperFbLog.h"
 #include "SuperFbBootRoot.h"
+#include "SuperFbBootOnce.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -1306,6 +1307,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
   UINTN ReservedRows;
   UINTN Unconfigured;
   UINTN Index;
+  BOOLEAN BootOnceRejected;
 
   ZeroMem (Menu, sizeof (*Menu));
   ZeroMem (&Config, sizeof (Config));
@@ -1316,6 +1318,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
   Menu->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
   Menu->ShowBooting = TRUE;
   Menu->LockPolicy = SfbConfigLockAsNeeded;
+  BootOnceRejected = SfbBootOnceTakeRejectedNotice ();
 
   if (FirstRun) {
     SfbAppendBuiltIn (Menu, SfbEntrySetupFastboot, L"Entering Super Fastboot");
@@ -1369,6 +1372,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
                  ((Menu->ConfigValid &&
                    (Menu->RejectedLines != 0 || Config.DefaultSpecified))
                     ? 1 : 0) +
+                 (BootOnceRejected ? 1 : 0) +
                  (Menu->SlotMismatch ? 1 : 0) +
                  (Menu->ConfigPrevious ? 1 : 0);
   while (Menu->Count > SFB_MAX_ENTRIES - ReservedRows) {
@@ -1397,6 +1401,9 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
     SfbAppendBuiltIn (Menu, SfbEntryBack, Rejected);
   }
 
+  if (BootOnceRejected) {
+    SfbAppendBuiltIn (Menu, SfbEntryBack, L"Boot-once target unavailable");
+  }
   if (Menu->ConfigPrevious) {
     SfbAppendBuiltIn (Menu, SfbEntryBack, L"Using previous saved configuration");
   }

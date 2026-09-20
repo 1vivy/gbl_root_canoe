@@ -13,6 +13,7 @@
 #include "SuperFbContainer.h"
 #include "SuperFbLastBoot.h"
 #include "SuperFbConfigStore.h"
+#include "SuperFbBootOnce.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -892,9 +893,15 @@ SfbHandleMainMenuRow (IN VOID *Context,
   }
 }
 
+typedef enum {
+  SfbPreferenceDefault = 0,
+  SfbPreferenceBootOnce,
+  SfbPreferenceMode
+} SFB_PREFERENCE_ACTION;
+
 typedef struct {
   CONST SFB_BOOT_ENTRY *Entry;
-  BOOLEAN ChangeMode;
+  SFB_PREFERENCE_ACTION Action;
 } SFB_ENTRY_PREFERENCE;
 
 STATIC SFB_MENU_ACTION
@@ -904,42 +911,72 @@ SfbHandleEntryPreference (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
   EFI_FILE_PROTOCOL *Root = NULL;
   EFI_STATUS Status;
   (VOID)Key;
-  if (Row >= (State->ChangeMode ? 3u : 1u)) { return SfbMenuActionExit; }
-  Status = SfbOpenVolumeRoot (State->Entry->Volume, &Root);
-  if (!EFI_ERROR (Status) && Root != NULL) {
-    Status = State->ChangeMode
-      ? SfbStoreConfigMode (Root, State->Entry->DefaultTarget, (UINT8)Row)
-      : SfbStoreConfigDefault (Root, State->Entry->DefaultTarget);
-    Root->Close (Root);
-  } else if (!EFI_ERROR (Status)) { Status = EFI_DEVICE_ERROR; }
-  SfbReportStatus (EFI_ERROR (Status) ? L"Could not save preference" :
-                   (State->ChangeMode ? L"Entry mode saved" : L"Default saved"), Status);
+  if (Row >= (State->Action == SfbPreferenceMode ? 3u : 1u)) {
+    return SfbMenuActionExit;
+  }
+  if (State->Action == SfbPreferenceBootOnce) {
+    Status = SfbBootOnceArmEntry (State->Entry);
+  } else {
+    Status = SfbOpenVolumeRoot (State->Entry->Volume, &Root);
+    if (!EFI_ERROR (Status) && Root != NULL) {
+      Status = State->Action == SfbPreferenceMode
+        ? SfbStoreConfigMode (Root, State->Entry->DefaultTarget, (UINT8)Row)
+        : SfbStoreConfigDefault (Root, State->Entry->DefaultTarget);
+      Root->Close (Root);
+    } else if (!EFI_ERROR (Status)) {
+      Status = EFI_DEVICE_ERROR;
+    }
+  }
+  SfbReportStatus (
+    EFI_ERROR (Status)
+      ? (State->Action == SfbPreferenceBootOnce
+           ? L"Could not arm boot once" : L"Could not save preference")
+      : (State->Action == SfbPreferenceMode
+           ? L"Entry mode saved"
+           : (State->Action == SfbPreferenceBootOnce
+                ? L"Boot once armed for next boot" : L"Default saved")),
+    Status);
   return SfbMenuActionExit;
 }
 
 STATIC VOID
-SfbConfirmEntryPreference (CONST SFB_BOOT_ENTRY *Entry, BOOLEAN ChangeMode)
+SfbConfirmEntryPreference (
+  IN CONST SFB_BOOT_ENTRY *Entry,
+  IN SFB_PREFERENCE_ACTION Action
+  )
 {
   SFB_MENU_ROW Rows[] = {{NULL,L" "},{NULL,L" "},{NULL,L" "},{L"Cancel",L" "}};
   SFB_MENU_TEMPLATE Template;
   SFB_ENTRY_PREFERENCE State;
   UINTN Index;
   ZeroMem (&Template, sizeof (Template));
-  State.Entry = Entry; State.ChangeMode = ChangeMode;
-  if (ChangeMode) {
+  State.Entry = Entry;
+  State.Action = Action;
+  if (Action == SfbPreferenceMode) {
     for (Index = 0; Index < 3; Index++) {
       Rows[Index].Text = SfbBootModeLabel ((SFB_BOOT_MODE)Index);
       Rows[Index].Marker = Entry->Mode == Index ? L"*" : L" ";
     }
-  } else { Rows[0].Text = L"Save as default"; Rows[1].Text = L"Cancel"; }
+  } else {
+    Rows[0].Text = Action == SfbPreferenceBootOnce
+                     ? L"Arm boot once" : L"Save as default";
+    Rows[1].Text = L"Cancel";
+  }
   Template.Title = Entry->Desc;
-  Template.Subtitle = ChangeMode
+  Template.Subtitle = Action == SfbPreferenceMode
     ? L"Mode 0 to/from 1/2 requires formatting data. Custom ROMs use Mode 2."
-    : L"Use this entry on future boots; keep its mode unchanged.";
-  Template.Footer = L"Saves a preference; never boots or formats the phone.";
-  Template.Rows = Rows; Template.RowCount = ChangeMode ? 4 : 2;
-  Template.Cursor = Template.RowCount - 1; Template.Navigate = TRUE;
-  Template.Context = &State; Template.Handler = SfbHandleEntryPreference;
+    : (Action == SfbPreferenceBootOnce
+         ? L"Use this entry on the next boot only; canoe.cfg is unchanged."
+         : L"Use this entry on future boots; keep its mode unchanged.");
+  Template.Footer = Action == SfbPreferenceBootOnce
+    ? L"Arms the next boot; never boots or resets the phone."
+    : L"Saves a preference; never boots or formats the phone.";
+  Template.Rows = Rows;
+  Template.RowCount = Action == SfbPreferenceMode ? 4 : 2;
+  Template.Cursor = Template.RowCount - 1;
+  Template.Navigate = TRUE;
+  Template.Context = &State;
+  Template.Handler = SfbHandleEntryPreference;
   (VOID)SfbRunMenu (&Template);
 }
 
@@ -947,7 +984,7 @@ typedef struct {
   CONST SFB_MENU_STATE *Menu;
   UINTN Map[SFB_MAX_ENTRIES];
   UINTN Count;
-  BOOLEAN ChangeMode;
+  SFB_PREFERENCE_ACTION Action;
 } SFB_ENTRY_CHOICE;
 
 STATIC SFB_MENU_ACTION
@@ -956,34 +993,59 @@ SfbHandleEntryChoice (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
   SFB_ENTRY_CHOICE *State = Context;
   (VOID)Key;
   if (Row < State->Count) {
-    SfbConfirmEntryPreference (&State->Menu->Entry[State->Map[Row]], State->ChangeMode);
+    SfbConfirmEntryPreference (
+      &State->Menu->Entry[State->Map[Row]], State->Action);
   }
   return SfbMenuActionExit;
 }
 
 STATIC VOID
-SfbRunEntryPreference (CONST SFB_MENU_STATE *Menu, BOOLEAN ChangeMode)
+SfbRunEntryPreference (
+  IN CONST SFB_MENU_STATE *Menu,
+  IN SFB_PREFERENCE_ACTION Action
+  )
 {
   SFB_ENTRY_CHOICE State;
   SFB_MENU_TEMPLATE Template;
   SFB_MENU_ROW Rows[SFB_MAX_ENTRIES + 1];
   UINTN Index;
-  ZeroMem (&State, sizeof (State)); ZeroMem (&Template, sizeof (Template));
-  State.Menu = Menu; State.ChangeMode = ChangeMode;
+  ZeroMem (&State, sizeof (State));
+  ZeroMem (&Template, sizeof (Template));
+  State.Menu = Menu;
+  State.Action = Action;
   for (Index = 0; Index < Menu->Count; Index++) {
     CONST SFB_BOOT_ENTRY *Entry = &Menu->Entry[Index];
-    if (!SfbIsContainerVolume (Entry->Volume) || Entry->DefaultTarget[0] == '\0') { continue; }
-    if (ChangeMode && (!SfbIsManagedAblEntry (Entry) || !Entry->ModeFromConfig)) { continue; }
+    if (Action == SfbPreferenceBootOnce) {
+      if (SfbBootOnceEntrySelector (Entry) == NULL) {
+        continue;
+      }
+    } else {
+      if (!SfbIsContainerVolume (Entry->Volume) ||
+          Entry->DefaultTarget[0] == '\0') {
+        continue;
+      }
+      if (Action == SfbPreferenceMode &&
+          (!SfbIsManagedAblEntry (Entry) || !Entry->ModeFromConfig)) {
+        continue;
+      }
+    }
     State.Map[State.Count] = Index;
     Rows[State.Count].Text = Entry->Desc;
     Rows[State.Count++].Marker = Index == Menu->DefaultIndex ? L"*" : L" ";
   }
-  Rows[State.Count].Text = L"Back"; Rows[State.Count].Marker = L" ";
-  Template.Title = ChangeMode ? L"Change an Android entry's mode" : L"Save a default entry";
+  Rows[State.Count].Text = L"Back";
+  Rows[State.Count].Marker = L" ";
+  Template.Title = Action == SfbPreferenceMode
+    ? L"Change an Android entry's mode"
+    : (Action == SfbPreferenceBootOnce
+         ? L"Arm boot once" : L"Save a default entry");
   Template.Subtitle = State.Count ? L"Choose an entry." : L"No eligible boot entries.";
   Template.Footer = L"Volume Up/Down: move   Power: select";
-  Template.Rows = Rows; Template.RowCount = State.Count + 1; Template.Navigate = TRUE;
-  Template.Context = &State; Template.Handler = SfbHandleEntryChoice;
+  Template.Rows = Rows;
+  Template.RowCount = State.Count + 1;
+  Template.Navigate = TRUE;
+  Template.Context = &State;
+  Template.Handler = SfbHandleEntryChoice;
   (VOID)SfbRunMenu (&Template);
 }
 
@@ -1105,11 +1167,12 @@ SfbHandleAdvanced (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
   CONST SFB_MENU_STATE *Menu = &State->Menu;
   (VOID)Key;
   switch (Row) {
-  case 0: SfbRunEntryPreference (Menu, FALSE); break;
-  case 1: SfbRunEntryPreference (Menu, TRUE); break;
-  case 2: SfbRunPolicyMenu (); break;
-  case 3: SfbRunToolsBrowser (Menu->Mode); break;
-  case 4: SfbRunFileBrowser (Menu->Mode); break;
+  case 0: SfbRunEntryPreference (Menu, SfbPreferenceDefault); break;
+  case 1: SfbRunEntryPreference (Menu, SfbPreferenceBootOnce); break;
+  case 2: SfbRunEntryPreference (Menu, SfbPreferenceMode); break;
+  case 3: SfbRunPolicyMenu (); break;
+  case 4: SfbRunToolsBrowser (Menu->Mode); break;
+  case 5: SfbRunFileBrowser (Menu->Mode); break;
   default: return SfbMenuActionExit;
   }
   /* Preference saves can change the menu's policy and entry values. Refresh
@@ -1117,20 +1180,26 @@ SfbHandleAdvanced (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
   (VOID)SfbRefreshMainMenu (State);
   return SfbMenuActionContinue;
 }
+
 STATIC VOID
 SfbRunAdvancedMenu (IN SFB_MAIN_MENU_CONTEXT *State)
 {
   STATIC SFB_MENU_ROW Rows[] = {
-    {L"Save a default entry", L" "}, {L"Change an Android entry's mode", L" "},
-    {L"Boot policy",L" "}, {L"Android EFI tools",L" "},
-    {L"Select an EFI file",L" "}, {L"Back",L" "}
+    {L"Save a default entry", L" "}, {L"Arm boot once", L" "},
+    {L"Change an Android entry's mode", L" "}, {L"Boot policy",L" "},
+    {L"Android EFI tools",L" "}, {L"Select an EFI file",L" "},
+    {L"Back",L" "}
   };
   SFB_MENU_TEMPLATE Template;
   ZeroMem (&Template, sizeof (Template));
-  Template.Title = L"Advanced"; Template.Subtitle = L"Manage boot preferences or launch an EFI application.";
+  Template.Title = L"Advanced";
+  Template.Subtitle = L"Manage boot preferences or launch an EFI application.";
   Template.Footer = L"Volume Up/Down: move   Power: select";
-  Template.Rows = Rows; Template.RowCount = ARRAY_SIZE (Rows); Template.Navigate = TRUE;
-  Template.Context = State; Template.Handler = SfbHandleAdvanced;
+  Template.Rows = Rows;
+  Template.RowCount = ARRAY_SIZE (Rows);
+  Template.Navigate = TRUE;
+  Template.Context = State;
+  Template.Handler = SfbHandleAdvanced;
   (VOID)SfbRunMenu (&Template);
 }
 STATIC SFB_MENU_ACTION
