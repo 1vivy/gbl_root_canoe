@@ -14,7 +14,8 @@ copy_resources:
 	rm -rf build/toolkit build/toolkit_android.zip
 	mkdir -p build/toolkit
 	mkdir -p build/toolkit/bin
-	cp -r resources/* build/toolkit/
+	cp -a resources/. build/toolkit/
+	test -x build/toolkit/install-canoe.sh
 submodule_uefi: copy_resources
 	# Build the EDK2 tree at most once per workspace, and at most once per
 	# invocation. `make build` in submodules/uefi relinks LinuxLoader with
@@ -91,4 +92,5 @@ submodule_ablfvextractor: copy_resources
 	cp ../../submodules/ablfvextractor/build/extractfv_android ./build/toolkit/bin/extractfv
 build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_canoe_image submodule_canoe_provision canoe_manager submodule_ablfvextractor
 	# zip
+	test -x build/toolkit/install-canoe.sh
 	cd build/toolkit && zip -r ../toolkit_android.zip ./
