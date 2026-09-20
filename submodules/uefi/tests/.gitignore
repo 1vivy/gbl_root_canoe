@@ -38,3 +38,4 @@ test_last_boot_store
 /test_raw_persist_export
 
 test_reboot_targets
+test_boot_once
