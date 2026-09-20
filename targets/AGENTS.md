@@ -24,7 +24,7 @@
 Most package assembly is host-only. Installed package scripts are not:
 
 - Module customize.sh is manager-only and must never invoke deployment, partition reads/writes, volume-key workflows, or boot events. Activated WebUI workflows may write ABL, raw `efisp`, `persist/efisp.fat`, or `vendor_boot` after review.
-- Android temporary-root tooling is documented as boot-root-only; the operator owns raw ABL/BDS writes.
+- Android temporary-root tooling is boot-root-only except for `install-canoe.sh`, which writes raw `efisp` after an explicit `--apply` and only when `abl-check` proves the active slot already carries the vulnerable loader. It never writes an ABL partition. A patched ABL is modified, so its signature no longer verifies: XBL would reject it on the slot the device boots from, which is an EDL recovery, not a failed boot. It is also the managed boot-root loader BDS launches with security bypassed, and it has no efisp dispatch left. Every other raw ABL/BDS write remains the operator's.
 - Hosted managed USB does not mount a host filesystem; its implementation is outside this package tree.
 
 Keep destructive actions behind an explicit operator choice with exact slot, partition, image, and rollback path. Never add device probing or writes to a package build target. Preserve other-slot recovery and transaction rollback when changing install flows.
@@ -35,6 +35,7 @@ Run the exact behavior tests for an edited target, then build the artifact:
 
 ```sh
 sh targets/magisk_module/tests/test_flows.sh
+sh targets/toolkit_android/tests/test_one_shot_unlock.sh
 make target_toolkit_android
 make target_magisk_module
 ```

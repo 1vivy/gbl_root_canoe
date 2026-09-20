@@ -89,6 +89,36 @@ For an installed system, use [OTA preparation](./ota.md), the Overview
 boot-image shortcut, or [Uninstall Canoe](./uninstall.md). Installing or updating only the
 manager does not require a data format.
 
+## Rooted Android one-shot install
+
+The Android command-toolkit zip includes `install-canoe.sh` for the narrow case
+where the active slot already contains the supported vulnerable loader and a
+root shell is available, commonly through temporary root on a locked stock
+device. This route assumes the active slot's firmware is good and uses that
+slot's ABL and vbmeta as the derivation source; it does not choose a catalogue
+image or assess userdata compatibility.
+
+Run the wrapper first without `--apply`, supplying an explicit `--mode 0|1|2`,
+the mounted persist directory and a new rollback directory. The plan names the
+active slot, the single raw partition target, its image and the rollback
+command. Only repeat it with `--apply` after reviewing those exact values.
+There is no default or silently inherited device mode.
+
+The confirmed run verifies rollback copies of the active ABL and raw `efisp`
+before writing anything, prepares `efisp.fat`, publishes the active-slot loader
+and explicit default entry, unmounts the FAT container, then writes BDS to raw
+`efisp`. That is the only partition written. The active slot keeps the signed,
+vulnerable ABL it was verified to already carry: that image is what dispatches
+to `efisp`, and it is also the only one XBL will authenticate. A patched ABL is
+modified and therefore unsigned, so writing one to a slot costs you the phone
+to EDL rather than merely failing to boot. Preserve the reported `.before.img`
+files and their
+`.sha256` records off-device. If the operation stops after raw writing begins,
+run the exact `efisp` restore command printed by the wrapper; the untouched
+other slot remains the recovery path. See
+[Command-line tools](./commands.md#rooted-android-one-shot-install) for the
+invocation and ordering details.
+
 ## Image and data compatibility
 
 A source ABL used to derive a loader is separate from the vulnerable ABL flashed
