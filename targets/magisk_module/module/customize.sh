@@ -62,11 +62,6 @@ set_perm "$MODPATH/module.prop" 0 0 0644
 set_perm "$MODPATH/customize.sh" 0 0 0755
 set_perm "$MODPATH/lang.txt" 0 0 0644
 
-# The build step bundles ablrepo for the WebUI X's offline lookup. Keep it in
-# the installed module at /data/adb/modules/<module-id>/ablrepo; module.prop
-# is authoritative for that id. The native worker validates this exact packaged
-# repository against Android product/model/SoC facts; there is no remote fallback.
-
 # Input presentation follows. The native worker owns preparation and the
 # reviewed writes, shared with WebUI X; shell never implements partition writes.
 ui_print ""

@@ -37,7 +37,8 @@ ENV/
 !submodules/uefi/blobs/*.efi
 extracted/
 
-# Track abl images in the ablrepo (checked-in artifacts, not build output)
+# Track the ablrepo fixture ABL images the extractor goldens and image tests
+# read; they are checked-in test data, not build output.
 !ablrepo/**/*.img
 
 # VS Code

@@ -1,20 +1,34 @@
-# Vulnerable ABL repository
+# ABL test fixtures
 
-This repository contains older stock ABL images that still carry the GBL
-vulnerability. They are candidates for the device's `abl` partition when the
-installed ABL no longer loads `efisp`.
+Repository test-fixture data for the ABL extractor goldens and the image tests.
+**Not** a user-facing ABL catalogue: nothing packaged into a shipped artifact
+carries it, no device flow reads it, there is no remote mirror, and users supply
+their own ABL images.
+
+## Who reads it
+
+- `submodules/ablfvextractor/tests/goldens.json` records the expected extracted
+  digest and length for the 13 images under `ablrepo/<product>/`;
+  `tests/goldens.rs` re-derives each one from `ablrepo/<product>/abl.img`.
+- `tools/canoe-image/tests/cli.rs` uses `ablrepo/CPH2767/abl.img` as an input
+  image.
+
+Replacing an image invalidates the golden recorded for it, so a fixture image is
+replaced deliberately and its golden is re-recorded in the same change.
 
 ## Layout
 
 ```text
 ablrepo/
   <product>/
-    abl.img       # raw stock ABL with the GBL vulnerability
+    abl.img       # stock ABL, kept as extractor/image-test input
     abl.sha256    # sha256sum output for abl.img
     abl.meta      # identity and integrity metadata
 ```
 
-`<product>` is the exact value of `getprop ro.product.name` on the device.
+`<product>` is the exact value of `getprop ro.product.name` on the device the
+image was pulled from. That is what keeps fixture names aligned with the
+per-product rows the extractor records.
 
 ## `abl.meta`
 
@@ -33,44 +47,26 @@ order:
 | `codename` | Optional informational device codename |
 
 `model`, `soc`, and `abl_version` are only as strong as the evidence recorded
-in this repository. Use `unknown` when a value was not read from a device that
-booted the image. A codename is not a SoC: record it under `codename`, never
-under `soc`.
+here. Use `unknown` when a value was not read from a device that booted the
+image. A codename is not a SoC: record it under `codename`, never under `soc`.
 
-`same_image_as` means only that one image was contributed under multiple product
-names. It does not prove that the image boots on every listed model. An ABL
-identity mismatch can be unrecoverable, so the checks below are mandatory.
+`same_image_as` is fixture bookkeeping: one image is recorded under several
+product names so the same bytes are not stored twice. It is not a claim that the
+image boots on every listed model.
 
-## Lookup and validation
+## Adding or replacing a fixture
 
-When the current ABL lacks GBL, the device installer looks in this order:
+1. Place the image at `ablrepo/<product>/abl.img`.
+2. Generate `sha256sum abl.img > abl.sha256`.
+3. Add `abl.meta`, using `unknown` for every uncorroborated value.
+4. If it is byte-identical to another fixture, add `same_image_as` on both sides.
+5. Re-record the extractor goldens for an image they cover.
+6. Run `make version-check` from the repository root: the `ablrepo` data row
+   verifies every entry's image against its `abl.sha256` file and against the
+   `sha256=` and `bytes=` values in its `abl.meta`, so a mis-ingested fixture
+   fails the gate instead of first failing a test. Then run
+   `cargo test --locked --manifest-path submodules/ablfvextractor/Cargo.toml` to
+   prove the goldens still resolve their fixtures.
 
-1. local module data at `$MODPATH/ablrepo/<product>/`;
-2. the repository mirror at
-   `https://raw.githubusercontent.com/superturtlee/gbl_root_canoe/main/ablrepo/<product>/`.
-
-Before a candidate is written to `abl`, all checks must pass:
-
-1. `abl.meta` exists, `product` matches `getprop ro.product.name`, and the
-   recorded SHA-256 and byte count match the image;
-2. every non-`unknown` `model` and `soc` matches the device properties;
-3. extracting and patching the candidate succeeds, including the GBL patch.
-
-Only after validation is the candidate written to `abl`. The patched loader and
-TrustZone map are then derived from the ABL that was selected for the device.
-
-## Adding an image
-
-1. Obtain an older stock ABL that still has GBL for the device.
-2. Place it as `ablrepo/<product>/abl.img`.
-3. Generate `sha256sum abl.img > abl.sha256`.
-4. Add `abl.meta`, using `unknown` for every uncorroborated value.
-5. If it is byte-identical to another product image, add `same_image_as` on
-   both sides and retain the warning that this is not a boot endorsement.
-6. Commit the repository entry and publish the cloud mirror when appropriate.
-
-After adding or replacing entries, run `make version-check` from the firmware
-repository root. The gate verifies every entry's image against its
-`abl.sha256` file and against the `sha256=` and `bytes=` values in `abl.meta`.
-A mis-ingested entry therefore fails the release gate instead of first failing
-on a device.
+These are stock firmware images kept as test input. Nothing here is a flash
+payload, and a fixture image is never written to a device.

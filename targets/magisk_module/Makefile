@@ -31,7 +31,6 @@ copy_resources:
 	mkdir -p build/module
 	mkdir -p build/module/bin
 	cp -r module/* build/module/
-	[ -d ../../ablrepo ] && cp -r ../../ablrepo ./build/module/ablrepo || true
 # b5 packages only the explicit local KSU build. Never fetch the b4 archive.
 webui_dist: copy_resources
 	python3 ../../scripts/stage_ksu.py "$(CANOE_KSU_DIST)" build/module/webroot "$(CANOE_VERSION)"

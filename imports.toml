@@ -58,7 +58,7 @@ rev = "unknown"
 [[import]]
 id = "ablrepo"
 kind = "data"
-why = "Foreign per-product ABL candidates and their recorded digests and metadata."
+why = "Repository test fixtures for the ABL extractor goldens and image tests, with their recorded digests and metadata; not a user-facing ABL catalogue."
 path = "ablrepo"
 entry_image = "abl.img"
 entry_digest = "abl.sha256"

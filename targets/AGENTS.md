@@ -6,7 +6,7 @@
 
 - `toolkit_linux/` and `toolkit_windows/`: retired desktop package entrypoints; b4 remains tagged.
 - `toolkit_android/`: temporary-root device package and shared device scripts.
-- `magisk_module/`: installation/OTA module, WebUI, device scripts, binaries, and bundled `ablrepo` data.
+- `magisk_module/`: installation/OTA module, WebUI, device scripts, and binaries.
 - Every `targets/*/build/` directory is generated output.
 
 ## Packaging invariants
@@ -14,7 +14,7 @@
 - All packages built in one release invocation must carry byte-identical BDS and standalone EFI artifacts.
 - A UEFI source edit requires one clean rebuild before packaging. Use top-level `UEFI_REBUILD=1`; never rebuild the non-reproducible EDK II tree independently per package.
 - Delete or reject stale package inputs before assembly. Existence alone is insufficient when a prior artifact could survive.
-- Package maintained resources and built outputs only. Do not package `.work`, caches, tests, source-only fixtures, absolute local paths, device dumps, or unsigned scratch images.
+- Package maintained resources and built outputs only. Do not package `.work`, caches, tests, source-only fixtures, absolute local paths, device dumps, or unsigned scratch images. `ablrepo/` is one of those source-only fixtures: it feeds the extractor goldens and image tests, no target stages it, and no package presents it as a shipped ABL catalogue.
 - Preserve executable bits, required Windows line endings, and pinned asset digests.
 - `version.mk` is authoritative; package metadata must pass `make version-check`.
 - Supplied user ABL/vbmeta files remain derivation inputs and are not silently copied as flash payloads.

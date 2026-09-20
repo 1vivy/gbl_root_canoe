@@ -8,7 +8,6 @@ TMP=${TMPDIR:-/tmp}/canoe-module-bootstrap.$$
 MOD="$TMP/module"
 BY_NAME="$TMP/by-name"
 BOOT_ROOT="$TMP/persist/efisp"
-ABL_REPO="$MOD/ablrepo/test-device"
 MARKER="$TMP/partition-operation.marker"
 UI_LOG="$TMP/ui.log"
 CONFIG_LOG="$TMP/config.log"
@@ -21,7 +20,7 @@ assert_eq() { [ "$1" = "$2" ] || fail "$3 (got '$1', want '$2')"; }
 assert_contains() { case "$1" in *"$2"*) ;; *) fail "$3" ;; esac; }
 
 mkdir -p "$MOD/bin" "$MOD/webroot" "$MOD/efisp/tools" "$BY_NAME" \
-  "$BOOT_ROOT/tools" "$ABL_REPO"
+  "$BOOT_ROOT/tools"
 cp "$ROOT/targets/magisk_module/module/customize.sh" "$MOD/customize.sh"
 printf 'abl-a-before\n' > "$BY_NAME/abl_a"
 printf 'abl-b-before\n' > "$BY_NAME/abl_b"
@@ -33,9 +32,6 @@ printf 'old-sidecar\n' > "$BOOT_ROOT/boot_a.efi"
 printf 'old-profile\n' > "$BOOT_ROOT/boot_a.efi.gm2p"
 printf 'old-tzmap\n' > "$BOOT_ROOT/boot_a.efi.tzmap"
 printf 'zh\n' > "$MOD/lang.txt"
-printf 'abl fixture\n' > "$ABL_REPO/abl.img"
-printf 'digest fixture\n' > "$ABL_REPO/abl.sha256"
-printf 'metadata fixture\n' > "$ABL_REPO/abl.meta"
 
 before_root="$TMP/root.before.tar"
 after_root="$TMP/root.after.tar"
@@ -136,8 +132,6 @@ cmp "$TMP/abl_b.before" "$BY_NAME/abl_b" || fail 'inactive ABL changed'
 cmp "$TMP/efisp.before" "$BY_NAME/efisp" || fail 'efisp partition changed'
 tar -cf "$after_root" -C "$BOOT_ROOT" .
 cmp "$before_root" "$after_root" || fail 'boot root changed during bootstrap'
-[ -d "$MOD/ablrepo" ] || fail 'bundled ABL repository was not retained for offline lookup'
-assert_file "$ABL_REPO/abl.img"
 pass 'bootstrap writes no partition and leaves the boot root byte-identical'
 
 sh -n "$ROOT/targets/magisk_module/module/customize.sh"

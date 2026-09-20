@@ -23,7 +23,7 @@ The raw `efisp` partition is not a filesystem. It contains `BDS.efi` as a whole-
 - `tools/canoe-host/`: retired. Unreachable from every shipped path; the Rust `canoe` CLI and the app replaced it. Do not revive it.
 - `tools/mode2-profile/`, `tools/abl-tzmap/`: Rust sidecar derivation.
 - `targets/`: end-user package assembly; `targets/*/build/` is generated.
-- `ablrepo/`: intentionally tracked vulnerable ABL artifacts and metadata, not general build output.
+- `ablrepo/`: test-fixture ABL images and metadata for the ABL extractor goldens and image tests; not a user-facing ABL catalogue and never packaged into a shipped artifact.
 - `wiki/`: user/operator documentation.
 - `dev_targets/`: development-only workflows, never release defaults.
 - `.work/`, `.cache/`, `.ruff_cache/`, EDK II `Build/`/`Conf/`, Rust `target/`, logs, extracted trees, and ordinary `.efi`/`.img`/`.bin` files: local artifacts unless explicitly unignored.
