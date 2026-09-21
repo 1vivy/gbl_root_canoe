@@ -1184,12 +1184,12 @@ SfbAddFastbootEntry (VOID)
   if (!EFI_ERROR (Status)) {
     Status = SfbStoreConfigFastbootEntry (Root);
   }
+  /* A refused edit is not necessarily a duplicate: a full entry table, an
+   * unparseable stored config and an exhausted size budget refuse the same
+   * way. The status code carries the detail into the log. */
   SfbReportStatus (
-    EFI_ERROR (Status)
-      ? (Status == EFI_INVALID_PARAMETER
-           ? L"Super Fastboot entry already configured"
-           : L"Could not add the Super Fastboot entry")
-      : L"Super Fastboot entry added",
+    EFI_ERROR (Status) ? L"Could not add the Super Fastboot entry"
+                       : L"Super Fastboot entry added",
     Status);
   if (Root != NULL) { Root->Close (Root); }
   if (Volumes != NULL) { FreePool (Volumes); }

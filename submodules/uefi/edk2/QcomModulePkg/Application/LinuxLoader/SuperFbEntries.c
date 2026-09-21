@@ -1035,6 +1035,9 @@ SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
       ZeroMem (Slot, sizeof (*Slot));
       Slot->Kind = SfbEntryFastboot;
       Slot->BlsIndex = SFB_NO_BLS;
+      /* Without its container handle the row is filtered out of Save a
+       * default entry, which is the only way to make it the unattended boot. */
+      Slot->Volume = Volume;
       StrnCpyS (Slot->Desc, SFB_DESC_CHARS, Title, SFB_DESC_CHARS - 1);
       AsciiStrCpyS (Slot->DefaultTarget, sizeof (Slot->DefaultTarget),
                     Config->Entry[ConfigIndex].Id);

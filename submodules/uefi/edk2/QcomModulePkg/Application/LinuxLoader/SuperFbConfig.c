@@ -777,12 +777,14 @@ typedef enum {
   SfbEditDefault, SfbEditMode, SfbEditPolicy, SfbEditAddFastboot
 } SFB_CFG_EDIT;
 
-/* The resident Super Fastboot row this menu can add. Selecting it as the
- * default is a separate action, and that is what makes the entry unattended. */
+/* The resident Super Fastboot row this menu can add. The title differs from
+ * the built-in "Enter Super Fastboot" action so the two are distinguishable
+ * when both appear. Selecting it as the default is a separate action, and
+ * that is what makes the entry unattended. */
 #define SFB_CFG_FASTBOOT_ID     "super-fastboot"
 #define SFB_CFG_FASTBOOT_BLOCK \
   "entry " SFB_CFG_FASTBOOT_ID "\n" \
-  "  title Enter Super Fastboot\n" \
+  "  title Super Fastboot\n" \
   "  action fastboot\n" \
   "  role other\n"
 

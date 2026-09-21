@@ -87,7 +87,8 @@ Boot entries retain their existing discovery order. The grouped actions are:
 
 - USB Mass Storage and Enter Super Fastboot.
 - **Advanced**: Save a default entry, Arm boot once, Change an Android entry's
-  mode, Boot policy, Android EFI tools, and Select an EFI file.
+  mode, Boot policy, Add a Super Fastboot entry, Android EFI tools, and Select
+  an EFI file.
 - **Reboot**: Fastbootd, Bootloader, Recovery, and System.
 - Power off and Restart.
 

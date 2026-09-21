@@ -135,7 +135,8 @@ SfbStoreConfigEdit (EFI_FILE_PROTOCOL *Root, SFB_STORE_EDIT Edit,
     goto Done;
   }
   Status = SfbReadStoredConfig (Root, Current, &Size, Config, &Previous);
-  if (Status == EFI_NOT_FOUND && Edit == SfbStorePolicy) {
+  if (Status == EFI_NOT_FOUND &&
+      (Edit == SfbStorePolicy || Edit == SfbStoreFastbootEntry)) {
     CONST CHAR8 Seed[] = "version 1\ngeneration 0\n";
     CopyMem (Current, Seed, sizeof (Seed));
     Size = sizeof (Seed) - 1;

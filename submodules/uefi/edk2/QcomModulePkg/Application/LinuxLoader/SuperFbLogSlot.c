@@ -114,10 +114,13 @@ SfbLogOpenSlot (
       continue;
     }
     if (EFI_ERROR (Status) || Candidate == NULL) {
+      /* A slot that will not open contributes nothing to the sequence and is
+       * not a reason to drop the session: a damaged logfs is exactly when the
+       * log matters most. A run with no usable slot at all still fails below. */
       if (Candidate != NULL) {
         Candidate->Close (Candidate);
       }
-      return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
+      continue;
     }
 
     SlotSeq = SfbLogSlotSequence (Candidate);
