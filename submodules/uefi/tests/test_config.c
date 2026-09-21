@@ -553,10 +553,49 @@ TestExplicitDefaultEdit (void)
   assert (Size == 0);
 }
 
+static void
+TestAddFastbootEntry (void)
+{
+  const char Input[] = "# keep me\nversion 1\ngeneration 4\ndefault a\n"
+    "entry a\n title A\n image boot_a.efi\n mode 2\n options untouched=1\n";
+  char Output[SFB_CONFIG_MAX_BYTES + 1];
+  SFB_UINTN Size = SFB_CONFIG_MAX_BYTES;
+  assert (SfbConfigAddFastbootEntry (Input, strlen (Input), Output, &Size));
+  Output[Size] = 0;
+  /* The existing rows, the comment and the unrelated default all survive. */
+  assert (strstr (Output, "# keep me\n") != NULL);
+  assert (strstr (Output, "entry a\n title A\n image boot_a.efi\n mode 2\n options untouched=1\n") != NULL);
+  assert (SfbConfigParse (Output, Size, &gConfig));
+  assert (gConfig.Generation == 5 && gConfig.Count == 2);
+  assert (gConfig.Entry[0].Action == SfbConfigActionNone && gConfig.Entry[0].Mode == 2);
+  assert (gConfig.Entry[1].Action == SfbConfigActionFastboot);
+  assert (gConfig.Entry[1].Image[0] == 0);
+  /* Adding a row is not the same as arming it: the default is untouched. */
+  assert (gConfig.DefaultIndex == 0);
+
+  /* A second resident row would be indistinguishable in the menu. */
+  SFB_UINTN Again = SFB_CONFIG_MAX_BYTES;
+  char Second[SFB_CONFIG_MAX_BYTES + 1];
+  assert (!SfbConfigAddFastbootEntry (Output, Size, Second, &Again));
+  assert (Again == 0);
+
+  /* The saved row is selectable as the default, which is what auto-enters. */
+  Again = SFB_CONFIG_MAX_BYTES;
+  assert (SfbConfigEditDefault (Output, Size, "super-fastboot", Second, &Again));
+  assert (SfbConfigParse (Second, Again, &gConfig));
+  assert (gConfig.DefaultIndex == 1 && gConfig.Entry[1].Action == SfbConfigActionFastboot);
+
+  /* No room to append is a refusal, never a truncated entry. */
+  Again = strlen (Input) + 4;
+  assert (!SfbConfigAddFastbootEntry (Input, strlen (Input), Second, &Again));
+  assert (Again == 0);
+}
+
 int
 main (void)
 {
   TestExplicitDefaultEdit ();
+  TestAddFastbootEntry ();
   TestVersionIsMandatory ();
   TestDefaultsWhenOmitted ();
   TestFastbootAction ();

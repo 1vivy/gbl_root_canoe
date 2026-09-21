@@ -1160,6 +1160,41 @@ Done:
   if (Volumes != NULL) { FreePool (Volumes); }
 }
 
+/* Adds the resident Super Fastboot row to canoe.cfg. It only appears in the
+ * menu from this point; Save a default entry is what makes it unattended. */
+STATIC VOID
+SfbAddFastbootEntry (VOID)
+{
+  EFI_FILE_PROTOCOL *Root = NULL;
+  EFI_HANDLE *Volumes = NULL;
+  UINTN Count = 0, Index;
+  EFI_STATUS Status;
+
+  Status = SfbLocateVolumes (&Volumes, &Count);
+  if (!EFI_ERROR (Status)) {
+    Status = EFI_NOT_FOUND;
+    for (Index = 0; Index < Count; Index++) {
+      if (SfbIsContainerVolume (Volumes[Index])) {
+        Status = SfbOpenVolumeRoot (Volumes[Index], &Root);
+        break;
+      }
+    }
+  }
+  if (!EFI_ERROR (Status) && Root == NULL) { Status = EFI_DEVICE_ERROR; }
+  if (!EFI_ERROR (Status)) {
+    Status = SfbStoreConfigFastbootEntry (Root);
+  }
+  SfbReportStatus (
+    EFI_ERROR (Status)
+      ? (Status == EFI_INVALID_PARAMETER
+           ? L"Super Fastboot entry already configured"
+           : L"Could not add the Super Fastboot entry")
+      : L"Super Fastboot entry added",
+    Status);
+  if (Root != NULL) { Root->Close (Root); }
+  if (Volumes != NULL) { FreePool (Volumes); }
+}
+
 STATIC SFB_MENU_ACTION
 SfbHandleAdvanced (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
 {
@@ -1171,8 +1206,9 @@ SfbHandleAdvanced (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
   case 1: SfbRunEntryPreference (Menu, SfbPreferenceBootOnce); break;
   case 2: SfbRunEntryPreference (Menu, SfbPreferenceMode); break;
   case 3: SfbRunPolicyMenu (); break;
-  case 4: SfbRunToolsBrowser (Menu->Mode); break;
-  case 5: SfbRunFileBrowser (Menu->Mode); break;
+  case 4: SfbAddFastbootEntry (); break;
+  case 5: SfbRunToolsBrowser (Menu->Mode); break;
+  case 6: SfbRunFileBrowser (Menu->Mode); break;
   default: return SfbMenuActionExit;
   }
   /* Preference saves can change the menu's policy and entry values. Refresh
@@ -1187,6 +1223,7 @@ SfbRunAdvancedMenu (IN SFB_MAIN_MENU_CONTEXT *State)
   STATIC SFB_MENU_ROW Rows[] = {
     {L"Save a default entry", L" "}, {L"Arm boot once", L" "},
     {L"Change an Android entry's mode", L" "}, {L"Boot policy",L" "},
+    {L"Add a Super Fastboot entry",L" "},
     {L"Android EFI tools",L" "}, {L"Select an EFI file",L" "},
     {L"Back",L" "}
   };

@@ -173,5 +173,9 @@ SFB_BOOLEAN SfbConfigEditMode (const char *Bytes, SFB_UINTN Size,
 SFB_BOOLEAN SfbConfigEditPolicy (const char *Bytes, SFB_UINTN Size,
                                 const SFB_CONFIG *Policy,
                                 char *Output, SFB_UINTN *OutputSize);
+/* Append the resident Super Fastboot entry. Refuses when one already exists;
+ * selecting it as the default is a separate edit. */
+SFB_BOOLEAN SfbConfigAddFastbootEntry (const char *Bytes, SFB_UINTN Size,
+                                       char *Output, SFB_UINTN *OutputSize);
 
 #endif /* __SUPER_FB_CONFIG_H__ */

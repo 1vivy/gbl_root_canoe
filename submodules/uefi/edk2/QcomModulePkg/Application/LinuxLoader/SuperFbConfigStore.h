@@ -19,4 +19,7 @@ EFI_STATUS SfbStoreConfigDefault (EFI_FILE_PROTOCOL *Root,
                                   CONST CHAR8 *Target);
 EFI_STATUS SfbStoreConfigMode (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target, UINT8 Mode);
 EFI_STATUS SfbStoreConfigPolicy (EFI_FILE_PROTOCOL *Root, CONST SFB_CONFIG *Policy);
+/* Add the resident Super Fastboot entry to canoe.cfg. Refuses when one is
+ * already configured; it becomes unattended only once saved as the default. */
+EFI_STATUS SfbStoreConfigFastbootEntry (EFI_FILE_PROTOCOL *Root);
 #endif

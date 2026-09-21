@@ -111,9 +111,13 @@ Done:
   return Status;
 }
 
+typedef enum {
+  SfbStoreDefault, SfbStoreMode, SfbStorePolicy, SfbStoreFastbootEntry
+} SFB_STORE_EDIT;
+
 STATIC EFI_STATUS
-SfbStoreConfigEdit (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target,
-                    UINT8 Mode, CONST SFB_CONFIG *Policy, BOOLEAN ChangeMode)
+SfbStoreConfigEdit (EFI_FILE_PROTOCOL *Root, SFB_STORE_EDIT Edit,
+                    CONST CHAR8 *Target, UINT8 Mode, CONST SFB_CONFIG *Policy)
 {
   CHAR8 *Current = NULL;
   CHAR8 *Next = NULL;
@@ -121,6 +125,7 @@ SfbStoreConfigEdit (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target,
   UINTN Size;
   UINTN NextSize = SFB_CONFIG_MAX_BYTES;
   BOOLEAN Previous;
+  BOOLEAN Edited;
   EFI_STATUS Status = EFI_OUT_OF_RESOURCES;
 
   Current = AllocateZeroPool (SFB_CONFIG_MAX_BYTES + 1);
@@ -130,7 +135,7 @@ SfbStoreConfigEdit (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target,
     goto Done;
   }
   Status = SfbReadStoredConfig (Root, Current, &Size, Config, &Previous);
-  if (Status == EFI_NOT_FOUND && Policy != NULL) {
+  if (Status == EFI_NOT_FOUND && Edit == SfbStorePolicy) {
     CONST CHAR8 Seed[] = "version 1\ngeneration 0\n";
     CopyMem (Current, Seed, sizeof (Seed));
     Size = sizeof (Seed) - 1;
@@ -138,9 +143,22 @@ SfbStoreConfigEdit (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target,
     Status = EFI_SUCCESS;
   }
   if (EFI_ERROR (Status)) { goto Done; }
-  if (!(Policy != NULL ? SfbConfigEditPolicy (Current, Size, Policy, Next, &NextSize) :
-        ChangeMode ? SfbConfigEditMode (Current, Size, Target, Mode, Next, &NextSize) :
-        SfbConfigEditDefault (Current, Size, Target, Next, &NextSize))) {
+  switch (Edit) {
+  case SfbStorePolicy:
+    Edited = SfbConfigEditPolicy (Current, Size, Policy, Next, &NextSize);
+    break;
+  case SfbStoreMode:
+    Edited = SfbConfigEditMode (Current, Size, Target, Mode, Next, &NextSize);
+    break;
+  case SfbStoreFastbootEntry:
+    Edited = SfbConfigAddFastbootEntry (Current, Size, Next, &NextSize);
+    break;
+  case SfbStoreDefault:
+  default:
+    Edited = SfbConfigEditDefault (Current, Size, Target, Next, &NextSize);
+    break;
+  }
+  if (!Edited) {
     Status = EFI_INVALID_PARAMETER;
     goto Done;
   }
@@ -159,8 +177,10 @@ Done:
 }
 
 EFI_STATUS SfbStoreConfigDefault (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target)
-{ return SfbStoreConfigEdit (Root, Target, 0, NULL, FALSE); }
+{ return SfbStoreConfigEdit (Root, SfbStoreDefault, Target, 0, NULL); }
 EFI_STATUS SfbStoreConfigMode (EFI_FILE_PROTOCOL *Root, CONST CHAR8 *Target, UINT8 Mode)
-{ return SfbStoreConfigEdit (Root, Target, Mode, NULL, TRUE); }
+{ return SfbStoreConfigEdit (Root, SfbStoreMode, Target, Mode, NULL); }
 EFI_STATUS SfbStoreConfigPolicy (EFI_FILE_PROTOCOL *Root, CONST SFB_CONFIG *Policy)
-{ return SfbStoreConfigEdit (Root, NULL, 0, Policy, FALSE); }
+{ return SfbStoreConfigEdit (Root, SfbStorePolicy, NULL, 0, Policy); }
+EFI_STATUS SfbStoreConfigFastbootEntry (EFI_FILE_PROTOCOL *Root)
+{ return SfbStoreConfigEdit (Root, SfbStoreFastbootEntry, NULL, 0, NULL); }

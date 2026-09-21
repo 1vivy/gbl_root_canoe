@@ -773,7 +773,18 @@ SfbCfgDecimal (SFB_UINT32 Value, char *Output)
 }
 
 /* Keep text preservation and generation handling common to the three edits. */
-typedef enum { SfbEditDefault, SfbEditMode, SfbEditPolicy } SFB_CFG_EDIT;
+typedef enum {
+  SfbEditDefault, SfbEditMode, SfbEditPolicy, SfbEditAddFastboot
+} SFB_CFG_EDIT;
+
+/* The resident Super Fastboot row this menu can add. Selecting it as the
+ * default is a separate action, and that is what makes the entry unattended. */
+#define SFB_CFG_FASTBOOT_ID     "super-fastboot"
+#define SFB_CFG_FASTBOOT_BLOCK \
+  "entry " SFB_CFG_FASTBOOT_ID "\n" \
+  "  title Enter Super Fastboot\n" \
+  "  action fastboot\n" \
+  "  role other\n"
 
 static SFB_BOOLEAN
 SfbCfgAppendNumber (char *Output, SFB_UINTN Capacity, SFB_UINTN *Used,
@@ -808,6 +819,14 @@ SfbCfgEdit (const char *Bytes, SFB_UINTN Size, SFB_CFG_EDIT Edit,
         Policy->KeyWindowMs > SFB_CONFIG_KEY_WINDOW_MAX ||
         Policy->MenuTimeoutSeconds > SFB_CONFIG_MENU_TIMEOUT_MAX ||
         Policy->MenuMode > SfbConfigMenuMenu) { return FALSE; }
+  } else if (Edit == SfbEditAddFastboot) {
+    /* One resident row is enough, and a second would be indistinguishable in
+     * the menu. A taken id or a full table refuses rather than replacing. */
+    if (Config.Count >= SFB_CONFIG_MAX_ENTRIES) { return FALSE; }
+    for (Index = 0; Index < Config.Count; Index++) {
+      if (Config.Entry[Index].Action == SfbConfigActionFastboot ||
+          SfbCfgEquals (Config.Entry[Index].Id, SFB_CFG_FASTBOOT_ID)) { return FALSE; }
+    }
   } else {
     if (Target == NULL || !SfbCfgParseDefault (Target, SfbCfgLength (Target), Id, Stem, &IsBls) ||
         (Edit == SfbEditMode && (IsBls || Mode > SFB_CONFIG_MODE_MAX))) { return FALSE; }
@@ -859,7 +878,23 @@ SfbCfgEdit (const char *Bytes, SFB_UINTN Size, SFB_CFG_EDIT Edit,
       }
     }
   }
+  if (Edit == SfbEditAddFastboot) {
+    /* Appended after every preserved line so it cannot land inside another
+     * entry's block, which would silently retitle that entry instead. */
+    if ((Used != 0 && Output[Used - 1] != '\n' &&
+         !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) ||
+        !SfbCfgAppend (Output, Capacity, &Used, SFB_CFG_FASTBOOT_BLOCK,
+                       SfbCfgLength (SFB_CFG_FASTBOOT_BLOCK))) { return FALSE; }
+  }
   if (!SfbConfigParse (Output, Used, &Config) || Config.Generation != Generation) { return FALSE; }
+  if (Edit == SfbEditAddFastboot) {
+    Found = FALSE;
+    for (Index = 0; Index < Config.Count; Index++) {
+      if (SfbCfgEquals (Config.Entry[Index].Id, SFB_CFG_FASTBOOT_ID) &&
+          Config.Entry[Index].Action == SfbConfigActionFastboot) { Found = TRUE; }
+    }
+    if (!Found) { return FALSE; }
+  }
   *OutputSize = Used;
   return TRUE;
 }
@@ -873,3 +908,6 @@ SFB_BOOLEAN SfbConfigEditMode (const char *Bytes, SFB_UINTN Size, const char *Ta
 SFB_BOOLEAN SfbConfigEditPolicy (const char *Bytes, SFB_UINTN Size, const SFB_CONFIG *Policy,
                                 char *Output, SFB_UINTN *OutputSize)
 { return SfbCfgEdit (Bytes, Size, SfbEditPolicy, NULL, 0, Policy, Output, OutputSize); }
+SFB_BOOLEAN SfbConfigAddFastbootEntry (const char *Bytes, SFB_UINTN Size,
+                                       char *Output, SFB_UINTN *OutputSize)
+{ return SfbCfgEdit (Bytes, Size, SfbEditAddFastboot, NULL, 0, NULL, Output, OutputSize); }
