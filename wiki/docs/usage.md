@@ -131,6 +131,24 @@ consumed on the next BDS start even if the selected child fails or returns; an
 entry that no longer resolves opens the normal menu with a notice instead of
 launching another row.
 
+### From a rooted Android shell
+
+The module ships the same operation as a command, so a destination can be armed
+without reaching the menu or a host:
+
+```sh
+/data/adb/modules/fake_bl_efisp/bin/canoe-manager boot-once show
+/data/adb/modules/fake_bl_efisp/bin/canoe-manager boot-once arm fastboot --reboot
+/data/adb/modules/fake_bl_efisp/bin/canoe-manager boot-once clear
+```
+
+`--reboot` performs an ordinary reboot once the record is written. Reboot that
+way rather than with `reboot recovery` or `reboot bootloader`: both write their
+own command into the same BCB field and silently discard an armed record.
+For the same reason arming refuses when a vendor command such as
+`boot-recovery` is already pending; pass `--replace` to cancel it deliberately.
+`clear` removes only a Canoe record and leaves a vendor command untouched.
+
 ## The Super Fastboot screen
 
 While BDS waits for a host it shows:
