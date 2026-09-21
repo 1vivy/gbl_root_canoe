@@ -47,12 +47,14 @@ VOID    SfbLogNote (IN CONST CHAR8 *Format, ...);
    file was written and closed. Fail-soft: never fatal to the caller. */
 EFI_STATUS SfbLogFlush (IN CONST CHAR8 *Tag);
 
-/* Open this session's log file in the rotation, evicting the oldest slot when
-   all are taken. Declared here because the writer and the rotation live in
-   separate files: a hand-copied prototype breaks at link, not at compile. */
+/* Open this session's log file in the rotation, evicting the lowest-sequence
+   slot when all are taken, and report the sequence this session must record.
+   Declared here because the writer and the rotation live in separate files: a
+   hand-copied prototype breaks at link, not at compile. */
 EFI_STATUS SfbLogOpenSlot (
   IN  EFI_FILE_PROTOCOL  *Directory,
-  OUT EFI_FILE_PROTOCOL **File
+  OUT EFI_FILE_PROTOCOL **File,
+  OUT UINT64             *Sequence
   );
 
 #endif /* __SUPER_FB_LOG_H__ */

@@ -140,6 +140,7 @@ SfbLogFlush (
   CHAR8              Header[256];
   CHAR8             *Captured;
   UINTN              CapturedLength;
+  UINT64             Sequence;
 
   Root = NULL;
   Directory = NULL;
@@ -166,12 +167,14 @@ SfbLogFlush (
     Status = EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
     goto Exit;
   }
-  Status = SfbLogOpenSlot (Directory, &File);
+  Status = SfbLogOpenSlot (Directory, &File, &Sequence);
   if (EFI_ERROR (Status)) {
     goto Exit;
   }
+  /* seq= leads the header so rotation can find it in a short probe read. */
   if (AsciiSPrint (Header, sizeof (Header),
-                   "Canoe BDS session; tag=%a; captured-bytes=%Lu\r\n",
+                   "Canoe BDS session; seq=%Lu; tag=%a; captured-bytes=%Lu\r\n",
+                   Sequence,
                    ((Tag == NULL) ? "unspecified" : Tag),
                    (UINT64)CapturedLength) >= sizeof (Header)) {
     Status = EFI_BAD_BUFFER_SIZE;

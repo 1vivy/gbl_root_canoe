@@ -39,3 +39,4 @@ test_last_boot_store
 
 test_reboot_targets
 test_boot_once
+test_log_slot

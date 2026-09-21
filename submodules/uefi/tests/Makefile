@@ -261,3 +261,11 @@ test_boot_once: test_boot_once.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBootOnce.c
 	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar -ffunction-sections -fdata-sections $(HOOK_INCLUDES) -Wl,--gc-sections -o $@ $^
 	./$@
+
+.PHONY: test_log_slot
+test: test_log_slot
+test_log_slot: test_log_slot.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLogSlot.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLog.h
+	$(CC) $(CFLAGS) -DMDEPKG_NDEBUG -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
+	./$@

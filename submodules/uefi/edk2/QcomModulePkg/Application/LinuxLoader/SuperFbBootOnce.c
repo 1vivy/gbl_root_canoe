@@ -90,16 +90,19 @@ SfbBootOnceConsume (IN SFB_BOOT_MODE Mode)
   Status = RebootTargetBootOnceReadAndClear (Selector, &Found);
   if (EFI_ERROR (Status)) {
     DEBUG ((EFI_D_ERROR,
-            "SFB: boot-once read/clear refused; normal policy retained: %r\n",
+            "SFB: MARK boot-once read=failed status=%r policy=normal\n",
             Status));
     return SfbBootOnceNone;
   }
   if (!Found) {
+    DEBUG ((EFI_D_INFO, "SFB: MARK boot-once armed=0\n"));
     return SfbBootOnceNone;
   }
 
   SfbBuildMenu (&Menu, Mode, FALSE);
   Index = SfbBootOnceResolve (&Menu, Selector);
+  DEBUG ((EFI_D_INFO, "SFB: MARK boot-once armed=1 selector='%a' resolved=%u\n",
+          Selector, (UINT32)(Index != SFB_NO_INDEX)));
   if (Index == SFB_NO_INDEX) {
     mRejectedNotice = TRUE;
     Result = SfbBootOnceMenu;

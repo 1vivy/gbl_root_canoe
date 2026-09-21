@@ -6,51 +6,98 @@
  */
 
 #include <Uefi.h>
-#include <Guid/FileInfo.h>
+#include <Library/BaseMemoryLib.h>
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Protocol/SimpleFileSystem.h>
 
+#include "SuperFbLog.h"
+
 #define SFB_LOG_FILE_COUNT   3
+/* Enough for the header line's leading fields; seq= is written first. */
+#define SFB_LOG_SEQ_PROBE    96
 
-typedef struct {
-  EFI_FILE_INFO Info;
-  CHAR16       ExtraName[9];
-} SFB_FILE_INFO;
-
+/*
+ * Rotation orders slots by a counter carried in the log header, not by the
+ * FAT modification time. There is no RTC at this point in boot, so a freshly
+ * written file can be stamped older than the stale ones beside it; measured on
+ * the OnePlus 15 that pinned eviction to one slot forever, and every session
+ * overwrote the previous session while two ancient logs survived untouched.
+ * An unreadable or header-less slot sorts as sequence zero, which makes it the
+ * first thing evicted - a corrupt slot is the one worth reusing.
+ */
 STATIC
 UINT64
-SfbTimeKey (
-  IN CONST EFI_TIME *Time
+SfbLogSlotSequence (
+  IN EFI_FILE_PROTOCOL *File
   )
 {
-  return (((((((UINT64)Time->Year * 13 + Time->Month) * 32 + Time->Day) * 24 +
-             Time->Hour) * 60 + Time->Minute) * 60) + Time->Second);
+  CHAR8      Probe[SFB_LOG_SEQ_PROBE];
+  EFI_STATUS Status;
+  UINT64     Sequence;
+  UINTN      Size;
+  UINTN      Index;
+
+  if (File->Read == NULL) {
+    return 0;
+  }
+  Size = sizeof (Probe);
+  Status = File->Read (File, &Size, Probe);
+  if (EFI_ERROR (Status) || Size > sizeof (Probe)) {
+    return 0;
+  }
+  for (Index = 0; Index + 4 <= Size; Index++) {
+    if (CompareMem (Probe + Index, "seq=", 4) != 0) {
+      continue;
+    }
+    Index += 4;
+    Sequence = 0;
+    if (Index >= Size || Probe[Index] < '0' || Probe[Index] > '9') {
+      return 0;
+    }
+    for (; Index < Size && Probe[Index] >= '0' && Probe[Index] <= '9'; Index++) {
+      if (Sequence > (MAX_UINT64 - 9) / 10) {
+        return 0;
+      }
+      Sequence = Sequence * 10 + (UINT64)(Probe[Index] - '0');
+    }
+    return Sequence;
+  }
+  return 0;
 }
 
 EFI_STATUS
 SfbLogOpenSlot (
   IN  EFI_FILE_PROTOCOL  *Directory,
-  OUT EFI_FILE_PROTOCOL **File
+  OUT EFI_FILE_PROTOCOL **File,
+  OUT UINT64             *Sequence
   )
 {
   EFI_STATUS         Status;
   EFI_STATUS         CloseStatus;
   EFI_FILE_PROTOCOL *Candidate;
-  SFB_FILE_INFO      Info;
   CHAR16             Name[16];
-  UINT64             OldestKey;
-  UINTN              InfoSize;
+  UINT64             Highest;
+  UINT64             OldestSeq;
+  UINT64             SlotSeq;
   UINTN              Index;
   UINTN              LogIndex;
+  BOOLEAN            HaveFree;
   BOOLEAN            HaveOldest;
 
-  if (Directory == NULL || File == NULL) {
+  if (Directory == NULL || File == NULL || Sequence == NULL) {
     return EFI_INVALID_PARAMETER;
   }
   *File = NULL;
+  *Sequence = 0;
+  Highest = 0;
+  OldestSeq = 0;
+  LogIndex = 0;
+  HaveFree = FALSE;
   HaveOldest = FALSE;
 
+  /* Every slot is inspected even once a free one is known: the next sequence
+     has to outrank all of them, not just the ones scanned before the gap. */
   for (Index = 0; Index < SFB_LOG_FILE_COUNT; Index++) {
     UnicodeSPrint (Name, sizeof (Name), L"bds-%u.log", (UINT32)Index);
     Candidate = NULL;
@@ -60,8 +107,11 @@ SfbLogOpenSlot (
       if (Candidate != NULL) {
         Candidate->Close (Candidate);
       }
-      LogIndex = Index;
-      break;
+      if (!HaveFree) {
+        LogIndex = Index;
+        HaveFree = TRUE;
+      }
+      continue;
     }
     if (EFI_ERROR (Status) || Candidate == NULL) {
       if (Candidate != NULL) {
@@ -70,27 +120,28 @@ SfbLogOpenSlot (
       return EFI_ERROR (Status) ? Status : EFI_DEVICE_ERROR;
     }
 
-    InfoSize = sizeof (Info);
-    Status = Candidate->GetInfo (Candidate, &gEfiFileInfoGuid,
-                                &InfoSize, &Info);
+    SlotSeq = SfbLogSlotSequence (Candidate);
     CloseStatus = Candidate->Close (Candidate);
     Candidate = NULL;
-    if (EFI_ERROR (Status)) {
-      return Status;
-    }
     if (EFI_ERROR (CloseStatus)) {
       return CloseStatus;
     }
-    if (!HaveOldest ||
-        SfbTimeKey (&Info.Info.ModificationTime) < OldestKey) {
-      OldestKey = SfbTimeKey (&Info.Info.ModificationTime);
+    if (SlotSeq > Highest) {
+      Highest = SlotSeq;
+    }
+    if (!HaveFree && (!HaveOldest || SlotSeq < OldestSeq)) {
+      OldestSeq = SlotSeq;
       LogIndex = Index;
       HaveOldest = TRUE;
     }
   }
-  if (Index == SFB_LOG_FILE_COUNT && !HaveOldest) {
+  if (!HaveFree && !HaveOldest) {
     return EFI_NOT_FOUND;
   }
+  if (Highest == MAX_UINT64) {
+    return EFI_OUT_OF_RESOURCES;
+  }
+  *Sequence = Highest + 1;
 
   UnicodeSPrint (Name, sizeof (Name), L"bds-%u.log", (UINT32)LogIndex);
   Candidate = NULL;
