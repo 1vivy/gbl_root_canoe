@@ -70,7 +70,7 @@ Run the narrow contract first, then the relevant aggregate:
 - UEFI host contracts: `make -C submodules/uefi test`.
 - UEFI compile/relink after any `QcomModulePkg` C/H/INF/DSC/FDF change: canonical `gbl_builder:latest` build from the `canoe-bds-rebuild` workflow; require `submodules/uefi/build/BDS.efi` from the current sources.
 - Patcher: `make -C submodules/patcher test`.
-- App surfaces (separate repo `canoe-boot-manager`): `bun run typecheck` must report 0 errors AND 0 warnings, then `bun test`, then `bun run build` including its asset guard.
+- App surfaces (separate repo `canoe-boot-manager`): `bun run check` must report 0 errors AND 0 warnings, then `bun run build` including its asset guard, `bun run test`, `bun run test:wasm`, and `bun run test:browser`. Raw `bun test` runs the WASM/browser suites against a stale build.
 - Rust tools: `cargo test --locked --manifest-path` for `tools/canoe-bootmgr/Cargo.toml`, `tools/mode2-profile/Cargo.toml`, `tools/abl-tzmap/Cargo.toml`.
 - Historical userspace ext4 helper: excluded from release/default checks. Its archived qualification is not release acceptance for the browser Rust driver.
 - Shipped Windows binaries: `x86_64-w64-mingw32-objdump -p <exe> | grep 'DLL Name'` must list only system DLLs; a MinGW runtime import is a shipping bug.

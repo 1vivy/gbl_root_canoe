@@ -85,6 +85,12 @@ Super Fastboot** row highlighted on a three-second countdown, instead of a
 separate first-run screen. An unreadable filesystem is reported separately and
 is not classified as a new installation.
 
+Notice rows (skipped config lines, an unavailable boot-once target, a fallback to
+the previous configuration, an Android entry for the other slot) carry a `!`
+marker and explain themselves on the selection line. The entry for the slot
+currently booted is labelled `(current slot)`, computed live; the stored
+`active`/`inactive` roles are no longer shown, while `(backup)` still is.
+
 ### Chainloading
 
 BDS reads BLS Type #1 entries and publishes an initrd and device tree for
@@ -163,6 +169,15 @@ with the generated version files and the BDS build stamp.
   than leaving the decision implicit.
 - Published the last-boot launch record under a checked contract, cleared on BDS
   entry, before launch, and on child return or menu/fastboot re-entry.
+- Cleared the read-only flag Android's updater leaves on verified partitions
+  before writing, so the updated slot's `abl` can be written after an OTA
+  without a reboot. A Baseband Guard (BBG) kernel denial now reports BBG's
+  kernel-log line and the command-line values its allowlist uses.
+- Gave `persist/efisp.fat` the persist folder's SELinux label. Hosted builds
+  created it unlabeled, so on 6.12 kernels before 6.12.25, which SELinux-check
+  loop I/O, KSU boot-file work failed with EIO. New containers copy the parent's
+  label; the worker labels an existing unlabeled container before attaching its
+  loop and leaves other labels unchanged.
 
 ### Hardening
 

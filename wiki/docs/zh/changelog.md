@@ -25,7 +25,10 @@
 - **启动菜单**：菜单、子菜单与 EFI 文件浏览器共用同一套绘制与导航逻辑；两个音量
   键都能打开菜单；操作分为 USB Mass Storage、Enter Super Fastboot、Advanced、
   Reboot 以及关机与重启。启动根目录为空时打开同一菜单并高亮临时的 Entering
-  Super Fastboot 项，不再有独立首次启动画面。
+  Super Fastboot 项，不再有独立首次启动画面。提示行（跳过的配置行、一次性启动
+  目标不可用、回退到上一份配置、Android 启动项属于另一槽位）以 `!` 标记并在选中
+  时显示说明；当前启动槽位对应的启动项实时标注 `(current slot)`，不再显示保存的
+  `active`/`inactive` 角色，`(backup)` 仍保留。
 - **链式启动**：支持 BLS Type #1 条目（发布 initrd 与设备树）与任意 EFI 应用；
   `default` 可指向 `bls:<stem>`。BDS 不再自带载荷加载器，只作为 PE 选择器并原样
   传递 `options`。
@@ -44,7 +47,11 @@
   `ReadyToBoot`/`EndOfDxe`；修正 fastboot 应答分帧并暴露挂载失败；容器挂载保持在
   文件系统驱动生命周期内；允许内核 loop I/O 访问 persist 启动根目录；修正
   `vendor_boot` 补丁准备；报告观测到的 `DeviceInfo` 状态与所采取的动作；按受检
-  契约发布 last-boot 启动记录。
+  契约发布 last-boot 启动记录；写入前清除 Android 更新程序在已校验分区上留下的
+  只读标志，OTA 后无需重启即可写入更新槽位的 `abl`，Baseband Guard（BBG）内核
+  拒绝写入时报告其内核日志与允许列表所用的命令行值；为 `persist/efisp.fat` 设置
+  persist 目录的 SELinux 标签（此前在线版创建的容器无标签，6.12.25 之前的 6.12
+  内核会因 loop I/O 的 SELinux 检查导致 KSU 启动文件操作报 EIO）。
 - **加固**：重置活动槽位的重试计数时先重新读取分区表，使反复启动尝试不会累积成
   自动换槽；只有恰好一个匹配的 `abl_a`/`abl_b` 被标记为活动时才会写入。
 
