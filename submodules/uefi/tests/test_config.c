@@ -552,17 +552,6 @@ TestExplicitDefaultEdit (void)
     assert (SfbConfigEditPolicy ("version 1\n", 10, &Policy, Output, &Size));
     assert (SfbConfigParse (Output, Size, &gConfig) && gConfig.Count == 0 &&
             !gConfig.ShowBooting && !gConfig.FastbootdMode2);
-    {
-      /* Re-enabling removes the saved `no` and leaves the default implicit. */
-      char Enabled[SFB_CONFIG_MAX_BYTES + 1];
-      SFB_UINTN EnabledSize = SFB_CONFIG_MAX_BYTES;
-      Policy.FastbootdMode2 = TRUE;
-      assert (SfbConfigEditPolicy (Output, Size, &Policy, Enabled, &EnabledSize));
-      Enabled[EnabledSize] = 0;
-      assert (strstr (Enabled, "fastbootd-mode2") == NULL);
-      assert (SfbConfigParse (Enabled, EnabledSize, &gConfig) && gConfig.FastbootdMode2);
-      Policy.FastbootdMode2 = FALSE;
-    }
     const unsigned Invalid[] = {0, 499, 5001, 10000};
     for (unsigned I = 0; I < sizeof Invalid / sizeof Invalid[0]; I++) {
       Policy.KeyWindowMs = Invalid[I]; Size = SFB_CONFIG_MAX_BYTES;

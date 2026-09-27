@@ -17,8 +17,6 @@ boot_a.efi/boot_b.efi 必须带各自匹配的 GM2P/TZ-map。不存在旧目录�
 `boot-fastboot` 时，BDS 仅在本次会话中把受管理 Android 启动临时切换为 Mode 2，
 且不清除该命令、不改写已保存的启动项模式。子 ABL/recovery 仍会进入 userspace
 Fastbootd。`boot-recovery`、bootloader 与普通重启不触发此覆盖；设为 `no` 可禁用。
-写入端仅在禁用时写出 `fastbootd-mode2 no`，启用的缺省值保持隐式，避免旧版 BDS
-把未知键计为被拒绝的行。
 
 Menu 策略自动打开菜单且已保存的默认启动项可用时，标题显示 `Boot menu - Highlighted entry will boot in Xs.`（高亮项将在 X 秒后启动）。用音量上键打开菜单或操作菜单会取消倒计时，标题显示 `Boot menu - Timeout is disabled.`（倒计时已禁用）。从子菜单返回不会重新计时；没有可用默认项时也不会倒计时。
 

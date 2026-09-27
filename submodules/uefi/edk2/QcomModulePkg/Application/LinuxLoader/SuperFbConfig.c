@@ -886,9 +886,9 @@ SfbCfgEdit (const char *Bytes, SFB_UINTN Size, SFB_CFG_EDIT Edit,
         } else if (Edit == SfbEditPolicy) {
           const char *Menu = Policy->MenuMode == SfbConfigMenuMenu ? "menu-mode menu\n" : "menu-mode silent\n";
           const char *Show = Policy->ShowBooting ? "show-booting yes\n" : "show-booting no\n";
-          /* The enabled default stays implicit so an older BDS reading this
-           * file does not count the key as a rejected line. */
-          const char *Fastbootd = Policy->FastbootdMode2 ? "" : "fastbootd-mode2 no\n";
+          const char *Fastbootd = Policy->FastbootdMode2
+                                     ? "fastbootd-mode2 yes\n"
+                                     : "fastbootd-mode2 no\n";
           if (!SfbCfgAppend (Output, Capacity, &Used, Menu, SfbCfgLength (Menu)) ||
               !SfbCfgAppendNumber (Output, Capacity, &Used, "key-window ", Policy->KeyWindowMs) ||
               !SfbCfgAppendNumber (Output, Capacity, &Used, "menu-timeout ", Policy->MenuTimeoutSeconds) ||
