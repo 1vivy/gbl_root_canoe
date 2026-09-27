@@ -65,6 +65,7 @@ TestDefaultsWhenOmitted (void)
   assert (gConfig.MenuTimeoutSeconds == 3);
   assert (gConfig.Mode == SFB_CONFIG_MODE_FAKE_LOCKED);
   assert (gConfig.LockPolicy == SfbConfigLockAsNeeded);
+  assert (gConfig.FastbootdMode2);
   assert (gConfig.DefaultIndex == SFB_CONFIG_NO_DEFAULT);
   assert (!gConfig.DefaultSpecified);
   assert (!gConfig.DefaultIsBls);
@@ -345,6 +346,15 @@ TestScalarBoundsAndGarbage (void)
   assert (Parse ("version 1\nmenu-mode other\nentry a\n  image boot.efi\n"));
   assert (gConfig.MenuMode == SfbConfigMenuSilent);
   assert (gConfig.RejectedLines == 1);
+  assert (Parse ("version 1\nfastbootd-mode2 no\nentry a\n  image boot.efi\n"));
+  assert (!gConfig.FastbootdMode2);
+  assert (gConfig.RejectedLines == 0);
+  assert (Parse ("version 1\nfastbootd-mode2 yes\nentry a\n  image boot.efi\n"));
+  assert (gConfig.FastbootdMode2);
+  assert (gConfig.RejectedLines == 0);
+  assert (Parse ("version 1\nfastbootd-mode2 maybe\nentry a\n  image boot.efi\n"));
+  assert (gConfig.FastbootdMode2);
+  assert (gConfig.RejectedLines == 1);
   assert (Parse ("version 1\nmode 3\nentry a\n  image boot.efi\n"));
   assert (gConfig.Mode == SFB_CONFIG_MODE_FAKE_LOCKED);
   assert (gConfig.RejectedLines == 1);
@@ -531,14 +541,17 @@ TestExplicitDefaultEdit (void)
   {
     SFB_CONFIG Policy = gConfig;
     Policy.ShowBooting = FALSE; Policy.KeyWindowMs = 500;
+    Policy.FastbootdMode2 = FALSE;
     Size = SFB_CONFIG_MAX_BYTES;
     assert (SfbConfigEditPolicy (Input, strlen (Input), &Policy, Output, &Size));
     assert (SfbConfigParse (Output, Size, &gConfig));
-    assert (!gConfig.ShowBooting && gConfig.KeyWindowMs == 500);
+    assert (!gConfig.ShowBooting && !gConfig.FastbootdMode2 &&
+            gConfig.KeyWindowMs == 500);
     assert (gConfig.DefaultIndex == 0 && gConfig.Entry[1].Mode == 2);
     Size = SFB_CONFIG_MAX_BYTES;
     assert (SfbConfigEditPolicy ("version 1\n", 10, &Policy, Output, &Size));
-    assert (SfbConfigParse (Output, Size, &gConfig) && gConfig.Count == 0 && !gConfig.ShowBooting);
+    assert (SfbConfigParse (Output, Size, &gConfig) && gConfig.Count == 0 &&
+            !gConfig.ShowBooting && !gConfig.FastbootdMode2);
     const unsigned Invalid[] = {0, 499, 5001, 10000};
     for (unsigned I = 0; I < sizeof Invalid / sizeof Invalid[0]; I++) {
       Policy.KeyWindowMs = Invalid[I]; Size = SFB_CONFIG_MAX_BYTES;

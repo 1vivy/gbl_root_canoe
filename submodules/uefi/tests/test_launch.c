@@ -1228,6 +1228,7 @@ static void
 TestLaunchModePrecedence(void)
 {
   SFB_BOOT_ENTRY Entry;
+  SFB_MODE2_PROFILE Profile = MakeValidProfile ();
 
   memset (&Entry, 0, sizeof (Entry));
   Entry.Kind = SfbEntryEfiFile;
@@ -1244,6 +1245,17 @@ TestLaunchModePrecedence(void)
   assert(SfbLaunchEntry (&Entry, FALSE, SfbBootModeKmProfile) == EFI_SUCCESS);
   assert(mLastPrepareMode == SfbBootModeAblFakeLocked);
   assert(mLastPreparePolicy == SfbConfigLockNever);
+
+  ResetLaunchBackend ();
+  ResetProfileIo ();
+  CopyMem (mSidecar, &Profile, sizeof (Profile));
+  mSidecarBytes = sizeof (Profile);
+  SfbSetFastbootdMode2Override (TRUE);
+  assert(SfbLaunchEntry (&Entry, FALSE, SfbBootModeHonestUnlocked) ==
+         EFI_SUCCESS);
+  assert(mLastPrepareMode == SfbBootModeKmProfile);
+  assert(mLastPrepareProfile != NULL);
+  SfbSetFastbootdMode2Override (FALSE);
 
   ResetLaunchBackend ();
   SfbSetLaunchLockPolicy (SfbConfigLockAsNeeded);

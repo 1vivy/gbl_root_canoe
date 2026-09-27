@@ -74,6 +74,7 @@
 #include <Library/PartitionTableUpdate.h>
 #include <Library/ShutdownServices.h>
 #include <Library/StackCanary.h>
+#include <Library/RebootTargetLib.h>
 #include "Library/ThreadStack.h"
 #include <Protocol/EFICardInfo.h>
 #include <Protocol/SimpleTextIn.h>
@@ -141,6 +142,8 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
   {
     BOOLEAN             EnterFastboot = FALSE;
     BOOLEAN             ConfigAvailable;
+    BOOLEAN             FastbootdDetected = FALSE;
+    BOOLEAN             FastbootdMode2Override = FALSE;
     SFB_BOOT_MODE       Mode = SfbBootModeAblFakeLocked;
     SFB_CONFIG          Config;
     EFI_HANDLE          ConfigVolume = NULL;
@@ -213,9 +216,27 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
       Config.MenuMode = SfbConfigMenuSilent;
       Config.KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
       Config.MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
+      Config.FastbootdMode2 = TRUE;
       Mode = SfbBootModeAblFakeLocked;
       DEBUG ((EFI_D_INFO, "SFB: canoe.cfg unavailable: %r\n", Status));
     }
+    Status = RebootTargetIsFastbootd (&FastbootdDetected);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((EFI_D_WARN,
+              "SFB: fastbootd target detection failed: %r\n", Status));
+    }
+    FastbootdMode2Override =
+      (BOOLEAN)(!EFI_ERROR (Status) && FastbootdDetected &&
+                Config.FastbootdMode2);
+    SfbSetFastbootdMode2Override (FastbootdMode2Override);
+    if (FastbootdMode2Override) {
+      Mode = SfbBootModeKmProfile;
+    }
+    DEBUG ((EFI_D_INFO,
+            "SFB: MARK fastbootd-target detected=%u mode2-enabled=%u "
+            "override=%u status=%r\n",
+            (UINT32)FastbootdDetected, (UINT32)Config.FastbootdMode2,
+            (UINT32)FastbootdMode2Override, Status));
     DEBUG ((EFI_D_INFO, "SFB: MARK mode-current mode=%u config-valid=%u\n",
             (UINT32)Mode, (UINT32)ConfigAvailable));
 

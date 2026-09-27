@@ -150,6 +150,26 @@ RebootTargetPrepare (REBOOT_TARGET Target, UINT8 *Reason)
 }
 
 EFI_STATUS
+RebootTargetIsFastbootd (OUT BOOLEAN *Detected)
+{
+  EFI_STATUS Status;
+  REBOOT_MISC_IO Misc;
+
+  if (Detected == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  *Detected = FALSE;
+  Status = RebootTargetReadMisc (&Misc);
+  if (!EFI_ERROR (Status)) {
+    *Detected = (BOOLEAN)(CompareMem (
+                            Misc.Bytes, "boot-fastboot\0",
+                            sizeof ("boot-fastboot")) == 0);
+  }
+  RebootTargetCloseMisc (&Misc);
+  return Status;
+}
+
+EFI_STATUS
 RebootTargetBootOnceArm (IN CONST CHAR8 *Selector)
 {
   EFI_STATUS Status;

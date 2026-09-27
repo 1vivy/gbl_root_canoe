@@ -111,6 +111,7 @@ typedef struct {
   SFB_UINT32             KeyWindowMs;
   SFB_UINT32             MenuTimeoutSeconds;
   SFB_BOOLEAN            ShowBooting;
+  SFB_BOOLEAN            FastbootdMode2;
   SFB_UINT8              Mode;
   SFB_CONFIG_LOCK_POLICY LockPolicy;
   /*

@@ -33,6 +33,14 @@
 
 /* Keeps the translation unit legal when the feature is compiled out. */
 CONST CHAR8 *gSfbEntriesModuleTag = "SuperFbEntries";
+STATIC BOOLEAN mSfbFastbootdMode2Override;
+
+VOID
+SfbSetFastbootdMode2Override (IN BOOLEAN Enabled)
+{
+  mSfbFastbootdMode2Override = Enabled;
+}
+
 STATIC
 EFI_STATUS
 SfbJoinRoot (IN CONST CHAR16 *RootPrefix,
@@ -1785,9 +1793,11 @@ SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,
        Entry->Kind != SfbEntryBlsEfi)) {
     return EFI_INVALID_PARAMETER;
   }
-  RequestedMode = Entry->ModeFromConfig ? Entry->Mode : SessionMode;
-  EffectiveMode = RequestedMode;
   Managed = SfbIsManagedAblEntry (Entry);
+  RequestedMode = (Managed && mSfbFastbootdMode2Override)
+                    ? SfbBootModeKmProfile
+                    : (Entry->ModeFromConfig ? Entry->Mode : SessionMode);
+  EffectiveMode = RequestedMode;
 
   if (Managed) {
     Status = SfbLoadTzMap (Entry, &TzMap);

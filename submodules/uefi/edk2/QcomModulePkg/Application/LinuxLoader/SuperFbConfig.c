@@ -463,6 +463,7 @@ SfbConfigParse (
   Config->KeyWindowMs = SFB_CONFIG_KEY_WINDOW_DEFAULT;
   Config->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
   Config->ShowBooting = TRUE;
+  Config->FastbootdMode2 = TRUE;
   Config->LockPolicy = SfbConfigLockAsNeeded;
   Config->DefaultIndex = SFB_CONFIG_NO_DEFAULT;
   DefaultId[0] = '\0';
@@ -611,6 +612,16 @@ SfbConfigParse (
       if (SfbCfgKeyIs (Value, End, "yes")) { Config->ShowBooting = TRUE; }
       else if (SfbCfgKeyIs (Value, End, "no")) { Config->ShowBooting = FALSE; }
       else { Config->RejectedLines++; }
+      continue;
+    }
+    if (SfbCfgKeyIs (Begin, KeyEnd, "fastbootd-mode2")) {
+      if (SfbCfgKeyIs (Value, End, "yes")) {
+        Config->FastbootdMode2 = TRUE;
+      } else if (SfbCfgKeyIs (Value, End, "no")) {
+        Config->FastbootdMode2 = FALSE;
+      } else {
+        Config->RejectedLines++;
+      }
       continue;
     }
     if (SfbCfgKeyIs (Begin, KeyEnd, "key-window")) {
@@ -855,9 +866,12 @@ SfbCfgEdit (const char *Bytes, SFB_UINTN Size, SFB_CFG_EDIT Edit,
         (!InEntry && Edit == SfbEditDefault && SfbCfgKeyIs (Begin, KeyEnd, "default")) ||
         (Selected && SfbCfgKeyIs (Begin, KeyEnd, "mode")) ||
         (!InEntry && Edit == SfbEditPolicy &&
-          (SfbCfgKeyIs (Begin, KeyEnd, "menu-mode") || SfbCfgKeyIs (Begin, KeyEnd, "key-window") ||
-           SfbCfgKeyIs (Begin, KeyEnd, "menu-timeout") || SfbCfgKeyIs (Begin, KeyEnd, "timeout") ||
-           SfbCfgKeyIs (Begin, KeyEnd, "show-booting")))) { continue; }
+          (SfbCfgKeyIs (Begin, KeyEnd, "menu-mode") ||
+           SfbCfgKeyIs (Begin, KeyEnd, "key-window") ||
+           SfbCfgKeyIs (Begin, KeyEnd, "menu-timeout") ||
+           SfbCfgKeyIs (Begin, KeyEnd, "timeout") ||
+           SfbCfgKeyIs (Begin, KeyEnd, "show-booting") ||
+           SfbCfgKeyIs (Begin, KeyEnd, "fastbootd-mode2")))) { continue; }
     if (!SfbCfgAppend (Output, Capacity, &Used, Raw, (SFB_UINTN)(Cursor - Raw))) { return FALSE; }
     if (VersionLine || (EntryLine && Selected)) {
       if (Used && Output[Used - 1] != '\n' && !SfbCfgAppend (Output, Capacity, &Used, "\n", 1)) { return FALSE; }
@@ -872,10 +886,15 @@ SfbCfgEdit (const char *Bytes, SFB_UINTN Size, SFB_CFG_EDIT Edit,
         } else if (Edit == SfbEditPolicy) {
           const char *Menu = Policy->MenuMode == SfbConfigMenuMenu ? "menu-mode menu\n" : "menu-mode silent\n";
           const char *Show = Policy->ShowBooting ? "show-booting yes\n" : "show-booting no\n";
+          const char *Fastbootd = Policy->FastbootdMode2
+                                     ? "fastbootd-mode2 yes\n"
+                                     : "fastbootd-mode2 no\n";
           if (!SfbCfgAppend (Output, Capacity, &Used, Menu, SfbCfgLength (Menu)) ||
               !SfbCfgAppendNumber (Output, Capacity, &Used, "key-window ", Policy->KeyWindowMs) ||
               !SfbCfgAppendNumber (Output, Capacity, &Used, "menu-timeout ", Policy->MenuTimeoutSeconds) ||
-              !SfbCfgAppend (Output, Capacity, &Used, Show, SfbCfgLength (Show))) { return FALSE; }
+              !SfbCfgAppend (Output, Capacity, &Used, Show, SfbCfgLength (Show)) ||
+              !SfbCfgAppend (Output, Capacity, &Used, Fastbootd,
+                             SfbCfgLength (Fastbootd))) { return FALSE; }
         }
       }
     }

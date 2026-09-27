@@ -506,6 +506,10 @@ SfbFreeMenu (IN OUT SFB_MENU_STATE *Menu);
 BOOLEAN
 SfbIsManagedAblEntry (IN CONST SFB_BOOT_ENTRY *Entry);
 
+/* Force managed launches into Mode 2 for this BDS session only. */
+VOID
+SfbSetFastbootdMode2Override (IN BOOLEAN Enabled);
+
 /*
  * Load and start the image the entry points at. Only returns if the launch
  * failed or the started image returned.
@@ -515,7 +519,8 @@ SfbIsManagedAblEntry (IN CONST SFB_BOOT_ENTRY *Entry);
  * (unattended default boot, which must not blank the boot splash).
  *
  * SessionMode is the policy to launch under for entries that carry none of
- * their own; an entry whose ModeFromConfig is TRUE always uses its own.
+ * their own; an entry whose ModeFromConfig is TRUE uses its own unless the
+ * fastbootd session override is active.
  */
 EFI_STATUS
 SfbLaunchEntry (IN CONST SFB_BOOT_ENTRY *Entry,

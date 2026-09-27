@@ -1098,8 +1098,13 @@ SfbHandlePolicy (IN VOID *Context, IN UINTN Row, IN SFB_KEY Key)
   case 2:
     SfbChooseNumber (L"Boot-menu timeout", &State->Policy.MenuTimeoutSeconds, Timeouts, ARRAY_SIZE (Timeouts), L"seconds");
     break;
-  case 3: State->Policy.ShowBooting = !State->Policy.ShowBooting; break;
-  case 4: {
+  case 3:
+    State->Policy.ShowBooting = !State->Policy.ShowBooting;
+    break;
+  case 4:
+    State->Policy.FastbootdMode2 = !State->Policy.FastbootdMode2;
+    break;
+  case 5: {
     EFI_STATUS Status = SfbStoreConfigPolicy (State->Root, &State->Policy);
     SfbReportStatus (EFI_ERROR (Status) ? L"Could not save boot policy" : L"Boot policy saved", Status);
     return SfbMenuActionExit;
@@ -1117,7 +1122,8 @@ SfbDrawPolicyRow (IN VOID *Context, IN UINTN Row, IN BOOLEAN Selected)
   case 1: UnicodeSPrint (Text, sizeof (Text), L"Key window: %u ms", State->Policy.KeyWindowMs); break;
   case 2: UnicodeSPrint (Text, sizeof (Text), L"Menu timeout: %u seconds", State->Policy.MenuTimeoutSeconds); break;
   case 3: UnicodeSPrint (Text, sizeof (Text), L"[%s] Hide Booting...", State->Policy.ShowBooting ? L" " : L"x"); break;
-  case 4: StrCpyS (Text, ARRAY_SIZE (Text), L"Save boot policy"); break;
+  case 4: UnicodeSPrint (Text, sizeof (Text), L"[%s] Fastbootd uses Mode 2", State->Policy.FastbootdMode2 ? L"x" : L" "); break;
+  case 5: StrCpyS (Text, ARRAY_SIZE (Text), L"Save boot policy"); break;
   default: StrCpyS (Text, ARRAY_SIZE (Text), L"Cancel"); break;
   }
   SfbDrawRow (Selected, L" ", Text);
@@ -1150,7 +1156,7 @@ SfbRunPolicyMenu (VOID)
   Template.Title = L"Boot policy";
   Template.Subtitle = L"Volume Up opens the boot menu during Silent startup.";
   Template.Footer = L"Changes take effect when saved. No boot entries are changed.";
-  Template.Context = State; Template.RowCount = 6; Template.Navigate = TRUE;
+  Template.Context = State; Template.RowCount = 7; Template.Navigate = TRUE;
   Template.Handler = SfbHandlePolicy; Template.DrawRow = SfbDrawPolicyRow;
   (VOID)SfbRunMenu (&Template);
 Done:

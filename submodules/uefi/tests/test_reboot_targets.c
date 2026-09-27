@@ -60,6 +60,21 @@ int main(void) {
   Reset(""); assert(RebootTargetPrepare(RebootTargetFastbootd,&Reason)==EFI_SUCCESS);
   assert(Reason==0 && strcmp((char *)Misc,"boot-fastboot")==0 && Writes==1 && Flushes==1);
   assert(memcmp(Misc+32,Before+32,sizeof Misc-32)==0);
+  {
+    BOOLEAN Fastbootd = FALSE;
+    Reset("boot-fastboot");
+    assert(RebootTargetIsFastbootd(&Fastbootd) == EFI_SUCCESS && Fastbootd);
+    assert(Writes == 0 && Flushes == 0 &&
+           memcmp(Misc, Before, sizeof Misc) == 0);
+    Reset("boot-recovery");
+    assert(RebootTargetIsFastbootd(&Fastbootd) == EFI_SUCCESS && !Fastbootd);
+    Reset("boot-fastboot-extra");
+    assert(RebootTargetIsFastbootd(&Fastbootd) == EFI_SUCCESS && !Fastbootd);
+    Reset("boot-fastboot");
+    ReadError = EFI_DEVICE_ERROR;
+    assert(RebootTargetIsFastbootd(&Fastbootd) == EFI_DEVICE_ERROR &&
+           !Fastbootd);
+  }
   Reset("boot-fastboot"); assert(RebootTargetPrepare(RebootTargetSystem,&Reason)==EFI_SUCCESS);
   assert(Misc[0]==0 && Writes==1 && Flushes==1 && memcmp(Misc+32,Before+32,sizeof Misc-32)==0);
   Reset("vendor-preserve"); assert(RebootTargetPrepare(RebootTargetSystem,&Reason)==EFI_SUCCESS);

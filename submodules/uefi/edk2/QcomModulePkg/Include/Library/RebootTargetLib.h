@@ -26,6 +26,9 @@ typedef enum {
  * Writes only the command field and flushes before success. No reset on failure. */
 EFI_STATUS RebootTargetPrepare (REBOOT_TARGET Target, UINT8 *Reason);
 
+/* Inspect the Android BCB command without consuming or changing it. */
+EFI_STATUS RebootTargetIsFastbootd (OUT BOOLEAN *Detected);
+
 /* Write a validated boot-once selector without resetting the device. */
 EFI_STATUS RebootTargetBootOnceArm (IN CONST CHAR8 *Selector);
 
