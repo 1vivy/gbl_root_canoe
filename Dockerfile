@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 # began refusing this image outright, which broke release builds without any
 # change here. Configure the same pinned repository directly so the toolchain
 # this image installs is a property of this file.
-RUN wget -qO /usr/share/keyrings/llvm-snapshot.asc https://apt.llvm.org/llvm-snapshot.gpg.key && \
+RUN wget -qO /usr/share/keyrings/llvm-snapshot.asc --tries=5 --retry-connrefused --waitretry=5 https://apt.llvm.org/llvm-snapshot.gpg.key && \
     echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.asc] https://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" \
       > /etc/apt/sources.list.d/llvm-20.list && \
     apt-get update && apt-get install -y --no-install-recommends \

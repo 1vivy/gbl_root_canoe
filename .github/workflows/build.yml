@@ -12,9 +12,9 @@ on:
         default: ''
     outputs:
       commit:
-        value: ${{ jobs.firmware.outputs.commit }}
+        value: ${{ jobs.scope.outputs.commit }}
       artifact:
-        value: ${{ jobs.firmware.outputs.artifact }}
+        value: ${{ jobs.scope.outputs.artifact }}
 permissions:
   contents: read
 env:
@@ -25,12 +25,20 @@ concurrency:
   # or replace that predecessor's queued checks; PR diffs cover their whole base.
   cancel-in-progress: ${{ github.event_name == 'pull_request' && inputs.source_ref == '' }}
 jobs:
-  firmware:
+  scope:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
     outputs:
       commit: ${{ steps.source.outputs.commit }}
       artifact: firmware-${{ steps.source.outputs.commit }}
+      uefi_tests: ${{ steps.select.outputs.uefi_tests }}
+      patcher_tests: ${{ steps.select.outputs.patcher_tests }}
+      module_tests: ${{ steps.select.outputs.module_tests }}
+      script_tests: ${{ steps.select.outputs.script_tests }}
+      firmware: ${{ steps.select.outputs.firmware }}
+      versions: ${{ steps.select.outputs.versions }}
+      rust_crates: ${{ steps.select.outputs.rust_crates }}
+      portable_crates: ${{ steps.select.outputs.portable_crates }}
+      apt_packages: ${{ steps.select.outputs.apt_packages }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -40,20 +48,31 @@ jobs:
       - id: source
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Select validation duties
-        id: scope
+        id: select
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
         run: python3 scripts/ci_scope.py
+
+  host-checks:
+    needs: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.scope.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
-        if: steps.scope.outputs.rust_crates != '' || steps.scope.outputs.firmware == 'true'
+        if: needs.scope.outputs.rust_crates != ''
         with:
           toolchain: 1.98.0
-          targets: ${{ steps.scope.outputs.firmware == 'true' && 'aarch64-linux-android,wasm32-unknown-unknown' || (steps.scope.outputs.portable_crates != '' && 'wasm32-unknown-unknown' || '') }}
+          targets: ${{ needs.scope.outputs.portable_crates != '' && 'wasm32-unknown-unknown' || '' }}
       - name: Cache Cargo sources and tools
-        if: steps.scope.outputs.rust_crates != '' || steps.scope.outputs.firmware == 'true'
+        if: needs.scope.outputs.rust_crates != ''
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          prefix-key: firmware-v1-sources
+          prefix-key: firmware-v1-host
           # canoe-provision creates sparse templates. Target archives expand
           # their holes and exhaust small runners, so rebuild target outputs.
           cache-targets: false
@@ -65,9 +84,9 @@ jobs:
             tools/canoe-image -> target
             tools/canoe-provision -> target
       - name: Install only missing host dependencies for selected duties
-        if: steps.scope.outputs.apt_packages != ''
+        if: needs.scope.outputs.apt_packages != ''
         env:
-          PACKAGES: ${{ steps.scope.outputs.apt_packages }}
+          PACKAGES: ${{ needs.scope.outputs.apt_packages }}
         run: |
           missing=()
           for package in $PACKAGES; do
@@ -82,32 +101,32 @@ jobs:
             sudo apt-get install -y --no-install-recommends "${missing[@]}"
           fi
       - name: Check Rust tool contracts
-        if: steps.scope.outputs.rust_crates != ''
+        if: needs.scope.outputs.rust_crates != ''
         env:
-          CRATES: ${{ steps.scope.outputs.rust_crates }}
+          CRATES: ${{ needs.scope.outputs.rust_crates }}
         run: |
           for crate in $CRATES; do
             cargo test --locked --manifest-path "tools/$crate/Cargo.toml"
           done
       - name: Check BDS contracts
-        if: steps.scope.outputs.uefi_tests == 'true'
+        if: needs.scope.outputs.uefi_tests == 'true'
         run: make -C submodules/uefi test
       - name: Check ABL patch contracts
-        if: steps.scope.outputs.patcher_tests == 'true'
+        if: needs.scope.outputs.patcher_tests == 'true'
         run: make -C submodules/patcher test
       - name: Check manager installation
-        if: steps.scope.outputs.module_tests == 'true'
+        if: needs.scope.outputs.module_tests == 'true'
         run: sh targets/magisk_module/tests/test_flows.sh
       - name: Check one-shot install safety
-        if: steps.scope.outputs.firmware == 'true'
+        if: needs.scope.outputs.firmware == 'true'
         run: sh targets/one_shot_android/tests/test_one_shot_unlock.sh
       - name: Check release and import commands
-        if: steps.scope.outputs.script_tests == 'true'
+        if: needs.scope.outputs.script_tests == 'true'
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
       - name: Qualify portable image libraries
-        if: steps.scope.outputs.portable_crates != ''
+        if: needs.scope.outputs.portable_crates != ''
         env:
-          CRATES: ${{ steps.scope.outputs.portable_crates }}
+          CRATES: ${{ needs.scope.outputs.portable_crates }}
         run: |
           for crate in $CRATES; do
             cargo check --locked --manifest-path tools/$crate/Cargo.toml --no-default-features --lib --target wasm32-unknown-unknown
@@ -116,28 +135,66 @@ jobs:
             cargo build --locked --manifest-path tools/canoe-image/qualification/vendorboot/Cargo.toml --target wasm32-unknown-unknown --release
             node tools/canoe-image/qualification/vendorboot/run.mjs
           fi
-      - name: Prepare firmware toolchain
-        if: steps.scope.outputs.firmware == 'true'
-        run: docker build -t gbl_builder .
+      - name: Check source version consistency
+        if: needs.scope.outputs.versions == 'true' && needs.scope.outputs.firmware != 'true'
+        run: make version-check
+
+  firmware:
+    needs: scope
+    if: needs.scope.outputs.firmware == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.scope.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.98.0
+          targets: aarch64-linux-android
+      - name: Cache Cargo sources and tools
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          prefix-key: firmware-v1-android
+          cache-targets: false
+          workspaces: |
+            tools/mode2-profile -> target
+            tools/abl-tzmap -> target
+            tools/canoe-bootmgr -> target
+            tools/canoe-fs -> target
+            tools/canoe-image -> target
+            tools/canoe-provision -> target
+      - name: Restore cached firmware toolchain
+        id: builder-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .work/gbl-builder.tar
+          key: gbl-builder-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Dockerfile') }}
+      - name: Load cached firmware toolchain
+        if: steps.builder-cache.outputs.cache-hit == 'true'
+        run: docker load --input .work/gbl-builder.tar
+      - name: Build and cache firmware toolchain
+        if: steps.builder-cache.outputs.cache-hit != 'true'
+        run: |
+          docker build -t gbl_builder - < Dockerfile
+          mkdir -p .work
+          docker save gbl_builder --output .work/gbl-builder.tar
       - name: Build CANOE-BDS and EFI tools
-        if: steps.scope.outputs.firmware == 'true'
         run: |
           docker image inspect gbl_builder --format '{{.Id}}'
           docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc 'make -C submodules/uefi clean && make -C submodules/uefi build && make -C submodules/uefi tools'
       - name: Build Android one-shot release archive
-        if: steps.scope.outputs.firmware == 'true'
         run: make target_one_shot_android
-      - run: make version-check
-        if: steps.scope.outputs.versions == 'true'
+      - name: Check built firmware version consistency
+        run: make version-check
       - name: Capture the exact firmware build and source identity
-        if: steps.scope.outputs.firmware == 'true'
         run: python3 scripts/firmware_release.py package
       - run: python3 scripts/firmware_release.py verify .work/firmware-release
-        if: steps.scope.outputs.firmware == 'true'
-      - if: steps.scope.outputs.firmware == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: firmware-${{ steps.source.outputs.commit }}
+          name: ${{ needs.scope.outputs.artifact }}
           path: .work/firmware-release/
           include-hidden-files: true
           if-no-files-found: error

@@ -14,7 +14,7 @@ its dependent files rather than editing their version fields separately:
 ```sh
 make bump VERSION=7.0.6 VERSION_CODE=23
 make test
-docker build -t gbl_builder .
+docker build -t gbl_builder - < Dockerfile
 docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc \
   'make -C submodules/uefi clean && make -C submodules/uefi build && make -C submodules/uefi tools'
 make target_one_shot_android
@@ -32,9 +32,12 @@ gate.
 Commit the release-ready source and create the requested version checkpoint tag.
 The pipeline tag is `release-<version>` at that same commit. Frozen prior tags and
 branches remain unchanged. Pushing the pipeline tag starts **Prepare firmware
-draft release**, which runs the full firmware CI and creates a draft release.
-Only a version carrying a `-suffix` is additionally marked prerelease, so 7.0.1
-drafts as an ordinary release. It never publishes automatically.
+draft release**. It reuses a complete, verified artifact from a successful
+`build.yml` push-to-`main` run at that exact commit when one is still available;
+otherwise it runs the full firmware CI at the tag commit. The selected bytes are
+verified again before the draft is created. Only a version carrying a `-suffix`
+is marked prerelease, so 7.0.1 drafts as an ordinary release. It never publishes
+automatically.
 
 ## 2. Verify the exact draft assets
 

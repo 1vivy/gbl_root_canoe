@@ -1,22 +1,29 @@
 # Firmware CI and releases
 
-`main` and pull requests run the firmware contracts and portable image checks,
-then build CANOE-BDS and standalone EFI tools once with Docker/EDK2. Firmware
-CI cross-compiles the rooted-Android commands with the NDK and assembles the
-one-shot archive from those commands and the same EFI output. The generated
-assets are copied into `.work/firmware-release` and verified before upload.
-KSU/WebUI packaging stays in Canoe Boot Manager; this workflow does not
-package an old WebUI or desktop sidecars.
+`main` and pull requests select the same firmware contracts and portable image
+checks as before. Host-only contracts and portable Rust qualification run in
+parallel with the Docker/EDK2 firmware job. The Docker builder image is cached
+by the exact `Dockerfile` hash. Firmware CI cross-compiles the rooted-Android
+commands with the NDK and assembles the one-shot archive from those commands
+and the same EFI output. The generated assets are copied into
+`.work/firmware-release` and verified before upload. KSU/WebUI packaging stays
+in Canoe Boot Manager; this workflow does not package an old WebUI or desktop
+sidecars.
 
 An existing `release-<CANOE_VERSION>` tag triggers `release.yml`. Its version
 must match `version.mk` at that exact tag commit. Manual dispatch accepts the
 same existing tag. Neither workflow creates or moves a tag.
 
-The release job downloads the completed CI artifact, verifies its source
-commit, PE architecture and hashes, and creates or updates a **draft** GitHub
-release. It never relinks the firmware or publishes automatically. Published
-releases cannot be overwritten through this helper. Qualify the exact draft
-assets and publish deliberately when they are ready.
+For a release, `release.yml` first looks for a successful `build.yml` push run
+on `main` whose head SHA is the exact tag commit. It reuses only that run's
+unexpired, commit-named firmware artifact, and only after
+`scripts/firmware_release.py verify` confirms the complete BDS, tool, one-shot,
+manifest and checksum set. If no qualifying artifact remains, the release calls
+the full firmware workflow at the tag commit. The selected artifact is
+downloaded by its run ID and verified again before the release helper creates or
+updates a **draft** GitHub release. The helper never publishes automatically,
+and published releases cannot be overwritten. Qualify the exact draft assets
+and publish deliberately when they are ready.
 
 The release assets are:
 

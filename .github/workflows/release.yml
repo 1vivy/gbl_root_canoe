@@ -9,6 +9,7 @@ on:
         required: true
         type: string
 permissions:
+  actions: read
   contents: read
 concurrency:
   group: firmware-release-${{ inputs.tag || github.ref_name }}
@@ -28,27 +29,94 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: python3 scripts/firmware_release.py tag "$RELEASE_TAG"
-  build:
+
+  reuse:
     needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      reuse: ${{ steps.artifact.outputs.reuse }}
+      run_id: ${{ steps.artifact.outputs.run_id }}
+      artifact: ${{ steps.artifact.outputs.artifact }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - name: Find a complete push-to-main firmware artifact
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          artifact_name="firmware-$TAG_COMMIT"
+          echo "reuse=false" >> "$GITHUB_OUTPUT"
+          echo "artifact=$artifact_name" >> "$GITHUB_OUTPUT"
+          while IFS= read -r run_id; do
+            [ -n "$run_id" ] || continue
+            artifact_id=$(
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts?per_page=100" |
+                jq -r --arg name "$artifact_name" '.artifacts[] | select(.name == $name and (.expired | not)) | .id' |
+                sed -n '1p'
+            )
+            [ -n "$artifact_id" ] || continue
+            rm -rf "$RUNNER_TEMP/firmware-candidate" "$RUNNER_TEMP/firmware-candidate.zip"
+            mkdir -p "$RUNNER_TEMP/firmware-candidate"
+            if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$RUNNER_TEMP/firmware-candidate.zip" &&
+               unzip -q "$RUNNER_TEMP/firmware-candidate.zip" -d "$RUNNER_TEMP/firmware-candidate" &&
+               python3 scripts/firmware_release.py verify "$RUNNER_TEMP/firmware-candidate"; then
+              echo "reuse=true" >> "$GITHUB_OUTPUT"
+              echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done < <(
+            gh api --paginate "repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/runs?branch=main&event=push&status=success&per_page=100" |
+              jq -r --arg commit "$TAG_COMMIT" '.workflow_runs[] | select(.head_sha == $commit and .head_branch == "main" and .event == "push" and .conclusion == "success") | .id'
+          )
+
+  build:
+    needs: [validate, reuse]
+    if: needs.reuse.outputs.reuse != 'true'
     uses: ./.github/workflows/build.yml
     with:
       source_ref: ${{ needs.validate.outputs.commit }}
+
   draft:
-    needs: [validate, build]
+    needs: [validate, reuse, build]
+    if: >-
+      ${{
+        always() &&
+        needs.validate.result == 'success' &&
+        needs.reuse.result == 'success' &&
+        (needs.reuse.outputs.reuse == 'true' || needs.build.result == 'success')
+      }}
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ needs.build.outputs.commit }}
+          ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - name: Download reused firmware artifact
+        if: needs.reuse.outputs.reuse == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.reuse.outputs.artifact }}
+          path: .work/firmware-release/
+          run-id: ${{ needs.reuse.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Download freshly built firmware artifact
+        if: needs.reuse.outputs.reuse != 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.build.outputs.artifact }}
           path: .work/firmware-release/
-      - env:
+      - name: Verify bytes and prepare draft release
+        env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: python3 scripts/firmware_release.py draft "$RELEASE_TAG" .work/firmware-release

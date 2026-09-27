@@ -13,7 +13,7 @@ KernelSU 模块，并将已发布的在线应用归档部署到 Cloudflare Worke
 ```sh
 make bump VERSION=7.0.6 VERSION_CODE=23
 make test
-docker build -t gbl_builder .
+docker build -t gbl_builder - < Dockerfile
 docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc \
   'make -C submodules/uefi clean && make -C submodules/uefi build && make -C submodules/uefi tools'
 make target_one_shot_android
@@ -28,7 +28,9 @@ make version-check
 
 提交准备发布的源码并创建版本检查点标签。流水线使用同一提交上的
 `release-<version>` 标签；保持旧版冻结标签与分支不变。推送流水线标签会启动
-**Prepare firmware draft release**，运行完整固件 CI 并生成草稿。Beta 版本
+**Prepare firmware draft release**。如果该提交在 `main` 的成功 `build.yml`
+push 运行中仍有完整且验证通过的产物，发布流程会直接复用；否则在标签提交上
+运行完整固件 CI。创建草稿前会再次验证选中的确切字节。带 `-suffix` 的版本才
 标记为预发布；工作流不会自动公开草稿。
 
 ## 2. 验证草稿的确切产物
