@@ -26,9 +26,10 @@
   键都能打开菜单；操作分为 USB Mass Storage、Enter Super Fastboot、Advanced、
   Reboot 以及关机与重启。启动根目录为空时打开同一菜单并高亮临时的 Entering
   Super Fastboot 项，不再有独立首次启动画面。提示行（跳过的配置行、一次性启动
-  目标不可用、回退到上一份配置、Android 启动项属于另一槽位）以 `!` 标记并在选中
-  时显示说明；当前启动槽位对应的启动项实时标注 `(current slot)`，不再显示保存的
-  `active`/`inactive` 角色，`(backup)` 仍保留。
+  目标不可用、回退到上一份配置、默认项属于另一槽位）以 `!` 标记并在选中时显示
+  说明；当前启动槽位对应的启动项实时标注 `(current slot)`。OTA 后 BDS 比较默认
+  启动项的槽位与活动槽位而不再依赖保存的角色，将当前槽位的启动项保存为默认即可
+  解决；不再写入或显示 `active`/`inactive` 角色，`(backup)` 仍保留。
 - **链式启动**：支持 BLS Type #1 条目（发布 initrd 与设备树）与任意 EFI 应用；
   `default` 可指向 `bls:<stem>`。BDS 不再自带载荷加载器，只作为 PE 选择器并原样
   传递 `options`。

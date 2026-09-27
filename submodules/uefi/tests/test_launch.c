@@ -2372,18 +2372,29 @@ TestBootRootEspIsDiscovered(void)
 }
 
 /*
- * Roles are written by whoever authored canoe.cfg. An OTA that flips the
- * active slot makes the `active` label a lie until the device-side watcher
- * re-runs, which it cannot do before Android boots. The BDS must notice and
- * refuse to launch that entry unattended - and must still notice nothing when
- * the label is right, or when the entry names no slot at all.
+ * An OTA flips the active slot while `default` still names the old slot's
+ * entry. The BDS must notice from the entry's id/image alone and refuse to
+ * launch it unattended - and must notice nothing when the default matches,
+ * when stored roles disagree, or when the entry names no slot at all.
  */
 static void
-TestStaleSlotRole(void)
+TestStaleDefaultSlot(void)
 {
   static const CHAR8 ConfigText[] =
     "version 1\n"
     "default android-a\n"
+    "mode 1\n"
+    "entry android-a\n"
+    "title Android (slot A)\n"
+    "image boot.efi\n"
+    "entry android-b\n"
+    "title Android (slot B)\n"
+    "image boot_b.efi\n";
+  /* A pre-7.0.7 config: a stale `active` role no longer matters once the
+   * default names the current slot. */
+  static const CHAR8 StaleRoleText[] =
+    "version 1\n"
+    "default android-b\n"
     "mode 1\n"
     "entry android-a\n"
     "title Android (slot A)\n"
@@ -2399,8 +2410,7 @@ TestStaleSlotRole(void)
     "mode 1\n"
     "entry mine\n"
     "title My own\n"
-    "image boot.efi\n"
-    "role active\n";
+    "image boot.efi\n";
   SFB_MENU_STATE Menu;
 
   ResetLaunchBackend ();
@@ -2414,7 +2424,7 @@ TestStaleSlotRole(void)
   mBootRootManagedPresent = TRUE;
   mBootRootSlotBPresent = TRUE;
 
-  /* The config says slot A is active; the GPT says B. */
+  /* The default names slot A; the GPT says B. */
   mFakeActiveSlot = SfbSlotB;
   SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   assert(mActiveSlotReads == 1);
@@ -2430,7 +2440,7 @@ TestStaleSlotRole(void)
         continue;
       }
       assert(!FoundCurrent);
-      assert(Menu.Entry[Index].Role == SfbConfigRoleInactive);
+      assert(Menu.Entry[Index].Kind != SfbEntryNotice);
       assert(strcmp (Menu.Entry[Index].DefaultTarget, "android-b") == 0);
       FoundCurrent = TRUE;
     }
@@ -2444,9 +2454,9 @@ TestStaleSlotRole(void)
       }
       assert(!FoundNotice);
       assert(StrCmp (Menu.Entry[Index].Desc,
-                     L"Android entry is for the other slot") == 0);
+                     L"Default is for the other slot") == 0);
       assert(StrCmp (Menu.Entry[Index].NoticeDetail,
-                     L"After a slot switch. Choose an entry, then save a default.") == 0);
+                     L"Select the current slot's entry, then save it as the default.") == 0);
       FoundNotice = TRUE;
     }
     assert(FoundNotice);
@@ -2473,6 +2483,17 @@ TestStaleSlotRole(void)
     assert(!Menu.Entry[Index].CurrentSlot);
   }
   SfbFreeMenu (&Menu);
+  /* Saving the current slot's entry as default clears it, whatever roles say. */
+  memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
+  memcpy (mEntriesFixture, StaleRoleText, sizeof (StaleRoleText) - 1);
+  mEntriesFixtureBytes = sizeof (StaleRoleText) - 1;
+  mFakeActiveSlot = SfbSlotB;
+  SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
+  assert(mActiveSlotReads == 4);
+  assert(!Menu.SlotMismatch);
+  assert(Menu.DefaultFromConfig);
+  assert(Menu.Entry[Menu.DefaultIndex].CurrentSlot);
+  SfbFreeMenu (&Menu);
 
   /*
    * An entry that claims no slot is not evidence of staleness. The active
@@ -2484,7 +2505,7 @@ TestStaleSlotRole(void)
   mEntriesFixtureBytes = sizeof (NoSlotText) - 1;
   mFakeActiveSlot = SfbSlotB;
   SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
-  assert(mActiveSlotReads == 4);
+  assert(mActiveSlotReads == 5);
   assert(!Menu.SlotMismatch);
   assert(Menu.DefaultFromConfig);
   assert(!Menu.Entry[Menu.DefaultIndex].CurrentSlot);
@@ -2594,7 +2615,7 @@ main(void)
   TestBlsLinuxAbortsWhenTheDtbFails ();
   TestBlsEfiPublishesNeither ();
   TestBlsLinuxWithoutPayloadsStillLaunches ();
-  TestStaleSlotRole ();
+  TestStaleDefaultSlot ();
   TestPowerOnDecisionTable ();
   TestContainerToolsBrowser ();
   return 0;

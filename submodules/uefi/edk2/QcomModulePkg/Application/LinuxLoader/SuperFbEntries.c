@@ -1198,17 +1198,15 @@ SfbConfigEntrySlot (IN CONST CHAR8 *Id, IN CONST CHAR8 *Image)
 }
 
 /*
- * Check the config's `active` label against the slot the GPT marks active.
+ * Check the default entry's slot against the slot the GPT marks active.
  *
- * Roles are presentation-only and are written by whoever authored the config.
- * When an OTA flips the active slot and the device-side watcher has not run
- * yet - because Android has not booted - the config still labels the old slot
- * active and `default` still points at it. Nothing else in this design can
- * notice, and the BDS would unattended-launch an entry the config no longer
- * describes correctly, on a device one bad boot from EDL.
+ * An OTA flips the active slot while `default` still names the old slot's
+ * managed entry. Launching it unattended would boot a slot the device no
+ * longer runs, on a device one bad boot from EDL. The slot is derived from the
+ * entry's id/image, never from a stored label that an OTA leaves stale.
  *
  * Verification only: no entry is ever selected by slot and no slot is ever
- * written. The config author still decides what boots.
+ * written. Saving a default for the current slot clears the mismatch.
  */
 STATIC
 VOID
@@ -1216,26 +1214,20 @@ SfbCheckConfigSlots (IN OUT SFB_MENU_STATE *Menu,
                      IN CONST SFB_CONFIG   *Config,
                      IN SFB_SLOT            Active)
 {
-  UINTN Index;
+  SFB_SLOT Claimed;
 
-  if (Active == SfbSlotUnknown) {
+  if (Active == SfbSlotUnknown || !Config->DefaultSpecified ||
+      Config->DefaultIsBls || Config->DefaultIndex >= Config->Count) {
     return;
   }
-  for (Index = 0; Index < Config->Count; Index++) {
-    SFB_SLOT  Claimed;
-
-    if (Config->Entry[Index].Role != SfbConfigRoleActive) {
-      continue;
-    }
-
-    Claimed = SfbConfigEntrySlot (Config->Entry[Index].Id,
-                                  Config->Entry[Index].Image);
-    if (Claimed != SfbSlotUnknown && Claimed != Active) {
-      DEBUG ((EFI_D_WARN,
-              "SFB: MARK slot-stale entry='%a' image='%a'\n",
-              Config->Entry[Index].Id, Config->Entry[Index].Image));
-      Menu->SlotMismatch = TRUE;
-    }
+  Claimed = SfbConfigEntrySlot (Config->Entry[Config->DefaultIndex].Id,
+                                Config->Entry[Config->DefaultIndex].Image);
+  if (Claimed != SfbSlotUnknown && Claimed != Active) {
+    DEBUG ((EFI_D_WARN,
+            "SFB: MARK slot-stale default='%a' image='%a'\n",
+            Config->Entry[Config->DefaultIndex].Id,
+            Config->Entry[Config->DefaultIndex].Image));
+    Menu->SlotMismatch = TRUE;
   }
 }
 STATIC
@@ -1309,14 +1301,11 @@ SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu,
     Menu->DefaultIndex = ConfiguredIndex;
     if (!Menu->Entry[Menu->DefaultIndex].IsUsb) {
       /*
-       * A stale `active` label must not boot unattended: the entry it points at
-       * is the one the flipped slot invalidated. The row stays highlighted so
-       * it is still one keypress away, but the user has to look first.
+       * A default for the other slot must not boot unattended: the flipped
+       * slot invalidated it. The row stays highlighted so it is still one
+       * keypress away, but the user has to look first.
        */
-      Menu->DefaultFromConfig =
-        (BOOLEAN)!(Menu->SlotMismatch &&
-                   Menu->Entry[Menu->DefaultIndex].Role ==
-                     SfbConfigRoleActive);
+      Menu->DefaultFromConfig = (BOOLEAN)!Menu->SlotMismatch;
       return;
     }
     Menu->RejectedLines++;
@@ -1450,8 +1439,8 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
   }
   if (Menu->SlotMismatch) {
     SfbAppendNotice (
-      Menu, L"Android entry is for the other slot",
-      L"After a slot switch. Choose an entry, then save a default.");
+      Menu, L"Default is for the other slot",
+      L"Select the current slot's entry, then save it as the default.");
   }
 
   SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");

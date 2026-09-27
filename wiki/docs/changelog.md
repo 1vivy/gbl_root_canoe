@@ -86,10 +86,12 @@ separate first-run screen. An unreadable filesystem is reported separately and
 is not classified as a new installation.
 
 Notice rows (skipped config lines, an unavailable boot-once target, a fallback to
-the previous configuration, an Android entry for the other slot) carry a `!`
-marker and explain themselves on the selection line. The entry for the slot
-currently booted is labelled `(current slot)`, computed live; the stored
-`active`/`inactive` roles are no longer shown, while `(backup)` still is.
+the previous configuration, a default for the other slot) carry a `!` marker and
+explain themselves on the selection line. The entry for the slot currently
+booted is labelled `(current slot)`, computed live. After an OTA, BDS compares
+the default entry's slot with the active slot rather than stored roles, so
+saving the current slot's entry as the default is the whole fix; `active` and
+`inactive` roles are no longer written or shown, while `(backup)` still is.
 
 ### Chainloading
 

@@ -196,7 +196,7 @@ for tool in "$STAGED"/tools/*.efi; do
 done
 "$BIN_DIR/canoe-bootmgr" --boot-root "$BOOT_MOUNT" entry set \
     --id "android-$SLOT" --title "Android - Slot $SLOT_TITLE" --image "boot_$SLOT.efi" \
-    --options "androidboot.slot_suffix=_$SLOT" --mode "$MODE" --role active --default
+    --options "androidboot.slot_suffix=_$SLOT" --mode "$MODE" --default
 sync
 umount "$BOOT_MOUNT"
 MOUNTED=0

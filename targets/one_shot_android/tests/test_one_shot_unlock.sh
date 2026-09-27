@@ -240,7 +240,7 @@ sed -n 's/^write://p' "$EVENT_LOG" > "$TMP/writes.actual"
 cmp "$TMP/writes.expected" "$TMP/writes.actual" || fail 'efisp was not the only raw write'
 cmp "$TOOLKIT/BDS.efi" "$BY_NAME/efisp" || fail 'efisp did not receive BDS'
 case "$(cat "$EVENT_LOG")" in
-    *'entry set --id android-a --title Android - Slot A --image boot_a.efi --options androidboot.slot_suffix=_a --mode 1 --role active --default'*) ;;
+    *'entry set --id android-a --title Android - Slot A --image boot_a.efi --options androidboot.slot_suffix=_a --mode 1 --default'*) ;;
     *) fail 'managed Android entry did not match the manager title and slot options' ;;
 esac
 cmp "$TMP/abl.expected" "$BY_NAME/abl_a" ||

@@ -171,15 +171,17 @@ Each installed slot has `boot_a.efi` or `boot_b.efi`, with a matching 120-byte
 application prepares selected slots independently and publishes matching rows.
 The small CLI's `loader install` and `entry set` are separate explicit commands.
 
-`role active` is functional metadata: BDS compares its slot claim with the
-actual active slot and withholds unattended launch on a mismatch. Do not label
-an unknown slot as active.
+BDS compares the slot the `default` entry claims (from its id or image, such as
+`android-b` or `boot_b.efi`) with the actual active slot. On a mismatch, as after
+an OTA, it withholds unattended launch and shows **Default is for the other
+slot**; saving the current slot's entry as the default clears it. Stored roles
+take no part in this check.
 
 At menu construction time, BDS marks any configured entry whose id or image
-claims the live GPT active slot with **(current slot)**. `role active` and
-`role inactive` add no suffix of their own; `role backup` still adds
-**(backup)**. An unknown claimed slot or unknown active slot adds no live
-suffix.
+claims the live GPT active slot with **(current slot)**. `role backup` adds
+**(backup)**. `role active` and `role inactive` are accepted for older configs
+but no longer written or shown. An unknown claimed slot or unknown active slot
+adds no live suffix.
 
 Recovery snapshots belong to saved application operations outside the boot
 root. There is no implicit backup rotation or migration of ext4 `efisp/`.
@@ -256,13 +258,13 @@ entry android-a
   title Android A
   image boot_a.efi
   mode 1
-  role active
+  role other
 
 entry android-b
   title Android B
   image boot_b.efi
   mode 1
-  role inactive
+  role other
 
 entry android-backup
   title Android (previous)
