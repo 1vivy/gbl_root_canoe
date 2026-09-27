@@ -60,8 +60,9 @@ staging the correct bundle is the operator's responsibility.
 A working release environment has all of the following:
 
 - Docker, for the canonical EDK2/BDS build;
-- the Android NDK, with `NDK_PATH` (or `ANDROID_NDK_LATEST_HOME`) set, for the
-  rooted-Android one-shot installer and KernelSU module;
+- the Android NDK, with `NDK_PATH` set or discovered from
+  `ANDROID_NDK_LATEST_HOME`, `ANDROID_NDK_HOME`, then `ANDROID_NDK_ROOT`, for
+  the rooted-Android one-shot installer and KernelSU module;
 - a rustup-managed Rust toolchain, including the
   `aarch64-linux-android` standard library. A distro `cargo` shim without that
   rustup target fails with `can't find crate for std`;
@@ -84,7 +85,9 @@ make target_one_shot_android
 make target_magisk_module
 ```
 
-Both require `NDK_PATH` to point to an Android NDK. The resulting archives are
+Both require an Android NDK. Set `NDK_PATH` explicitly, or let the build use the
+first non-empty value from `ANDROID_NDK_LATEST_HOME`, `ANDROID_NDK_HOME`, and
+`ANDROID_NDK_ROOT`. The resulting archives are
 `targets/one_shot_android/build/canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`
 and `targets/magisk_module/build/module_android.zip`. The one-shot archive is
 not a general toolkit: it contains `install-canoe.sh`, the four ARM64 Android

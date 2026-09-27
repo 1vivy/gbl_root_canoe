@@ -9,7 +9,7 @@
 # It is not a general toolbox. It holds the rooted-shell installer, the four
 # commands that installer drives, the released BDS and the reviewed EFI tool
 # set the installers stage into the boot root.
-NDK_PATH ?= $(ANDROID_NDK_LATEST_HOME)
+NDK_PATH ?= $(or $(ANDROID_NDK_LATEST_HOME),$(ANDROID_NDK_HOME),$(ANDROID_NDK_ROOT))
 include ../../version.mk
 
 ANDROID_TARGET := aarch64-linux-android
@@ -37,7 +37,7 @@ clean:
 
 guard:
 	@set -eu; \
-	test -n "$(NDK_PATH)" || { echo "NDK_PATH or ANDROID_NDK_LATEST_HOME is required"; exit 1; }; \
+	test -n "$(NDK_PATH)" || { echo "NDK_PATH, ANDROID_NDK_LATEST_HOME, ANDROID_NDK_HOME, or ANDROID_NDK_ROOT is required"; exit 1; }; \
 	test -x "$(ANDROID_CLANG)" || { echo "Android NDK clang is unavailable: $(ANDROID_CLANG)"; exit 1; }; \
 	test -d "$$(rustc --print target-libdir --target $(ANDROID_TARGET) 2>/dev/null)" || { \
 		echo "Rust Android std is unavailable; install $(ANDROID_TARGET) with rustup"; exit 1; }; \

@@ -68,8 +68,8 @@ BIN_DIR=$SCRIPT_DIR/bin
 BY_NAME_DIR=${CANOE_BY_NAME_DIR:-/dev/block/by-name}
 SLOT_SUFFIX=$(getprop ro.boot.slot_suffix 2>/dev/null || true)
 case "$SLOT_SUFFIX" in
-    _a) SLOT=a ;;
-    _b) SLOT=b ;;
+    _a) SLOT=a; SLOT_TITLE=A ;;
+    _b) SLOT=b; SLOT_TITLE=B ;;
     *) die "ro.boot.slot_suffix must identify the active slot (_a or _b); got '$SLOT_SUFFIX'" ;;
 esac
 
@@ -195,8 +195,8 @@ for tool in "$STAGED"/tools/*.efi; do
     cp "$tool" "$BOOT_MOUNT/tools/"
 done
 "$BIN_DIR/canoe-bootmgr" --boot-root "$BOOT_MOUNT" entry set \
-    --id "android-$SLOT" --title "Android $SLOT" --image "boot_$SLOT.efi" \
-    --mode "$MODE" --role active --default
+    --id "android-$SLOT" --title "Android - Slot $SLOT_TITLE" --image "boot_$SLOT.efi" \
+    --options "androidboot.slot_suffix=_$SLOT" --mode "$MODE" --role active --default
 sync
 umount "$BOOT_MOUNT"
 MOUNTED=0

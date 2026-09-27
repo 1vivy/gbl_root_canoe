@@ -54,7 +54,8 @@ CANOE_KSU_DIST=/absolute/path/to/canoe-boot-manager/dist/ksu make target_magisk_
 已验证可工作的发布环境具备以下全部条件：
 
 - Docker，用于规范的 EDK2/BDS 构建；
-- Android NDK，并设置 `NDK_PATH`（或 `ANDROID_NDK_LATEST_HOME`），用于
+- Android NDK；可设置 `NDK_PATH`，否则依次使用
+  `ANDROID_NDK_LATEST_HOME`、`ANDROID_NDK_HOME`、`ANDROID_NDK_ROOT`，用于
   rooted Android 一次性安装包和 KernelSU 模块；
 - 由 rustup 管理的 Rust 工具链，并包含
   `aarch64-linux-android` 标准库。没有该 rustup target 的发行版 `cargo`
@@ -77,7 +78,9 @@ make target_one_shot_android
 make target_magisk_module
 ```
 
-两者都要求 `NDK_PATH` 指向 Android NDK。生成的归档为
+两者都要求 Android NDK。可明确设置 `NDK_PATH`，否则构建会依次采用首个非空的
+`ANDROID_NDK_LATEST_HOME`、`ANDROID_NDK_HOME` 或 `ANDROID_NDK_ROOT`。
+生成的归档为
 `targets/one_shot_android/build/canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`
 与 `targets/magisk_module/build/module_android.zip`。一次性安装归档不是通用
 工具包；它只包含 `install-canoe.sh`、该脚本调用的四个 ARM64 Android 命令、
