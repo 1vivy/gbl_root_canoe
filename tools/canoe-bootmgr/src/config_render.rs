@@ -18,11 +18,12 @@ pub(crate) fn serialize(config: &ConfigDocument) -> Result<Vec<u8>, ConfigError>
             "show-booting {}",
             if config.show_booting { "yes" } else { "no" }
         ),
-        format!(
-            "fastbootd-mode2 {}",
-            if config.fastbootd_mode2 { "yes" } else { "no" }
-        ),
     ];
+    // The default is written implicitly: pre-fastbootd-mode2 BDS builds count
+    // an unknown key as a rejected line and surface a warning in their menu.
+    if !config.fastbootd_mode2 {
+        lines.push("fastbootd-mode2 no".to_owned());
+    }
     if let Some(default) = &config.default {
         lines.push(format!("default {default}"));
     }

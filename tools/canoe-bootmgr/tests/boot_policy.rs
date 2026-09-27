@@ -53,6 +53,8 @@ fn policy_only_document_round_trips_and_old_documents_show_booting() {
     assert!(config.entries.is_empty());
     assert!(config.show_booting);
     assert!(config.fastbootd_mode2);
+    let implicit = String::from_utf8(config.serialize().unwrap()).unwrap();
+    assert!(!implicit.contains("fastbootd-mode2"));
     config
         .set_policy(PolicyUpdate {
             menu_mode: None,

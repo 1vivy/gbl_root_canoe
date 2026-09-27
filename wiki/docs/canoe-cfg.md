@@ -76,7 +76,9 @@ flashing while Mode 2 retains its general-storage policy. The override applies
 only to this BDS session, does not rewrite `canoe.cfg`, and does not activate for
 `boot-recovery`, bootloader, or normal reboot targets. `fastbootd-mode2 no`
 retains the entry's configured mode. The ordinary missing/invalid Mode 2 profile
-fallback to honest Mode 0 still applies.
+fallback to honest Mode 0 still applies. Writers emit only `fastbootd-mode2 no`;
+the enabled default stays implicit so older BDS builds, which count an unknown
+key as a rejected line, read an unchanged file.
 
 A policy-only document with no boot entries is valid. Save default never changes
 an entry mode; Change entry mode never changes the default target.
@@ -117,7 +119,7 @@ menu-mode silent|menu
 key-window 1200
 menu-timeout 3
 show-booting yes
-fastbootd-mode2 yes
+fastbootd-mode2 no         # only when disabled
 default android-a          # or: default bls:pmos
 mode 0|1|2
 devinfo-repair asneeded|never
