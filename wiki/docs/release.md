@@ -12,7 +12,7 @@ Run from the firmware repository root. `version.mk` owns the version; regenerate
 its dependent files rather than editing their version fields separately:
 
 ```sh
-make bump VERSION=7.0.6 VERSION_CODE=23
+make bump VERSION=7.0.7 VERSION_CODE=24
 make test
 docker build -t gbl_builder - < Dockerfile
 docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc \
