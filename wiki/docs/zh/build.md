@@ -55,7 +55,7 @@ CANOE_KSU_DIST=/absolute/path/to/canoe-boot-manager/dist/ksu make target_magisk_
 
 - Docker，用于规范的 EDK2/BDS 构建；
 - Android NDK，并设置 `NDK_PATH`（或 `ANDROID_NDK_LATEST_HOME`），用于
-  Android 工具包和 KernelSU 模块；
+  rooted Android 一次性安装包和 KernelSU 模块；
 - 由 rustup 管理的 Rust 工具链，并包含
   `aarch64-linux-android` 标准库。没有该 rustup target 的发行版 `cargo`
   shim 会因 `can't find crate for std` 失败；
@@ -69,20 +69,22 @@ CANOE_KSU_DIST=/absolute/path/to/canoe-boot-manager/dist/ksu make target_magisk_
 
 ## 构建发布包
 
-先完成应用的 `dist/ksu`，再从固件仓库根目录使用以下根 Makefile 目标构建两个
-支持的发布包：
+从固件仓库根目录，用当前固件输出构建 rooted Android 一次性安装归档；应用的
+`dist/ksu` 生成后，再构建 KernelSU 模块：
 
 ```bash
-make target_toolkit_android
+make target_one_shot_android
 make target_magisk_module
 ```
 
-两者都要求 `NDK_PATH` 指向 Android NDK。归档分别位于
-`targets/toolkit_android/build/` 和 `targets/magisk_module/build/`。
+两者都要求 `NDK_PATH` 指向 Android NDK。生成的归档为
+`targets/one_shot_android/build/canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`
+与 `targets/magisk_module/build/module_android.zip`。一次性安装归档不是通用
+工具包；它只包含 `install-canoe.sh`、该脚本调用的四个 ARM64 Android 命令、
+BDS 与经过审查的 EFI 工具。
 
-`target_toolkit_linux` 与 `target_toolkit_windows` 仍然声明，但会拒绝执行：
-它们打印 `Desktop packages retired in b5; use the hosted CANOE BOOT MANAGER.`
-并以 2 退出。不要恢复它们。
+桌面工具包已经退役，本仓库不再提供对应的打包 target。桌面流程请使用在线
+CANOE BOOT MANAGER。
 
 模块配方通过 `scripts/stage_ksu.py` 将 `CANOE_KSU_DIST` 暂存到模块 webroot，
 使打包的 UI 与应用的 KSU 构建保持字节一致，并拒绝产品、版本或运行时不匹配。
@@ -137,31 +139,31 @@ BDS 字节。
 
 ## 跨软件包字节一致的启动构件
 
-每个工具包和模块都必须为以下文件携带相同字节：
+Android 一次性安装包与模块必须为以下文件携带相同字节：
 
 - `BDS.efi`；
 - 独立 EFI 工具 `ArbTools.efi`、`BLTools.efi`、`RebootTools.efi`、
   `SurfaceTools.efi` 和 `UsbTools.efi`。
 
-`make -C submodules/uefi tools` 还会构建三个任何软件包都不携带的工具：
+`make -C submodules/uefi tools` 还会构建三个这两个软件包都不携带的工具：
 `LogTools.efi`、`MdTools.efi` 和 `CrashTools.efi`。它们由主机通过
 `fastboot boot <tool>.efi` 针对已运行存在漏洞 ABL 的设备启动，用于调查固件
 而不是操作固件：`MdTools` 在 RAM 中扫描并编辑高通 minidump 区域表，
 `CrashTools` 触发有意的故障以进入 900e memory-debug 模式。因此上面的打包
 清单比构建输出更窄，这是有意的；不要通过把它们加入某个 target 来“修复”。
 
-打包配方在每个 workspace 中各构建一次 EDK2 构件并复用，而不是每个包都
-重新链接。这项检查很重要，因为相同源码的 EDK2 重新链接可能产生不同字节；
-分别重建会使各包的启动菜单或独立工具不一致。字节一致能明确保证已发布的
-启动行为和构件来源一致。
+一次性安装包配方要求先有规范的 EDK2 构建输出；模块配方只构建缺失的 EFI
+构件。在两个包中复用同一次固件构建，不要为每个包重新链接：相同源码的 EDK2
+重新链接也可能产生不同字节，使各包的启动菜单或独立工具不一致。字节一致才能
+明确已发布的启动行为和构件来源。
 
 修改 UEFI 源码后，针对打包命令强制执行一次干净的 BDS 重建：
 
 ```bash
-UEFI_REBUILD=1 make target_magisk_module
+UEFI_REBUILD=1 make target_one_shot_android
 ```
 
-如果最终包是 Android 工具包，请使用对应的包目标。不要为每个包分别强制重建。
+最终包是模块时改用 `target_magisk_module`。不要为每个包分别强制重建。
 
 ## 命令组件
 

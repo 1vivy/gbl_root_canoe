@@ -4,12 +4,10 @@ include imports.mk
 
 .PHONY: clean clean_submodules targets_clean \
 	submodule_uefi_clean submodule_patcher_clean submodule_ablfvextractor_clean \
-	target_toolkit_windows_clean target_toolkit_linux_clean \
-	target_magisk_module_clean target_toolkit_android_clean \
-	target_toolkit_windows target_toolkit_linux target_magisk_module \
-	target_toolkit_android dev_target_extract_and_patch \
+	target_magisk_module_clean target_one_shot_android_clean \
+	target_magisk_module target_one_shot_android dev_target_extract_and_patch \
 	tools_vbmetafixer_linux tools_vbmetafixer_windows \
-	tools_vbmetafixer_android test uefi_discard fetch-verified \
+	tools_vbmetafixer_android test uefi_discard uefi_prepare \
 	bump version-check imports import-pin
 
 # UEFI_REBUILD=1 forces a from-scratch BDS, ONCE for the whole invocation.
@@ -18,9 +16,8 @@ include imports.mk
 # building the same sources clean twice in a row was measured to give
 # BDS.efi sha256 7ef5d010... and then 09a83e86.... Rebuilding per package would
 # therefore put different bytes in each archive and break the CI check that
-# every package carries byte-identical boot artifacts. Dropping the tree here
-# makes the first package that runs do the single build; the rest find the
-# artifacts present and reuse them.
+# every package carries byte-identical boot artifacts. The shared prerequisite
+# cleans and builds once; both packages reuse those outputs.
 #
 # It is a full clean, not just a delete of build/*.efi, because
 # submodules/uefi's `build` target removes edk2's LinuxLoader.efi before
@@ -32,8 +29,10 @@ include imports.mk
 # silently packages the previous build, which is how a release ships a boot
 # menu stamped with the version before it.
 ifeq ($(UEFI_REBUILD),1)
-target_toolkit_windows target_toolkit_linux target_magisk_module \
-target_toolkit_android: uefi_discard
+target_magisk_module target_one_shot_android: uefi_prepare
+uefi_prepare: uefi_discard
+	$(MAKE) -C submodules/uefi build
+	$(MAKE) -C submodules/uefi tools
 uefi_discard:
 	$(MAKE) -C submodules/uefi clean
 endif
@@ -46,15 +45,11 @@ submodule_ablfvextractor_clean:
 	cd submodules/ablfvextractor && make clean
 clean_submodules: submodule_uefi_clean submodule_patcher_clean submodule_ablfvextractor_clean
 
-target_toolkit_windows_clean:
-	cd targets/toolkit_windows && make clean
-target_toolkit_linux_clean:
-	cd targets/toolkit_linux && make clean
 target_magisk_module_clean:
 	cd targets/magisk_module && make clean
-target_toolkit_android_clean:
-	cd targets/toolkit_android && make clean
-targets_clean: clean_submodules target_toolkit_windows_clean target_toolkit_linux_clean target_magisk_module_clean target_toolkit_android_clean
+target_one_shot_android_clean:
+	cd targets/one_shot_android && make clean
+targets_clean: clean_submodules target_magisk_module_clean target_one_shot_android_clean
 
 clean: targets_clean clean_submodules
 
@@ -335,7 +330,7 @@ version-check:
 	fi; \
 	if [ -f submodules/uefi/build/BDS.efi ] && command -v sha256sum >/dev/null 2>&1 && command -v unzip >/dev/null 2>&1; then \
 		expected="$$(sha256sum submodules/uefi/build/BDS.efi | cut -d" " -f1)"; \
-		for archive in targets/toolkit_android/build/toolkit_android.zip \
+		for archive in targets/one_shot_android/build/canoe-one-shot-$(CANOE_VERSION)-android-arm64.zip \
 			targets/magisk_module/build/module_android.zip; do \
 			if [ ! -f "$$archive" ]; then \
 				if [ -d "$$(dirname "$$archive")" ]; then \
@@ -360,13 +355,10 @@ version-check:
 	if [ "$$fail" -ne 0 ]; then exit 1; fi; \
 	printf 'Version check passed: %s (version code %s)\n' "$$version" "$$version_code"
 
-target_toolkit_windows target_toolkit_linux:
-	@echo "Desktop packages retired in b5; use the hosted CANOE BOOT MANAGER." >&2
-	@exit 2
 target_magisk_module:
 	cd targets/magisk_module && $(MAKE) build
-target_toolkit_android:
-	cd targets/toolkit_android && $(MAKE) build
+target_one_shot_android:
+	cd targets/one_shot_android && $(MAKE) build
 
 dev_target_extract_and_patch:
 	cd dev_targets/extract_and_patch && make patch
@@ -389,37 +381,5 @@ test:
 	$(MAKE) -C submodules/patcher test
 	$(MAKE) -C submodules/uefi test
 	sh targets/magisk_module/tests/test_flows.sh
+	sh targets/one_shot_android/tests/test_one_shot_unlock.sh
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
-
-# Fetch a pinned package asset without ever exposing a partial archive to
-# subsequent builds. Package Makefiles invoke this target with absolute
-# FETCH_DEST paths so the mechanism is independent of their working directory.
-# A file:// URL uses the checked-in last-known-good asset while a release URL
-# remains the normal path once the producer repository publishes one.
-fetch-verified:
-	@set -eu; \
-	test -n "$(FETCH_URL)" || { echo "FETCH_URL is required" >&2; exit 2; }; \
-	test -n "$(FETCH_SHA256)" || { echo "FETCH_SHA256 is required" >&2; exit 2; }; \
-	test -n "$(FETCH_DEST)" || { echo "FETCH_DEST is required" >&2; exit 2; }; \
-	dest="$(FETCH_DEST)"; \
-	mkdir -p "$$(dirname "$$dest")"; \
-	tmp="$$dest.tmp"; \
-	trap 'rm -f "$$tmp"' EXIT HUP INT TERM; \
-	if [ -f "$$dest" ] && \
-	   [ "$$(sha256sum "$$dest" | cut -d" " -f1)" = "$(FETCH_SHA256)" ]; then \
-		echo "Verified $$(basename "$$dest") sha256: $(FETCH_SHA256)"; \
-		exit 0; \
-	fi; \
-	source_label=Downloaded; \
-	case "$(FETCH_URL)" in \
-		file://*) source_label=Copied; cp -- "$${FETCH_URL#file://}" "$$tmp" ;; \
-		*) wget --no-verbose --tries=3 --output-document="$$tmp" "$(FETCH_URL)" ;; \
-	esac; \
-	actual="$$(sha256sum "$$tmp" | cut -d" " -f1)"; \
-	if [ "$$actual" != "$(FETCH_SHA256)" ]; then \
-		echo "sha256 mismatch for $$(basename "$$dest"): expected $(FETCH_SHA256), got $$actual" >&2; \
-		exit 1; \
-	fi; \
-	mv "$$tmp" "$$dest"; \
-	trap - EXIT HUP INT TERM; \
-	echo "$$source_label and verified $$(basename "$$dest") sha256: $$actual"

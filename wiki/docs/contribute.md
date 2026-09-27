@@ -35,10 +35,10 @@ make test
 UEFI_REBUILD=1 make target_magisk_module
 ```
 
-Use `target_toolkit_android` instead for the temporary-root package. The module
-target must receive an absolute `CANOE_KSU_DIST` path when the app checkout is
-not the default sibling checkout. The retired `target_toolkit_linux` and
-`target_toolkit_windows` targets refuse to run.
+Use `target_one_shot_android` instead when checking the rooted-Android one-shot
+installer. The module target must receive an absolute `CANOE_KSU_DIST` path when
+the app checkout is not the default sibling checkout. Desktop toolkit package
+targets are retired and must not be restored.
 
 ### `canoe-bootmgr` and config grammar
 
@@ -76,14 +76,18 @@ that changed:
 
 ```bash
 make version-check
-make target_toolkit_android
+make target_one_shot_android
 make target_magisk_module
 ```
 
-The module recipe stages the app's version-matched `dist/ksu` through
-`scripts/stage_ksu.py`; it must not regenerate a divergent UI. The packages also
-assert that BDS plus the standalone EFI tools retain byte identity across
-packages.
+The one-shot recipe packages the installer with BDS and its reviewed EFI tools
+from the canonical firmware build. `scripts/firmware_release.py` verifies those
+embedded firmware bytes against the same build before adding
+`canoe-one-shot-<CANOE_VERSION>-android-arm64.zip` to the firmware manifest,
+checksums, and draft release. The module recipe stages the app's
+version-matched `dist/ksu` through `scripts/stage_ksu.py`; it must not regenerate
+a divergent UI. Both packages assert that BDS plus the selected standalone EFI
+tools retain byte identity.
 
 ## Contribution workflow
 

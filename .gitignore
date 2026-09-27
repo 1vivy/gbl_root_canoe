@@ -46,6 +46,7 @@ extracted/
 
 # Session scratch: device dumps, pulled UefiLogs, one-off host tools
 .work/
+.worktrees/
 
 # Local agent guidance and harness state, deliberately not published.
 # .omo/ holds plans, per-task evidence and a task DAG; .pi/ holds memory

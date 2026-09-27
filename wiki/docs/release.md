@@ -17,13 +17,17 @@ make test
 docker build -t gbl_builder .
 docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc \
   'make -C submodules/uefi clean && make -C submodules/uefi build && make -C submodules/uefi tools'
+make target_one_shot_android
 make version-check
 ```
 
 Pin any changed imported source or binary through `imports.toml` and
 `make import-pin ID=<id>`. Never use a `CANOE_VERSION_OVERRIDE` local build for a
-release. Existing generated package archives must match the current BDS or be
-moved out of their build directories before the version gate.
+release. `target_one_shot_android` requires the Android NDK and produces
+`targets/one_shot_android/build/canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`
+from that same firmware output. Existing generated package archives must match
+the current BDS or be moved out of their build directories before the version
+gate.
 
 Commit the release-ready source and create the requested version checkpoint tag.
 The pipeline tag is `release-<version>` at that same commit. Frozen prior tags and
@@ -34,22 +38,45 @@ drafts as an ordinary release. It never publishes automatically.
 
 ## 2. Verify the exact draft assets
 
-The draft contains `BDS.efi`, all eight EFI tools, `manifest.json` and
-`SHA256SUMS`. Download those firmware assets into a dedicated directory and run:
+The draft contains `BDS.efi`, all eight EFI tools,
+`canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`, `manifest.json`, and
+`SHA256SUMS`. Download the complete asset set into a dedicated directory and
+run:
 
 ```sh
 python3 scripts/firmware_release.py verify /path/to/downloaded-firmware
 ```
 
-Check the manifest's version, tag, source commit, ARM64 PE format and exact byte
-identities. The helper verifies those file contracts and checksums. The local
+Check the manifest's version, tag, source commit, ARM64 PE format, and exact byte
+identities. The helper verifies every release-file checksum, the one-shot
+archive's ARM64 Android commands, and that the BDS plus its five staged EFI tools
+are byte-identical to the raw assets from this firmware build. The local
 canonical build is compile validation; a second CI build need not have identical
 bytes. Qualify and consume the exact CI draft assets. Never silently substitute
 a local rebuild for an approved catalogue.
 
-Record host tests, build checks and physical-device qualification separately.
-Building or publishing does not authorize flashing or rebooting a phone. Publish
-the verified firmware release deliberately once the agreed checks pass.
+Record host tests, build checks, one-shot archive inspection, and
+physical-device qualification separately. Building or publishing does not
+authorize flashing or rebooting a phone. The one-shot installer requires root,
+mounted persist, and explicit `--mode`, `--persist-mount`, and `--work-dir`
+arguments. The work directory is unused scratch space for temporary staging and
+readback diagnostics, not a rollback backup. Stock active-slot ABL and vbmeta
+are read-only sources for the prepared loader and sidecars.
+
+The default is a no-write plan. With `--apply`, the installer creates
+`persist/efisp.fat` and writes BDS only to raw `efisp`; it never flashes an ABL.
+The creation primitive refuses an existing `persist/efisp.fat` rather than
+overwriting it. An independent off-device persist backup and a separate
+recovery path are recommended before `--apply` in case the raw `efisp` write
+fails. The installer does not capture the previous raw `efisp` or provide a
+built-in rollback copy.
+
+Stock ABL has no `efisp` redirect, so this preparation alone cannot boot Canoe.
+The user or another separately authorized tool must independently obtain and
+install a compatible signed vulnerable ABL. The modified, unsigned prepared
+`boot_<slot>.efi` stays in the boot root and must never be written to an ABL
+partition. Publish the verified firmware release deliberately once the agreed
+checks pass.
 See [firmware CI contracts](https://github.com/1vivy/gbl_root_canoe/blob/main/scripts/FIRMWARE_RELEASES.md) for the manifest
 schema and draft helper.
 

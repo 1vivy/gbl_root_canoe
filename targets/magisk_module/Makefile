@@ -3,7 +3,7 @@ CANOE_ROOT_DIR := $(abspath ../..)
 include ../../version.mk
 include ../../imports.mk
 
-.PHONY: canoe_manager clean copy_resources webui_dist webui-pin submodule_uefi submodule_patcher \
+.PHONY: canoe_manager clean copy_resources webui_dist submodule_uefi submodule_patcher \
 	submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr \
 	submodule_ablfvextractor build
 
@@ -34,9 +34,6 @@ copy_resources:
 # b5 packages only the explicit local KSU build. Never fetch the b4 archive.
 webui_dist: copy_resources
 	python3 ../../scripts/stage_ksu.py "$(CANOE_KSU_DIST)" build/module/webroot "$(CANOE_VERSION)"
-webui-pin:
-	@echo 'b5 uses CANOE_KSU_DIST; build the app KSU target first.' >&2
-	@exit 2
 submodule_uefi: copy_resources
 	# Build the EDK2 tree at most once per workspace, and at most once per
 	# invocation. `make build` in submodules/uefi relinks LinuxLoader with
@@ -44,8 +41,8 @@ submodule_uefi: copy_resources
 	# different BDS.efi in each archive and break the CI check that every package
 	# carries byte-identical boot artifacts. The guard is therefore a plain
 	# existence test. To pick up edited UEFI sources, run
-	# `UEFI_REBUILD=1 make target_<name>` from the REPO ROOT, whose uefi_discard
-	# target drops these artifacts once for the whole invocation.
+	# `UEFI_REBUILD=1 make target_<name>` from the repo root; its shared
+	# uefi_prepare prerequisite rebuilds these artifacts once.
 	# BDS and the standalone tools are guarded SEPARATELY. Rebuilding the tools
 	# must not drag in a second `make build`, because that relinks LinuxLoader
 	# with different bytes and breaks the byte-identical BDS.efi invariant.

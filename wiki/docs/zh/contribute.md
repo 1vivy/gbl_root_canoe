@@ -29,9 +29,9 @@ make test
 UEFI_REBUILD=1 make target_magisk_module
 ```
 
-如果检查的是临时 root 包，请改用 `target_toolkit_android`。当应用 checkout
-不是默认兄弟 checkout 时，模块目标必须接收绝对路径的 `CANOE_KSU_DIST`。
-已退役的 `target_toolkit_linux` 与 `target_toolkit_windows` 会拒绝执行。
+检查 rooted Android 一次性安装包时，请改用 `target_one_shot_android`。当应用
+checkout 不是默认兄弟 checkout 时，模块目标必须接收绝对路径的
+`CANOE_KSU_DIST`。桌面工具包 target 已退役，不应恢复。
 
 ### `canoe-bootmgr` 与配置语法
 
@@ -67,12 +67,16 @@ bun test
 
 ```bash
 make version-check
-make target_toolkit_android
+make target_one_shot_android
 make target_magisk_module
 ```
 
-模块配方通过 `scripts/stage_ksu.py` 暂存版本匹配的 `dist/ksu`；不能重新生成
-不同的界面。配方还会断言 BDS 和独立 EFI 工具在各包之间保持字节一致。
+一次性安装包配方使用规范固件构建中的 BDS 与经过审查的 EFI 工具打包安装器。
+`scripts/firmware_release.py` 会先核对归档内的固件字节与同一构建，再把
+`canoe-one-shot-<CANOE_VERSION>-android-arm64.zip` 加入固件清单、校验和与
+草稿发布。模块配方通过 `scripts/stage_ksu.py` 暂存版本匹配的 `dist/ksu`，
+不能重新生成不同的界面。两种软件包都会断言 BDS 和选定的独立 EFI 工具保持
+字节一致。
 
 ## 贡献流程
 

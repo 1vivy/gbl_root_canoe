@@ -61,7 +61,7 @@ A working release environment has all of the following:
 
 - Docker, for the canonical EDK2/BDS build;
 - the Android NDK, with `NDK_PATH` (or `ANDROID_NDK_LATEST_HOME`) set, for the
-  Android toolkit and KernelSU module;
+  rooted-Android one-shot installer and KernelSU module;
 - a rustup-managed Rust toolchain, including the
   `aarch64-linux-android` standard library. A distro `cargo` shim without that
   rustup target fails with `can't find crate for std`;
@@ -75,20 +75,23 @@ specifically use the NDK's `aarch64-linux-android31-clang` linker.
 
 ## Build the release packages
 
-From the firmware repository root, after the app's `dist/ksu` has been built,
-build the two supported packages with these root Makefile targets:
+From the firmware repository root, build the rooted-Android one-shot archive
+with the current firmware output. Build the KernelSU module after the app's
+`dist/ksu` has been produced:
 
 ```bash
-make target_toolkit_android
+make target_one_shot_android
 make target_magisk_module
 ```
 
-Both require `NDK_PATH` to point to an Android NDK. Archives are written below
-`targets/toolkit_android/build/` and `targets/magisk_module/build/`.
+Both require `NDK_PATH` to point to an Android NDK. The resulting archives are
+`targets/one_shot_android/build/canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`
+and `targets/magisk_module/build/module_android.zip`. The one-shot archive is
+not a general toolkit: it contains `install-canoe.sh`, the four ARM64 Android
+commands that script invokes, BDS, and the reviewed EFI tools.
 
-`target_toolkit_linux` and `target_toolkit_windows` are still declared, but they
-refuse to run: each prints `Desktop packages retired in b5; use the hosted CANOE
-BOOT MANAGER.` and exits 2. Do not reintroduce them.
+Desktop toolkit packages are retired and have no package targets in this
+repository. Use the hosted CANOE BOOT MANAGER for the desktop workflow.
 
 The module recipe stages `CANOE_KSU_DIST` into the module webroot through
 `scripts/stage_ksu.py`, which keeps the packaged UI byte-identical to the app's
@@ -162,13 +165,13 @@ in any existing package archives.
 
 ## Byte-identical boot artifacts
 
-Every toolkit and module package carries the same bytes for:
+The Android one-shot and module packages carry the same bytes for:
 
 - `BDS.efi`; and
 - the standalone EFI tools `ArbTools.efi`, `BLTools.efi`, `RebootTools.efi`,
   `SurfaceTools.efi`, and `UsbTools.efi`.
 
-`make -C submodules/uefi tools` builds three more that no package carries:
+`make -C submodules/uefi tools` builds three more that neither package carries:
 `LogTools.efi`, `MdTools.efi`, and `CrashTools.efi`. They are launched from a
 host with `fastboot boot <tool>.efi` against a device already running a
 vulnerable ABL, and they exist to investigate the firmware rather than to
@@ -177,21 +180,21 @@ RAM, and `CrashTools` triggers deliberate faults to reach 900e memory-debug
 mode. The packaged list above is therefore narrower than the build output on
 purpose; do not "fix" it by adding them to a target.
 
-The package recipes build each EDK2 artifact once per workspace and reuse it
-instead of relinking once per package. This is checked because EDK2 relinking
-can produce different bytes from the same sources; rebuilding separately would
-make packages disagree about the boot menu or its standalone tools. Byte
-identity makes the shipped boot behavior and the artifact provenance
-unambiguous.
+The one-shot recipe requires existing canonical EDK2 output; the module recipe
+builds missing EFI artifacts once per workspace. Reuse one firmware build when
+assembling both packages. EDK2 relinking can produce different bytes from the
+same sources; rebuilding separately would make packages disagree about the boot
+menu or its standalone tools. Byte identity makes the shipped behavior and
+artifact provenance unambiguous.
 
 When UEFI sources change, force one clean BDS rebuild for the package command:
 
 ```bash
-UEFI_REBUILD=1 make target_toolkit_linux
+UEFI_REBUILD=1 make target_one_shot_android
 ```
 
-Use the matching package target when the final package is Windows, Android, or
-the module. Do not force a separate rebuild for each package.
+Use `target_magisk_module` instead when the final package is the module. Do not
+force a separate rebuild for each package.
 
 ## Command components and packaging
 

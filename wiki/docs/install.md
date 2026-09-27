@@ -91,40 +91,65 @@ manager does not require a data format.
 
 ## Rooted Android one-shot install
 
-The Android command-toolkit zip includes `install-canoe.sh` for the narrow case
-where the active slot already contains the supported vulnerable loader and a
-root shell is available, commonly through temporary root on a locked stock
-device. This route assumes the active slot's firmware is good and uses that
-slot's ABL and vbmeta as the derivation source; it does not choose a catalogue
-image or assess userdata compatibility.
+The firmware draft's
+`canoe-one-shot-<CANOE_VERSION>-android-arm64.zip` includes
+`install-canoe.sh` for the narrow case where the phone has a root shell and an
+ext4 persist directory is already mounted. The archive is built from the same
+firmware output as the draft's raw EFI assets and is covered by its manifest
+and checksums. It does not unlock the bootloader or install an ABL. This route
+uses the active slot's stock ABL and vbmeta as read-only derivation sources; it
+does not choose a catalogue image or assess userdata compatibility.
 
 Run the wrapper first without `--apply`, supplying an explicit `--mode 0|1|2`,
-the mounted persist directory and a new rollback directory. The plan names the
-active slot, the single raw partition target, its image and the rollback
-command. Only repeat it with `--apply` after reviewing those exact values.
-There is no default or silently inherited device mode.
+the mounted persist directory, and an unused `--work-dir` such as
+`/data/local/tmp/canoe-work`. There is no default or silently inherited device
+mode. The work directory contains temporary prepared-loader staging and
+readback diagnostics; it is not a rollback backup. Only repeat the command
+with `--apply` after reviewing the active slot, boot root, single raw partition
+target, image, and work directory in the plan.
 
-The confirmed run verifies rollback copies of the active ABL and raw `efisp`
-before writing anything, prepares `efisp.fat`, publishes the active-slot loader
-and explicit default entry, unmounts the FAT container, then writes BDS to raw
-`efisp`. That is the only partition written. The active slot keeps the signed,
-vulnerable ABL it was verified to already carry: that image is what dispatches
-to `efisp`, and it is also the only one XBL will authenticate. A patched ABL is
-modified and therefore unsigned, so writing one to a slot costs you the phone
-to EDL rather than merely failing to boot. Preserve the reported `.before.img`
-files and their
-`.sha256` records off-device. If the operation stops after raw writing begins,
-run the exact `efisp` restore command printed by the wrapper; the untouched
-other slot remains the recovery path. See
-[Command-line tools](./commands.md#rooted-android-one-shot-install) for the
-invocation and ordering details.
+Before `--apply`, SELinux must be **Permissive** (or already Disabled).
+Root alone does not permit the kernel loop worker to read and write
+`persist/efisp.fat` under Enforcing; this archive does not include or activate
+the KernelSU module's policy. Check `getenforce`; if it reports `Enforcing`,
+run `setenforce 0` from the root shell and verify `getenforce` reports
+`Permissive`. This is an operator prerequisite: the installer neither checks
+nor changes SELinux. Permissive weakens SELinux protection for the **whole device**,
+not just the FAT file. Restore Enforcing with `setenforce 1` after the run
+(or reboot); Android-side loop-backed management will then need an active
+policy grant, while firmware boot does not depend on Android SELinux.
+
+An independent off-device persist backup and a separate recovery path are
+recommended before `--apply` in case the raw `efisp` write fails. The one-shot
+installer neither saves the previous raw `efisp` nor provides a built-in
+rollback copy or restore command.
+
+The confirmed run prepares the loader and matching sidecars from the read-only
+active-slot ABL and vbmeta, creates and mounts `persist/efisp.fat`, installs the
+prepared active-slot loader, EFI tools and explicit default entry there, and
+unmounts the FAT container before writing BDS only to raw `efisp`. It verifies
+BDS by readback into the work directory and never writes any ABL partition.
+The `canoe-provision` creation primitive refuses an existing
+`persist/efisp.fat` rather than overwriting it.
+
+This leaves a stock active-slot ABL unchanged. Preparation alone is not
+bootability: stock ABL has no `efisp` redirect and cannot launch Canoe. The user
+or another separately authorized tool must independently obtain and install a
+compatible signed vulnerable ABL before expecting Canoe to boot. Never flash
+the prepared `boot_<slot>.efi` as ABL; it is modified and unsigned, and XBL
+would reject it before it runs.
+
+See [Command-line tools](./commands.md#rooted-android-one-shot-install) for the
+invocation, plan output, and ordering details.
 
 ## Image and data compatibility
 
-A source ABL used to derive a loader is separate from the vulnerable ABL flashed
-to the partition. Each `.efi` has matching `.gm2p` and `.tzmap` sidecars. Do not
-mix generations. A parsed signing key does not establish OEM provenance or
-firmware suitability.
+A stock ABL used as a read-only derivation source is separate from the
+compatible signed vulnerable ABL that the user or another separately authorized
+tool installs to complete the boot chain. The prepared `boot_<slot>.efi` is not
+an ABL partition payload. Each `.efi` has matching `.gm2p` and `.tzmap`
+sidecars; do not mix generations. A parsed signing key does not establish OEM
+provenance or firmware suitability.
 
 See the [format-data matrix](./format-data.md). Missing boot evidence is
 **Unknown**, not proof that formatting is required. AVB failures need correct

@@ -1,7 +1,7 @@
 #!/bin/sh
 # One-shot Canoe installer for a rooted Android shell.
 # Baked assumptions: this runs as uid 0, and the ACTIVE slot's ABL/vbmeta are
-# the firmware derivation source. The script refuses to guess either condition.
+# the firmware derivation source, even when the ABL has no efisp redirect.
 #
 # Raw efisp is the ONLY partition this writes. The active slot's ABL is read
 # and never written. Do not "improve" this by flashing a patched ABL: patching
@@ -14,7 +14,7 @@ set -eu
 
 usage() {
     cat <<'EOF'
-Usage: install-canoe.sh --mode 0|1|2 --persist-mount DIR --backup-dir DIR [--apply]
+Usage: install-canoe.sh --mode 0|1|2 --persist-mount DIR --work-dir DIR [--apply]
 
 Without --apply, validates the active-slot source and prints the exact write
 plan without changing storage. --apply confirms that destructive plan.
@@ -25,7 +25,7 @@ die() { echo "install-canoe: $*" >&2; exit 1; }
 
 MODE=
 PERSIST_MOUNT=
-BACKUP_DIR=
+WORK_DIR=
 APPLY=0
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -39,9 +39,9 @@ while [ "$#" -gt 0 ]; do
             PERSIST_MOUNT=$2
             shift 2
             ;;
-        --backup-dir)
-            [ "$#" -ge 2 ] || die '--backup-dir requires a directory'
-            BACKUP_DIR=$2
+        --work-dir)
+            [ "$#" -ge 2 ] || die '--work-dir requires a directory'
+            WORK_DIR=$2
             shift 2
             ;;
         --apply)
@@ -60,15 +60,12 @@ done
 
 case "$MODE" in 0|1|2) ;; *) die 'an explicit --mode 0, 1 or 2 is required' ;; esac
 [ -n "$PERSIST_MOUNT" ] || die 'an explicit --persist-mount is required'
-[ -n "$BACKUP_DIR" ] || die 'an explicit --backup-dir is required'
+[ -n "$WORK_DIR" ] || die 'an explicit --work-dir is required'
 [ "$(id -u)" = 0 ] || die 'root is required (id -u must be 0)'
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 BIN_DIR=$SCRIPT_DIR/bin
 BY_NAME_DIR=${CANOE_BY_NAME_DIR:-/dev/block/by-name}
-case "$BACKUP_DIR$BY_NAME_DIR" in
-    *"'"*) die "backup and partition paths must not contain a single quote" ;;
-esac
 SLOT_SUFFIX=$(getprop ro.boot.slot_suffix 2>/dev/null || true)
 case "$SLOT_SUFFIX" in
     _a) SLOT=a ;;
@@ -80,10 +77,8 @@ ABL_PART=$BY_NAME_DIR/abl$SLOT_SUFFIX
 VBMETA_PART=$BY_NAME_DIR/vbmeta$SLOT_SUFFIX
 EFISP_PART=$BY_NAME_DIR/efisp
 BDS_IMAGE=$SCRIPT_DIR/BDS.efi
-STAGED=$BACKUP_DIR/work/staged
-ABL_BACKUP=$BACKUP_DIR/abl$SLOT_SUFFIX.before.img
-EFISP_BACKUP=$BACKUP_DIR/efisp.before.img
-BOOT_MOUNT=$BACKUP_DIR/work/boot-root
+STAGED=$WORK_DIR/staged
+BOOT_MOUNT=$WORK_DIR/boot-root
 
 for command in dd sha256sum sync losetup mount umount cp mkdir; do
     command -v "$command" >/dev/null 2>&1 || die "required command is unavailable: $command"
@@ -98,24 +93,13 @@ done
 [ -d "$PERSIST_MOUNT" ] || die "persist mount is not a directory: $PERSIST_MOUNT"
 [ -d "$SCRIPT_DIR/efisp/tools" ] || die "EFI tools are missing: $SCRIPT_DIR/efisp/tools"
 
-# abl-check exits 0 and REPORTS gbl_patched; a zero exit alone proves nothing.
-ABL_REPORT=$("$BIN_DIR/canoe-image" abl-check --image "$ABL_PART" --tools "$BIN_DIR" --json) ||
-    die "could not inspect the active-slot ABL: $ABL_PART"
-case $(printf '%s' "$ABL_REPORT" | tr -d ' \n\t') in
-    *'"ok":true'*'"gbl_patched":true'*) ;;
-    *) die "active-slot ABL carries no vulnerable loader, so it cannot dispatch to efisp: $ABL_REPORT" ;;
-esac
-
-print_rollback() {
-    echo "Rollback efisp: dd if='$EFISP_BACKUP' of='$EFISP_PART' bs=4194304"
-}
-
 print_plan() {
     echo "Active derivation slot: $SLOT"
     echo "Derivation source, read only and never written: $ABL_PART"
     echo "Single raw write: partition=$EFISP_PART image=$BDS_IMAGE"
     echo "Boot root: $PERSIST_MOUNT/efisp.fat entry boot_$SLOT.efi mode $MODE"
-    print_rollback
+    echo 'Boot prerequisite: an active ABL without the efisp redirect will not launch Canoe; install a compatible signed vulnerable ABL separately before expecting it to boot.'
+    echo "Work directory: $WORK_DIR (not a rollback backup)"
 }
 
 print_plan
@@ -125,13 +109,24 @@ if [ "$APPLY" -ne 1 ]; then
 fi
 
 [ -w "$EFISP_PART" ] || die "raw efisp is not writable: $EFISP_PART"
-[ ! -e "$BACKUP_DIR" ] || die "backup directory already exists: $BACKUP_DIR"
+[ ! -e "$WORK_DIR" ] || die "work directory already exists: $WORK_DIR"
 
 MOUNTED=0
 LOOP_ATTACHED=0
 LOOP_DEVICE=
 CONTAINER_CREATED=0
 WRITE_PHASE=none
+detach_loop() {
+    # Some kernels auto-release the loop at umount, so -d then reports ENXIO.
+    if losetup -d "$LOOP_DEVICE" >/dev/null 2>&1 ||
+       ! losetup "$LOOP_DEVICE" >/dev/null 2>&1; then
+        LOOP_ATTACHED=0
+        LOOP_DEVICE=
+        return 0
+    fi
+    return 1
+}
+
 cleanup() {
     status=$?
     cleanup_storage_ok=1
@@ -145,9 +140,7 @@ cleanup() {
         fi
     fi
     if [ "$LOOP_ATTACHED" -eq 1 ] && [ "$MOUNTED" -eq 0 ]; then
-        if losetup -d "$LOOP_DEVICE" >/dev/null 2>&1; then
-            LOOP_ATTACHED=0
-        else
+        if ! detach_loop; then
             cleanup_storage_ok=0
             echo "Failed to detach $LOOP_DEVICE; backing storage was left intact." >&2
         fi
@@ -157,8 +150,7 @@ cleanup() {
         "$BIN_DIR/canoe-provision" remove --persist-directory "$PERSIST_MOUNT" >/dev/null 2>&1 || true
     fi
     if [ "$status" -ne 0 ] && [ "$WRITE_PHASE" != none ]; then
-        echo 'A raw write started but the installation did not complete.' >&2
-        print_rollback >&2
+        echo 'A raw write started but the installation did not complete; no prior efisp image was saved by this installer.' >&2
     fi
     exit "$status"
 }
@@ -167,17 +159,6 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 hash_file() { sha256sum "$1" | cut -d ' ' -f 1; }
-backup_partition() {
-    source=$1
-    destination=$2
-    dd if="$source" of="$destination" bs=4194304
-    sync
-    source_digest=$(hash_file "$source")
-    backup_digest=$(hash_file "$destination")
-    [ "$source_digest" = "$backup_digest" ] || die "backup verification failed: $destination"
-    printf '%s  %s\n' "$backup_digest" "$destination" > "$destination.sha256"
-    echo "Verified rollback copy: $destination sha256=$backup_digest"
-}
 write_image() {
     image=$1
     partition=$2
@@ -191,15 +172,10 @@ write_image() {
         die "partition readback does not match $image: $partition"
 }
 
-mkdir -p "$BACKUP_DIR/work"
-backup_partition "$ABL_PART" "$ABL_BACKUP"
-backup_partition "$EFISP_PART" "$EFISP_BACKUP"
-dd if="$VBMETA_PART" of="$BACKUP_DIR/work/vbmeta$SLOT_SUFFIX.img" bs=4194304
-sync
-
+mkdir -p "$WORK_DIR"
 "$BIN_DIR/canoe-image" build \
-    --abl "$ABL_BACKUP" \
-    --vbmeta "$BACKUP_DIR/work/vbmeta$SLOT_SUFFIX.img" \
+    --abl "$ABL_PART" \
+    --vbmeta "$VBMETA_PART" \
     --staged "$STAGED" \
     --tools "$BIN_DIR" \
     --efisp-tools "$SCRIPT_DIR/efisp/tools"
@@ -224,14 +200,12 @@ done
 sync
 umount "$BOOT_MOUNT"
 MOUNTED=0
-losetup -d "$LOOP_DEVICE"
-LOOP_ATTACHED=0
-LOOP_DEVICE=
+detach_loop || die "Failed to detach $LOOP_DEVICE; backing storage was left intact."
 
 WRITE_PHASE=efisp-started
-write_image "$BDS_IMAGE" "$EFISP_PART" "$BACKUP_DIR/work/efisp.readback"
+write_image "$BDS_IMAGE" "$EFISP_PART" "$WORK_DIR/efisp.readback"
 WRITE_PHASE=complete
 
 echo 'Canoe installation completed and the efisp write passed readback verification.'
-echo "Rollback copies remain in: $BACKUP_DIR"
+echo "Preparation outputs remain in: $WORK_DIR (not a rollback backup)"
 print_plan
