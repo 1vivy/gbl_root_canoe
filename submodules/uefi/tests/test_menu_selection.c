@@ -562,6 +562,78 @@ int main (int argc, char **argv)
   assert(SfbRunMenu(&Template) == EFI_SUCCESS && mNextKey == 5);
 
 
+  /* Notices keep their identity across rebuilds, use the alert marker even if
+   * a stale cursor/default points at them, and expose an untruncated detail. */
+  Initialize(&State, &Template);
+  Add(&State, SfbEntryFastboot, L"", L"Enter Super Fastboot", 0, FALSE, FALSE);
+  Add(&State, SfbEntryNotice, L"", L"Android entry is for the other slot", 0, FALSE, FALSE);
+  State.Menu.Entry[1].NoticeDetail =
+    L"After a slot switch. Choose an entry, then save a default.";
+  Add(&State, SfbEntryNotice, L"", L"Another notice", 0, FALSE, FALSE);
+  State.Menu.Entry[2].NoticeDetail = L"Another detail.";
+  State.Menu.DefaultIndex = 1;
+  Template.Cursor = 1;
+  mColumns = 80;
+  SfbReadMenuGeometry();
+  FakeClear(&Out);
+  SfbDrawMainMenuRow(&State, 1, FALSE);
+  assert(mScreen[0][mSfbMenuTextLeft - 2] == '!');
+  assert(memcmp(&mScreen[0][mSfbMenuTextLeft],
+                "Android entry is for the other slot",
+                sizeof("Android entry is for the other slot") - 1) == 0);
+  mColumns = 40;
+  SfbReadMenuGeometry();
+  FakeClear(&Out);
+  SfbDrawMainMenuHeader(&State);
+  assert(strstr(mFrame, "After a slot switch.") != NULL);
+  assert(strstr(mFrame, "default.") != NULL);
+  {
+    SFB_BOOT_ENTRY Previous = State.Menu.Entry[1];
+    SFB_MENU_STATE Refreshed = State.Menu;
+    Refreshed.Entry[1] = State.Menu.Entry[2];
+    Refreshed.Entry[2] = State.Menu.Entry[1];
+    assert(SfbRestoreMainSelection(&Refreshed, &Previous, 1) == 2);
+  }
+
+  /* Config roles no longer imply live slot state. The current-slot suffix is
+   * captured separately, while backup and passthrough labels remain intact. */
+  Initialize(&State, &Template);
+  Add(&State, SfbEntryFastboot, L"", L"Enter Super Fastboot", 0, FALSE, FALSE);
+  Add(&State, SfbEntryEfiFile, L"\\boot_a.efi", L"Android A", 0, TRUE, FALSE);
+  Add(&State, SfbEntryEfiFile, L"\\boot_b.efi", L"Android B", 0, TRUE, FALSE);
+  Add(&State, SfbEntryEfiFile, L"\\boot_backup.efi", L"Previous", 0, TRUE, FALSE);
+  Add(&State, SfbEntryEfiFile, L"\\linux.efi", L"Custom", 0, TRUE, FALSE);
+  State.Menu.Entry[1].Role = SfbConfigRoleActive;
+  State.Menu.Entry[1].CurrentSlot = TRUE;
+  State.Menu.Entry[2].Role = SfbConfigRoleInactive;
+  State.Menu.Entry[3].Role = SfbConfigRoleBackup;
+  State.Menu.Entry[4].CurrentSlot = TRUE;
+  mColumns = 80;
+  SfbReadMenuGeometry();
+  FakeClear(&Out);
+  SfbDrawMainMenuRow(&State, 1, FALSE);
+  assert(memcmp(&mScreen[0][mSfbMenuTextLeft], "Android A (current slot)",
+                sizeof("Android A (current slot)") - 1) == 0);
+  assert(mScreen[0][mSfbMenuTextLeft +
+         sizeof("Android A (current slot)") - 1] == ' ');
+  FakeClear(&Out);
+  SfbDrawMainMenuRow(&State, 2, FALSE);
+  assert(memcmp(&mScreen[0][mSfbMenuTextLeft], "Android B",
+                sizeof("Android B") - 1) == 0);
+  assert(mScreen[0][mSfbMenuTextLeft + sizeof("Android B") - 1] == ' ');
+  FakeClear(&Out);
+  SfbDrawMainMenuRow(&State, 3, FALSE);
+  assert(memcmp(&mScreen[0][mSfbMenuTextLeft], "Previous (backup)",
+                sizeof("Previous (backup)") - 1) == 0);
+  assert(mScreen[0][mSfbMenuTextLeft + sizeof("Previous (backup)") - 1] == ' ');
+  FakeClear(&Out);
+  SfbDrawMainMenuRow(&State, 4, FALSE);
+  assert(memcmp(&mScreen[0][mSfbMenuTextLeft],
+                "Custom (current slot) (passthrough)",
+                sizeof("Custom (current slot) (passthrough)") - 1) == 0);
+  assert(mScreen[0][mSfbMenuTextLeft +
+         sizeof("Custom (current slot) (passthrough)") - 1] == ' ');
+
 
   /* Actual main-menu refresh keeps the selected action through changed
    * discovery/default preferences. Only the first display has a countdown. */

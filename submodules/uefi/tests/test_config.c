@@ -181,8 +181,12 @@ TestRolesAndTheThirdEntry (void)
   assert (Find ("a")->Role == SfbConfigRoleActive);
   assert (Find ("b")->Role == SfbConfigRoleInactive);
   assert (Find ("c")->Role == SfbConfigRoleBackup);
-  /* Backup enumerates as an ordinary third row, distinguishable only by its
-   * suffix; the loader derives no slot state of its own. */
+  assert (strcmp (SfbConfigRoleSuffix (SfbConfigRoleActive), "") == 0);
+  assert (strcmp (SfbConfigRoleSuffix (SfbConfigRoleInactive), "") == 0);
+  assert (strcmp (SfbConfigRoleSuffix (SfbConfigRoleBackup),
+                  " (backup)") == 0);
+  /* Backup remains an ordinary third row with its configured suffix; the live
+   * current-slot indicator is independent of the parsed role. */
   /* `default` resolves to an index, so no caller re-scans by id. */
   assert (gConfig.DefaultIndex == 1);
   assert (strcmp (gConfig.Entry[gConfig.DefaultIndex].Id, "b") == 0);

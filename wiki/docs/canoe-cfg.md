@@ -175,6 +175,12 @@ The small CLI's `loader install` and `entry set` are separate explicit commands.
 actual active slot and withholds unattended launch on a mismatch. Do not label
 an unknown slot as active.
 
+At menu construction time, BDS marks any configured entry whose id or image
+claims the live GPT active slot with **(current slot)**. `role active` and
+`role inactive` add no suffix of their own; `role backup` still adds
+**(backup)**. An unknown claimed slot or unknown active slot adds no live
+suffix.
+
 Recovery snapshots belong to saved application operations outside the boot
 root. There is no implicit backup rotation or migration of ext4 `efisp/`.
 `boot_backup.efi` and the old `boot.efi` name remain firmware compatibility

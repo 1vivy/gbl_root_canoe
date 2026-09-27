@@ -360,6 +360,20 @@ SfbAppendBuiltIn (IN OUT SFB_MENU_STATE *Menu,
   Menu->Count++;
 }
 
+STATIC
+VOID
+SfbAppendNotice (IN OUT SFB_MENU_STATE *Menu,
+                 IN CONST CHAR16       *Title,
+                 IN CONST CHAR16       *Detail)
+{
+  if (Menu->Count >= SFB_MAX_ENTRIES) {
+    return;
+  }
+
+  SfbAppendBuiltIn (Menu, SfbEntryNotice, Title);
+  Menu->Entry[Menu->Count - 1].NoticeDetail = Detail;
+}
+
 /* ---- text list parsing (DRIVER.LIST) ------------------------------------ */
 
 /*
@@ -1014,10 +1028,15 @@ SfbScanDiscoveredVolumes (IN OUT SFB_MENU_STATE *Menu)
 }
 
 STATIC
+SFB_SLOT
+SfbConfigEntrySlot (IN CONST CHAR8 *Id, IN CONST CHAR8 *Image);
+
+STATIC
 VOID
 SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
                         IN CONST SFB_CONFIG         *Config,
-                        IN EFI_HANDLE                Volume)
+                        IN EFI_HANDLE                Volume,
+                        IN SFB_SLOT                  ActiveSlot)
 {
   EFI_FILE_PROTOCOL *Root = NULL;
   UINTN ConfigIndex;
@@ -1076,6 +1095,11 @@ SfbAppendConfigEntries (IN OUT SFB_MENU_STATE       *Menu,
     AsciiStrCpyS (Slot->DefaultTarget, sizeof (Slot->DefaultTarget),
                   Config->Entry[ConfigIndex].Id);
     Slot->Role = Config->Entry[ConfigIndex].Role;
+    Slot->CurrentSlot =
+      (BOOLEAN)(ActiveSlot != SfbSlotUnknown &&
+                SfbConfigEntrySlot (Config->Entry[ConfigIndex].Id,
+                                    Config->Entry[ConfigIndex].Image) ==
+                  ActiveSlot);
     /*
      * An `options` value rides in the same out-of-line payload table the
      * boot-spec rows use, rather than growing SFB_BOOT_ENTRY: the menu
@@ -1188,23 +1212,21 @@ SfbConfigEntrySlot (IN CONST CHAR8 *Id, IN CONST CHAR8 *Image)
  */
 STATIC
 VOID
-SfbCheckConfigSlots (IN OUT SFB_MENU_STATE *Menu, IN CONST SFB_CONFIG *Config)
+SfbCheckConfigSlots (IN OUT SFB_MENU_STATE *Menu,
+                     IN CONST SFB_CONFIG   *Config,
+                     IN SFB_SLOT            Active)
 {
-  SFB_SLOT  Active;
-  UINTN     Index;
+  UINTN Index;
 
-  Active = SfbActiveSlot ();
   if (Active == SfbSlotUnknown) {
     return;
   }
-
   for (Index = 0; Index < Config->Count; Index++) {
     SFB_SLOT  Claimed;
 
     if (Config->Entry[Index].Role != SfbConfigRoleActive) {
       continue;
     }
-
 
     Claimed = SfbConfigEntrySlot (Config->Entry[Index].Id,
                                   Config->Entry[Index].Image);
@@ -1313,6 +1335,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
   EFI_STATUS Status;
   EFI_HANDLE ConfigVolume = NULL;
   SFB_CONFIG Config;
+  SFB_SLOT ActiveSlot = SfbSlotUnknown;
   /* Six always-available actions; advanced choices live in their submenu. */
   UINTN MandatoryRows = 6;
   UINTN ReservedRows;
@@ -1348,8 +1371,9 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
     Menu->ShowBooting = Config.ShowBooting;
     Menu->LockPolicy = Config.LockPolicy;
     Menu->RejectedLines = Config.RejectedLines;
-    SfbAppendConfigEntries (Menu, &Config, ConfigVolume);
-    SfbCheckConfigSlots (Menu, &Config);
+    ActiveSlot = SfbActiveSlot ();
+    SfbAppendConfigEntries (Menu, &Config, ConfigVolume, ActiveSlot);
+    SfbCheckConfigSlots (Menu, &Config, ActiveSlot);
   }
 
   /*
@@ -1407,19 +1431,27 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
     CHAR16 Rejected[SFB_DESC_CHARS];
 
     UnicodeSPrint (Rejected, sizeof (Rejected),
-                   L"Config rejected lines: %u",
+                   L"Config lines skipped: %u",
                    (UINT32)Menu->RejectedLines);
-    SfbAppendBuiltIn (Menu, SfbEntryBack, Rejected);
+    SfbAppendNotice (
+      Menu, Rejected,
+      L"Unknown or invalid lines, or a missing default target.");
   }
 
   if (BootOnceRejected) {
-    SfbAppendBuiltIn (Menu, SfbEntryBack, L"Boot-once target unavailable");
+    SfbAppendNotice (
+      Menu, L"Boot-once target unavailable",
+      L"The record was cleared. Normal boot policy applies.");
   }
   if (Menu->ConfigPrevious) {
-    SfbAppendBuiltIn (Menu, SfbEntryBack, L"Using previous saved configuration");
+    SfbAppendNotice (
+      Menu, L"Using previous saved configuration",
+      L"canoe.cfg was invalid; the last good copy is in use.");
   }
   if (Menu->SlotMismatch) {
-    SfbAppendBuiltIn (Menu, SfbEntryBack, L"Config slot role is stale");
+    SfbAppendNotice (
+      Menu, L"Android entry is for the other slot",
+      L"After a slot switch. Choose an entry, then save a default.");
   }
 
   SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");

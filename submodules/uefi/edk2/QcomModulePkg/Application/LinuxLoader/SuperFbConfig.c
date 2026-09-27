@@ -424,9 +424,9 @@ SfbConfigRoleSuffix (SFB_CONFIG_ROLE Role)
 {
   switch (Role) {
   case SfbConfigRoleActive:
-    return " (active)";
+    return "";
   case SfbConfigRoleInactive:
-    return " (inactive)";
+    return "";
   case SfbConfigRoleBackup:
     return " (backup)";
   case SfbConfigRoleOther:

@@ -109,9 +109,9 @@ typedef enum {
    * the EFI kind is an ordinary LoadImage with a command line. */
   SfbEntryBlsLinux,
   SfbEntryBlsEfi,
-  /* Inert row: redraws the menu when selected. Carries the notices the menu
-   * must show but cannot act on. */
-  SfbEntryBack,
+  /* Inert notice row: redraws the menu when selected and carries its own
+   * selection detail. */
+  SfbEntryNotice,
   /* Power management actions offered at the end of the menu and on the
    * fastboot mode screen. */
   SfbEntryPowerOff,
@@ -139,6 +139,8 @@ typedef enum {
 typedef struct {
   SFB_ENTRY_KIND            Kind;
   CHAR16                    Desc[SFB_DESC_CHARS];
+  /* Static selection detail for SfbEntryNotice; NULL for every other kind. */
+  CONST CHAR16              *NoticeDetail;
   CHAR16                    Path[SFB_PATH_CHARS];
   /* FAT volume label the entry lives on; how an entry names the volume it was
    * discovered on after a reboot has renumbered the handles. */
@@ -157,8 +159,10 @@ typedef struct {
    * these entries ignore a session override, because their sidecars are bound
    * to that exact policy. */
   BOOLEAN                   ModeFromConfig;
-  /* Presentation only; how the backup row is told apart from the two slots. */
+  /* Presentation only; keeps the backup label supplied by canoe.cfg. */
   SFB_CONFIG_ROLE           Role;
+  /* Captured while the menu is built; drawing never reads the GPT. */
+  BOOLEAN                   CurrentSlot;
   /*
    * TRUE when the image is not one of the managed ABL names, so no wrapper is
    * ever installed for it and Mode above decides nothing. Set from the path

@@ -159,8 +159,8 @@ SfbConfigEntryMode (
   const SFB_CONFIG_ENTRY *Entry
   );
 
-/* Presentation suffix for a role: " (active)", " (inactive)", " (backup)" or
- * "" for SfbConfigRoleOther. Never NULL. */
+/* Presentation suffix for a role: " (backup)" for SfbConfigRoleBackup and
+ * "" for every other role. Never NULL. */
 const char *
 SfbConfigRoleSuffix (SFB_CONFIG_ROLE Role);
 

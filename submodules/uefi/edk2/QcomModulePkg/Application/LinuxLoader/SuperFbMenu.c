@@ -611,7 +611,7 @@ SfbIsConfiguredFastboot (IN CONST SFB_BOOT_ENTRY *Entry)
                    Entry->DefaultTarget[0] != '\0');
 }
 
-/* Selection details stay two bounded lines, including long file paths. */
+/* Ordinary selection details stay two bounded lines; notice details wrap. */
 STATIC VOID SfbDrawSelectionLine (IN CONST CHAR16 *Text) { SfbDrawInfoLine (Text); }
 
 /* Drawing is deliberately observational: use the same configured/fallback
@@ -633,6 +633,12 @@ SfbDrawMainMenuHeader (IN VOID *Context)
     SFB_BOOT_MODE Mode = Entry->ModeFromConfig ? Entry->Mode : State->CurrentMode;
     SfbDrawSelectionLine (SfbBootModeLabel (Mode));
     SfbDrawSelectionLine (Entry->Path);
+    Print (L"\r\n");
+    return;
+  }
+  if (Entry->Kind == SfbEntryNotice) {
+    SfbDrawSelectionLine (Entry->Desc);
+    SfbDrawWrappedInfo (Entry->NoticeDetail);
     Print (L"\r\n");
     return;
   }
@@ -707,8 +713,10 @@ SfbDrawMainMenuRow (IN VOID    *Context,
 {
   SFB_MAIN_MENU_CONTEXT *State = (SFB_MAIN_MENU_CONTEXT *)Context;
   CONST SFB_BOOT_ENTRY  *Entry = &State->Menu.Entry[Row];
-  CONST CHAR16          *Marker = (Row == State->Menu.DefaultIndex)
-                                  ? L"*" : L" ";
+  CONST CHAR16          *Marker = Entry->Kind == SfbEntryNotice
+                                  ? L"!"
+                                  : (Row == State->Menu.DefaultIndex)
+                                    ? L"*" : L" ";
   CONST CHAR16          *Prefix = Entry->IsUsb ? L"[E] " : L"";
   if (Row == 0 || Entry->Kind == SfbEntryMassStorage ||
       Entry->Kind == SfbEntryAdvanced || Entry->Kind == SfbEntryReboot ||
@@ -718,24 +726,27 @@ SfbDrawMainMenuRow (IN VOID    *Context,
   }
 
 
-  if (Entry->Role != SfbConfigRoleOther || Entry->Passthrough) {
+  if (Entry->Role != SfbConfigRoleOther || Entry->CurrentSlot ||
+      Entry->Passthrough) {
     CONST CHAR8 *AsciiSuffix = SfbConfigRoleSuffix (Entry->Role);
-    CHAR16 Suffix[16];
+    CONST CHAR16 *CurrentSlot = Entry->CurrentSlot ? L" (current slot)" : L"";
+    CHAR16 RoleSuffix[16];
     CHAR16 Passthrough[16];
     CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS +
-                ARRAY_SIZE (Suffix) + ARRAY_SIZE (Passthrough)];
+                ARRAY_SIZE (RoleSuffix) + ARRAY_SIZE (L" (current slot)") +
+                ARRAY_SIZE (Passthrough)];
     UINTN SuffixIndex;
 
     for (SuffixIndex = 0;
-         SuffixIndex + 1 < ARRAY_SIZE (Suffix) &&
+         SuffixIndex + 1 < ARRAY_SIZE (RoleSuffix) &&
          AsciiSuffix[SuffixIndex] != '\0'; SuffixIndex++) {
-      Suffix[SuffixIndex] = (CHAR16)(UINT8)AsciiSuffix[SuffixIndex];
+      RoleSuffix[SuffixIndex] = (CHAR16)(UINT8)AsciiSuffix[SuffixIndex];
     }
-    Suffix[SuffixIndex] = L'\0';
+    RoleSuffix[SuffixIndex] = L'\0';
     StrCpyS (Passthrough, ARRAY_SIZE (Passthrough),
              Entry->Passthrough ? L" (passthrough)" : L"");
-    UnicodeSPrint (Text, sizeof (Text), L"%s%s%s%s", Prefix, Entry->Desc,
-                   Suffix, Passthrough);
+    UnicodeSPrint (Text, sizeof (Text), L"%s%s%s%s%s", Prefix, Entry->Desc,
+                   RoleSuffix, CurrentSlot, Passthrough);
     SfbDrawRow (Selected, Marker, Text);
   } else if (Entry->IsUsb) {
     CHAR16 Text[SFB_DESC_CHARS + SFB_ROW_PREFIX_CHARS];
@@ -751,7 +762,8 @@ STATIC VOID SfbRunRebootMenu (VOID);
 
 /* Rebuilding discovery after a child returns must not turn Save default into
  * a cursor jump. Match the selected entry's stable name, or its volume/path
- * when it is a manually discovered EFI; built-in actions match their kind. */
+ * when it is a manually discovered EFI. Notices match their title so adjacent
+ * rows retain their identity; other built-in actions match their kind. */
 STATIC UINTN
 SfbRestoreMainSelection (CONST SFB_MENU_STATE *Menu,
                          CONST SFB_BOOT_ENTRY *Previous, UINTN PreviousRow)
@@ -768,7 +780,8 @@ SfbRestoreMainSelection (CONST SFB_MENU_STATE *Menu,
     } else if (Entry->Kind == SfbEntryEfiFile || Entry->Kind == SfbEntryBlsLinux ||
                Entry->Kind == SfbEntryBlsEfi) {
       if (Entry->Volume == Previous->Volume && StrCmp (Entry->Path, Previous->Path) == 0) { return Index; }
-    } else if (Entry->Kind != SfbEntryBack || StrCmp (Entry->Desc, Previous->Desc) == 0) {
+    } else if (Entry->Kind != SfbEntryNotice ||
+               StrCmp (Entry->Desc, Previous->Desc) == 0) {
       return Index;
     }
   }
@@ -878,7 +891,7 @@ SfbHandleMainMenuRow (IN VOID *Context,
     SfbShowActionScreen (L"Rebooting to recovery...");
     RebootDevice (RECOVERY_MODE);
     return SfbMenuActionRebuild;
-  case SfbEntryBack:
+  case SfbEntryNotice:
     return SfbMenuActionRebuild;
   case SfbEntryPowerOff:
     SfbShowActionScreen (L"Powering off...");

@@ -93,6 +93,7 @@ static UINTN mRetryResetMarkerCount;
 static BOOLEAN mPrepareDenyFirst;
 static CONST SFB_MODE2_PROFILE *mLastPrepareProfile;
 static SFB_SLOT mFakeActiveSlot;
+static UINTN mActiveSlotReads;
 
 /* Second volume: a FAT32 stick beside the persist boot root. Discovery has to
  * tell them apart, so the harness has to be able to present both at once. */
@@ -1045,6 +1046,7 @@ ResetLaunchBackend(void)
   mRetryResetMarkerCount = 0;
   mPrepareDenyFirst = FALSE;
   mLastPrepareProfile = NULL;
+  mActiveSlotReads = 0;
   mHandleProtocolCount = 0;
   memset (&mLoadedImage, 0, sizeof (mLoadedImage));
   mInitrdInstallCount = 0;
@@ -2386,7 +2388,11 @@ TestStaleSlotRole(void)
     "entry android-a\n"
     "title Android (slot A)\n"
     "image boot.efi\n"
-    "role active\n";
+    "role active\n"
+    "entry android-b\n"
+    "title Android (slot B)\n"
+    "image boot_b.efi\n"
+    "role inactive\n";
   static const CHAR8 NoSlotText[] =
     "version 1\n"
     "default mine\n"
@@ -2406,28 +2412,66 @@ TestStaleSlotRole(void)
   mVolumesAvailable = TRUE;
   mBootRootConfigPresent = TRUE;
   mBootRootManagedPresent = TRUE;
+  mBootRootSlotBPresent = TRUE;
 
   /* The config says slot A is active; the GPT says B. */
   mFakeActiveSlot = SfbSlotB;
   SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
+  assert(mActiveSlotReads == 1);
   assert(Menu.SlotMismatch);
   /* Still highlighted, but no longer launched without a keypress. */
   assert(!Menu.DefaultFromConfig);
   assert(Menu.DefaultIndex != SFB_NO_INDEX);
+  assert(!Menu.Entry[Menu.DefaultIndex].CurrentSlot);
+  {
+    BOOLEAN FoundCurrent = FALSE;
+    for (UINTN Index = 0; Index < Menu.Count; ++Index) {
+      if (!Menu.Entry[Index].CurrentSlot) {
+        continue;
+      }
+      assert(!FoundCurrent);
+      assert(Menu.Entry[Index].Role == SfbConfigRoleInactive);
+      assert(strcmp (Menu.Entry[Index].DefaultTarget, "android-b") == 0);
+      FoundCurrent = TRUE;
+    }
+    assert(FoundCurrent);
+  }
+  {
+    BOOLEAN FoundNotice = FALSE;
+    for (UINTN Index = 0; Index < Menu.Count; ++Index) {
+      if (Menu.Entry[Index].Kind != SfbEntryNotice) {
+        continue;
+      }
+      assert(!FoundNotice);
+      assert(StrCmp (Menu.Entry[Index].Desc,
+                     L"Android entry is for the other slot") == 0);
+      assert(StrCmp (Menu.Entry[Index].NoticeDetail,
+                     L"After a slot switch. Choose an entry, then save a default.") == 0);
+      FoundNotice = TRUE;
+    }
+    assert(FoundNotice);
+  }
   SfbFreeMenu (&Menu);
 
   /* Agreement is silent. */
   mFakeActiveSlot = SfbSlotA;
   SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
+  assert(mActiveSlotReads == 2);
   assert(!Menu.SlotMismatch);
   assert(Menu.DefaultFromConfig);
+  assert(Menu.Entry[Menu.DefaultIndex].CurrentSlot);
   SfbFreeMenu (&Menu);
 
   /* An unrecognised partition layout must never suppress a boot. */
   mFakeActiveSlot = SfbSlotUnknown;
   SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
+  assert(mActiveSlotReads == 3);
   assert(!Menu.SlotMismatch);
   assert(Menu.DefaultFromConfig);
+  assert(!Menu.Entry[Menu.DefaultIndex].CurrentSlot);
+  for (UINTN Index = 0; Index < Menu.Count; ++Index) {
+    assert(!Menu.Entry[Index].CurrentSlot);
+  }
   SfbFreeMenu (&Menu);
 
   /*
@@ -2440,8 +2484,13 @@ TestStaleSlotRole(void)
   mEntriesFixtureBytes = sizeof (NoSlotText) - 1;
   mFakeActiveSlot = SfbSlotB;
   SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
+  assert(mActiveSlotReads == 4);
   assert(!Menu.SlotMismatch);
   assert(Menu.DefaultFromConfig);
+  assert(!Menu.Entry[Menu.DefaultIndex].CurrentSlot);
+  for (UINTN Index = 0; Index < Menu.Count; ++Index) {
+    assert(!Menu.Entry[Index].CurrentSlot);
+  }
   SfbFreeMenu (&Menu);
 
   ResetVolumes ();
@@ -2770,6 +2819,7 @@ SfbVolumeIsExt4(IN EFI_HANDLE Volume)
 SFB_SLOT
 SfbActiveSlot(VOID)
 {
+  ++mActiveSlotReads;
   return mFakeActiveSlot;
 }
 
