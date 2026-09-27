@@ -45,12 +45,12 @@ jobs:
           SOURCE_REF: ${{ inputs.source_ref }}
         run: python3 scripts/ci_scope.py
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
-        if: steps.scope.outputs.rust_crates != ''
+        if: steps.scope.outputs.rust_crates != '' || steps.scope.outputs.firmware == 'true'
         with:
           toolchain: 1.98.0
-          targets: ${{ steps.scope.outputs.portable_crates != '' && 'wasm32-unknown-unknown' || '' }}
+          targets: ${{ steps.scope.outputs.firmware == 'true' && 'aarch64-linux-android,wasm32-unknown-unknown' || (steps.scope.outputs.portable_crates != '' && 'wasm32-unknown-unknown' || '') }}
       - name: Cache Cargo sources and tools
-        if: steps.scope.outputs.rust_crates != ''
+        if: steps.scope.outputs.rust_crates != '' || steps.scope.outputs.firmware == 'true'
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           prefix-key: firmware-v1-sources
@@ -98,6 +98,9 @@ jobs:
       - name: Check manager installation
         if: steps.scope.outputs.module_tests == 'true'
         run: sh targets/magisk_module/tests/test_flows.sh
+      - name: Check one-shot install safety
+        if: steps.scope.outputs.firmware == 'true'
+        run: sh targets/one_shot_android/tests/test_one_shot_unlock.sh
       - name: Check release and import commands
         if: steps.scope.outputs.script_tests == 'true'
         run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
@@ -121,6 +124,9 @@ jobs:
         run: |
           docker image inspect gbl_builder --format '{{.Id}}'
           docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc 'make -C submodules/uefi clean && make -C submodules/uefi build && make -C submodules/uefi tools'
+      - name: Build Android one-shot release archive
+        if: steps.scope.outputs.firmware == 'true'
+        run: make target_one_shot_android
       - run: make version-check
         if: steps.scope.outputs.versions == 'true'
       - name: Capture the exact firmware build and source identity
