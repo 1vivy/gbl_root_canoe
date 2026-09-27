@@ -10,10 +10,13 @@ mod bls_render;
 pub mod boot_path;
 #[cfg(feature = "cli")]
 pub mod cli;
+#[cfg(feature = "cli")]
+mod cli_execute;
 pub mod config;
 mod config_ops;
 mod config_parse;
 mod config_render;
+mod config_validation;
 #[cfg(feature = "native")]
 pub mod confined;
 #[cfg(feature = "native")]

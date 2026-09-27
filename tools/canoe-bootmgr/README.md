@@ -8,6 +8,7 @@ or the manager application.
 canoe-bootmgr --boot-root /mnt/canoe entry list
 canoe-bootmgr --boot-root /mnt/canoe config show
 canoe-bootmgr --boot-root /mnt/canoe entry mode --id android-a --mode 2
+canoe-bootmgr --boot-root /mnt/canoe config set-policy --fastbootd-mode2 true
 canoe-bootmgr --boot-root /mnt/canoe default set android-a
 ```
 

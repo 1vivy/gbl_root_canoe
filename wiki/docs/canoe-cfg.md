@@ -35,6 +35,7 @@ In 7.0.5 the boot policy is explicit. Global keys must appear before the first `
 | `key-window` | `500..=5000` | `1200` | Silent startup Volume Up window in milliseconds |
 | `menu-timeout` | `0..=300` | `3` | Menu countdown in seconds; only in Menu mode |
 | `show-booting` | `yes`, `no` | `yes` | Display the Booting message when launching an image |
+| `fastbootd-mode2` | `yes`, `no` | `yes` | Temporarily force managed Android launches to Mode 2 for a Fastbootd reboot target |
 | `default` | an entry ID or `bls:<stem>` | none | Row launched without menu input |
 | `mode` | `0`, `1`, `2` | `1` | Fallback mode for entries without their own mode |
 | `devinfo-repair` | `asneeded`, `never` | `asneeded` | Whether a managed launch may repair `DeviceInfo` |
@@ -66,13 +67,24 @@ menu-driven launch still clears the menu; an unattended launch preserves the
 existing screen. The CBM and BDS **Hide Booting…** controls edit this one key.
 Older BDS builds ignore this additive key; current firmware advertises
 `canoe-boot-policy=show-booting-v1`. Configuration remains `version 1`.
+
+With `fastbootd-mode2 yes`, the exact Android BCB command `boot-fastboot`
+temporarily overrides the configured mode of a managed Android entry with Mode 2.
+BDS only reads this command; the child ABL/recovery still consumes it and enters
+userspace Fastbootd. This keeps Fastbootd's lock-state checks from disabling
+flashing while Mode 2 retains its general-storage policy. The override applies
+only to this BDS session, does not rewrite `canoe.cfg`, and does not activate for
+`boot-recovery`, bootloader, or normal reboot targets. `fastbootd-mode2 no`
+retains the entry's configured mode. The ordinary missing/invalid Mode 2 profile
+fallback to honest Mode 0 still applies.
+
 A policy-only document with no boot entries is valid. Save default never changes
 an entry mode; Change entry mode never changes the default target.
 
 Here, Super Fastboot means the BDS's own fastboot session, which waives ABL's
 critical-partition status so flashing works from it; partitions inside `super`
-remain the exception. Stock userspace `fastbootd` is reserved for the
-fresh-install path.
+remain the exception. Userspace Fastbootd is a recovery target reached through
+the managed Android handoff.
 
 The writer never emits `timeout`. BDS accepts a pre-b2 `timeout N` line only as
 a compatibility alias for `menu-mode menu` plus `menu-timeout N`; it is not a
@@ -105,6 +117,7 @@ menu-mode silent|menu
 key-window 1200
 menu-timeout 3
 show-booting yes
+fastbootd-mode2 yes
 default android-a          # or: default bls:pmos
 mode 0|1|2
 devinfo-repair asneeded|never
@@ -177,8 +190,10 @@ passthrough row; managed policy is for the device boot root only.
 Mode 0 is honest-unlocked and installs no managed projection; it restores any
 wrapper a previous managed attempt left armed. Mode 1 projects the locked
 DeviceInfo view and enables the normal managed hooks. Mode 2 additionally uses
-the matching profile for that managed loader. A menu mode is a one-shot override unless explicitly saved using Save as default. A per-entry mode applies to that
-entry, with global `mode` as the fallback.
+the matching profile for that managed loader. A `boot-fastboot` target may
+temporarily force a managed launch into Mode 2 as described above. A menu mode is
+a one-shot override unless explicitly saved using Save as default. A per-entry
+mode applies to that entry, with global `mode` as the fallback.
 
 Recursion prevention is not a runtime hook. A prepared managed ABL image has its
 efisp lookup disabled by the patcher, so BDS installs no efisp Block I/O hiding

@@ -15,8 +15,10 @@
   persist 报告的可用空间，残留会直接缩小它。
 - **配置**：`BOOTENTRIES` 由 `canoe.cfg`（`version 1`）取代，启动策略显式化：
   `menu-mode`、`key-window`（500–5000 毫秒，默认 1200）、`menu-timeout`、
-  `show-booting`、`default`、`mode` 与 `devinfo-repair`。普通菜单选择只影响本次
-  启动；只有显式保存动作才写入配置，并保留已验证的 `canoe.cfg.prev`。
+  `show-booting`、`fastbootd-mode2`（默认 `yes`）、`default`、`mode` 与
+  `devinfo-repair`。`boot-fastboot` 目标默认仅在本次启动临时采用 Mode 2；普通菜单
+  选择只影响本次启动，只有显式保存动作才写入配置，并保留已验证的
+  `canoe.cfg.prev`。
 - **受管理加载器**：由单个 `boot.efi` 改为按槽位管理 `boot_a.efi`、`boot_b.efi`
   与 `boot_backup.efi`，每份都带匹配的 120 字节 `.gm2p` 和 256 字节 `.tzmap`，
   不同代次不可混用。

@@ -45,6 +45,7 @@ Boot policy is now explicit instead of implied:
 | `key-window` | 500–5000 ms | 1200 |
 | `menu-timeout` | 0–300 s, Menu mode only | 3 |
 | `show-booting` | `yes`, `no` | `yes` |
+| `fastbootd-mode2` | `yes`, `no` | `yes` |
 | `default` | an entry id or `bls:<stem>` | none |
 | `mode` | `0`, `1`, `2` | `1` |
 | `devinfo-repair` | `asneeded`, `never` | `asneeded` |
@@ -61,6 +62,10 @@ manages a per-slot set — `boot_a.efi`, `boot_b.efi` and `boot_backup.efi` — 
 every generation carries its own 120-byte `.gm2p` and 256-byte `.tzmap`.
 Generations must not be mixed. `boot.efi` is still read as a pre-b2
 compatibility name.
+
+A `boot-fastboot` BCB target now temporarily forces the managed Android handoff
+to Mode 2 by default, without consuming the target or changing the saved entry
+mode. `fastbootd-mode2 no` disables this narrow override.
 
 Prepared managed ABL images now disable their own efisp lookup through the ABL
 patcher rather than relying on a runtime Block I/O hiding hook, so an unmodified

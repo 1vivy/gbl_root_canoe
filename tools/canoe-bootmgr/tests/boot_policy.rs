@@ -8,9 +8,15 @@ fn typed_fastboot_action_round_trips_and_is_exclusive() {
     assert_eq!(entry.action, Some(EntryAction::Fastboot));
     assert!(entry.image.is_empty());
     let rendered = config.serialize().unwrap();
-    assert!(String::from_utf8(rendered.clone()).unwrap().contains("  action fastboot\n"));
+    assert!(
+        String::from_utf8(rendered.clone())
+            .unwrap()
+            .contains("  action fastboot\n")
+    );
     assert_eq!(ConfigDocument::parse(&rendered).unwrap(), config);
-    assert!(ConfigDocument::parse(b"version 1\nentry bad\n image x.efi\n action fastboot\n").is_err());
+    assert!(
+        ConfigDocument::parse(b"version 1\nentry bad\n image x.efi\n action fastboot\n").is_err()
+    );
 }
 
 #[test]
@@ -46,20 +52,24 @@ fn policy_only_document_round_trips_and_old_documents_show_booting() {
         ConfigDocument::parse(b"version 1\nkey-window 300\ncustom-policy retained\n").unwrap();
     assert!(config.entries.is_empty());
     assert!(config.show_booting);
+    assert!(config.fastbootd_mode2);
     config
         .set_policy(PolicyUpdate {
             menu_mode: None,
             key_window_ms: None,
             menu_timeout_s: None,
             show_booting: Some(false),
+            fastbootd_mode2: Some(false),
         })
         .unwrap();
     let serialized = config.serialize().unwrap();
     let reparsed = ConfigDocument::parse(&serialized).unwrap();
     assert!(!reparsed.show_booting);
+    assert!(!reparsed.fastbootd_mode2);
     assert_eq!(reparsed.key_window_ms, 500);
     assert_eq!(reparsed.unknown[0].key, "custom-policy");
     assert!(ConfigDocument::parse(b"version 1\nshow-booting perhaps\n").is_err());
+    assert!(ConfigDocument::parse(b"version 1\nfastbootd-mode2 perhaps\n").is_err());
 }
 
 #[test]
@@ -74,14 +84,39 @@ fn default_and_mode_edits_do_not_change_each_other() {
 #[test]
 fn key_window_has_a_legacy_read_floor_and_strict_write_bounds() {
     assert_eq!(ConfigDocument::empty().key_window_ms, 1200);
-    assert_eq!(ConfigDocument::parse(b"version 1\n").unwrap().key_window_ms, 1200);
-    for (value, expected) in [(0,500), (300,500), (499,500), (500,500), (1200,1200), (5000,5000), (5001,5000), (10000,5000), (u32::MAX,5000)] {
-        let config = ConfigDocument::parse(format!("version 1\nkey-window {value}\n").as_bytes()).unwrap();
+    assert_eq!(
+        ConfigDocument::parse(b"version 1\n").unwrap().key_window_ms,
+        1200
+    );
+    for (value, expected) in [
+        (0, 500),
+        (300, 500),
+        (499, 500),
+        (500, 500),
+        (1200, 1200),
+        (5000, 5000),
+        (5001, 5000),
+        (10000, 5000),
+        (u32::MAX, 5000),
+    ] {
+        let config =
+            ConfigDocument::parse(format!("version 1\nkey-window {value}\n").as_bytes()).unwrap();
         assert_eq!(config.key_window_ms, expected);
-        assert_eq!(ConfigDocument::parse(&config.serialize().unwrap()).unwrap().key_window_ms, expected);
+        assert_eq!(
+            ConfigDocument::parse(&config.serialize().unwrap())
+                .unwrap()
+                .key_window_ms,
+            expected
+        );
         let mut edited = ConfigDocument::empty();
         let before = edited.clone();
-        let result = edited.set_policy(PolicyUpdate {menu_mode: None, key_window_ms: Some(value), menu_timeout_s: None, show_booting: None});
+        let result = edited.set_policy(PolicyUpdate {
+            menu_mode: None,
+            key_window_ms: Some(value),
+            menu_timeout_s: None,
+            show_booting: None,
+            fastbootd_mode2: None,
+        });
         if (500..=5000).contains(&value) {
             result.unwrap();
             assert_eq!(edited.key_window_ms, value);

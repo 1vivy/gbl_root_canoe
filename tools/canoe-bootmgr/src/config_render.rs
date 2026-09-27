@@ -18,6 +18,10 @@ pub(crate) fn serialize(config: &ConfigDocument) -> Result<Vec<u8>, ConfigError>
             "show-booting {}",
             if config.show_booting { "yes" } else { "no" }
         ),
+        format!(
+            "fastbootd-mode2 {}",
+            if config.fastbootd_mode2 { "yes" } else { "no" }
+        ),
     ];
     if let Some(default) = &config.default {
         lines.push(format!("default {default}"));
@@ -66,6 +70,7 @@ fn validate_document(config: &ConfigDocument) -> Result<(), ConfigError> {
         key_window_ms: Some(config.key_window_ms),
         menu_timeout_s: Some(config.menu_timeout_s),
         show_booting: Some(config.show_booting),
+        fastbootd_mode2: Some(config.fastbootd_mode2),
     })?;
     if config.mode > 2 {
         return Err(ConfigError::Invalid(
@@ -136,6 +141,7 @@ fn validate_raw(line: &crate::config::RawLine) -> Result<(), ConfigError> {
                 | "key-window"
                 | "menu-timeout"
                 | "show-booting"
+                | "fastbootd-mode2"
                 | "timeout"
                 | "default"
                 | "mode"

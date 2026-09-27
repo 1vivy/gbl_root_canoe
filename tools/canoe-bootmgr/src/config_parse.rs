@@ -41,6 +41,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
     let mut key_window_ms = DEFAULT_KEY_WINDOW_MS;
     let mut menu_timeout_s = DEFAULT_MENU_TIMEOUT_S;
     let mut show_booting = true;
+    let mut fastbootd_mode2 = true;
     let mut global_mode = 1;
     let mut repair = DeviceInfoRepair::AsNeeded;
     let mut default = None;
@@ -133,6 +134,17 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
                     }
                 };
             }
+            "fastbootd-mode2" => {
+                fastbootd_mode2 = match value {
+                    "yes" => true,
+                    "no" => false,
+                    _ => {
+                        return Err(ConfigError::Invalid(
+                            "fastbootd-mode2 must be yes or no".to_owned(),
+                        ));
+                    }
+                };
+            }
             "timeout" => {
                 menu_timeout_s = parse_policy_number(value, "menu_timeout_s", MAX_MENU_TIMEOUT_S)?;
                 menu_mode = MenuMode::Menu;
@@ -161,6 +173,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
         key_window_ms,
         menu_timeout_s,
         show_booting,
+        fastbootd_mode2,
         default,
         mode: global_mode,
         devinfo_repair: repair,

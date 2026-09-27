@@ -14,6 +14,7 @@ impl ConfigDocument {
             key_window_ms: super::config::DEFAULT_KEY_WINDOW_MS,
             menu_timeout_s: DEFAULT_MENU_TIMEOUT_S,
             show_booting: true,
+            fastbootd_mode2: true,
             default: None,
             mode: 0,
             devinfo_repair: DeviceInfoRepair::AsNeeded,
@@ -211,6 +212,9 @@ impl ConfigDocument {
         }
         if let Some(show_booting) = update.show_booting {
             self.show_booting = show_booting;
+        }
+        if let Some(fastbootd_mode2) = update.fastbootd_mode2 {
+            self.fastbootd_mode2 = fastbootd_mode2;
         }
         self.bump_generation()
     }

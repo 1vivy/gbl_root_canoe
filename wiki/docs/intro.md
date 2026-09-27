@@ -29,7 +29,8 @@ The app has these five named routes:
   expose their read-only mode badge, default, remove, and Deploy preparation
   actions; discovered rows have no mutation controls.
 - **Settings** contains language, uninstall, and the existing `canoe.cfg`
-  policy keys (`menu-mode`, `key-window`, `menu-timeout`, and `show-booting`).
+  policy keys (`menu-mode`, `key-window`, `menu-timeout`, `show-booting`, and
+  the default-enabled Fastbootd Mode 2 override).
 - **Diagnostics** exposes protocol activity, evidence, paths, digests, and
   export recovery details that are not needed for ordinary operations.
 
