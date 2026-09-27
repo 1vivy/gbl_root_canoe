@@ -142,6 +142,23 @@ would reject it before it runs.
 See [Command-line tools](./commands.md#rooted-android-one-shot-install) for the
 invocation, plan output, and ordering details.
 
+### Unlocking after a one-shot install
+
+The one-shot installer leaves the bootloader lock state as it is. To unlock,
+whichever mode you installed:
+
+1. Boot into the Canoe menu and open **Advanced → Android EFI tools → BLTools**.
+   The title shows the current state, for example `Unlock:off Crit:off`, and
+   each item offers the opposite action.
+2. Choose **Unlock Critical**, which also sets unlock, and confirm with a fresh
+   Power press. Volume keys cancel. The title should read `Unlock:on Crit:on`.
+3. Reboot and **format data**. The lock state feeds the TEE's view of the
+   device; when it no longer matches, the TEE refuses the data key and existing
+   encrypted data cannot be read.
+
+BLTools changes only the unlock flags in `DeviceInfo`. It wipes nothing itself
+and does not touch vendor unlock tokens such as OnePlus Deep Test.
+
 ## Image and data compatibility
 
 A stock ABL used as a read-only derivation source is separate from the

@@ -55,6 +55,20 @@ redirect，无法从 raw `efisp` 启动 Canoe；用户或另一个得到单独�
 拒绝它；该文件只能留在 BDS 管理的启动根中。详细调用与安全说明参见
 [英文命令指南](../commands.md#rooted-android-one-shot-install)。
 
+### 一次性安装后解锁
+
+一次性安装器不会改变 bootloader 锁定状态。无论安装的是哪种模式，如需解锁：
+
+1. 进入 Canoe 菜单，打开 **Advanced → Android EFI tools → BLTools**。标题显示
+   当前状态（如 `Unlock:off Crit:off`），各项提供相反的操作。
+2. 选择 **Unlock Critical**（会同时开启解锁），用一次新的电源键确认；音量键取消。
+   标题应显示 `Unlock:on Crit:on`。
+3. 重启并**格式化数据**。锁定状态会影响 TEE 对设备的判断；状态不一致时 TEE
+   拒绝提供数据密钥，现有加密数据将无法读取。
+
+BLTools 只修改 `DeviceInfo` 中的解锁标志，本身不清除数据，也不涉及 OnePlus
+Deep Test 等厂商解锁令牌。
+
 在线版从 Overview 选择 **Fresh install / redeploy**；首次安装与从旧 EFISP 模组重装都从这里进入，后续镜像、清理、备份、槽位和数据格式化判断由应用按当前设备分流，不再按旧场景另选教程。先记录旧 EFISP 模组使用历史，再在 Android Fastbootd 中审阅活动槽 ABL 和原始 efisp 写入及恢复镜像。重启后通常自动进入 Super Fastboot，校验完成后继续准备。A/B/Both 是手动选择，各槽独立准备。WebUI 完整安装保留 Android 原生文件选择器。在线版需使用支持 WebUSB 的 Chromium 浏览器，Linux 需一次性配置 [USB 访问规则](./linux-usb.md)；首次安装要求先独立保存 persist 备份。
 
 启动根目录改为 persist/efisp.fat；旧 efisp 目录不迁移。从 gbl-chainload、Canoe 6.3.5 或其他 EFISP 模组重装时仍选择 **Fresh install / redeploy** 并如实选择已有修改；应用会重建 Android 启动项，只有用户另加的 EFI/BLS 项需要手动重建。
