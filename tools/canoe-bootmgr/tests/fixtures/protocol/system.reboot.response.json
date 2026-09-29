@@ -1,1 +1,0 @@
-{"ok":false,"error":{"code":"request","message":"system.reboot target must be `system` or `recovery` (got `android`)"}}
