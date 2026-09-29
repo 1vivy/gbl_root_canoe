@@ -26,12 +26,8 @@ STATIC MD_REGION_ENTRY mProbeRegions[1]
   __attribute__ ((aligned (EFI_PAGE_SIZE)));
 STATIC BOOLEAN mProbeFilled = FALSE;
 
-STATIC struct {
-  MD_SUBSYSTEM_CLAIM Claim;
-  UINT64             TriggerAddress;
-} mTarget;
-
-STATIC EFI_STATUS mScanStatus = EFI_NOT_STARTED;
+STATIC MD_OWNED_REGISTRATION mProbeRegistration;
+STATIC UINT64                mTriggerAddress;
 
 STATIC
 EFI_STATUS
@@ -44,6 +40,7 @@ MdGateOpen (
 {
   CONST MD_TABLE_MAP *Map;
   EFI_STATUS         Status;
+  EFI_STATUS         ScanStatus;
   EFI_STATUS         FlushStatus;
 
   Status = MdEvidenceOpen (Tag, Evidence);
@@ -71,22 +68,22 @@ MdGateOpen (
     return Status;
   }
 
-  mScanStatus = MdEnsureScan (Evidence);
+  ScanStatus = MdEnsureScan (Evidence);
   Map = MdCachedMap ();
-  if (EFI_ERROR (mScanStatus)) {
+  if (EFI_ERROR (ScanStatus)) {
     MdEvidencePrint (
       Evidence,
       L"outcome: discovery REFUSED (%r); nothing written",
-      mScanStatus
+      ScanStatus
       );
     MdEvidenceClose (Evidence);
-    return mScanStatus;
+    return ScanStatus;
   }
 
   Status = MdEvidencePrint (
              Evidence,
              L"discovery=%r arrays=%u source=SMEM item %u",
-             mScanStatus,
+             ScanStatus,
              (UINT32)((Map != NULL) ? Map->ArrayCount : 0),
              MD_SMEM_ITEM_ID
              );
@@ -324,17 +321,41 @@ MdProbeInit (
   mProbeFilled = TRUE;
 }
 
-STATIC
 EFI_STATUS
-MdClaimEvidenceRows (
-  IN OUT MD_EVIDENCE        *Evidence,
-  IN     CONST MD_TABLE_MAP *Map
+MdPrepareOwnedRegistration (
+  IN OUT MD_EVIDENCE           *Evidence,
+  IN     CONST MD_TABLE_MAP    *Map,
+  IN OUT MD_OWNED_REGISTRATION *Registration
   )
 {
-  UINT32     Previous[MD_SUBSYSTEM_TOC_SIZE / sizeof (UINT32)];
-  EFI_STATUS Status;
+  CONST MD_REGION_ENTRY *Region;
+  UINT32                 Previous[MD_SUBSYSTEM_TOC_SIZE / sizeof (UINT32)];
+  EFI_STATUS             Status;
 
-  CopyMem (Previous, &mTarget.Claim.Previous, sizeof (Previous));
+  if (Evidence == NULL || Map == NULL || Registration == NULL ||
+      Registration->Regions == NULL || Registration->RegionCount != 1) {
+    return EFI_INVALID_PARAMETER;
+  }
+  Region = &Registration->Regions[0];
+  if (Region->Valid != MD_REGION_VALID_VALUE ||
+      Region->Address < MD_MIN_REGION_ADDRESS ||
+      Region->Address >= MD_MAX_REGION_ADDRESS ||
+      Region->Size == 0 || Region->Size > MD_MAX_REGION_SIZE ||
+      Region->Name[0] == '\0') {
+    return EFI_COMPROMISED_DATA;
+  }
+
+  Status = MdTablePlanSubsystemClaim (Map, &Registration->Claim);
+  if (EFI_ERROR (Status)) {
+    MdEvidencePrint (
+      Evidence,
+      L"intent REFUSE: no safe free subsystem slot (%r)",
+      Status
+      );
+    return Status;
+  }
+
+  CopyMem (Previous, &Registration->Claim.Previous, sizeof (Previous));
   Status = MdEvidencePrint (
              Evidence,
              L"intent: root source=SMEM item %u addr=0x%lx bytes=%u",
@@ -346,10 +367,10 @@ MdClaimEvidenceRows (
     Status = MdEvidencePrint (
                Evidence,
                L"intent: slot=%u of %u at 0x%lx (%s)",
-               (UINT32)mTarget.Claim.Index,
+               (UINT32)Registration->Claim.Index,
                MD_MAX_SUBSYSTEMS,
-               (UINT64)mTarget.Claim.TocAddress,
-               mTarget.Claim.AboveHighest
+               (UINT64)Registration->Claim.TocAddress,
+               Registration->Claim.AboveHighest
                ? L"above highest used" : L"first free fallback"
                );
   }
@@ -372,89 +393,67 @@ MdClaimEvidenceRows (
                Evidence,
                L"intent: template=AOP slot %u toc=0x%lx",
                MD_SS_AOP,
-               (UINT64)mTarget.Claim.TemplateToc
+               (UINT64)Registration->Claim.TemplateToc
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidenceTocRows (Evidence, &mTarget.Claim.Template);
+    Status = MdEvidenceTocRows (Evidence, &Registration->Claim.Template);
   }
   if (!EFI_ERROR (Status)) {
     Status = MdEvidencePrint (
                Evidence,
-               L"intent: store 32 bytes after flush: count=1 baseptr=0x%lx",
-               (UINT64)(UINTN)mProbeRegions
+               L"intent: store 32 bytes after flush: count=%u baseptr=0x%lx",
+               Registration->RegionCount,
+               (UINT64)(UINTN)Registration->Regions
                );
   }
   if (!EFI_ERROR (Status)) {
     Status = MdEvidencePrint (
                Evidence,
                L"intent: region name=%a addr=0x%lx size=0x%lx",
-               MD_PROBE_REGION_NAME,
-               (UINT64)(UINTN)mProbeBuffer,
-               (UINT64)sizeof (mProbeBuffer)
+               Region->Name,
+               Region->Address,
+               Region->Size
                );
   }
   if (!EFI_ERROR (Status)) {
     Status = MdEvidenceMemoryRow (
                Evidence,
                L"claim-slot",
-               (UINT64)mTarget.Claim.TocAddress
+               (UINT64)Registration->Claim.TocAddress
                );
   }
   if (!EFI_ERROR (Status)) {
     Status = MdEvidenceMemoryRow (
                Evidence,
-               L"our-regions",
-               (UINT64)(UINTN)mProbeRegions
+               L"owned-regions",
+               (UINT64)(UINTN)Registration->Regions
                );
   }
   if (!EFI_ERROR (Status)) {
     Status = MdEvidenceMemoryRow (
                Evidence,
-               L"our-buffer",
-               (UINT64)(UINTN)mProbeBuffer
+               L"registered-payload",
+               Region->Address
                );
   }
   return Status;
 }
 
-STATIC
 EFI_STATUS
-MdIntentClaimSubsystem (
-  IN OUT MD_EVIDENCE *Evidence
-  )
-{
-  CONST MD_TABLE_MAP *Map;
-  EFI_STATUS         Status;
-
-  Map = MdCachedMap ();
-  if (Map == NULL || EFI_ERROR (mScanStatus)) {
-    return EFI_NOT_STARTED;
-  }
-
-  MdProbeInit ();
-  Status = MdTablePlanSubsystemClaim (Map, &mTarget.Claim);
-  if (EFI_ERROR (Status)) {
-    MdEvidencePrint (
-      Evidence,
-      L"intent REFUSE: no safe free subsystem slot (%r)",
-      Status
-      );
-    return Status;
-  }
-  return MdClaimEvidenceRows (Evidence, Map);
-}
-
-STATIC
-EFI_STATUS
-MdActClaimSubsystem (
-  IN OUT MD_EVIDENCE *Evidence
+MdApplyOwnedRegistration (
+  IN OUT MD_EVIDENCE           *Evidence,
+  IN OUT MD_OWNED_REGISTRATION *Registration
   )
 {
   MD_TABLE_MAP     *Map;
   MD_SUBSYSTEM_TOC Stored;
   EFI_STATUS       Status;
 
+  if (Evidence == NULL || Registration == NULL ||
+      Registration->Regions == NULL || Registration->RegionCount != 1) {
+    return EFI_INVALID_PARAMETER;
+  }
   Map = (MD_TABLE_MAP *)MdCachedMap ();
   if (Map == NULL) {
     return EFI_NOT_STARTED;
@@ -462,9 +461,9 @@ MdActClaimSubsystem (
 
   Status = MdTableClaimSubsystem (
              Map,
-             &mTarget.Claim,
-             (UINT64)(UINTN)mProbeRegions,
-             1,
+             &Registration->Claim,
+             (UINT64)(UINTN)Registration->Regions,
+             Registration->RegionCount,
              &Stored
              );
   if (EFI_ERROR (Status)) {
@@ -473,7 +472,7 @@ MdActClaimSubsystem (
   Status = MdEvidencePrint (
              Evidence,
              L"outcome: slot %u stored init=0x%08x enabled=0x%08x",
-             (UINT32)mTarget.Claim.Index,
+             (UINT32)Registration->Claim.Index,
              Stored.Status,
              Stored.Enabled
              );
@@ -489,11 +488,11 @@ MdActClaimSubsystem (
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  if (Stored.RegionCount != 1 ||
-      Stored.RegionsBasePtr != (UINT64)(UINTN)mProbeRegions ||
-      Stored.Status != mTarget.Claim.Template.Status ||
-      Stored.Enabled != mTarget.Claim.Template.Enabled ||
-      Stored.EncryptionStatus != mTarget.Claim.Template.EncryptionStatus ||
+  if (Stored.RegionCount != Registration->RegionCount ||
+      Stored.RegionsBasePtr != (UINT64)(UINTN)Registration->Regions ||
+      Stored.Status != Registration->Claim.Template.Status ||
+      Stored.Enabled != Registration->Claim.Template.Enabled ||
+      Stored.EncryptionStatus != Registration->Claim.Template.EncryptionStatus ||
       Stored.EncryptionRequired != MD_SS_ENCR_NOTREQ_VALUE) {
     return EFI_DEVICE_ERROR;
   }
@@ -505,7 +504,34 @@ MdActClaimSubsystem (
 
 STATIC
 EFI_STATUS
-MdIntentTrigger (
+MdIntentClaimSubsystem (
+  IN OUT MD_EVIDENCE *Evidence
+  )
+{
+  CONST MD_TABLE_MAP *Map;
+
+  Map = MdCachedMap ();
+  if (Map == NULL) {
+    return EFI_NOT_STARTED;
+  }
+
+  MdProbeInit ();
+  mProbeRegistration.Regions = mProbeRegions;
+  mProbeRegistration.RegionCount = 1;
+  return MdPrepareOwnedRegistration (Evidence, Map, &mProbeRegistration);
+}
+
+STATIC
+EFI_STATUS
+MdActClaimSubsystem (
+  IN OUT MD_EVIDENCE *Evidence
+  )
+{
+  return MdApplyOwnedRegistration (Evidence, &mProbeRegistration);
+}
+
+EFI_STATUS
+MdIntentCollectionTrigger (
   IN OUT MD_EVIDENCE *Evidence
   )
 {
@@ -514,7 +540,7 @@ MdIntentTrigger (
   if (MD_EXPECT_TZ_SIZE < sizeof (UINT32)) {
     return EFI_COMPROMISED_DATA;
   }
-  mTarget.TriggerAddress = MD_EXPECT_TZ_ADDR + MD_EXPECT_TZ_SIZE / 2;
+  mTriggerAddress = MD_EXPECT_TZ_ADDR + MD_EXPECT_TZ_SIZE / 2;
 
   Status = MdEvidencePrint (
              Evidence,
@@ -527,7 +553,7 @@ MdIntentTrigger (
                Evidence,
                L"intent: fire 0x%08x at midpoint 0x%lx",
                (UINT32)MD_CRASH_PATTERN,
-               mTarget.TriggerAddress
+               mTriggerAddress
                );
   }
   if (!EFI_ERROR (Status)) {
@@ -540,15 +566,14 @@ MdIntentTrigger (
     Status = MdEvidenceMemoryRow (
                Evidence,
                L"trigger",
-               mTarget.TriggerAddress
+               mTriggerAddress
                );
   }
   return Status;
 }
 
-STATIC
 EFI_STATUS
-MdActTrigger (
+MdActCollectionTrigger (
   IN OUT MD_EVIDENCE *Evidence
   )
 {
@@ -559,7 +584,7 @@ MdActTrigger (
   Print (
     L"write 0x%x at measured TZ_DDR midpoint 0x%lx\r\n",
     (UINT32)MD_CRASH_PATTERN,
-    mTarget.TriggerAddress
+    mTriggerAddress
     );
   Print (L"an XPU refusal should enter the 900e dump path\r\n");
   Print (L"the owned subsystem is already registered\r\n");
@@ -574,7 +599,7 @@ MdActTrigger (
 
   AtUiShowMessage (L"Firing trigger...");
   MdTriggerWriteFault (
-    mTarget.TriggerAddress,
+    mTriggerAddress,
     MD_CRASH_PATTERN,
     &Readback
     );
@@ -603,7 +628,7 @@ STATIC CONST MD_RUNG mPathwayOwnSubsystem[] = {
   { L"Rung 2: claim one owned subsystem slot", L"own2",
     MdIntentClaimSubsystem, MdActClaimSubsystem },
   { L"Rung 3: trigger collection (terminal)", L"own3",
-    MdIntentTrigger, MdActTrigger },
+    MdIntentCollectionTrigger, MdActCollectionTrigger },
 };
 
 STATIC CONST MD_PATHWAY mPathways[] = {

@@ -12,7 +12,7 @@ CFLAGS += $(SFB_VERSION_CFLAGS)
 
 .PHONY: test clean
 
-test: test_usb_serial test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface test_md_table test_md_discovery
+test: test_usb_serial test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface test_md_table test_md_discovery test_md_shadow
 	./test_usb_serial
 	./test_profile
 	./test_deviceinfo
@@ -33,6 +33,7 @@ test: test_usb_serial test_profile test_deviceinfo test_devinfo test_slot_attrib
 	./test_surface
 	./test_md_table
 	./test_md_discovery
+	./test_md_shadow
 
 test_profile: test_profile.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/Hook/SuperFbProfile.c \
@@ -181,11 +182,18 @@ test_md_discovery: test_md_discovery.c \
 	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) \
 		-I../edk2/AndroidToolsPkg/Include -o $@ $^
 
+test_md_shadow: test_md_shadow.c \
+	../edk2/AndroidToolsPkg/Application/MdTools/MdShadowModel.c \
+	../edk2/AndroidToolsPkg/Application/MdTools/MdShadow.h
+	$(CC) $(CFLAGS) -fno-builtin -fshort-wchar $(HOOK_INCLUDES) \
+		-I../edk2/AndroidToolsPkg/Include \
+		-I../edk2/AndroidToolsPkg/Application/MdTools -o $@ $(filter %.c,$^)
+
 clean:
 	rm -f test_menu_selection
 	rm -f test_root_observation
 	rm -f test_reboot_targets test_boot_once
-	rm -f test_raw_persist_export test_ext4_lifecycle test_fastboot_response test_ext4_checksums test_last_boot_store test_usb_serial test_msd_lease test_image_map test_image_disk test_container test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface test_md_table test_md_discovery
+	rm -f test_raw_persist_export test_ext4_lifecycle test_fastboot_response test_ext4_checksums test_last_boot_store test_usb_serial test_msd_lease test_image_map test_image_disk test_container test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface test_md_table test_md_discovery test_md_shadow
 
 .PHONY: test_ext4_checksums
 test: test_ext4_checksums

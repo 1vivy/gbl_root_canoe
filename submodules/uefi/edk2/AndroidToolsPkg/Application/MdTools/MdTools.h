@@ -7,11 +7,12 @@
  *  pathway creates and flushes a durable stage marker. A crash therefore
  *  leaves the exact pending stage in logfs instead of an empty partition.
  *
- *  The mutation pathway claims one free subsystem slot, pointing it at this
- *  image's own one-entry array, then deliberately triggers collection while
- *  the image remains resident. Every store is preceded by a flushed intent
- *  row and followed by a flushed read-back outcome. XBL rebuilds the table on
- *  every boot, so no edit survives reset.
+ *  Mutation pathways claim one free subsystem slot that points at a one-entry
+ *  array owned by this image. The entry either names this image's probe buffer
+ *  or aliases one selected live AOP/BOOT payload with encryption not required.
+ *  Collection is triggered while the image remains resident. Every store is
+ *  preceded by a flushed intent row and followed by a flushed read-back
+ *  outcome. XBL rebuilds the table on every boot, so no edit survives reset.
  *
  *  Expected values below were measured from the 2026-09-02 Sahara captures
  *  and the 2026-09-29 qdl capture. They are printed as expected=/found pairs;
@@ -189,6 +190,47 @@ MdAct (
   );
 
 typedef struct {
+  MD_SUBSYSTEM_CLAIM Claim;
+  MD_REGION_ENTRY   *Regions;
+  UINT32             RegionCount;
+} MD_OWNED_REGISTRATION;
+
+/**
+  Plan one free-slot claim and append the complete intended slot, region array
+  and payload descriptors to Evidence. Registration must name exactly one
+  resident, cache-cleaned region entry.
+**/
+EFI_STATUS
+MdPrepareOwnedRegistration (
+  IN OUT MD_EVIDENCE            *Evidence,
+  IN     CONST MD_TABLE_MAP     *Map,
+  IN OUT MD_OWNED_REGISTRATION  *Registration
+  );
+
+/** Store and verify the previously planned owned registration. **/
+EFI_STATUS
+MdApplyOwnedRegistration (
+  IN OUT MD_EVIDENCE           *Evidence,
+  IN OUT MD_OWNED_REGISTRATION *Registration
+  );
+
+/** Shared terminal collection-trigger rung for resident registrations. **/
+EFI_STATUS
+MdIntentCollectionTrigger (
+  IN OUT MD_EVIDENCE *Evidence
+  );
+
+EFI_STATUS
+MdActCollectionTrigger (
+  IN OUT MD_EVIDENCE *Evidence
+  );
+
+typedef VOID (*MD_PATHWAY_INTRO_FN) (
+  VOID
+  );
+
+
+typedef struct {
   CONST CHAR16 *Name;
   CONST CHAR16 *Tag;
   MD_INTENT_FN  Intent;
@@ -203,13 +245,19 @@ typedef struct {
      by the report pathway, which is what the menu's old read-only view rows
      became. */
   BOOLEAN        ShowReports;
-  /* TRUE when this pathway registers a minidump region pointing at this
-     image's own memory. Such a registration is only meaningful while MdTools
-     is resident, so the pathway must not return to the menu as though it had
-     succeeded: it ends in a terminal trigger, and surviving that trigger means
-     nothing was collected. */
+  /* TRUE when the subsystem ToC points at a region array in this image's
+     memory. Such a registration is only meaningful while MdTools is resident,
+     so the pathway must not return to the menu as though it had succeeded: it
+     ends in a terminal trigger, and surviving that trigger means nothing was
+     collected. */
   BOOLEAN        Registers;
 } MD_PATHWAY;
+/** Show one pathway confirmation/result screen and walk it when confirmed. **/
+VOID
+MdRunPathwayScreen (
+  IN CONST MD_PATHWAY       *Pathway,
+  IN MD_PATHWAY_INTRO_FN     Intro OPTIONAL
+  );
 
 /** The pathway table in menu order. **/
 CONST MD_PATHWAY *

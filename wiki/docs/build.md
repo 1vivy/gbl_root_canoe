@@ -180,9 +180,14 @@ host with `fastboot boot <tool>.efi` against a device already running a
 vulnerable ABL, and they exist to investigate the firmware rather than operate
 it. `MdTools` resolves minidump SMEM item 602, reads only its fixed global ToC
 and the AOP/BOOT arrays, and flushes a logfs stage marker before discovery. Its
-only table mutation claims one free subsystem slot for its own one-entry array,
-then triggers collection while the image remains resident. `CrashTools` uses
-the measured TZ_DDR target directly; it does not scan firmware memory.
+mutation pathways each claim one free subsystem slot for a one-entry array that
+remains inside the running tool. The original probe points at its own plaintext
+buffer; the interactive shadow submenu enumerates every validated AOP/BOOT
+region and can register one selected payload under a unique Canoe alias using
+the AOP not-encryption-required template. Both paths trigger collection before
+the image exits. They do not carry into Android userspace: the region array is
+RAM-only tool state, and XBL rebuilds the table on reset. `CrashTools` uses the
+measured TZ_DDR target directly; it does not scan firmware memory.
 The packaged list above is therefore narrower than the build output on purpose;
 do not “fix” it by adding these tools to a target.
 

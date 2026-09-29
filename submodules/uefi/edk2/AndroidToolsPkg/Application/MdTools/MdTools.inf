@@ -1,6 +1,6 @@
 #/** @file
-#  MdTools UEFI application - bounded SMEM minidump report and one durable
-#  owned-subsystem crash probe. Launched from the ABL with
+#  MdTools UEFI application - bounded SMEM report, owned-buffer crash probe,
+#  and interactive one-region shadow registration. Launched from the ABL with
 #  `fastboot boot MdTools.efi`.
 #
 #  Copyright (c) 2026, contributors to the canoe ABL tree.
@@ -18,6 +18,9 @@
 [Sources]
   MdTools.c
   MdTools.h
+  MdShadow.h
+  MdShadowModel.c
+  MdShadow.c
   MdDiscovery.c
   MdReport.c
   MdEdit.c

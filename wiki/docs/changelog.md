@@ -182,8 +182,12 @@ with the generated version files and the BDS build stamp.
 - Built BDS from clean objects so a stale header limit cannot survive a rebuild.
 - Replaced `MdTools`’ descriptor-wide minidump search with bounded SMEM item
   602 discovery, flushed a durable stage marker before the first firmware
-  lookup, reduced its mutation surface to one owned subsystem slot, and made
-  both probe tools use the captured `TZ_DDR` base instead of the AES-key base.
+  lookup, and limited each mutation to one owned subsystem slot. Its new
+  interactive shadow submenu enumerates validated AOP/BOOT regions and can
+  register one selected live payload under a unique alias with encryption not
+  required before the terminal collection trigger. The shadow array remains
+  inside MdTools RAM and deliberately does not carry into Android userspace.
+  Both probe tools use the captured `TZ_DDR` base instead of the AES-key base.
 - Corrected `vendor_boot` patch preparation.
 - Reported the observed `DeviceInfo` state and the action taken on it, rather
   than leaving the decision implicit.

@@ -53,13 +53,17 @@
   `SHA256SUMS`；发布一律先创建草稿，只有带 `-` 后缀的版本才标记为预发布。
 - **修复**：回合上游 ext4 组描述符 CRC16 修复；FAT 栈启动时不再发出
   `ReadyToBoot`/`EndOfDxe`；修正 fastboot 应答分帧并暴露挂载失败；容器挂载保持在
-  文件系统驱动生命周期内；允许内核 loop I/O 访问 persist 启动根目录；修正
-  `vendor_boot` 补丁准备；报告观测到的 `DeviceInfo` 状态与所采取的动作；按受检
-  契约发布 last-boot 启动记录；写入前清除 Android 更新程序在已校验分区上留下的
-  只读标志，OTA 后无需重启即可写入更新槽位的 `abl`，Baseband Guard（BBG）内核
-  拒绝写入时报告其内核日志与允许列表所用的命令行值；为 `persist/efisp.fat` 设置
-  persist 目录的 SELinux 标签（此前在线版创建的容器无标签，6.12.25 之前的 6.12
-  内核会因 loop I/O 的 SELinux 检查导致 KSU 启动文件操作报 EIO）。
+  文件系统驱动生命周期内；允许内核 loop I/O 访问 persist 启动根目录；`MdTools`
+  以 SMEM 项 602 进行有界发现，每次修改只占用一个自有子系统槽；其新增交互式影子
+  子菜单会列出已验证的 AOP/BOOT 区域，并可在最终收集触发前，以唯一别名及“不要求
+  加密”属性注册一个选定的现有载荷。影子数组只存在于 MdTools RAM，不会延续到
+  Android 用户空间；修正 `vendor_boot` 补丁准备；报告观测到的 `DeviceInfo` 状态与
+  所采取的动作；按受检契约发布 last-boot 启动记录；写入前清除 Android 更新程序在
+  已校验分区上留下的只读标志，OTA 后无需重启即可写入更新槽位的 `abl`，Baseband
+  Guard（BBG）内核拒绝写入时报告其内核日志与允许列表所用的命令行值；为
+  `persist/efisp.fat` 设置 persist 目录的 SELinux 标签（此前在线版创建的容器无标签，
+  6.12.25 之前的 6.12 内核会因 loop I/O 的 SELinux 检查导致 KSU 启动文件操作报
+  EIO）。
 - **加固**：重置活动槽位的重试计数时先重新读取分区表，使反复启动尝试不会累积成
   自动换槽；只有恰好一个匹配的 `abl_a`/`abl_b` 被标记为活动时才会写入。
 

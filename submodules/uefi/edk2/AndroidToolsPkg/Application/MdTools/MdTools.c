@@ -1,7 +1,7 @@
 /** @file
- *  MdTools menu. The menu offers a bounded read-only report and one
- *  owned-subsystem crash probe. Each attempt opens and flushes durable
- *  evidence before discovery or mutation begins.
+ *  MdTools menu. The menu offers a bounded read-only report, one owned-buffer
+ *  crash probe, and a resident shadow-target picker. Each attempt opens and
+ *  flushes durable evidence before discovery or mutation begins.
  *
  *  Copyright (c) 2026, contributors to the canoe ABL tree.
  *  SPDX-License-Identifier: BSD-3-Clause
@@ -12,6 +12,7 @@
 #include <AndroidToolsUi.h>
 
 #include "MdTools.h"
+#include "MdShadow.h"
 
 
 STATIC CONST AT_REPORT_SOURCE mMdReports[] = {
@@ -20,10 +21,10 @@ STATIC CONST AT_REPORT_SOURCE mMdReports[] = {
 };
 
 
-STATIC
 VOID
 MdRunPathwayScreen (
-  IN CONST MD_PATHWAY *Pathway
+  IN CONST MD_PATHWAY   *Pathway,
+  IN MD_PATHWAY_INTRO_FN Intro OPTIONAL
   )
 {
   EFI_STATUS Status;
@@ -38,6 +39,9 @@ MdRunPathwayScreen (
     Print (L"The owned region points at THIS image's memory,\r\n");
     Print (L"so this pathway claims a slot and triggers\r\n");
     Print (L"collection before MdTools can exit.\r\n");
+  }
+  if (Intro != NULL) {
+    Intro ();
   }
   Print (L"Rungs: %u\r\n", (UINT32)Pathway->RungCount);
   AtUiEndScreen (L"Power = walk, Vol +/- = cancel");
@@ -83,7 +87,7 @@ MdToolsEntry (
   )
 {
   STATIC CONST CHAR16 *Footer =
-    L"Evidence flushes before bounded discovery; probe writes one owned slot";
+    L"Evidence first; registrations live only until MdTools exits";
   CONST MD_PATHWAY   *Pathways;
   CONST CHAR16      **Items;
   EFI_STATUS          Status;
@@ -95,27 +99,32 @@ MdToolsEntry (
   (VOID)SystemTable;
 
   Pathways = MdPathways (&Count);
-  Items = AllocateZeroPool ((Count + 1) * sizeof (CHAR16 *));
+  Items = AllocateZeroPool ((Count + 2) * sizeof (CHAR16 *));
   if (Items == NULL) {
     return EFI_OUT_OF_RESOURCES;
   }
   for (Index = 0; Index < Count; Index++) {
     Items[Index] = Pathways[Index].Name;
   }
-  Items[Count] = L"Back";
+  Items[Count] = L"3 Shadow existing region + collection trigger";
+  Items[Count + 1] = L"Back";
 
   AtUiEnterMenu (L"Minidump Tools");
   while (TRUE) {
-    Status = AtUiRunMenu (L"Minidump Tools", Items, Count + 1, &Selected,
+    Status = AtUiRunMenu (L"Minidump Tools", Items, Count + 2, &Selected,
                           Footer);
     if (EFI_ERROR (Status)) {
       continue;
     }
-    if (Selected >= Count) {
+    if (Selected == Count) {
+      MdRunShadowTargetMenu ();
+      continue;
+    }
+    if (Selected > Count) {
       FreePool (Items);
       return EFI_SUCCESS;
     }
-    MdRunPathwayScreen (&Pathways[Selected]);
+    MdRunPathwayScreen (&Pathways[Selected], NULL);
   }
 }
 
