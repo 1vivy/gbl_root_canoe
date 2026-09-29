@@ -68,6 +68,11 @@ set -eu
 command=${1-}
 shift || true
 case "$command" in
+  inspect-header)
+    [ "${1-}" = --vbmeta ] || exit 48
+    printf 'profile-inspect %s\n' "${2-}" >> "$TRACE"
+    printf '%s\n' '{"header":{"algorithm_type":1,"rollback_index":1,"flags":0,"release_string":""},"classification":{"state":null,"confidence":"unknown","algorithm_type":1}}'
+    ;;
   derive)
     vbmeta= out=
     while [ "$#" -gt 0 ]; do
@@ -79,7 +84,7 @@ case "$command" in
     done
     printf 'profile-derive %s\n' "$vbmeta" >> "$TRACE"
     [ "${PROFILE_BEHAVIOR:-ok}" != derive ] || exit 44
-    dd if=/dev/zero of="$out" bs=120 count=1 2>/dev/null
+    { printf 'GM2P\001\000'; dd if=/dev/zero bs=114 count=1 2>/dev/null; } > "$out"
     ;;
   validate)
     [ "${1-}" = --input ] || exit 47
@@ -167,13 +172,25 @@ grep -F 'must be _a or _b' "$work/output.log" >/dev/null || fail 'slot refusal m
 pass 'invalid active slot is refused before writing'
 
 
+make_fixture missing-acknowledgement
+work="$TMP/missing-acknowledgement"
+if TEST_SLOT=_b run_build "$work" >"$work/output.log" 2>&1; then
+  fail 'mode 1 without the required format acknowledgement was accepted'
+fi
+grep -F 'P-FORMAT' "$work/output.log" >/dev/null || \
+  fail 'mode 1 refusal did not name the missing format acknowledgement'
+[ ! -e "$work/bootroot/canoe.cfg" ] || fail 'unacknowledged mode change wrote config'
+pass 'mode 1 requires the explicit format acknowledgement'
+
 make_fixture defaults
 work="$TMP/defaults"
-TEST_SLOT=_b run_build "$work" >"$work/output.log"
+TEST_SLOT=_b run_build "$work" --acknowledge P-FORMAT >"$work/output.log"
 grep -F "extractfv $work/dev/by-name/abl_b" "$work/trace.log" >/dev/null || \
   fail 'default ABL did not use the active slot partition'
 grep -F "profile-derive $work/dev/by-name/vbmeta_b" "$work/trace.log" >/dev/null || \
   fail 'default vbmeta did not use the active slot partition'
+grep -F "profile-inspect $work/dev/by-name/vbmeta_b" "$work/trace.log" >/dev/null || \
+  fail 'default vbmeta was not used as target mode evidence'
 grep -F 'installed=b' "$work/output.log" >/dev/null || \
   fail 'default transaction did not install the staged tree'
 grep -A3 -F 'entry android-b' "$work/bootroot/canoe.cfg" | grep -F 'mode 1' >/dev/null || \

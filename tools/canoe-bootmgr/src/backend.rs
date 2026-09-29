@@ -36,17 +36,22 @@ pub enum BackendError {
     Clock,
 }
 
+/// Distinguishes an operation error from extraction, population or sync failure.
+#[derive(Debug)]
+pub(crate) enum BackendActionError<E> {
+    Backend(BackendError),
+    Action(E),
+}
+
 impl BackendError {
     pub fn protocol_code(&self) -> &str {
         match self {
-            Self::Io { operation, source, .. }
-                if source.kind() == std::io::ErrorKind::NotFound && *operation == "stat" =>
-            {
+            Self::Io {
+                operation, source, ..
+            } if source.kind() == std::io::ErrorKind::NotFound && *operation == "stat" => {
                 "boot-root-missing"
             }
-            Self::Io { source, .. }
-                if source.kind() == std::io::ErrorKind::PermissionDenied =>
-            {
+            Self::Io { source, .. } if source.kind() == std::io::ErrorKind::PermissionDenied => {
                 "permission-denied"
             }
             Self::Ext4Typed(error) => error.protocol_code(),
@@ -199,7 +204,11 @@ impl BootRoot for LocalDir {
     }
 }
 
-fn atomic_replace(root: &Path, destination: &Path, bytes: &[u8]) -> Result<(), BackendError> {
+pub(crate) fn atomic_replace(
+    root: &Path,
+    destination: &Path,
+    bytes: &[u8],
+) -> Result<(), BackendError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| BackendError::Clock)?

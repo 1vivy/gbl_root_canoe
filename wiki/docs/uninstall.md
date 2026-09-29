@@ -1,8 +1,8 @@
 # Uninstall guide
 
-Canoe has no single protocol operation or `canoe` subcommand for a complete
-chain removal. The app can remove individual persisted rows through **Boot
-entries** (`entry.remove`), but a clean chain removal still requires deleting
+Canoe has no single protocol operation or `canoe` subcommand for removing the
+whole boot chain. The app can remove an individual persisted row through
+**Entries** (`entry.remove`), but a clean chain removal still requires deleting
 `canoe.cfg` and erasing the raw `efisp` partition with the platform fastboot
 tool. Do not treat removing one row as an uninstall.
 
@@ -10,9 +10,9 @@ tool. Do not treat removing one row as an uninstall.
 
 Back up important data before removing the chain. Unlock state, recovery
 behavior, and data access are device-specific. If you need to inspect the
-current configuration first, use the app's **Boot entries** and **Settings**
-views or read it through `config.show`; do not infer an absent row to mean an
-empty boot root.
+current configuration first, use the app's **Entries** and **Settings** views
+or read it through `config.show`; do not infer an absent row to mean an empty
+boot root.
 
 ## 2. Remove the boot-root configuration
 

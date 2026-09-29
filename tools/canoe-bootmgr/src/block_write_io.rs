@@ -1,7 +1,7 @@
-#[cfg(unix)]
-use std::os::unix::fs::FileTypeExt;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+#[cfg(unix)]
+use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -57,14 +57,22 @@ pub(super) fn set_writable(path: &Path, metadata: &Metadata) -> Result<(), Block
     Ok(())
 }
 
-pub(super) fn snapshot_target(node: &Path, bytes: u64, snapshot: &Path) -> Result<(), BlockWriteError> {
+pub(super) fn snapshot_target(
+    node: &Path,
+    bytes: u64,
+    snapshot: &Path,
+) -> Result<(), BlockWriteError> {
     if let Err(error) = fs::remove_file(snapshot) {
         if error.kind() != io::ErrorKind::NotFound {
             return Err(snapshot_error(snapshot, error));
         }
     }
     let mut source = File::open(node).map_err(|error| snapshot_error(snapshot, error))?;
-    let mut destination = File::create(snapshot).map_err(|error| snapshot_error(snapshot, error))?;
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(snapshot)
+        .map_err(|error| snapshot_error(snapshot, error))?;
     copy_bytes(&mut source, &mut destination, bytes)
         .map_err(|error| snapshot_error(snapshot, error))?;
     destination
@@ -74,6 +82,7 @@ pub(super) fn snapshot_target(node: &Path, bytes: u64, snapshot: &Path) -> Resul
 
 pub(super) fn write_image(
     image: &Path,
+    source_file: &File,
     node: &Path,
     bytes: u64,
     fault: Option<BlockWriteTestFault>,
@@ -85,7 +94,12 @@ pub(super) fn write_image(
             io::Error::other("injected write-open failure"),
         ));
     }
-    let mut source = File::open(image).map_err(|source| io_error("open image", image, source))?;
+    let mut source = source_file
+        .try_clone()
+        .map_err(|source| io_error("open image", image, source))?;
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|source| io_error("seek image", image, source))?;
     let mut target = OpenOptions::new()
         .write(true)
         .open(node)
@@ -118,9 +132,19 @@ pub(super) fn write_image(
         .map_err(|source| io_error("flush target", node, source))
 }
 
-pub(super) fn restore_snapshot(node: &Path, bytes: u64, snapshot: &Path) -> io::Result<()> {
-    let expected = crate::build_tools::sha256_prefix(snapshot, bytes)?;
-    let mut source = File::open(snapshot)?;
+pub(super) fn restore_snapshot(
+    node: &Path,
+    bytes: u64,
+    snapshot: &Path,
+    snapshot_file: &File,
+    fault: Option<BlockWriteTestFault>,
+) -> io::Result<()> {
+    if matches!(fault, Some(BlockWriteTestFault::RollbackFailure)) {
+        return Err(io::Error::other("injected rollback failure"));
+    }
+    let expected = crate::file_identity::identity(snapshot_file, snapshot)?.sha256;
+    let mut source = snapshot_file.try_clone()?;
+    source.seek(SeekFrom::Start(0))?;
     let mut target = OpenOptions::new().write(true).open(node)?;
     copy_bytes(&mut source, &mut target, bytes)?;
     target.sync_all()?;
@@ -156,7 +180,6 @@ pub(crate) fn copy_bytes(
     }
     Ok(())
 }
-
 
 fn snapshot_error(snapshot: &Path, source: io::Error) -> BlockWriteError {
     BlockWriteError::SnapshotFailed {

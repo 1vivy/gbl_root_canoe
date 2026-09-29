@@ -11,6 +11,8 @@
 //! under test is the path the backend asks for, which is exactly what a real
 //! volume would silently accept either way.
 
+#![cfg(unix)]
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

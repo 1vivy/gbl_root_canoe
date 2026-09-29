@@ -2,7 +2,7 @@
 # Regenerate with make bump or make import-pin ID=<id>.
 
 CANOE_WEBUI_VERSION = 0.1.0
-CANOE_WEBUI_SHA256 = fc491ad94548b865789b86b37793ece0bb7f9dbf8edc97989e27a9eea27a9620
+CANOE_WEBUI_SHA256 = c699dd7698bbca0c9cef6ba034d1b5faff53169b620568df02bdbd32d80069d5
 CANOE_WEBUI_URL = file://$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz
 CANOE_WEBUI_PATH = $(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz
 

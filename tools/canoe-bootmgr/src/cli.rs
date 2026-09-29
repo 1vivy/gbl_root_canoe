@@ -7,20 +7,20 @@ use crate::artifact::BlsStageReceipt;
 use crate::backend::BlsFile;
 use crate::build::{BuildArgs, BuildProbeReceipt, BuildReceipt};
 pub use crate::cli_extra::{
-    AblLookupArgs, AblVerifyArgs, BlsStageArgs, BlockReadArgs, BlockWriteArgs, FastbootAblCoverageArgs,
-    FastbootCommand, FastbootEndExportArgs, FastbootExportArgs, FastbootFetchArgs,
-    FastbootFlashArgs, FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs, ImageDigestArgs,
-    InstallArgs, ModePlanArgs, OtaApplyArgs, SlotCommand, SlotStatusArgs, SystemRebootArgs,
-    ToolsUpdateArgs, VbmetaCheckArgs, VbmetaExtractArgs, VbmetaHeaderArgs, VendorBootCommand,
-    VendorBootPatchArgs,
+    AblLookupArgs, AblVerifyArgs, BlockReadArgs, BlockWriteArgs, BlsStageArgs,
+    FastbootAblCoverageArgs, FastbootCommand, FastbootEndExportArgs, FastbootExportArgs,
+    FastbootFetchArgs, FastbootFlashArgs, FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs,
+    ImageDigestArgs, ImageZeroArgs, InstallArgs, ModePlanArgs, OtaApplyArgs, SlotCommand,
+    SlotStatusArgs, SystemRebootArgs, ToolsInventoryArgs, ToolsUpdateArgs, VbmetaCheckArgs,
+    VbmetaExtractArgs, VbmetaHeaderArgs, VendorBootCommand, VendorBootPatchArgs,
 };
 use crate::config::{ConfigDocument, ConfigEntry, DeviceInfoRepair, MenuMode, Role};
 use crate::detect::SourceCandidate;
 use crate::graft::GraftReceipt;
+use crate::mode_plan::ModePlan;
 use crate::slot_transaction::InstallReceipt;
 use crate::slots::Slot;
 use crate::vbmeta_inspect::{VbmetaBuildProperties, VbmetaChainPartition};
-use crate::mode_plan::ModePlan;
 use crate::vendorboot::PatchReceipt;
 #[derive(Debug, Parser)]
 #[command(
@@ -63,6 +63,14 @@ pub struct Cli {
         help = "Direct ext4 image (alias for --source)"
     )]
     pub image: Option<PathBuf>,
+    #[arg(long, global = true, hide = true)]
+    pub runtime_root: Option<PathBuf>,
+    #[cfg(windows)]
+    #[arg(long, global = true, hide = true)]
+    pub named_pipe: Option<PathBuf>,
+    #[cfg(windows)]
+    #[arg(long, global = true, hide = true)]
+    pub job_name: Option<PathBuf>,
     #[arg(
         long,
         global = true,
@@ -114,6 +122,9 @@ pub enum Command {
     /// Read a local image or image prefix and return its SHA-256 digest.
     #[command(name = "image-digest")]
     ImageDigest(ImageDigestArgs),
+    /// Create a reviewed all-zero partition image.
+    #[command(name = "image-zero")]
+    ImageZero(ImageZeroArgs),
     /// Read a partition node into a local image.
     #[command(name = "block-read")]
     BlockRead(BlockReadArgs),
@@ -126,6 +137,9 @@ pub enum Command {
     /// Update the boot-root EFI tools directory without installing a loader.
     #[command(name = "tools-update")]
     ToolsUpdate(ToolsUpdateArgs),
+    /// Return a deterministic identity inventory for a tools directory.
+    #[command(name = "tools-inventory")]
+    ToolsInventory(ToolsInventoryArgs),
     /// Install one or both per-slot managed loader triplets.
     Install(InstallArgs),
     /// Apply a post-OTA loader to the explicitly confirmed target slot.
@@ -338,6 +352,7 @@ pub enum Success {
         ok: bool,
         app_version: &'static str,
         protocol_version: u32,
+        capabilities: &'static [&'static str],
     },
     #[serde(rename = "config.show")]
     ConfigShow { ok: bool, config: ConfigDocument },
@@ -433,6 +448,13 @@ pub enum Success {
         sha256: String,
         bytes: u64,
     },
+    #[serde(rename = "image.zero")]
+    ImageZero {
+        ok: bool,
+        output: String,
+        bytes: u64,
+        sha256: String,
+    },
     #[serde(rename = "block.write")]
     BlockWrite {
         ok: bool,
@@ -441,6 +463,8 @@ pub enum Success {
         bytes_written: u64,
         sha256: String,
         snapshot: String,
+        snapshot_bytes: u64,
+        snapshot_sha256: String,
         verified: bool,
     },
     #[serde(rename = "block.read")]
@@ -453,11 +477,30 @@ pub enum Success {
         sha256: String,
     },
     #[serde(rename = "install")]
-    Install { ok: bool, receipt: InstallReceipt },
+    Install {
+        ok: bool,
+        receipt: InstallReceipt,
+        acknowledged: Vec<String>,
+        warnings: Vec<String>,
+    },
     #[serde(rename = "ota-apply")]
-    OtaApply { ok: bool, receipt: InstallReceipt },
+    OtaApply {
+        ok: bool,
+        receipt: InstallReceipt,
+        acknowledged: Vec<String>,
+        warnings: Vec<String>,
+    },
     #[serde(rename = "tools.update")]
-    ToolsUpdate { ok: bool, files: Vec<String> },
+    ToolsUpdate {
+        ok: bool,
+        files: Vec<String>,
+        inventory: Vec<crate::file_identity::FileIdentity>,
+    },
+    #[serde(rename = "tools.inventory")]
+    ToolsInventory {
+        ok: bool,
+        inventory: Vec<crate::file_identity::FileIdentity>,
+    },
     #[serde(rename = "abl.lookup")]
     AblLookup {
         ok: bool,
@@ -491,9 +534,14 @@ pub enum Success {
         rollback_index: u64,
         flags: u32,
         release_string: String,
+        public_key_sha256: Option<String>,
+        build_properties: VbmetaBuildProperties,
     },
     #[serde(rename = "vbmeta.extract")]
-    VbmetaExtract { ok: bool, receipt: crate::graft::ExtractReceipt },
+    VbmetaExtract {
+        ok: bool,
+        receipt: crate::graft::ExtractReceipt,
+    },
     #[serde(rename = "vbmeta.check")]
     VbmetaCheck {
         ok: bool,
@@ -513,6 +561,7 @@ pub enum Success {
         devinfo: Option<String>,
         last_launch: Option<String>,
         is_userspace: Option<bool>,
+        boot_root: Option<String>,
     },
     #[serde(rename = "fastboot.export")]
     FastbootExport { ok: bool, node: String },
@@ -547,6 +596,8 @@ pub struct AblCoverage {
 pub struct FastbootFlashReceipt {
     pub partition: String,
     pub image: String,
+    pub bytes: u64,
+    pub sha256: String,
 }
 
 impl CliRole {

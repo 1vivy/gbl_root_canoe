@@ -1,12 +1,12 @@
-use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
-use std::thread;
-use std::time::Duration;
 use crate::build::{self, BuildOptions};
 use crate::error::CanoeError;
 use crate::layout::Toolkit;
 use crate::stage;
 use crate::ui::{ask_choice, ask_yes_no, ask_yes_no_from, emit, note, note_to, step, warn};
+use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 
 pub const USAGE: &str = "canoe - the Canoe host tool.
 
@@ -32,8 +32,13 @@ fn wait_for_images(toolkit: &Toolkit) {
         return;
     }
     step("Waiting for the stock firmware pair");
-    emit("Images folder is empty. Add images/abl.img and images/vbmeta.img. They MUST match the firmware version being booted and MUST be stock.");
-    note(&format!("Watching {} until both files are populated...", toolkit.images().display()));
+    emit(
+        "Images folder is empty. Add images/abl.img and images/vbmeta.img. They MUST match the firmware version being booted and MUST be stock.",
+    );
+    note(&format!(
+        "Watching {} until both files are populated...",
+        toolkit.images().display()
+    ));
     while !(toolkit.abl_image().is_file() && toolkit.vbmeta_image().is_file()) {
         thread::sleep(Duration::from_secs(1));
     }
@@ -47,17 +52,15 @@ fn confirm_environment<R: BufRead, W: Write>(
         Ok(path) => path,
         Err(error) => return confirm_probe_failure(error.to_string(), reader, writer),
     };
-    let identity = match canoe_bootmgr::fastboot::identify_checked(
-        &fastboot,
-        Duration::from_secs(10),
-    ) {
-        Ok(identity) => identity,
-        Err(error @ canoe_bootmgr::fastboot::FastbootError::DeviceBusy { .. })
-        | Err(error @ canoe_bootmgr::fastboot::FastbootError::ExportActive { .. }) => {
-            return Err(CanoeError::message(error.to_string()));
-        }
-        Err(error) => return confirm_probe_failure(error.to_string(), reader, writer),
-    };
+    let identity =
+        match canoe_bootmgr::fastboot::identify_checked(&fastboot, Duration::from_secs(10)) {
+            Ok(identity) => identity,
+            Err(error @ canoe_bootmgr::fastboot::FastbootError::DeviceBusy { .. })
+            | Err(error @ canoe_bootmgr::fastboot::FastbootError::ExportActive { .. }) => {
+                return Err(CanoeError::message(error.to_string()));
+            }
+            Err(error) => return confirm_probe_failure(error.to_string(), reader, writer),
+        };
     confirm_identity(identity, reader, writer)
 }
 
@@ -66,8 +69,15 @@ fn confirm_probe_failure<R: BufRead, W: Write>(
     reader: &mut R,
     writer: &mut W,
 ) -> Result<Option<canoe_bootmgr::fastboot::Identity>, CanoeError> {
-    warn(&format!("Could not identify the device with fastboot: {error}"));
-    if !ask_yes_no_from(reader, writer, "Continue despite the fastboot probe failure?", false)? {
+    warn(&format!(
+        "Could not identify the device with fastboot: {error}"
+    ));
+    if !ask_yes_no_from(
+        reader,
+        writer,
+        "Continue despite the fastboot probe failure?",
+        false,
+    )? {
         return Ok(None);
     }
     Ok(Some(canoe_bootmgr::fastboot::Identity {
@@ -83,8 +93,15 @@ fn confirm_identity<R: BufRead, W: Write>(
     writer: &mut W,
 ) -> Result<Option<canoe_bootmgr::fastboot::Identity>, CanoeError> {
     if identity.bds_version.is_none() {
-        warn("The device does not look like Super Fastboot; fastboot oem mass-storage:persist does not exist outside the BDS.");
-        if !ask_yes_no_from(reader, writer, "Continue without Super Fastboot detection?", false)? {
+        warn(
+            "The device does not look like Super Fastboot; fastboot oem mass-storage:persist does not exist outside the BDS.",
+        );
+        if !ask_yes_no_from(
+            reader,
+            writer,
+            "Continue without Super Fastboot detection?",
+            false,
+        )? {
             return Ok(None);
         }
     }
@@ -114,56 +131,146 @@ struct WizardPlan {
     slot: String,
     mode: u8,
     vendor_boot: Option<PathBuf>,
+    acknowledge: Vec<String>,
 }
 struct PromptIo<'a> {
     reader: &'a mut dyn BufRead,
     writer: &'a mut dyn Write,
 }
 
-fn ask(toolkit: &Toolkit, identity: &canoe_bootmgr::fastboot::Identity, io: &mut PromptIo<'_>) -> Result<Option<WizardPlan>, CanoeError> {
+fn ask(
+    toolkit: &Toolkit,
+    identity: &canoe_bootmgr::fastboot::Identity,
+    io: &mut PromptIo<'_>,
+) -> Result<Option<WizardPlan>, CanoeError> {
     let slot = match identity.current_slot.as_deref() {
         Some(slot) => {
-            note_to(io.writer, &format!("Read active slot {slot} from the device rather than guessing."))?;
+            note_to(
+                io.writer,
+                &format!("Read active slot {slot} from the device rather than guessing."),
+            )?;
             slot.to_owned()
         }
         None => {
-            let selected = ask_choice(io.reader, io.writer, "Which slot is currently active", &["a", "b"], Some("a"))?;
-            note_to(io.writer, "This labels the menu rows; if it is wrong, re-run the install with the correct slot.")?;
+            let selected = ask_choice(
+                io.reader,
+                io.writer,
+                "Which slot is currently active",
+                &["a", "b"],
+                Some("a"),
+            )?;
+            note_to(
+                io.writer,
+                "This labels the menu rows; if it is wrong, re-run the install with the correct slot.",
+            )?;
             selected
         }
     };
-    let mode = ask_choice(io.reader, io.writer, "Which mode", &["0", "1", "2"], Some("1"))?;
-    let mode = mode.parse::<u8>().map_err(|_| CanoeError::message("mode must be 0, 1 or 2"))?;
+    let mode = ask_choice(
+        io.reader,
+        io.writer,
+        "Which mode",
+        &["0", "1", "2"],
+        Some("1"),
+    )?;
+    let mode = mode
+        .parse::<u8>()
+        .map_err(|_| CanoeError::message("mode must be 0, 1 or 2"))?;
     let mut vendor_boot = None;
+    let mut acknowledge = Vec::new();
     if mode == 1 {
-        note_to(io.writer, "Graft with: vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>")?;
+        note_to(
+            io.writer,
+            "Graft with: vbmetaport <official recovery vbmeta> <custom recovery.img> <output.img>",
+        )?;
         note_to(io.writer, "The grafted output must not grow.")?;
-        if !ask_yes_no_from(io.reader, io.writer, "Mode 1 requires grafting a custom recovery with the vbmeta tool, flashing it, and returning here. Declining cancels the installation. Proceed?", true)? {
+        if !ask_yes_no_from(
+            io.reader,
+            io.writer,
+            "Mode 1 requires grafting a custom recovery with the vbmeta tool, flashing it, and returning here. Declining cancels the installation. Proceed?",
+            true,
+        )? {
             return Ok(None);
         }
+        acknowledge.push("P-GRAFT".to_owned());
         let candidate = toolkit.images().join("vendor_boot.img");
-        if candidate.is_file() && ask_yes_no_from(io.reader, io.writer, "Patch vendor_boot to blacklist oplus_secure_guard_new?", false)? {
+        if candidate.is_file()
+            && ask_yes_no_from(
+                io.reader,
+                io.writer,
+                "Patch vendor_boot to blacklist oplus_secure_guard_new?",
+                false,
+            )?
+        {
             vendor_boot = Some(candidate);
         }
     }
-    if !ask_yes_no_from(io.reader, io.writer, "Generate a boot entry from these matching stock files?", true)? {
+    if mode != 0 {
+        note_to(
+            io.writer,
+            "Changing the launch mode makes existing userdata undecryptable: the TEE refuses the data key written under the previous state.",
+        )?;
+        if !ask_yes_no_from(
+            io.reader,
+            io.writer,
+            "Formatting userdata is required. Declining cancels the installation. Proceed?",
+            true,
+        )? {
+            return Ok(None);
+        }
+        acknowledge.push("P-FORMAT".to_owned());
+    }
+    if !ask_yes_no_from(
+        io.reader,
+        io.writer,
+        "Generate a boot entry from these matching stock files?",
+        true,
+    )? {
         return Ok(None);
     }
-    Ok(Some(WizardPlan { slot, mode, vendor_boot }))
+    Ok(Some(WizardPlan {
+        slot,
+        mode,
+        vendor_boot,
+        acknowledge,
+    }))
 }
 
 fn execute(toolkit: &Toolkit, plan: &WizardPlan) -> Result<bool, CanoeError> {
     step("Deriving the boot entry");
-    build::derive(toolkit, &BuildOptions { abl: None, vbmeta: None })?;
-    note(&format!("Derived boot.efi and sidecars from {} and {}", toolkit.abl_image().display(), toolkit.vbmeta_image().display()));
-    let mut arguments = vec!["--slot".to_owned(), plan.slot.clone(), "--mode".to_owned(), plan.mode.to_string()];
+    build::derive(
+        toolkit,
+        &BuildOptions {
+            abl: None,
+            vbmeta: None,
+        },
+    )?;
+    note(&format!(
+        "Derived boot.efi and sidecars from {} and {}",
+        toolkit.abl_image().display(),
+        toolkit.vbmeta_image().display()
+    ));
+    let mut arguments = vec![
+        "--slot".to_owned(),
+        plan.slot.clone(),
+        "--mode".to_owned(),
+        plan.mode.to_string(),
+    ];
+    for code in &plan.acknowledge {
+        arguments.extend(["--acknowledge".to_owned(), code.clone()]);
+    }
     if let Some(vendor_boot) = plan.vendor_boot.as_deref() {
-        arguments.extend(["--vendor-boot".to_owned(), vendor_boot.display().to_string()]);
+        arguments.extend([
+            "--vendor-boot".to_owned(),
+            vendor_boot.display().to_string(),
+        ]);
     }
     if !install_with_signer_gate(&arguments)? {
         return Ok(false);
     }
-    emit("Data format is required. On a first-time installation it is not optional:\nMode 1 projects a locked DeviceInfo to the OS, and the TEE will refuse the\ndata key for userdata written under the previous state, so the old data is\nunreadable either way.\n\nOn the device: main menu -> Reboot to Recovery -> FORMAT DATA.\ncanoe.cfg carries devinfo-repair asneeded, so the lock-state repair happens\non the next managed launch; formatting is what makes that state coherent.");
+    emit(
+        "Data format is required. On a first-time installation it is not optional:\nMode 1 projects a locked DeviceInfo to the OS, and the TEE will refuse the\ndata key for userdata written under the previous state, so the old data is\nunreadable either way.\n\nOn the device: main menu -> Reboot to Recovery -> FORMAT DATA.\ncanoe.cfg carries devinfo-repair asneeded, so the lock-state repair happens\non the next managed launch; formatting is what makes that state coherent.",
+    );
     Ok(true)
 }
 
@@ -189,7 +296,10 @@ fn interactive() -> Result<(), CanoeError> {
         let stdout = io::stdout();
         let mut reader = stdin.lock();
         let mut writer = stdout.lock();
-        let mut prompt = PromptIo { reader: &mut reader, writer: &mut writer };
+        let mut prompt = PromptIo {
+            reader: &mut reader,
+            writer: &mut writer,
+        };
         ask(&toolkit, &identity, &mut prompt)?
     };
     let plan = match plan {
@@ -204,7 +314,7 @@ fn interactive() -> Result<(), CanoeError> {
     }
     Ok(())
 }
- 
+
 pub fn run() -> Result<(), CanoeError> {
     interactive()
 }

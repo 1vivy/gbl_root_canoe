@@ -3,8 +3,8 @@ use std::fs;
 use canoe_bootmgr::{AppError, VendorBootError};
 use tempfile::tempdir;
 
-const FIELD_END: usize = canoe_bootmgr::vendorboot::CMDLINE_OFFSET
-    + canoe_bootmgr::vendorboot::CMDLINE_BYTES;
+const FIELD_END: usize =
+    canoe_bootmgr::vendorboot::CMDLINE_OFFSET + canoe_bootmgr::vendorboot::CMDLINE_BYTES;
 
 #[test]
 fn invalid_header_refuses_without_writing_output() {

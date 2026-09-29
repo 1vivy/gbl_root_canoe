@@ -32,7 +32,7 @@ EFI stub 内核，可以再指定一个 `initrd`、一个 `devicetree` 和命令
 行指向普通 UEFI 应用，`options` 会作为不透明的 LoadOptions 传递。为兼容发行版文件，
 未知的标准 BLS 键会保留；格式错误、镜像缺失以及不支持的重复字段会被跳过。
 
-**Boot entries** 路由把发现的 BLS 行作为未受管理的证据显示。应用使用 `bls.list`/
+**Entries** 路由把发现的 BLS 行作为未受管理的证据显示。
 `bls.show` 读取；CLI 可以用 `bls.stage` 及 SHA-256 校验暂存启动项：
 
 ```bash

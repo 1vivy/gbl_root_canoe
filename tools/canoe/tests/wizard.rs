@@ -13,7 +13,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
         let serial = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("canoe-wizard-test-{stamp}-{serial}"));
         fs::create_dir_all(root.join("efisp/tools")).expect("fixture directories");
@@ -44,7 +47,9 @@ impl Fixture {
         }
         let script = "#!/bin/sh\ncase \"$2\" in\ncurrent-slot) printf 'current-slot: a\\n' >&2 ;;\ncanoe-bds) printf 'canoe-bds: 7.0.0-b2\\n' >&2 ;;\nesac\n";
         fs::write(&path, script).expect("fake fastboot");
-        let mut permissions = fs::metadata(&path).expect("fastboot metadata").permissions();
+        let mut permissions = fs::metadata(&path)
+            .expect("fastboot metadata")
+            .permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions).expect("fastboot permissions");
     }
@@ -52,13 +57,19 @@ impl Fixture {
     fn run_with_input(&self, input: &str) -> Output {
         let mut child = Command::new(self.root.join("canoe"))
             .env_remove("CANOE_BOOT_ROOT")
+            .env("CANOE_DEVICE_LOCK_PATH", self.root.join("device.lock"))
             .stdin(Stdio::piped())
             .env("PATH", self.root.join("empty"))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn canoe");
-        child.stdin.take().expect("stdin pipe").write_all(input.as_bytes()).expect("write stdin");
+        child
+            .stdin
+            .take()
+            .expect("stdin pipe")
+            .write_all(input.as_bytes())
+            .expect("write stdin");
         child.wait_with_output().expect("wait canoe")
     }
 }

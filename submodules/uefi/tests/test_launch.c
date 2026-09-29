@@ -21,6 +21,7 @@
 #include <Protocol/Security2.h>
 
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.h"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBootRoot.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbBls.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLaunchPolicy.h"
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbSlots.h"
@@ -1461,7 +1462,7 @@ TestBootRootEmpty(void)
   mVolumesAvailable = TRUE;
   mBootRootConfigPresent = FALSE;
   mBootRootManagedPresent = FALSE;
-  assert(SfbBootRootIsEmpty ());
+  assert(SfbBootRootObserve () == SfbBootRootEmptyRoot);
   /* Volume Up is the sole first-run opt-in; all default paths stay fastboot. */
   assert(SfbFirstRunEntersMenu (SfbKeyUp));
   assert(!SfbFirstRunEntersMenu (SfbKeyTimeout));
@@ -1469,24 +1470,24 @@ TestBootRootEmpty(void)
   assert(!SfbFirstRunEntersMenu (SfbKeySelect));
 
   mBootRootSlotAPresent = TRUE;
-  assert(!SfbBootRootIsEmpty ());
+  assert(SfbBootRootObserve () == SfbBootRootPopulatedManaged);
   mBootRootSlotAPresent = FALSE;
 
 
   /* A config path alone is not usable: it must parse and name a file. */
   mBootRootConfigPresent = TRUE;
-  assert(SfbBootRootIsEmpty ());
+  assert(SfbBootRootObserve () == SfbBootRootEmptyRoot);
 
   memcpy (mEntriesFixture, ConfigText, sizeof (ConfigText) - 1);
   mEntriesFixtureBytes = sizeof (ConfigText) - 1;
   mEntriesFixtureEnabled = TRUE;
   mBootRootManagedPresent = TRUE;
-  assert(!SfbBootRootIsEmpty ());
+  assert(SfbBootRootObserve () == SfbBootRootPopulatedConfig);
 
   mEntriesFixtureEnabled = FALSE;
   mBootRootConfigPresent = FALSE;
   mBootRootManagedPresent = TRUE;
-  assert(!SfbBootRootIsEmpty ());
+  assert(SfbBootRootObserve () == SfbBootRootPopulatedManaged);
 
   /*
    * No locatable volume is first-run, not "populated". Answering FALSE here
@@ -1495,7 +1496,7 @@ TestBootRootEmpty(void)
    * from a PC was to navigate the menu by hand.
    */
   mVolumesAvailable = FALSE;
-  assert(SfbBootRootIsEmpty ());
+  assert(SfbBootRootObserve () == SfbBootRootNoVolumes);
   mBootRootManagedPresent = FALSE;
 }
 

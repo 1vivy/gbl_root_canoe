@@ -40,7 +40,7 @@ ordinary UEFI application and uses `options` as its opaque LoadOptions. Unknown
 standard BLS keys are retained for compatibility, while malformed entries,
 missing images, and unsupported duplicate fields are skipped.
 
-The **Boot entries** route displays discovered BLS rows as unmanaged evidence.
+The **Entries** route displays discovered BLS rows as unmanaged evidence.
 The app uses `bls.list`/`bls.show` for reads; the CLI can stage a row with
 `bls.stage` and SHA-256 verification:
 

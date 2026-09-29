@@ -36,6 +36,42 @@ where
             return code;
         }
     };
+    #[cfg(windows)]
+    if let Some(runtime_root) = cli.runtime_root.as_deref() {
+        if let Err(error) = crate::initialize_reviewed_runtime_root(runtime_root) {
+            let message = format!("could not initialize reviewed runtime root: {error}");
+            if cli.json {
+                return emit_json_error("usage", &message, EXIT_USAGE);
+            }
+            eprintln!("canoe-bootmgr: {message}");
+            return EXIT_USAGE;
+        }
+    }
+    #[cfg(windows)]
+    match (cli.named_pipe.as_deref(), cli.job_name.as_deref()) {
+        (Some(pipe), Some(job_name)) => {
+            if cli.runtime_root.is_none() {
+                eprintln!("canoe-bootmgr: --named-pipe requires --runtime-root");
+                return EXIT_USAGE;
+            }
+            if !cli.json || cli.command.is_some() || cli.request_b64.is_some() {
+                eprintln!(
+                    "canoe-bootmgr: --named-pipe requires --json with no command or --request-b64"
+                );
+                return EXIT_USAGE;
+            }
+            return crate::windows_ipc::run(&cli, pipe, job_name);
+        }
+        (Some(_), None) => {
+            eprintln!("canoe-bootmgr: --named-pipe requires --job-name");
+            return EXIT_USAGE;
+        }
+        (None, Some(_)) => {
+            eprintln!("canoe-bootmgr: --job-name requires --named-pipe");
+            return EXIT_USAGE;
+        }
+        (None, None) => {}
+    }
     if let Some(token) = cli.request_b64.as_deref() {
         if cli.command.is_some() {
             return emit_json_error(
@@ -72,14 +108,23 @@ fn run_one_shot(cli: &Cli, token: &str) -> i32 {
 
 fn run_jsonl(cli: &Cli) -> i32 {
     let input = std::io::stdin();
-    let reader = BufReader::new(input.lock());
+    let output = std::io::stdout();
+    run_jsonl_io(cli, BufReader::new(input.lock()), output.lock())
+}
+
+pub(crate) fn run_jsonl_io<R: BufRead, W: std::io::Write>(
+    cli: &Cli,
+    reader: R,
+    mut output: W,
+) -> i32 {
     let mut failed = false;
     for line in reader.lines() {
         let line = match line {
             Ok(line) => line,
             Err(error) => {
                 failed = true;
-                let _ = emit_json_error("input", &error.to_string(), EXIT_OPERATION);
+                let _ =
+                    emit_json_error_to(&mut output, "input", &error.to_string(), EXIT_OPERATION);
                 break;
             }
         };
@@ -88,12 +133,17 @@ fn run_jsonl(cli: &Cli) -> i32 {
         }
         let response = match wire::parse_json(line.as_bytes()) {
             Ok(request) => match operations::execute_request_cli(cli, request) {
-                Ok(success) => emit_json_success(&success),
-                Err(error) => {
-                    emit_json_error(error.protocol_code(), &error.to_string(), EXIT_OPERATION)
-                }
+                Ok(success) => emit_json_success_to(&mut output, &success),
+                Err(error) => emit_json_error_to(
+                    &mut output,
+                    error.protocol_code(),
+                    &error.to_string(),
+                    EXIT_OPERATION,
+                ),
             },
-            Err(error) => emit_json_error("request", &error.to_string(), EXIT_OPERATION),
+            Err(error) => {
+                emit_json_error_to(&mut output, "request", &error.to_string(), EXIT_OPERATION)
+            }
         };
         if response != EXIT_OK {
             failed = true;
@@ -114,14 +164,22 @@ fn emit_success(cli: &Cli, success: &crate::cli::Success) -> i32 {
 }
 
 fn emit_json_success(success: &crate::cli::Success) -> i32 {
-    match output::json_success(success) {
-        Ok(bytes) if bytes.len() <= MAX_RESPONSE_BYTES => emit_bytes(&bytes, EXIT_OK),
-        Ok(_) => emit_json_error(
+    emit_json_success_to(&mut std::io::stdout().lock(), success)
+}
+
+pub(crate) fn emit_json_success_to<W: std::io::Write>(
+    output: &mut W,
+    success: &crate::cli::Success,
+) -> i32 {
+    match crate::output::json_success(success) {
+        Ok(bytes) if bytes.len() <= MAX_RESPONSE_BYTES => emit_bytes_to(output, &bytes, EXIT_OK),
+        Ok(_) => emit_json_error_to(
+            output,
             "response-too-large",
             "response exceeds 1 MiB",
             EXIT_OPERATION,
         ),
-        Err(error) => emit_json_error("output", &error.to_string(), EXIT_OPERATION),
+        Err(error) => emit_json_error_to(output, "output", &error.to_string(), EXIT_OPERATION),
     }
 }
 
@@ -135,8 +193,17 @@ fn emit_failure(cli: &Cli, code: &str, message: &str) -> i32 {
 }
 
 fn emit_json_error(code: &str, message: &str, exit_code: i32) -> i32 {
-    match output::json_error(code, message) {
-        Ok(bytes) => emit_bytes(&bytes, exit_code),
+    emit_json_error_to(&mut std::io::stdout().lock(), code, message, exit_code)
+}
+
+pub(crate) fn emit_json_error_to<W: std::io::Write>(
+    output: &mut W,
+    code: &str,
+    message: &str,
+    exit_code: i32,
+) -> i32 {
+    match crate::output::json_error(code, message) {
+        Ok(bytes) => emit_bytes_to(output, &bytes, exit_code),
         Err(error) => {
             eprintln!("canoe-bootmgr: could not encode error: {error}");
             exit_code
@@ -146,6 +213,14 @@ fn emit_json_error(code: &str, message: &str, exit_code: i32) -> i32 {
 
 fn emit_bytes(bytes: &[u8], exit_code: i32) -> i32 {
     if let Err(error) = operations::write_output(bytes) {
+        eprintln!("canoe-bootmgr: {error}");
+        return EXIT_OPERATION;
+    }
+    exit_code
+}
+
+fn emit_bytes_to<W: std::io::Write>(output: &mut W, bytes: &[u8], exit_code: i32) -> i32 {
+    if let Err(error) = output.write_all(bytes).and_then(|()| output.flush()) {
         eprintln!("canoe-bootmgr: {error}");
         return EXIT_OPERATION;
     }

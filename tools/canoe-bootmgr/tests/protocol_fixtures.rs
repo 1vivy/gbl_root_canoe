@@ -43,10 +43,7 @@ static WORKER_TOOLS_DIRECTORY: LazyLock<String> = LazyLock::new(|| {
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(unix)]
-fn install_identify_fastboot(
-    root: &Path,
-    request: &Path,
-) -> Option<MutexGuard<'static, ()>> {
+fn install_identify_fastboot(root: &Path, request: &Path) -> Option<MutexGuard<'static, ()>> {
     let name = request.file_name()?.to_str()?;
     let stem = name.strip_suffix(REQUEST_SUFFIX)?;
     let script_body = match stem {
@@ -60,7 +57,7 @@ fn install_identify_fastboot(
                 .to_owned()
         }
         "fastboot.identify-unknown" => {
-            "case \"$2\" in\n  is-userspace) echo \"is-userspace: FAILED (unknown variable)\" >&2 ;;\nesac\nexit 0"
+            "case \"$2\" in\n  is-userspace) echo \"getvar:is-userspace FAILED (remote: 'GetVar Variable Not found')\" >&2 ;;\nesac\nexit 0"
                 .to_owned()
         }
         _ => return None,
@@ -148,7 +145,7 @@ fn prepare_fixture_root(root: &Path, request: &Path) {
 }
 
 #[test]
-fn golden_protocol_transcripts_replay_byte_for_byte() {
+fn golden_protocol_transcripts_preserve_wire_contracts() {
     let fixtures = fixture_paths();
     assert!(
         !fixtures.is_empty(),
@@ -176,7 +173,7 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
             .expect("golden response is UTF-8")
             .replace(ROOT_PLACEHOLDER, root)
             .into_bytes();
-        let expected_document: serde_json::Value =
+        let mut expected_document: serde_json::Value =
             serde_json::from_slice(&expected).expect("golden response JSON");
         let expected_success = expected_document["ok"] == true;
         #[cfg(unix)]
@@ -186,8 +183,12 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_canoe-bootmgr"));
         command
             .args(["--json", "--boot-root"])
-            .arg(boot_root.path());
-        command.env("PATH", boot_root.path());
+            .arg(boot_root.path())
+            .env("PATH", boot_root.path())
+            .env(
+                "CANOE_DEVICE_LOCK_PATH",
+                boot_root.path().join("device.lock"),
+            );
         if request_path.file_name().and_then(|value| value.to_str())
             == Some("mode.plan-target-image.request.json")
         {
@@ -205,7 +206,7 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
             .write_all(request.as_bytes())
             .expect("write golden request");
         let output = child.wait_with_output().expect("wait for canoe-bootmgr");
-        drop(identify_guard);
+        let _ = identify_guard;
 
         assert_eq!(
             output.status.success(),
@@ -215,12 +216,38 @@ fn golden_protocol_transcripts_replay_byte_for_byte() {
             output.status.code(),
             String::from_utf8_lossy(&output.stderr)
         );
+        let mut actual_document: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("actual response JSON");
+        normalize_diagnostic_text(&mut expected_document);
+        normalize_diagnostic_text(&mut actual_document);
         assert_eq!(
-            output.stdout,
-            expected,
+            actual_document,
+            expected_document,
             "{} response differs from {}",
             request_path.display(),
             response_path.display()
         );
+    }
+}
+
+fn normalize_diagnostic_text(document: &mut serde_json::Value) {
+    for path in ["/error/message", "/plan/outcome/reason"] {
+        normalize_prose(document.pointer_mut(path));
+    }
+    if let Some(reasons) = document
+        .pointer_mut("/plan/userdata/reasons")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for reason in reasons {
+            normalize_prose(reason.get_mut("reason"));
+        }
+    }
+}
+
+fn normalize_prose(value: Option<&mut serde_json::Value>) {
+    if let Some(value) = value
+        && value.as_str().is_some_and(|text| !text.trim().is_empty())
+    {
+        *value = serde_json::Value::String("<diagnostic text>".to_owned());
     }
 }

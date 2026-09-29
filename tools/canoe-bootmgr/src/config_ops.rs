@@ -14,7 +14,7 @@ impl ConfigDocument {
             key_window_ms: 1200,
             menu_timeout_s: 5,
             default: None,
-            mode: 1,
+            mode: 0,
             devinfo_repair: DeviceInfoRepair::AsNeeded,
             unknown: Vec::new(),
         }
@@ -144,8 +144,8 @@ impl ConfigDocument {
             self.default = None;
         }
         if self.default.is_none()
-            && let Some(preferred_default) = preferred_default
-                .filter(|id| rows.iter().any(|row| row.id == *id))
+            && let Some(preferred_default) =
+                preferred_default.filter(|id| rows.iter().any(|row| row.id == *id))
         {
             self.default = Some(preferred_default.to_owned());
         }
@@ -153,16 +153,8 @@ impl ConfigDocument {
         self.bump_generation()
     }
 
-    pub fn set_mode(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
-        self.set_mode_inner(id, mode)
-    }
-
     /// Apply a mode after the caller has evaluated `mode.plan`.
     pub fn set_mode_planned(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
-        self.set_mode_inner(id, mode)
-    }
-
-    fn set_mode_inner(&mut self, id: &str, mode: u8) -> Result<u32, ConfigError> {
         validate_mode(mode)?;
         if self.generation == MAX_GENERATION {
             return Err(ConfigError::Invalid(

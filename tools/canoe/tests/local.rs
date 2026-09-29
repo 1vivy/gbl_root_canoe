@@ -12,13 +12,19 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
         let serial = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("canoe-local-test-{stamp}-{serial}"));
         fs::create_dir_all(root.join("efisp/tools")).expect("fixture directories");
         fs::copy(env!("CARGO_BIN_EXE_canoe"), root.join("canoe")).expect("copy binary");
         fs::write(root.join("efisp/boot.efi"), b"loader").expect("loader");
-        fs::write(root.join("efisp/boot.efi.gm2p"), vec![0_u8; 120]).expect("gm2p");
+        let mut gm2p = [0_u8; 120];
+        gm2p[0..4].copy_from_slice(b"GM2P");
+        gm2p[4..6].copy_from_slice(&1_u16.to_le_bytes());
+        fs::write(root.join("efisp/boot.efi.gm2p"), gm2p).expect("gm2p");
         fs::write(root.join("efisp/boot.efi.tzmap"), vec![0_u8; 256]).expect("tzmap");
         fs::write(root.join("efisp/tools/reboot.efi"), b"tool").expect("tool");
         Self { root }
@@ -79,7 +85,9 @@ fn local_boot_root_write_probe_rejects_read_only_efisp() {
     let fixture = Fixture::new();
     let destination = fixture.root.join("persist/efisp");
     fs::create_dir_all(&destination).expect("efisp root");
-    let mut permissions = fs::metadata(&destination).expect("efisp metadata").permissions();
+    let mut permissions = fs::metadata(&destination)
+        .expect("efisp metadata")
+        .permissions();
     permissions.set_mode(0o555);
     fs::set_permissions(&destination, permissions).expect("read-only efisp");
     let destination_arg = destination.to_string_lossy().into_owned();
@@ -107,5 +115,8 @@ fn local_boot_root_non_directory_is_refused_without_writes() {
         "persist root is not a directory: {}",
         destination.display()
     )));
-    assert_eq!(fs::read(&destination).expect("persist file"), b"not a directory");
+    assert_eq!(
+        fs::read(&destination).expect("persist file"),
+        b"not a directory"
+    );
 }

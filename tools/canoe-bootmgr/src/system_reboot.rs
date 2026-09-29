@@ -1,5 +1,7 @@
 use std::io;
+#[cfg(unix)]
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 use thiserror::Error;
@@ -21,7 +23,10 @@ pub enum SystemRebootError {
     #[error("system.reboot could not find `reboot` in PATH")]
     Unavailable,
     #[error("system.reboot could not start reboot: {source}")]
-    Spawn { #[source] source: io::Error },
+    Spawn {
+        #[source]
+        source: io::Error,
+    },
     #[error("system.reboot is unsupported on this platform")]
     UnsupportedPlatform,
 }
@@ -50,7 +55,7 @@ pub fn reboot(request: &SystemRebootRequest) -> Result<SystemRebootReceipt, Syst
     #[cfg(not(unix))]
     {
         let _ = args;
-        return Err(SystemRebootError::UnsupportedPlatform);
+        Err(SystemRebootError::UnsupportedPlatform)
     }
     #[cfg(unix)]
     {

@@ -57,8 +57,7 @@ impl GraftError {
 
 pub fn extract(image: &Path, output: &Path) -> Result<ExtractReceipt, GraftError> {
     let image_bytes = fs::read(image).map_err(|error| io("read image", image, error))?;
-    let (vbmeta_offset, _, vbmeta_size) =
-        read_footer(&image_bytes).ok_or(GraftError::NoFooter)?;
+    let (vbmeta_offset, _, vbmeta_size) = read_footer(&image_bytes).ok_or(GraftError::NoFooter)?;
     let offset = usize::try_from(vbmeta_offset).map_err(|_| GraftError::RangeInvalid)?;
     let size = usize::try_from(vbmeta_size).map_err(|_| GraftError::RangeInvalid)?;
     let footer_offset = image_bytes
@@ -83,7 +82,6 @@ pub fn extract(image: &Path, output: &Path) -> Result<ExtractReceipt, GraftError
         vbmeta_size,
     })
 }
-
 
 pub fn graft(source: &Path, target: &Path, output: &Path) -> Result<GraftReceipt, GraftError> {
     let vbmeta = fs::read(source).map_err(|error| io("read source", source, error))?;

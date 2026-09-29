@@ -1,43 +1,45 @@
 # Using Canoe
 
-Canoe has one operator application on three surfaces: the Linux and Windows
-Tauri desktop shells and the KernelSU Android WebUI. The application speaks the
-JSON wire protocol to `canoe-bootmgr`; it does not edit boot-root files itself.
-The native `canoe` CLI forwards supported operator commands to the same writer.
+Canoe has one operator application with five routes on three surfaces: the Linux
+and Windows Tauri desktop shells and the KernelSU Android WebUI. The application
+speaks the JSON wire protocol to `canoe-bootmgr`; it does not edit boot-root
+files itself. The native `canoe` CLI forwards supported operator commands to the
+same writer.
 
-## Start and the named routes
+## Overview and the named routes
 
-The **Start** (landing) page is deliberately conservative:
+The **Overview** route is the conservative entry point. It reports observed
+connection, slot, BDS, and boot-root facts, then presents the available lane
+without guessing.
 
-- On **Linux or Windows**, choose **Enter Super Fastboot**. The desktop app
-  waits for a `fastboot.identify` response. A BDS response opens **GENERAL**;
-  a fastboot response without BDS offers the guided **Provision** flow.
+- On **Linux or Windows**, enter **Super Fastboot** when the device is ready.
+  The desktop app waits for a `fastboot.identify` response. A BDS response
+  leaves the operator on Overview with measured facts; a response without BDS
+  exposes the fresh-install lane in Deploy.
 - In **KernelSU Android**, the app reads the local boot root with `config.show`.
-  It never waits for fastboot. A readable root opens **GENERAL**; an absent or
-  unreadable root offers first-install **Provision**.
+  It never waits for fastboot. A readable root leaves Overview available with
+  its derived lanes; a missing root exposes the fresh-install lane, while
+  another read failure remains visible and offers the repair lane.
 
-Every route has the same status strip. It shows connection/transport, slot, BDS
-version, and expandable details such as boot root and staged set. Unanswered
-facts say **Unknown**. Canoe never guesses a slot or a BDS version.
+Every route has the same operator status band. It shows connection/transport,
+slot, BDS version, and expandable details such as boot root and staged set.
+Unanswered facts say **Unknown**. Canoe never guesses a slot or a BDS version.
 
-The routes are:
+The five routes are:
 
-- **GENERAL** — update BDS and EFI tools, regenerate managed entries, and on a
-  device begin the inactive-slot OTA flow.
-- **Boot entries** — review managed entries and discovered BLS rows, including
-  requested/effective mode, default status, and sidecar health. Removing a
-  persisted row uses `entry.remove`; discovered BLS files are read-only here.
-- **Settings** — write only the `canoe.cfg` policy keys with
-  `config.set-policy`, and choose the global mode seeded into new entries.
-- **Guided flow** — the staged first-install or mode-change flow: Provision,
-  Prepare, Commit, and Finish. It reviews evidence before writing and keeps
-  reboot as an explicit final step.
-- **Graft** — inspect images and headers, extract or graft vbmeta, check a
-  selected public key, and offer a separately confirmed flash only after the
-  output is verified. It is principally a Mode 1 preparation flow.
+- **Overview** — connection, next action, observed facts, latest receipt, and
+  the available Deploy lanes.
+- **Deploy** — the single operation surface with **Provision → Prepare →
+  Action** stages. Mode 1 grafting is an optional task inside Prepare, not a
+  route of its own.
+- **Entries** — managed entries with read-only mode badges and managed-row
+  actions, plus discovered BLS rows with no action controls.
+- **Settings** — the `canoe.cfg` policy keys through `config.set-policy`.
+- **Diagnostics** — protocol activity, queue/cache phases, raw paths and
+  digests, AVB evidence, slot probes, and export recovery.
 
-Abandoning the guided flow before Commit sends no protocol write. A partition
-write or a reboot always requires the applicable confirmation in the app.
+Leaving Deploy before **Apply** performs no protocol write. A partition write or
+reboot always requires its applicable confirmation in the app.
 
 ## Entering Super Fastboot
 
@@ -63,8 +65,7 @@ are temporary.
 
 Super Fastboot waives ABL's critical-partition status, so flashing works from
 this BDS session; partitions inside `super` remain the exception. Stock
-userspace `fastbootd` is used only by the fresh-install Provision flow.
-
+userspace `fastbootd` is used only by Deploy's fresh-install Provision stage.
 ## First run and BDS menu
 
 When the boot root is missing or unreachable, has no launchable image, or has a
@@ -148,8 +149,8 @@ fastboot reboot bootloader   # back into Super Fastboot
 
 Other targets fail. This BDS session is not a stock userspace session, so
 `fastboot reboot fastboot` is refused here rather than being treated as a
-bootloader reboot. The fresh-install Provision flow is the only workflow in
-this guide that asks for stock userspace `fastbootd`.
+bootloader reboot. Deploy's fresh-install Provision stage is the only workflow
+in this guide that asks for stock userspace `fastbootd`.
 
 ## USB export and the host/device boundary
 
@@ -210,8 +211,8 @@ canoe source detect --json
 canoe-bootmgr --json config show
 canoe-bootmgr --json entry list
 canoe-bootmgr --json slot status
-canoe-bootmgr ota-apply --staged <DIR> --target-slot b --mode 1
-canoe-bootmgr install --staged <DIR> --slot a --mode 1
+canoe-bootmgr ota-apply --staged <DIR> --target-slot b
+canoe-bootmgr install --staged <DIR> --slot a
 canoe-bootmgr fastboot identify
 canoe-bootmgr fastboot export --target persist
 canoe-bootmgr fastboot end-export --node <RAW_NODE>
@@ -220,9 +221,38 @@ canoe-bootmgr vbmeta-inspect --vbmeta <VBMETA>
 canoe-bootmgr vbmeta-header --vbmeta <VBMETA>
 canoe-bootmgr vbmeta-extract --image <IMAGE> --output <VBMETA>
 canoe-bootmgr vbmeta-check --image <IMAGE> --vbmeta <VBMETA> --partition recovery
-canoe-bootmgr vbmeta-graft <OFFICIAL_VBMETA> <CUSTOM_RECOVERY> <OUTPUT>
 canoe-bootmgr fastboot reboot --target recovery
 ```
+
+Omitting `--mode` on `install` or `ota-apply` inherits the persisted mode.
+For an existing managed row, pass `--id <ENTRY_ID>` so the backend can resolve
+the current-mode evidence; for a new row, pass `--from-mode 0|1|2` explicitly.
+When changing mode, also repeat `--acknowledge <CODE>` for every acknowledgement
+required by `mode.plan`. If the plan needs image evidence, pass
+`--current-vbmeta <PATH>`, `--target-vbmeta <PATH>`, and
+`--target-image <PATH>`; these are evidence inputs, not implicit flash payloads.
+The writer evaluates `mode.plan` before mutating the boot root; a refusal or
+missing acknowledgement leaves it untouched.
+For example, an existing row can request a reviewed mode change:
+
+```bash
+canoe-bootmgr install --staged <DIR> --slot a --mode 1 --id android-a \
+  --current-vbmeta <CURRENT_VBMETA> --target-vbmeta <TARGET_VBMETA> \
+  --target-image <TARGET_IMAGE> \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
+```
+
+For a new row, use `--from-mode` instead of `--id`:
+
+```bash
+canoe-bootmgr install --staged <DIR> --slot a --mode 1 --from-mode 0 \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
+```
+
+The app's Deploy → Prepare optional graft task owns descriptor enumeration,
+extraction, grafting, and verification. The low-level `vbmeta.graft` protocol
+operation remains available to protocol clients; the app keeps this work inside
+Deploy → Prepare.
 
 The protocol operation names exposed by this release are:
 
@@ -270,7 +300,7 @@ fastboot reboot bootloader
 ```
 
 The app's `fastboot.flash` operation records and executes an explicit image
-flash; it is not an erase operation. The first-install Provision flow writes
-the vulnerable ABL to both ABL slots and `BDS.efi` to `efisp`, then performs a
+flash; it is not an erase operation. Deploy's Provision stage writes the
+vulnerable ABL to both ABL slots and `BDS.efi` to `efisp`, then performs a
 plain reboot only after its confirmation. The host installer itself does not
 silently flash a partition.

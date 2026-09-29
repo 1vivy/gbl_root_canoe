@@ -3,7 +3,7 @@ use std::fs;
 use mode2_profile::{
     BuildProperties, DeriveError, DeriveFileError, GraftClassification, GraftConfidence,
     GraftState, VbmetaHeader, classify_graft, derive_profile, derive_to_file, inspect_vbmeta,
-    inspect_vbmeta_header,
+    inspect_vbmeta_header, inspect_vbmeta_header_evidence,
 };
 use tempfile::tempdir;
 
@@ -148,6 +148,64 @@ fn recorded_real_headers_drive_graft_classifier_confidence_order() {
 }
 
 #[test]
+fn header_evidence_keeps_unsigned_and_incomplete_images_inspectable() {
+    let mut descriptors = property(b"com.android.build.system.os_version", b"16");
+    descriptors.extend(property(
+        b"com.android.build.system.security_patch",
+        b"2026-05-01",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.vendor.security_patch",
+        b"2026-04-05",
+    ));
+    descriptors.extend(property(
+        b"com.android.build.boot.security_patch",
+        b"2026-03-01",
+    ));
+    let signed = fixture_from_descriptors(descriptors);
+    let signed_evidence =
+        inspect_vbmeta_header_evidence(&signed).expect("complete header evidence");
+    assert_eq!(
+        hex(signed_evidence
+            .public_key_sha256
+            .as_ref()
+            .expect("public key digest")),
+        "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
+    );
+    assert_eq!(
+        signed_evidence
+            .build_properties
+            .system_security_patch
+            .as_deref(),
+        Some("2026-05-01")
+    );
+
+    let mut unsigned = signed.clone();
+    unsigned.drain(256..544);
+    unsigned[28..32].copy_from_slice(&0_u32.to_be_bytes());
+    be_u64(&mut unsigned, 12, 0);
+    let unsigned_evidence =
+        inspect_vbmeta_header_evidence(&unsigned).expect("unsigned header evidence");
+    assert_eq!(unsigned_evidence.header.algorithm_type, 0);
+    assert_eq!(
+        unsigned_evidence
+            .build_properties
+            .vendor_security_patch
+            .as_deref(),
+        Some("2026-04-05")
+    );
+    assert_eq!(
+        unsigned_evidence.public_key_sha256,
+        signed_evidence.public_key_sha256
+    );
+
+    let incomplete =
+        inspect_vbmeta_header_evidence(&recorded_header(0)).expect("incomplete header evidence");
+    assert_eq!(incomplete.public_key_sha256, None);
+    assert_eq!(incomplete.build_properties, BuildProperties::default());
+}
+
+#[test]
 fn header_inspection_rejects_untrusted_malformed_inputs() {
     let mut truncated_header = vec![0; 127];
     truncated_header[0..4].copy_from_slice(b"AVB0");
@@ -229,10 +287,7 @@ fn inspection_enumerates_graft_chains_and_filters_vbmeta_names() {
 
 #[test]
 fn key_check_follows_footer_and_ignores_duplicate_properties() {
-    let mut descriptors = property(
-        b"com.android.build.boot.security_patch",
-        b"2026-03-01",
-    );
+    let mut descriptors = property(b"com.android.build.boot.security_patch", b"2026-03-01");
     descriptors.extend(property(
         b"com.android.build.boot.security_patch",
         b"2026-04-01",
@@ -276,6 +331,7 @@ fn key_check_accepts_unsigned_image_with_empty_public_key() {
 fn inspection_extracts_exactly_the_four_named_build_properties() {
     let mut descriptors = property(b"com.android.build.boot.os_version", b"16.0.7");
     descriptors.extend(property(b"com.android.build.system.os_version", b"16"));
+    descriptors.extend(property(b"com.android.build.system.os_version", b"16"));
     descriptors.extend(property(
         b"com.android.build.system.security_patch",
         b"2026-05-01",
@@ -307,26 +363,22 @@ fn inspection_extracts_exactly_the_four_named_build_properties() {
 }
 
 #[test]
-fn duplicate_named_property_is_rejected() {
+fn conflicting_named_boot_security_patch_is_rejected() {
     let mut descriptors = property(b"com.android.build.boot.os_version", b"16.0.7");
     descriptors.extend(property(
-        b"com.android.build.system.security_patch",
+        b"com.android.build.boot.security_patch",
         b"2026-05-01",
     ));
     descriptors.extend(property(
-        b"com.android.build.system.security_patch",
-        b"2026-06-01",
-    ));
-    descriptors.extend(property(
         b"com.android.build.boot.security_patch",
-        b"2026-03-01",
+        b"2026-06-01",
     ));
 
     let error = inspect_vbmeta(&fixture_from_descriptors(descriptors))
-        .expect_err("duplicate named property must be refused");
+        .expect_err("conflicting named property must be refused");
     assert_eq!(
         error,
-        DeriveError::DuplicateProperty("com.android.build.system.security_patch".to_owned())
+        DeriveError::DuplicateProperty("com.android.build.boot.security_patch".to_owned())
     );
     println!("{error:?}: {error}");
 }
@@ -359,13 +411,19 @@ fn duplicate_profile_only_os_version_retains_legacy_last_value_behavior() {
 }
 
 #[test]
-fn donor_infiniti_vbmeta_rejects_duplicated_named_property() {
+fn donor_infiniti_vbmeta_accepts_identical_named_property() {
     let vbmeta = include_bytes!("fixtures/vbmeta-infiniti-IN-16.0.7.201.img");
+    let inspection = inspect_vbmeta(vbmeta).expect("identical named property derives");
+    assert_eq!(inspection.profile.system_version, 0x40000);
+    assert_eq!(inspection.profile.system_spl, 0x9a5);
     assert_eq!(
-        derive_profile(vbmeta),
-        Err(DeriveError::DuplicateProperty(
-            "com.android.build.boot.security_patch".to_owned()
-        ))
+        inspection.build_properties,
+        BuildProperties {
+            system_os_version: None,
+            system_security_patch: None,
+            vendor_security_patch: None,
+            boot_security_patch: Some("2026-05-01".to_owned()),
+        }
     );
 }
 

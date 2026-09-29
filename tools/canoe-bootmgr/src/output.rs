@@ -139,8 +139,17 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             ..
         } => format!("verified ABL sha256={sha256} gbl_patched={gbl_patched}\n"),
         Success::ImageDigest {
-            path, sha256, bytes, ..
+            path,
+            sha256,
+            bytes,
+            ..
         } => format!("digested {path} ({bytes} bytes, sha256={sha256})\n"),
+        Success::ImageZero {
+            output,
+            sha256,
+            bytes,
+            ..
+        } => format!("zeroed {output} ({bytes} bytes, sha256={sha256})\n"),
         Success::BlockWrite {
             partition,
             bytes_written,
@@ -157,11 +166,20 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             bytes,
             sha256,
             ..
+        } => format!("read {partition} to {output} ({bytes} bytes, sha256={sha256})\n"),
+        Success::Install {
+            receipt,
+            acknowledged,
+            warnings,
+            ..
+        }
+        | Success::OtaApply {
+            receipt,
+            acknowledged,
+            warnings,
+            ..
         } => format!(
-            "read {partition} to {output} ({bytes} bytes, sha256={sha256})\n"
-        ),
-        Success::Install { receipt, .. } | Success::OtaApply { receipt, .. } => format!(
-            "installed={} generation={} backup={}\n",
+            "installed={} generation={} backup={} acknowledged={} warnings={}\n",
             receipt
                 .installed
                 .iter()
@@ -169,9 +187,14 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
                 .collect::<Vec<_>>()
                 .join(","),
             receipt.generation,
-            receipt.backup_present
+            receipt.backup_present,
+            acknowledged.join(","),
+            warnings.join(",")
         ),
         Success::ToolsUpdate { files, .. } => format!("updated tools: {}\n", files.join(",")),
+        Success::ToolsInventory { inventory, .. } => {
+            format!("inventoried tools: {}\n", inventory.len())
+        }
         Success::AblLookup {
             product,
             output,
@@ -182,18 +205,35 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
         } => format!(
             "resolved ABL {product} from {source} to {output} ({bytes} bytes, sha256={sha256})\n"
         ),
-        Success::ModePlan { id, plan, .. } => format!(
-            "mode.plan id={} from={} target={} outcome={} preconditions={}\n",
-            id.as_deref().unwrap_or("<none>"),
-            plan.from_mode,
-            plan.target_mode,
-            plan.outcome.status,
-            plan.preconditions
-                .iter()
-                .map(|precondition| precondition.code)
-                .collect::<Vec<_>>()
-                .join(",")
-        ),
+        Success::ModePlan { id, plan, .. } => {
+            let from_mode = plan
+                .from_mode
+                .map_or_else(|| "unknown".to_owned(), |mode| mode.to_string());
+            let userdata_requirement = match plan.userdata.requirement {
+                crate::mode_plan::UserdataRequirement::Must => "must",
+                crate::mode_plan::UserdataRequirement::May => "may",
+                crate::mode_plan::UserdataRequirement::NotRequired => "not-required",
+            };
+            format!(
+                "mode.plan id={} from={} target={} outcome={} preconditions={} userdata={} userdata_rules={}\n",
+                id.as_deref().unwrap_or("<none>"),
+                from_mode,
+                plan.target_mode,
+                plan.outcome.status,
+                plan.preconditions
+                    .iter()
+                    .map(|precondition| precondition.code)
+                    .collect::<Vec<_>>()
+                    .join(","),
+                userdata_requirement,
+                plan.userdata
+                    .reasons
+                    .iter()
+                    .map(|reason| reason.rule.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
         Success::SystemReboot { target, .. } => format!("rebooting to {target}\n"),
         Success::VbmetaGraft { receipt, .. } => {
             format!("grafted {} ({} bytes)\n", receipt.output, receipt.bytes)
@@ -215,9 +255,11 @@ pub fn human(success: &Success) -> Result<Vec<u8>, ConfigError> {
             rollback_index,
             flags,
             release_string,
+            public_key_sha256,
             ..
         } => format!(
-            "algorithm_type={algorithm_type} rollback_index={rollback_index} flags={flags} release_string={release_string}\n"
+            "algorithm_type={algorithm_type} rollback_index={rollback_index} flags={flags} release_string={release_string} public_key_sha256={}\n",
+            public_key_sha256.as_deref().unwrap_or("unknown"),
         ),
         Success::VbmetaCheck {
             partition,

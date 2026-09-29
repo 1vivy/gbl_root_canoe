@@ -21,7 +21,12 @@ pub enum AblVerifyError {
     #[error("ABL digest mismatch: expected {expected}, got {actual}")]
     DigestMismatch { expected: String, actual: String },
     #[error("abl.verify {operation} {path}: {source}")]
-    Io { operation: &'static str, path: PathBuf, #[source] source: io::Error },
+    Io {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error(transparent)]
     Build(#[from] crate::build::BuildError),
     #[error("abl.verify returned an unexpected full-build receipt")]
@@ -38,8 +43,8 @@ impl AblVerifyError {
 }
 
 pub fn verify(request: &AblVerifyRequest) -> Result<AblVerifyReceipt, AblVerifyError> {
-    let actual = crate::build_tools::sha256_file(&request.image)
-        .map_err(|source| AblVerifyError::Io {
+    let actual =
+        crate::build_tools::sha256_file(&request.image).map_err(|source| AblVerifyError::Io {
             operation: "hash image",
             path: request.image.clone(),
             source,

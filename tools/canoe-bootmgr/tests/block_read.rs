@@ -1,8 +1,10 @@
+#![cfg(unix)]
+
 use std::fs;
 
-use canoe_bootmgr::block_read::{read_at_root, BlockReadRequest};
+use canoe_bootmgr::block_read::{BlockReadRequest, read_at_root};
 use canoe_bootmgr::block_write::{
-    write_at_root_require_block_device, BlockWriteError, BlockWriteRequest,
+    BlockWriteError, BlockWriteRequest, write_at_root_require_block_device,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -65,6 +67,11 @@ fn production_block_write_path_rejects_a_regular_partition_file() {
             image,
             snapshot: directory.path().join("snapshot.bin"),
             slot: None,
+            expected_bytes: None,
+            expected_partition_bytes: None,
+            expected_sha256: None,
+            expected_snapshot_bytes: None,
+            expected_snapshot_sha256: None,
         },
         directory.path(),
     )

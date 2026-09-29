@@ -114,7 +114,7 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<ConfigDocument, ConfigError> {
                 menu_timeout_s = parse_policy_number(value, "menu_timeout_s", MAX_MENU_TIMEOUT_S)?;
                 menu_mode = MenuMode::Menu;
             }
-            "mode" => global_mode = parse_mode(value).unwrap_or(global_mode),
+            "mode" => global_mode = parse_mode(value).unwrap_or(1),
             "devinfo-repair" => repair = DeviceInfoRepair::parse(value).unwrap_or(repair),
             "default" => default = (!value.is_empty()).then(|| value.to_owned()),
             _ => unknown.push(RawLine {

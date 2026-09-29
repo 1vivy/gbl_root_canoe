@@ -1,23 +1,27 @@
-
-
 pub use crate::block_partition::BlockError as BlockWriteError;
 
+#[cfg(not(windows))]
 use std::fs;
+#[cfg(not(windows))]
 use std::io;
-use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+#[cfg(not(windows))]
 #[path = "block_write_io.rs"]
 pub(crate) mod block_write_io;
 
+#[cfg(not(windows))]
+use block_write_io::io_error;
+#[cfg(not(windows))]
 use block_write_io::{
     corrupt_first_byte, restore_snapshot, set_writable, snapshot_target, target_size, write_image,
 };
-use block_write_io::io_error;
 
 pub(crate) use crate::block_partition::{slot_suffix, validate_partition};
+#[cfg(not(windows))]
 const BY_NAME_ROOT: &str = crate::block_partition::BY_NAME_ROOT;
 
 #[derive(Debug, Clone)]
@@ -26,11 +30,18 @@ pub struct BlockWriteRequest {
     pub image: PathBuf,
     pub snapshot: PathBuf,
     pub slot: Option<String>,
+    pub expected_bytes: Option<u64>,
+    pub expected_partition_bytes: Option<u64>,
+    pub expected_sha256: Option<String>,
+    pub expected_snapshot_bytes: Option<u64>,
+    pub expected_snapshot_sha256: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
 pub struct BlockWriteReceipt {
     pub partition: String,
+    pub snapshot_bytes: u64,
+    pub snapshot_sha256: String,
     pub node: String,
     pub bytes_written: u64,
     pub sha256: String,
@@ -57,7 +68,10 @@ pub fn write_at_root(
     root: &Path,
 ) -> Result<BlockWriteReceipt, BlockWriteError> {
     #[cfg(windows)]
-    return Err(BlockWriteError::UnsupportedPlatform);
+    {
+        let _ = (request, root);
+        Err(BlockWriteError::UnsupportedPlatform)
+    }
     #[cfg(not(windows))]
     write_at_root_inner(request, root, None, false)
 }
@@ -80,7 +94,10 @@ pub fn write_at_root_with_fault(
     fault: BlockWriteTestFault,
 ) -> Result<BlockWriteReceipt, BlockWriteError> {
     #[cfg(windows)]
-    return Err(BlockWriteError::UnsupportedPlatform);
+    {
+        let _ = (request, root, fault);
+        Err(BlockWriteError::UnsupportedPlatform)
+    }
     #[cfg(not(windows))]
     write_at_root_inner(request, root, Some(fault), false)
 }
@@ -92,11 +109,15 @@ pub fn write_at_root_require_block_device(
     root: &Path,
 ) -> Result<BlockWriteReceipt, BlockWriteError> {
     #[cfg(windows)]
-    return Err(BlockWriteError::UnsupportedPlatform);
+    {
+        let _ = (request, root);
+        Err(BlockWriteError::UnsupportedPlatform)
+    }
     #[cfg(not(windows))]
     write_at_root_inner(request, root, None, true)
 }
 
+#[cfg(not(windows))]
 fn write_at_root_inner(
     request: &BlockWriteRequest,
     root: &Path,
@@ -118,14 +139,46 @@ fn write_at_root_inner(
         return Err(BlockWriteError::NotABlockDevice { node });
     }
     let target_bytes = target_size(&node, &metadata)?;
-    let source_bytes = fs::metadata(&request.image)
-        .map_err(|source| io_error("read image metadata", &request.image, source))?
-        .len();
+    let source_file = crate::file_identity::open_readonly(&request.image)
+        .map_err(|source| io_error("open image", &request.image, source))?;
+    let source_identity = crate::file_identity::verify(
+        &source_file,
+        &request.image,
+        request.expected_bytes,
+        request.expected_sha256.as_deref(),
+    )
+    .map_err(|source| io_error("verify image", &request.image, source))?;
+    let source_bytes = source_identity.bytes;
+    if let Some(expected_partition_bytes) = request.expected_partition_bytes {
+        if source_bytes != expected_partition_bytes {
+            return Err(BlockWriteError::ExpectedPartitionSourceSize {
+                expected_partition_bytes,
+                source_bytes,
+            });
+        }
+        if target_bytes != expected_partition_bytes {
+            return Err(BlockWriteError::ExpectedPartitionTargetSize {
+                expected_partition_bytes,
+                target_bytes,
+            });
+        }
+    }
     if source_bytes == 0 || source_bytes > target_bytes {
         return Err(BlockWriteError::ImageTooLarge {
             source_bytes,
             target_bytes,
         });
+    }
+    if request.expected_snapshot_bytes.is_some() || request.expected_snapshot_sha256.is_some() {
+        let snapshot_file = crate::file_identity::open_readonly(&request.snapshot)
+            .map_err(|source| io_error("open snapshot", &request.snapshot, source))?;
+        crate::file_identity::verify(
+            &snapshot_file,
+            &request.snapshot,
+            request.expected_snapshot_bytes,
+            request.expected_snapshot_sha256.as_deref(),
+        )
+        .map_err(|source| io_error("verify snapshot", &request.snapshot, source))?;
     }
     if request.snapshot == node || request.snapshot == request.image {
         return Err(BlockWriteError::SnapshotFailed {
@@ -136,16 +189,20 @@ fn write_at_root_inner(
 
     set_writable(&node, &metadata)?;
     snapshot_target(&node, target_bytes, &request.snapshot)?;
+    let snapshot_file = crate::file_identity::open_readonly(&request.snapshot)
+        .map_err(|source| io_error("open snapshot", &request.snapshot, source))?;
+    let snapshot_identity = crate::file_identity::identity(&snapshot_file, &request.snapshot)
+        .map_err(|source| io_error("hash snapshot", &request.snapshot, source))?;
     let result = (|| {
-        write_image(&request.image, &node, source_bytes, fault)?;
+        write_image(&request.image, &source_file, &node, source_bytes, fault)?;
         if matches!(
             fault,
             Some(BlockWriteTestFault::CorruptReadback | BlockWriteTestFault::RollbackFailure)
         ) {
-            corrupt_first_byte(&node).map_err(|source| io_error("corrupt readback", &node, source))?;
+            corrupt_first_byte(&node)
+                .map_err(|source| io_error("corrupt readback", &node, source))?;
         }
-        let expected = crate::build_tools::sha256_prefix(&request.image, source_bytes)
-            .map_err(|source| io_error("hash image", &request.image, source))?;
+        let expected = source_identity.sha256.clone();
         let actual = if matches!(fault, Some(BlockWriteTestFault::Readback)) {
             return Err(io_error(
                 "hash readback",
@@ -169,16 +226,21 @@ fn write_at_root_inner(
             bytes_written: source_bytes,
             sha256: expected,
             snapshot: request.snapshot.display().to_string(),
+            snapshot_bytes: snapshot_identity.bytes,
+            snapshot_sha256: snapshot_identity.sha256.clone(),
             verified: true,
         })
     })();
     match result {
         Ok(receipt) => Ok(receipt),
         Err(error) => {
-            if matches!(fault, Some(BlockWriteTestFault::RollbackFailure)) {
-                let _ = fs::remove_file(&request.snapshot);
-            }
-            match restore_snapshot(&node, target_bytes, &request.snapshot) {
+            match restore_snapshot(
+                &node,
+                target_bytes,
+                &request.snapshot,
+                &snapshot_file,
+                fault,
+            ) {
                 Ok(()) => Err(error),
                 Err(restore) => Err(BlockWriteError::RollbackFailed {
                     snapshot: request.snapshot.clone(),
@@ -192,4 +254,3 @@ fn write_at_root_inner(
         }
     }
 }
-

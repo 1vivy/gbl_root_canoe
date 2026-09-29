@@ -1,1 +1,1 @@
-{"operation":"tools.update","ok":true,"files":["a.tool","z.tool"]}
+{"operation":"tools.update","ok":true,"files":["a.tool","z.tool"],"inventory":[{"path":"tests/fixtures/tools-update-source/a.tool","bytes":15,"sha256":"5404f200e5d8a6c735c1878825bee55d6803987d8ed454af81063c48bed15699"},{"path":"tests/fixtures/tools-update-source/z.tool","bytes":15,"sha256":"d558d1819ea3947ecf85fc0f33e3490aa60fd4d730f0dc8a14eedbee843b9570"}]}

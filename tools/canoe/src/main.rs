@@ -4,6 +4,7 @@ mod error;
 mod layout;
 mod local;
 mod stage;
+mod stage_mode;
 mod stage_report;
 mod ui;
 mod version;
@@ -14,7 +15,9 @@ use std::ffi::OsString;
 use error::CanoeError;
 use ui::run_entry;
 
-const COMMANDS: [&str; 8] = ["build", "install", "entry", "config", "default", "bls", "slot", "source"];
+const COMMANDS: [&str; 8] = [
+    "build", "install", "entry", "config", "default", "bls", "slot", "source",
+];
 
 fn forward(command: &str, args: &[String]) -> i32 {
     let mut forwarded = Vec::with_capacity(args.len() + 2);
@@ -29,7 +32,10 @@ fn run_command(command: &str, args: &[String]) -> Result<i32, CanoeError> {
         "build" => Ok(run_entry("canoe build", build::run, args)),
         "install" => Ok(run_entry("canoe install", stage::run, args)),
         "entry" | "config" | "default" | "bls" | "slot" | "source" => Ok(forward(command, args)),
-        _ => Err(CanoeError::message(format!("unknown command '{command}'\n\n{}", wizard::USAGE))),
+        _ => Err(CanoeError::message(format!(
+            "unknown command '{command}'\n\n{}",
+            wizard::USAGE
+        ))),
     }
 }
 
@@ -43,17 +49,23 @@ fn run(args: &[String]) -> Result<i32, CanoeError> {
     }
     if args[0] == "--version" {
         if args.len() > 1 {
-            return Err(CanoeError::message(format!("unexpected argument: {}", args[1])));
+            return Err(CanoeError::message(format!(
+                "unexpected argument: {}",
+                args[1]
+            )));
         }
         ui::emit(version::VERSION);
         return Ok(0);
     }
     let command_offset = usize::from(args[0] == "--non-interactive");
-    let command = args.get(command_offset).ok_or_else(|| {
-        CanoeError::message(format!("nothing to do\n\n{}", wizard::USAGE))
-    })?;
+    let command = args
+        .get(command_offset)
+        .ok_or_else(|| CanoeError::message(format!("nothing to do\n\n{}", wizard::USAGE)))?;
     if !COMMANDS.contains(&command.as_str()) {
-        return Err(CanoeError::message(format!("unknown command '{command}'\n\n{}", wizard::USAGE)));
+        return Err(CanoeError::message(format!(
+            "unknown command '{command}'\n\n{}",
+            wizard::USAGE
+        )));
     }
     run_command(command, &args[(command_offset + 1)..])
 }

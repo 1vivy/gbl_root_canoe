@@ -1,5 +1,6 @@
 use crate::artifact::ArtifactSpec;
 use crate::cli::{CliDeviceInfoRepair, CliMenuMode, CliRole};
+use crate::file_identity::FileIdentity;
 use serde::Deserialize;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -44,12 +45,18 @@ pub enum JsonRequest {
         #[serde(default)]
         bytes: Option<u64>,
     },
+    #[serde(rename = "image.zero")]
+    ImageZero { output: PathBuf, bytes: u64 },
     #[serde(rename = "tools.update")]
     ToolsUpdate {
         source: PathBuf,
         #[serde(default)]
         boot_root_source: Option<PathBuf>,
+        #[serde(default)]
+        inventory: Vec<FileIdentity>,
     },
+    #[serde(rename = "tools.inventory")]
+    ToolsInventory { source: PathBuf },
     #[serde(rename = "block.write")]
     BlockWrite {
         partition: String,
@@ -57,6 +64,16 @@ pub enum JsonRequest {
         snapshot: PathBuf,
         #[serde(default)]
         slot: Option<String>,
+        #[serde(default)]
+        expected_bytes: Option<u64>,
+        #[serde(default)]
+        expected_partition_bytes: Option<u64>,
+        #[serde(default)]
+        expected_sha256: Option<String>,
+        #[serde(default)]
+        expected_snapshot_bytes: Option<u64>,
+        #[serde(default)]
+        expected_snapshot_sha256: Option<String>,
     },
     #[serde(rename = "block.read")]
     BlockRead {
@@ -109,6 +126,8 @@ pub enum JsonRequest {
         target_vbmeta: Option<PathBuf>,
         #[serde(default)]
         target_image: Option<PathBuf>,
+        #[serde(default)]
+        tools: Option<PathBuf>,
     },
     #[serde(rename = "mode.plan")]
     ModePlan {
@@ -117,6 +136,8 @@ pub enum JsonRequest {
         target_mode: u8,
         #[serde(default)]
         from_mode: Option<u8>,
+        #[serde(default)]
+        prior_canoe: bool,
         #[serde(default)]
         current_vbmeta: Option<PathBuf>,
         #[serde(default)]
@@ -181,11 +202,42 @@ pub enum JsonRequest {
         allow_new_signer: bool,
         #[serde(default)]
         boot_root_source: Option<PathBuf>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        from_mode: Option<u8>,
+        #[serde(default)]
+        prior_canoe: bool,
+        #[serde(default)]
+        acknowledge: Vec<String>,
+        #[serde(default)]
+        current_vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        target_vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        target_image: Option<PathBuf>,
+        #[serde(default)]
+        staged_loader_bytes: Option<u64>,
+        #[serde(default)]
+        staged_loader_sha256: Option<String>,
+        #[serde(default)]
+        staged_gm2p_bytes: Option<u64>,
+        #[serde(default)]
+        staged_gm2p_sha256: Option<String>,
+        #[serde(default)]
+        staged_tzmap_bytes: Option<u64>,
+        #[serde(default)]
+        staged_tzmap_sha256: Option<String>,
+        #[serde(default)]
+        staged_tools: Vec<FileIdentity>,
     },
     #[serde(rename = "ota-apply")]
     OtaApply {
+        #[serde(default)]
         target_slot: Option<String>,
+        #[serde(default)]
         bootctl_output: Option<String>,
+        #[serde(default)]
         gpt_active_slot: Option<String>,
         staged: PathBuf,
         #[serde(default)]
@@ -194,6 +246,34 @@ pub enum JsonRequest {
         allow_new_signer: bool,
         #[serde(default)]
         boot_root_source: Option<PathBuf>,
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        from_mode: Option<u8>,
+        #[serde(default)]
+        prior_canoe: bool,
+        #[serde(default)]
+        acknowledge: Vec<String>,
+        #[serde(default)]
+        current_vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        target_vbmeta: Option<PathBuf>,
+        #[serde(default)]
+        target_image: Option<PathBuf>,
+        #[serde(default)]
+        staged_loader_bytes: Option<u64>,
+        #[serde(default)]
+        staged_loader_sha256: Option<String>,
+        #[serde(default)]
+        staged_gm2p_bytes: Option<u64>,
+        #[serde(default)]
+        staged_gm2p_sha256: Option<String>,
+        #[serde(default)]
+        staged_tzmap_bytes: Option<u64>,
+        #[serde(default)]
+        staged_tzmap_sha256: Option<String>,
+        #[serde(default)]
+        staged_tools: Vec<FileIdentity>,
     },
     #[serde(rename = "vbmeta.graft", alias = "graft", alias = "vbmetaport")]
     VbmetaGraft {
@@ -249,7 +329,16 @@ pub enum JsonRequest {
         timeout_seconds: u64,
     },
     #[serde(rename = "fastboot.flash")]
-    FastbootFlash { partition: String, image: PathBuf },
+    FastbootFlash {
+        partition: String,
+        image: PathBuf,
+        #[serde(default)]
+        expected_bytes: Option<u64>,
+        #[serde(default)]
+        expected_partition_bytes: Option<u64>,
+        #[serde(default)]
+        expected_sha256: Option<String>,
+    },
     #[serde(rename = "fastboot.reboot")]
     FastbootReboot {
         #[serde(default)]
@@ -262,7 +351,7 @@ fn default_fastboot_target() -> String {
 }
 
 const fn default_fastboot_timeout_seconds() -> u64 {
-    30
+    10
 }
 
 #[derive(Debug, Error)]
@@ -324,7 +413,7 @@ fn base64_value(byte: u8) -> Option<u8> {
 }
 #[cfg(test)]
 mod tests {
-    use super::parse_json;
+    use super::{JsonRequest, parse_json};
 
     #[test]
     fn every_dotted_verb_deserializes() {
@@ -332,6 +421,7 @@ mod tests {
             serde_json::json!({"verb":"protocol.version"}),
             serde_json::json!({"verb":"build","abl":"a","probe":true}),
             serde_json::json!({"verb":"abl.verify","image":"a"}),
+            serde_json::json!({"verb":"image.zero","output":"a","bytes":4096}),
             serde_json::json!({"verb":"block.write","partition":"boot","image":"a","snapshot":"b"}),
             serde_json::json!({"verb":"config.show"}),
             serde_json::json!({"verb":"config.set-policy"}),
@@ -365,5 +455,15 @@ mod tests {
             let parsed = parse_json(&bytes).expect("dotted verb");
             let _ = parsed.into_command();
         }
+    }
+
+    #[test]
+    fn omitted_fastboot_identify_timeout_uses_the_bounded_refresh_budget() {
+        let request = parse_json(br#"{"verb":"fastboot.identify"}"#).expect("identify request");
+        let JsonRequest::FastbootIdentify { timeout_seconds } = request else {
+            panic!("identify request variant");
+        };
+
+        assert_eq!(timeout_seconds, 10);
     }
 }

@@ -1,6 +1,6 @@
 use std::fs;
 
-use canoe_bootmgr::image_digest::{digest, ImageDigestError, ImageDigestRequest};
+use canoe_bootmgr::image_digest::{ImageDigestError, ImageDigestRequest, digest};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
