@@ -84,6 +84,7 @@
 #include "SuperFbOemWatchdog.h"
 #include "SuperFbLog.h"
 #include "SuperFbBootOnce.h"
+#include "SuperFbLaunchPolicy.h"
 
 #define MAX_APP_STR_LEN 64
 #define MAX_NUM_FS 10
@@ -322,6 +323,13 @@ LinuxLoaderEntry (IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
 
 enter_fastboot:
     if (EnterFastboot) {
+      /*
+       * The fastboot loop is a separate entry path with no sight of the mode
+       * decided here, and a command that launches from inside it has to run as the
+       * session it was started in rather than as a policy that path invents for
+       * itself. Written at the one point every route into that loop passes.
+       */
+      SfbSetLaunchSessionMode (Mode);
       SfbShowFastbootMode ();
       DEBUG ((EFI_D_INFO, "SFB: bootflow fastboot=1\n"));
     }

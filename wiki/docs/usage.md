@@ -114,18 +114,56 @@ does not prove physical debugging effectiveness.
 ## Boot once
 
 To select a destination for only the next BDS start, open **Advanced → Arm boot
-once** and choose an entry. Super Fastboot exposes the same operation as
-`fastboot oem boot-once:<selector>`; use `fastboot oem boot-once-clear` to
-cancel it. A selector is a resolvable `canoe.cfg` entry id, `bls:<stem>`, or
-`fastboot` for the resident Super Fastboot action.
+once** and choose an entry. Super Fastboot provides these host commands:
 
-The request is stored as the NUL-terminated ASCII command
-`canoe-once:<selector>` in the 32-byte Android BCB command field at misc LBA 0.
-Selectors use `[A-Za-z0-9._:-]` and are at most 20 bytes; values that do not fit
-are refused rather than truncated. BDS clears and flushes the command field
-before resolving or launching the target. A failed clear therefore falls back
-to normal boot policy instead of risking a boot loop. Bytes after the command
-field are preserved.
+```text
+fastboot oem boot-once <selector> [<target>]
+fastboot oem boot-once:<selector>
+fastboot oem boot-once-clear
+fastboot oem boot-direct <selector> [<target>]
+```
+
+`boot-once` arms the record and answers without resetting or launching.
+`boot-once:<selector>` is the pre-existing colon form and always writes a plain
+record. `boot-once-clear` clears the record. `boot-direct` resolves and launches
+the entry immediately without resetting or arming a boot-once record: it
+answers the host first, then hands the link to the launched entry.
+
+For both selection commands, `<selector>` is a resolvable `canoe.cfg` entry id,
+`bls:<stem>`, or `fastboot` for the resident Super Fastboot action.
+`boot-direct` alone also accepts the literal `default`, which selects the entry
+to which `canoe.cfg`'s `default` resolves. It fails if no default is configured
+and never falls back to the currently highlighted row. `boot-once default` is
+refused because a stored record must name a stable target.
+
+The optional `<target>` is exactly `recovery` or `fastbootd`, the two reboot
+targets that write a standard command into the bootloader control block. A
+target is accepted only when the resolved row is a managed Android ABL entry;
+otherwise the command fails and writes nothing. Without a target,
+`boot-direct` performs no BCB write, while `boot-once` writes only its Canoe
+record and no standard reboot-target command.
+
+The record occupies only the 32-byte Android BCB command field at misc LBA 0
+and is NUL-terminated ASCII. The untagged grammar is
+`canoe-once:<selector>`; its 11-byte `canoe-once:` prefix and terminating NUL
+leave a 20-byte selector. A tagged record is
+`canoe-once:<selector>+<target>`. Its selector budget is
+`32 - 11 - 1 - len(tag) - 1` bytes: 11 bytes for `recovery` because
+`+recovery` costs 9 bytes, and 10 bytes for `fastbootd` because `+fastbootd`
+costs 10. Selectors use `[A-Za-z0-9._:-]`. An oversized selector is refused before
+anything is written and is never truncated. Bytes after the command field are
+untouched.
+
+BDS clears and flushes the record before resolving or launching the target. A
+failed clear therefore falls back to normal boot policy instead of risking a
+boot loop. A tagged record whose row no longer resolves, or whose row is not a
+managed Android ABL entry, takes the existing **Boot-once target unavailable**
+notice path, launches nothing, and leaves normal boot policy in effect. If a
+launch fails after the tagged record was spent and its standard target command
+was written, that command remains in `misc`, so the next boot still follows
+that target; the menu shows **Reboot target command pending** instead of
+claiming normal policy applies. The two outcomes share one reserved notice row,
+so only one notice can appear.
 
 Boot once neither resets the phone when armed nor writes `canoe.cfg`. It is
 consumed on the next BDS start even if the selected child fails or returns; an
@@ -159,19 +197,34 @@ While BDS waits for a host it shows:
 - **Power Off**; and
 - **Restart**.
 
-From a host, the supported reboot targets are:
+From a host, the supported reboot targets and direct-entry command are:
 
 ```bash
 fastboot reboot              # Android
 fastboot reboot recovery     # recovery
 fastboot reboot bootloader   # bootloader target
 fastboot reboot fastboot     # userspace Fastbootd
+fastboot oem boot-direct <selector> [<target>]
 ```
 
-Other targets fail. Recovery and Fastbootd prepare the bootloader control block
-in `misc`, flush it, and restart through the ordinary boot path. Firmware and
-the selected boot chain must support that destination; this is not a stock-ABL
-escape. System clears a known recovery/Fastbootd command before restarting.
+`boot-direct` is the way to leave Super Fastboot for a selected entry without a
+reset. It resolves the entry first. When a target is supplied, it writes and
+flushes the standard BCB command, answers the host, then hands the link to the
+entry it launches. Without a target it performs no BCB write. It never arms a
+boot-once record.
+
+If the handoff fails, the entry is deliberately not launched: the device stays
+in Super Fastboot and the session tries to restore the link. Because the host
+was answered before the handoff, it still receives `OKAY`, so a success response
+may be followed by no boot. The device log records
+`SFB: MARK boot-once handoff=failed` and
+`SFB: MARK boot-direct-release status=...` in that case.
+
+Other reboot targets fail. Recovery and Fastbootd prepare the bootloader
+control block in `misc`, flush it, and restart through the ordinary boot path.
+Firmware and the selected boot chain must support that destination; this is not
+a stock-ABL escape. System clears a known recovery/Fastbootd command before
+restarting.
 
 
 ## Saving a BDS preference

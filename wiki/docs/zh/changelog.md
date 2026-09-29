@@ -41,7 +41,14 @@
 - **Super Fastboot 与 USB**：BDS 自有 fastboot 会话豁免关键分区限制（`super` 内
   分区除外），支持 `fastboot boot <image>.efi`、多种重启目标，以及
   `fastboot oem mass-storage:<target>` 导出存储。共有三个目标：`boot-root`
-  （普通可移动 FAT）、原始 `persist` 与 `logfs`。
+  （普通可移动 FAT）、原始 `persist` 与 `logfs`。boot-once 记录新增带标签形式与
+  直接启动动词：`fastboot oem boot-once <selector> [<target>]` 与
+  `fastboot oem boot-direct <selector> [<target>]`；标签只能是 `recovery` 或
+  `fastbootd`，且只有 `boot-direct` 接受字面量 `default`。带标签记录为
+  `canoe-once:<selector>+<target>`，同一 32 字节 BCB 命令字段中的 selector
+  预算因此从 20 字节降为 11（`recovery`）与 10（`fastbootd`）字节。消费记录时，两种
+  互斥的结果共用一个保留提示行：目标不可用时继续采用正常启动策略；目标命令已写入后
+  启动失败时，该命令留在 `misc` 中，供下一次启动遵循。
 - **固件与发布**：CI 构建 `BDS.efi` 与八个独立 EFI 工具，并附 `manifest.json` 和
   `SHA256SUMS`；发布一律先创建草稿，只有带 `-` 后缀的版本才标记为预发布。
 - **修复**：回合上游 ext4 组描述符 CRC16 修复；FAT 栈启动时不再发出

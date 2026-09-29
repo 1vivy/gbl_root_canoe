@@ -32,7 +32,7 @@ EFI_HANDLE gImageHandle;
 EFI_GUID gEfiSecurityArchProtocolGuid;
 EFI_GUID gEfiSecurity2ArchProtocolGuid;
 EFI_GUID gEfiLoadedImageProtocolGuid;
-BOOLEAN SfbBootOnceTakeRejectedNotice (VOID) { return FALSE; }
+SFB_BOOT_ONCE_NOTICE SfbBootOnceTakeNotice (VOID) { return SfbBootOnceNoticeNone; }
 
 static EFI_FILE_PROTOCOL mRoot;
 static EFI_HANDLE mVolume = (EFI_HANDLE)(UINTN)0x1234;

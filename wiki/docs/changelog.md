@@ -145,6 +145,20 @@ userspace-fastbootd reboot targets, and exports storage over USB through
 ordinary removable FAT storage, raw `persist`, and `logfs`. Raw persist export
 is a separate, deliberate operation.
 
+Boot-once records gained a tagged form and a direct-launch verb. `fastboot oem
+boot-once <selector> [<target>]` and `fastboot oem boot-direct <selector>
+[<target>]` join the pre-existing colon form and the clear verb. Only
+`recovery` and `fastbootd` are accepted as targets, only a managed Android ABL
+row may carry one, and only `boot-direct` also accepts the literal `default`;
+it resolves and launches without a reset and never arms a record. A tagged
+record reads `canoe-once:<selector>+<target>` in the same 32-byte BCB command
+field, so it budgets 11 selector bytes for `recovery` and 10 for `fastbootd`
+instead of the untagged 20. An oversized selector is refused before anything is
+written. Consumption reports two mutually exclusive outcomes through one
+reserved notice row: an unavailable target leaves normal policy in effect,
+while a failed launch after the target command was written leaves that command
+pending in `misc` for the next boot.
+
 ### Firmware artifacts and release pipeline
 
 Firmware CI builds `BDS.efi` plus eight standalone EFI tools — `ArbTools`,

@@ -112,6 +112,9 @@ found at
 #include "../../Application/LinuxLoader/SuperFbBootRoot.h"
 #include "../../Application/LinuxLoader/SuperFbContainer.h"
 #include "../../Application/LinuxLoader/SuperFbBootOnce.h"
+/* The session mode a boot-direct launch runs under is published by
+   LinuxLoader.c before this loop starts; nothing here may invent one. */
+#include "../../Application/LinuxLoader/SuperFbLaunchPolicy.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -1260,6 +1263,51 @@ STATIC VOID WaitForTransferComplete (VOID)
     }
   }
 }
+
+/*
+ * Budget for the bounded acknowledgement wait below: at most 50 ms, invisible
+ * next to a boot, and short enough that a host which stopped reading cannot hold
+ * the session there for long.
+ */
+#define SFB_FASTBOOT_ACK_POLLS     50
+#define SFB_FASTBOOT_ACK_STALL_US  1000
+
+/*
+ * Bounded form of the wait above, for the one place that has to know an answer
+ * reached the host before the link is handed over: FastbootAck only queues the
+ * response with Send, so putting a release after it orders the two calls and
+ * proves nothing about the response itself.
+ *
+ * The unbounded helper cannot be used there. It calls HandleEvent in a while (1)
+ * with no exit but the notification it wants, and the fastboot watchdog is
+ * disabled for the session, so a host that stops reading mid-exchange would leave
+ * this image spinning in front of a launch that never happens. HandleEvent is
+ * documented as a periodic poll, so this polls a fixed number of times, stalls
+ * briefly between polls, and reports whether the device-to-host completion was
+ * seen - a miss is worth a log line, not an unbounded wait.
+ */
+STATIC BOOLEAN
+WaitForTransferCompleteBounded (IN UINTN MaxPolls)
+{
+  USB_DEVICE_EVENT      Msg;
+  USB_DEVICE_EVENT_DATA Payload;
+  UINTN                 PayloadSize;
+  UINTN                 Poll;
+
+  for (Poll = 0; Poll < MaxPolls; Poll++) {
+    GetFastbootDeviceData ()->UsbDeviceProtocol->HandleEvent (&Msg,
+                                                             &PayloadSize,
+                                                             &Payload);
+    if (UsbDeviceEventTransferNotification == Msg &&
+        1 == USB_INDEX_TO_EP (Payload.TransferOutcome.EndpointIndex) &&
+        USB_ENDPOINT_DIRECTION_IN ==
+          USB_INDEX_TO_EPDIR (Payload.TransferOutcome.EndpointIndex)) {
+      return TRUE;
+    }
+    gBS->Stall (SFB_FASTBOOT_ACK_STALL_US);
+  }
+  return FALSE;
+}
 #ifdef ENABLE_UPDATE_PARTITIONS_CMDS
 STATIC EFI_STATUS
 FetchParseHex (IN CONST CHAR8 *Token, OUT UINT64 *Value)
@@ -2029,7 +2077,11 @@ FastbootCmdsUnInit (VOID)
     }
   }
   FastbootUnInit ();
-  GetFastbootDeviceData ()->UsbDeviceProtocol->Stop ();
+  /* Release through the flag-tracking helper: it Stops only a gadget the
+   * vendor stack still holds, so the FastbootUsbDeviceStop that follows this
+   * call on the exit path does not Stop the same controller twice. The
+   * vendor status of this Stop was never consumed here. */
+  FastbootUsbDeviceRelease ();
   return EFI_SUCCESS;
 }
 
@@ -2348,6 +2400,40 @@ CmdReboot (IN CONST CHAR8 *arg, IN VOID *data, IN UINT32 sz)
 }
 
 /*
+ * Answer the host and hand the USB link over to the launch about to happen. The
+ * host is answered before the link is touched, exactly as CmdBoot does it:
+ * FastbootUsbDeviceRelease takes the controller away from the fastboot loop and
+ * nothing after it can carry a FAIL.
+ *
+ * The release status is the return value, because a release that failed retains
+ * ownership - the same rule the mass-storage path follows when it refuses to
+ * announce over a live LUN. SfbBootOnceExecute skips the launch on a failure and
+ * reports the post-handoff outcome, which is what makes CmdOem reconnect and try
+ * to restore the link the failed Stop left unknown, instead of handing a child a
+ * controller this image could not give up.
+ */
+STATIC EFI_STATUS
+CmdOemBootLaunchReady (IN VOID *Context)
+{
+  EFI_STATUS Status;
+  BOOLEAN    Acked;
+
+  (VOID)Context;
+  FastbootOkay ("");
+  /*
+   * Send only queues the answer, so the release below is told whether the host
+   * actually took it: a miss means a possibly truncated OKAY, which belongs in
+   * the log instead of staying a silent race with the handoff.
+   */
+  Acked = WaitForTransferCompleteBounded (SFB_FASTBOOT_ACK_POLLS);
+  DEBUG ((EFI_D_ERROR, "SFB: MARK boot-direct-ack complete=%u\n",
+          (UINT32)Acked));
+  Status = FastbootUsbDeviceRelease ();
+  DEBUG ((EFI_D_ERROR, "SFB: MARK boot-direct-release status=%r\n", Status));
+  return Status;
+}
+
+/*
  * Fastboot's command transport and the mass-storage gadget share the USB
  * controller. StartDevice takes the link away from fastboot and StopDevice
  * restores it, so the host must receive its response before export starts.
@@ -2372,28 +2458,80 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
     FastbootFail ("unknown oem command");
     return;
   }
-  if (AsciiStrCmp (Arg, "boot-once-clear") == 0) {
-    WaitForFlashFinished ();
-    Status = RebootTargetBootOnceClear ();
-    if (EFI_ERROR (Status)) {
-      FastbootFail ("could not clear boot-once target");
-    } else {
-      FastbootOkay ("");
-    }
-    return;
-  }
 
-  if (AsciiStrnCmp (Arg, "boot-once:", 10) == 0) {
-    WaitForFlashFinished ();
-    Status = SfbBootOnceArm (Arg + 10);
-    if (EFI_ERROR (Status)) {
-      FastbootFail ("unknown or invalid boot-once target");
-    } else {
-      FastbootOkay ("");
-    }
-    return;
-  }
+  /*
+   * Boot-once verbs, parsed rather than pattern-matched here: arm a record for
+   * the next start, clear it, or resolve and launch now. A form the parser does
+   * not classify as one of these stays available to the OEM commands below, and
+   * a malformed one is answered as malformed instead of being guessed at.
+   */
+  {
+    SFB_BOOT_ONCE_VERB        Verb;
+    SFB_BOOT_ONCE_REQUEST     Request;
+    SFB_BOOT_ONCE_EXEC_RESULT Exec;
+    CHAR8                     Selector[REBOOT_BOOT_ONCE_SELECTOR_BYTES];
 
+    Status = SfbBootOnceParseOemArg (Arg, &Verb, Selector, &Request.Target);
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("invalid boot-once argument");
+      return;
+    }
+
+    if (Verb == SfbBootOnceVerbClear) {
+      WaitForFlashFinished ();
+      Status = RebootTargetBootOnceClear ();
+      if (EFI_ERROR (Status)) {
+        FastbootFail ("could not clear boot-once target");
+      } else {
+        FastbootOkay ("");
+      }
+      return;
+    }
+
+    if (Verb == SfbBootOnceVerbOnce) {
+      /* Arming is the whole command: it never resets and never launches, so the
+       * record is still there for the next BDS start. */
+      WaitForFlashFinished ();
+      Status = SfbBootOnceArm (Selector, Request.Target);
+      if (EFI_ERROR (Status)) {
+        FastbootFail ("unknown or invalid boot-once target");
+      } else {
+        FastbootOkay ("");
+      }
+      return;
+    }
+
+    if (Verb == SfbBootOnceVerbDirect) {
+      Request.Selector = Selector;
+      Request.Mode = SfbGetLaunchSessionMode ();
+      Request.AllowDefault = TRUE;
+      WaitForFlashFinished ();
+      Exec = SfbBootOnceExecute (&Request, CmdOemBootLaunchReady, NULL, NULL);
+      /*
+       * The Super Fastboot row is the session already running, so it is answered
+       * and the link is kept. A launch took the link with it and has to be given
+       * back. A failure happened while the link was still ours, which is why the
+       * FAIL can still be sent.
+       */
+      if (Exec == SfbBootOnceExecFastboot) {
+        FastbootOkay ("");
+        return;
+      }
+      if (Exec == SfbBootOnceExecFailed) {
+        /*
+         * By contract this is the only failure reachable here: a launch outcome
+         * hands the link over and always comes back as SfbBootOnceExecReturned,
+         * so no FAIL is ever sent over a gadget the launch already stopped.
+         */
+        FastbootFail ("could not launch boot target");
+        return;
+      }
+      FastbootUsbReconnect ();
+      DEBUG ((EFI_D_ERROR, "SFB: MARK boot-direct-return exec=%u\n",
+              (UINT32)Exec));
+      return;
+    }
+  }
 
   /*
    * oem log-flush: persist the session so far into the next rotation slot on
@@ -2693,6 +2831,7 @@ CmdBoot (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
    * ============================================ */
   if (IsEfiInBootImg (hdr, Size, &EfiData, &EfiSize)) {
     EFI_STATUS Status;
+    BOOLEAN    Acked;
     DEBUG ((EFI_D_INFO, "CmdBoot: EFI image in boot.img, size=%u\n", EfiSize));
 
     /* A RAM-loaded BDS or other EFI child may mount the same backing disk.
@@ -2703,9 +2842,30 @@ CmdBoot (CONST CHAR8 *Arg, VOID *Data, UINT32 Size)
       return;
     }
     FastbootOkay ("Booting EFI image...");
-    FastbootUsbDeviceStop ();
+    /*
+     * The answer is queued by Send and the link is about to be given to the
+     * child, so the release is told whether the host took it: a miss means the
+     * status may be truncated, which the log records instead of hiding.
+     */
+    Acked = WaitForTransferCompleteBounded (SFB_FASTBOOT_ACK_POLLS);
+    DEBUG ((EFI_D_ERROR, "SFB: MARK fb-child-ack complete=%u\n",
+            (UINT32)Acked));
+    /* Release, not tear down: FastbootUsbDeviceStop frees the transfer
+     * buffers and the descriptor pools, and this session has to survive both
+     * a child that returns control and a second "fastboot boot" after that.
+     * Stop leaves all of them alive for the resume below. */
+    Status = FastbootUsbDeviceRelease ();
+    DEBUG ((EFI_D_ERROR, "SFB: MARK fb-child-release status=%r\n", Status));
 
-     BootEfiImage (EfiData, EfiSize);
+    Status = BootEfiImage (EfiData, EfiSize);
+    /* A RAM child may hand control back - a load that failed, or a payload
+     * that returns deliberately. The release above kept this session's
+     * buffers and descriptors for exactly this case, so take the link back
+     * the same way a mass-storage export does. Without it the loop would
+     * resume with a stopped gadget and the next host command would never
+     * reach AcceptCmd. */
+    FastbootUsbReconnect ();
+    DEBUG ((EFI_D_ERROR, "SFB: MARK fb-child-return status=%r\n", Status));
     return;
   }
   FastbootFail ("No EFI image found in boot.img");

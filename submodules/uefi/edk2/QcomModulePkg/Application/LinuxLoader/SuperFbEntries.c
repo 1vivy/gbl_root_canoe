@@ -1330,7 +1330,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
   UINTN ReservedRows;
   UINTN Unconfigured;
   UINTN Index;
-  BOOLEAN BootOnceRejected;
+  SFB_BOOT_ONCE_NOTICE BootOnceNotice;
 
   ZeroMem (Menu, sizeof (*Menu));
   ZeroMem (&Config, sizeof (Config));
@@ -1341,7 +1341,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
   Menu->MenuTimeoutSeconds = SFB_CONFIG_MENU_TIMEOUT_DEFAULT;
   Menu->ShowBooting = TRUE;
   Menu->LockPolicy = SfbConfigLockAsNeeded;
-  BootOnceRejected = SfbBootOnceTakeRejectedNotice ();
+  BootOnceNotice = SfbBootOnceTakeNotice ();
 
   if (FirstRun) {
     SfbAppendBuiltIn (Menu, SfbEntrySetupFastboot, L"Entering Super Fastboot");
@@ -1396,7 +1396,7 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
                  ((Menu->ConfigValid &&
                    (Menu->RejectedLines != 0 || Config.DefaultSpecified))
                     ? 1 : 0) +
-                 (BootOnceRejected ? 1 : 0) +
+                 (BootOnceNotice != SfbBootOnceNoticeNone ? 1 : 0) +
                  (Menu->SlotMismatch ? 1 : 0) +
                  (Menu->ConfigPrevious ? 1 : 0);
   while (Menu->Count > SFB_MAX_ENTRIES - ReservedRows) {
@@ -1427,10 +1427,21 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
       L"Unknown or invalid lines, or a missing default target.");
   }
 
-  if (BootOnceRejected) {
+  /*
+   * Two different truths share one reserved row, because the row count is fixed
+   * before the entries are appended and only one of them can ever be true: either
+   * nothing was written for the record, or the record was spent and the standard
+   * reboot-target command it named is sitting in misc waiting for the next boot.
+   */
+  if (BootOnceNotice == SfbBootOnceNoticeRecordDropped) {
     SfbAppendNotice (
       Menu, L"Boot-once target unavailable",
       L"The record was cleared. Normal boot policy applies.");
+  } else if (BootOnceNotice == SfbBootOnceNoticeRebootTargetPending) {
+    SfbAppendNotice (
+      Menu, L"Reboot target command pending",
+      L"The record was spent, but its target command is set: the next boot "
+      L"follows that target.");
   }
   if (Menu->ConfigPrevious) {
     SfbAppendNotice (

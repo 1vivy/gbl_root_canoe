@@ -25,6 +25,7 @@ STATIC EFI_SECURITY2_FILE_AUTHENTICATION      mSfbOrigSec2Auth;
 STATIC SFB_CONFIG_LOCK_POLICY mSfbLockPolicy = SfbConfigLockAsNeeded;
 STATIC SFB_BOOT_MODE mSfbRequestedMode = SfbBootModeHonestUnlocked;
 STATIC BOOLEAN mSfbRequestedModeValid = FALSE;
+STATIC SFB_BOOT_MODE mSfbSessionMode = SfbBootModeHonestUnlocked;
 STATIC SFB_OBSERVED_DEVINFO mSfbInitialDeviceInfo;
 
 VOID
@@ -39,6 +40,18 @@ SfbSetLaunchRequestedMode (IN SFB_BOOT_MODE RequestedMode)
 {
   mSfbRequestedMode = RequestedMode;
   mSfbRequestedModeValid = (BOOLEAN)(RequestedMode <= SfbBootModeKmProfile);
+}
+
+VOID
+SfbSetLaunchSessionMode (IN SFB_BOOT_MODE SessionMode)
+{
+  mSfbSessionMode = SessionMode;
+}
+
+SFB_BOOT_MODE
+SfbGetLaunchSessionMode (VOID)
+{
+  return mSfbSessionMode;
 }
 
 STATIC

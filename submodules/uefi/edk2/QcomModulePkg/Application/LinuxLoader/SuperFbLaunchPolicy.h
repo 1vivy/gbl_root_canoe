@@ -49,6 +49,19 @@ SfbSetLaunchLockPolicy (IN SFB_CONFIG_LOCK_POLICY Policy);
 VOID
 SfbSetLaunchRequestedMode (IN SFB_BOOT_MODE RequestedMode);
 
+/*
+ * Session mode the fastboot loop runs under, published once before that loop
+ * starts. It exists because the loop is a separate entry path with no sight of
+ * the boot decision that reached it, and a launch from inside it has to run as
+ * the session it was started in. Never published means the honest unlocked
+ * default, so nothing here can claim a lock state the session never chose.
+ */
+VOID
+SfbSetLaunchSessionMode (IN SFB_BOOT_MODE SessionMode);
+
+SFB_BOOT_MODE
+SfbGetLaunchSessionMode (VOID);
+
 /* Run the real managed-image lifecycle. The caller has already preloaded
  * drivers; this function performs prepare, LoadImage, StartImage, and the
  * required restore/disarm boundaries using gBS directly.

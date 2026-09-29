@@ -105,6 +105,15 @@ found at
 static FastbootDeviceData Fbd;
 static USB_DEVICE_DESCRIPTOR_SET DescSet;
 
+/*
+ * TRUE while the vendor stack holds the endpoints and the descriptor set from
+ * a successful StartEx. It exists so a release that a child launch or an
+ * export did not undo is not Stopped twice: Stop may only be called on a
+ * started controller, and Stop is what a resumable release and the final
+ * teardown both need.
+ */
+STATIC BOOLEAN mUsbDeviceStarted;
+
 STATIC
 CONST
 struct {
@@ -286,6 +295,7 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
     SfbReportStatus (L"Fastboot USB did not start", Status);
     return EFI_NOT_STARTED;
   }
+  mUsbDeviceStarted = TRUE;
 
   /* Allocate buffers required to receive the data from Host*/
   Status = Fbd.UsbDeviceProtocol->AllocateTransferBuffer (USB_BUFF_SIZE,
@@ -311,8 +321,37 @@ STATIC EFI_STATUS FastbootUsbDeviceStart (VOID)
 }
 
 /*
- * Bring the gadget back after a mass-storage export borrowed the controller.
- * The export's StopDevice restores the fastboot descriptor set inside the
+ * Hand the controller to a RAM child without destroying this session.
+ *
+ * Stop is the only release the descriptor set and the transfer buffers
+ * survive: the vendor stack drops the endpoints, the pointers below stay
+ * valid, and FastbootUsbReconnect can StartEx the same descriptor set and
+ * re-prime the same receive buffer if control ever comes back. The buffer
+ * frees in FastbootUsbDeviceStop would not survive that - they leave every
+ * pointer dangling for the rest of the session - so nothing but Stop is
+ * called here. The started flag is what keeps the later teardown from
+ * stopping a controller this call has already released.
+ */
+EFI_STATUS
+FastbootUsbDeviceRelease (VOID)
+{
+  EFI_STATUS Status;
+
+  if (!mUsbDeviceStarted) {
+    return EFI_SUCCESS;
+  }
+
+  Status = Fbd.UsbDeviceProtocol->Stop ();
+  if (!EFI_ERROR (Status)) {
+    mUsbDeviceStarted = FALSE;
+  }
+  return Status;
+}
+
+/*
+ * Bring the gadget back after another user borrowed the controller - a
+ * mass-storage export or a RAM child launched by fastboot boot.
+ * The borrower's StopDevice restores the fastboot descriptor set inside the
  * vendor stack but nothing re-announces on the bus: the operator sees the
  * FASTBOOT MODE screen while the host sees no device, and only a cable
  * replug (a fresh attach event) revives it. Do exactly what the first start
@@ -338,33 +377,60 @@ FastbootUsbReconnect (VOID)
   if (EFI_ERROR (Status)) {
     return Status;
   }
+  mUsbDeviceStarted = TRUE;
 
   Status = Fbd.UsbDeviceProtocol->Send (0x1, 511, Fbd.gRxBuffer);
   DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-reseed status=%r\n", Status));
   return EFI_SUCCESS;
 }
 
-/* API to stop USB device when booting to kernel, used for "fastboot boot" */
+/*
+ * Permanently release everything this session owns: the gadget, the transfer
+ * buffers, and the descriptor pools.
+ *
+ * Every step is guarded and clears the pointer it freed, so the second call
+ * the loop's error exit used to make - and a call after an earlier one that
+ * completed - is a no-op instead of a second free of the same buffer. The
+ * gadget is stopped here only while the vendor stack still holds it; a
+ * release that a child launch or an export already performed is not repeated.
+ */
 EFI_STATUS
 FastbootUsbDeviceStop (VOID)
 {
   EFI_STATUS Status;
 
-  /* Free the Rx & Tx Buffers */
-  Status = Fbd.UsbDeviceProtocol->FreeTransferBuffer (Fbd.gTxBuffer);
+  Status = FastbootUsbDeviceRelease ();
   if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "Fastboot USB: Unable to free Tx Buffer\n"));
-    return Status;
-  }
-  Status = Fbd.UsbDeviceProtocol->FreeTransferBuffer (Fbd.gRxBuffer);
-  if (EFI_ERROR (Status)) {
-    DEBUG ((EFI_D_ERROR, "Fastboot USB: Unable to free Rx Buffer\n"));
     return Status;
   }
 
-  FreePool ((DescSet.Descriptors));
-  FreePool ((DescSet.SSDescriptors));
-  return Status;
+  if (Fbd.gTxBuffer != NULL) {
+    Status = Fbd.UsbDeviceProtocol->FreeTransferBuffer (Fbd.gTxBuffer);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((EFI_D_ERROR, "Fastboot USB: Unable to free Tx Buffer\n"));
+      return Status;
+    }
+    Fbd.gTxBuffer = NULL;
+  }
+
+  if (Fbd.gRxBuffer != NULL) {
+    Status = Fbd.UsbDeviceProtocol->FreeTransferBuffer (Fbd.gRxBuffer);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((EFI_D_ERROR, "Fastboot USB: Unable to free Rx Buffer\n"));
+      return Status;
+    }
+    Fbd.gRxBuffer = NULL;
+  }
+
+  if (DescSet.Descriptors != NULL) {
+    FreePool (DescSet.Descriptors);
+    DescSet.Descriptors = NULL;
+  }
+  if (DescSet.SSDescriptors != NULL) {
+    FreePool (DescSet.SSDescriptors);
+    DescSet.SSDescriptors = NULL;
+  }
+  return EFI_SUCCESS;
 }
 
 /* Process bulk transfer out come for Rx */
