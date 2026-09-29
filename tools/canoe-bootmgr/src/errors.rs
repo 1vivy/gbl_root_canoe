@@ -3,7 +3,7 @@ use thiserror::Error;
 use crate::abl_lookup::AblLookupError;
 use crate::abl_verify::AblVerifyError;
 use crate::artifact::ArtifactError;
-use crate::backend::BackendError;
+use crate::backend::{BackendActionError, BackendError};
 use crate::block_write::BlockWriteError;
 use crate::build::BuildError;
 use crate::config::ConfigError;
@@ -43,6 +43,8 @@ pub enum AppError {
     #[error(transparent)]
     ImageDigest(#[from] crate::image_digest::ImageDigestError),
     #[error(transparent)]
+    ImageZero(#[from] crate::image_zero::ImageZeroError),
+    #[error(transparent)]
     SystemReboot(#[from] crate::system_reboot::SystemRebootError),
     #[error(transparent)]
     ToolsUpdate(#[from] ToolsUpdateError),
@@ -52,8 +54,12 @@ pub enum AppError {
     ModePlan(#[from] ModePlanError),
     #[error(transparent)]
     VbmetaInspect(#[from] VbmetaInspectError),
+    #[error("{message}")]
+    ModeGate { code: &'static str, message: String },
     #[error("request: {0}")]
     Request(String),
+    #[error("OTA target requires known active-slot metadata")]
+    OtaActiveSlotUnknown,
     #[error("install: {0}")]
     Install(String),
     #[error("default.target: {0}")]
@@ -63,20 +69,40 @@ pub enum AppError {
 }
 
 impl AppError {
+    pub(crate) fn from_backend_action<E>(error: BackendActionError<E>) -> Self
+    where
+        E: Into<Self>,
+    {
+        match error {
+            BackendActionError::Backend(error) => Self::Backend(error),
+            BackendActionError::Action(error) => error.into(),
+        }
+    }
+
     pub fn protocol_code(&self) -> &str {
         match self {
             Self::Backend(error) => error.protocol_code(),
             Self::Build(error) => error.protocol_code(),
             Self::AblLookup(error) => error.protocol_code(),
             Self::ImageDigest(error) => error.protocol_code(),
+            Self::ImageZero(error) => error.protocol_code(),
             Self::SystemReboot(error) => error.protocol_code(),
             Self::ModePlan(error) => error.protocol_code(),
+            Self::ModeGate { code, .. } => code,
             Self::VbmetaInspect(error) => error.protocol_code(),
             Self::AblVerify(error) => error.protocol_code(),
             Self::BlockWrite(error) => error.protocol_code(),
             Self::ToolsUpdate(error) => error.protocol_code(),
             Self::Fastboot(error) => error.protocol_code(),
             Self::VendorBoot(error) => error.protocol_code(),
+            Self::Slot(crate::slots::SlotError::Rollback { .. }) => "slot-rollback",
+            Self::Slot(crate::slots::SlotError::ToolsInventoryRequired) => {
+                "tools-inventory-required"
+            }
+            Self::OtaActiveSlotUnknown => "ota-active-slot-unknown",
+            Self::Slot(crate::slots::SlotError::ToolsInventoryMismatch(_)) => {
+                "tools-inventory-mismatch"
+            }
             Self::Config(_)
             | Self::Artifact(_)
             | Self::Slot(_)

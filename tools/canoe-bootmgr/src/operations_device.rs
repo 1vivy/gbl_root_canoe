@@ -1,7 +1,7 @@
-use crate::cli::{
-    AblLookupArgs, BlockReadArgs, ImageDigestArgs, Success, SystemRebootArgs,
-};
 use super::AppError;
+use crate::cli::{
+    AblLookupArgs, BlockReadArgs, ImageDigestArgs, ImageZeroArgs, Success, SystemRebootArgs,
+};
 
 pub(super) fn image_digest(args: &ImageDigestArgs) -> Result<Success, AppError> {
     let receipt = crate::image_digest::digest(&crate::image_digest::ImageDigestRequest {
@@ -13,6 +13,19 @@ pub(super) fn image_digest(args: &ImageDigestArgs) -> Result<Success, AppError> 
         path: receipt.path,
         sha256: receipt.sha256,
         bytes: receipt.bytes,
+    })
+}
+
+pub(super) fn image_zero(args: &ImageZeroArgs) -> Result<Success, AppError> {
+    let receipt = crate::image_zero::zero(&crate::image_zero::ImageZeroRequest {
+        output: args.output.clone(),
+        bytes: args.bytes,
+    })?;
+    Ok(Success::ImageZero {
+        ok: true,
+        output: receipt.output,
+        bytes: receipt.bytes,
+        sha256: receipt.sha256,
     })
 }
 

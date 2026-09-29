@@ -75,7 +75,7 @@ pub fn detect_windows() -> Result<Vec<SourceCandidate>, super::DetectError> {
         let model = descriptor
             .as_ref()
             .and_then(|value| value.model.clone())
-            .map_or_else(|| format!("Physical Drive {index}"), |value| value);
+            .unwrap_or_else(|| format!("Physical Drive {index}"));
         let why = identity.as_deref().map_or_else(
             || "USB identity could not be determined without SetupAPI devnode walk; raw disk access requires Administrator".to_owned(),
             |value| format!("exported persist LUN ({value}); raw disk access requires Administrator"),
@@ -179,10 +179,7 @@ fn query_capacity(handle: HANDLE) -> u64 {
     if success == 0 {
         0
     } else {
-        match u64::try_from(info.Length) {
-            Ok(value) => value,
-            Err(_) => 0,
-        }
+        u64::try_from(info.Length).unwrap_or_default()
     }
 }
 
@@ -192,7 +189,7 @@ fn read_descriptor_string(output: &[u8], offset: u32) -> Option<String> {
     let end = tail
         .iter()
         .position(|value| *value == 0)
-        .map_or(tail.len(), |value| value);
+        .unwrap_or(tail.len());
     let value = String::from_utf8_lossy(&tail[..end]).trim().to_owned();
     (!value.is_empty()).then_some(value)
 }

@@ -1,1 +1,1 @@
-{"operation":"fastboot.identify","ok":true,"bds_version":null,"current_slot":null,"devinfo":null,"last_launch":null,"is_userspace":null}
+{"operation":"fastboot.identify","ok":true,"bds_version":null,"current_slot":null,"devinfo":null,"last_launch":null,"is_userspace":null,"boot_root":null}

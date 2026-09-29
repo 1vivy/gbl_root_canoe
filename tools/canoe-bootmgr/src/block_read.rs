@@ -1,12 +1,15 @@
+#[cfg(not(windows))]
 use std::fs::{self, File, OpenOptions};
+#[cfg(not(windows))]
 use std::io;
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use std::os::unix::fs::FileTypeExt;
 
+#[cfg(not(windows))]
 use crate::block_write::block_write_io::{copy_bytes, io_error, target_size};
-use crate::block_write::{slot_suffix, validate_partition, BlockWriteError};
+use crate::block_write::{BlockWriteError, slot_suffix, validate_partition};
 
 #[derive(Debug, Clone)]
 pub struct BlockReadRequest {
@@ -31,7 +34,11 @@ pub fn read(request: &BlockReadRequest) -> Result<BlockReadReceipt, BlockWriteEr
     #[cfg(windows)]
     return Err(BlockWriteError::UnsupportedPlatform);
     #[cfg(not(windows))]
-    read_at_root_inner(request, Path::new(crate::block_partition::BY_NAME_ROOT), true)
+    read_at_root_inner(
+        request,
+        Path::new(crate::block_partition::BY_NAME_ROOT),
+        true,
+    )
 }
 
 /// Test seam for reading a regular file as a partition node.
@@ -41,11 +48,15 @@ pub fn read_at_root(
     root: &Path,
 ) -> Result<BlockReadReceipt, BlockWriteError> {
     #[cfg(windows)]
-    return Err(BlockWriteError::UnsupportedPlatform);
+    {
+        let _ = (request, root);
+        Err(BlockWriteError::UnsupportedPlatform)
+    }
     #[cfg(not(windows))]
     read_at_root_inner(request, root, false)
 }
 
+#[cfg(not(windows))]
 fn read_at_root_inner(
     request: &BlockReadRequest,
     root: &Path,
@@ -74,7 +85,10 @@ fn read_at_root_inner(
             &request.output,
             io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("destination parent directory does not exist: {}", parent.display()),
+                format!(
+                    "destination parent directory does not exist: {}",
+                    parent.display()
+                ),
             ),
         ));
     }
@@ -95,6 +109,7 @@ fn read_at_root_inner(
     result
 }
 
+#[cfg(not(windows))]
 fn read_target(node: &Path, output: &Path, bytes: u64) -> Result<(), BlockWriteError> {
     let mut source = File::open(node).map_err(|source| io_error("open target", node, source))?;
     let mut destination = OpenOptions::new()
@@ -109,4 +124,3 @@ fn read_target(node: &Path, output: &Path, bytes: u64) -> Result<(), BlockWriteE
         .sync_all()
         .map_err(|source| io_error("flush output", output, source))
 }
-

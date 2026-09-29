@@ -5,7 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn source_detect_forwards_to_bootmgr_and_propagates_success() {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
     let serial = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!("canoe-forward-test-{stamp}-{serial}"));
     fs::create_dir_all(&root).expect("fixture directory");

@@ -4,9 +4,9 @@ use crate::cli::{
     PolicyArgs, Success,
 };
 use crate::config::{ConfigDocument, EntryRequest, PolicyUpdate};
+use crate::errors::AppError;
 use crate::extra_ops;
-use crate::operations::AppError;
-
+use crate::mode_enforcement::{ModeEvidence, enforce_mode};
 
 pub(super) fn config(backend: &Backend, command: &ConfigCommand) -> Result<Success, AppError> {
     match command {
@@ -39,7 +39,7 @@ fn config_show(backend: &dyn BootRoot) -> Result<Success, AppError> {
     })
 }
 
-pub(super) fn entry(backend: &dyn BootRoot, command: &EntryCommand) -> Result<Success, AppError> {
+pub(super) fn entry(backend: &Backend, command: &EntryCommand) -> Result<Success, AppError> {
     match command {
         EntryCommand::List => {
             let config = read_or_empty(backend)?;
@@ -57,52 +57,66 @@ pub(super) fn entry(backend: &dyn BootRoot, command: &EntryCommand) -> Result<Su
             Ok(Success::EntryRemove {
                 ok: true,
                 generation,
-                mark: format!("CANOE-MARK: entry-removed id={} generation={generation}", args.id),
+                mark: format!(
+                    "CANOE-MARK: entry-removed id={} generation={generation}",
+                    args.id
+                ),
             })
         }
         EntryCommand::Mode(args) => entry_mode(backend, args),
     }
 }
 
-fn entry_mode(
-    backend: &dyn BootRoot,
-    args: &crate::cli::EntryModeArgs,
-) -> Result<Success, AppError> {
-    super::operations_build::validate_mode_plan_target(args.mode)?;
-    let mut config = read_existing(backend)?;
-    let entry = config.entry(&args.id).cloned().ok_or_else(|| {
-        AppError::Config(crate::config::ConfigError::Invalid(format!(
-            "no such entry: {}",
-            args.id
-        )))
-    })?;
-    let plan = crate::mode_plan::plan_for_entry(
-        backend.root(),
-        &entry,
-        args.mode,
-        args.current_vbmeta.as_ref(),
-        args.target_vbmeta.as_ref(),
-        args.target_image.as_ref(),
-        args.tools.as_deref(),
-    )?;
-    let acknowledged = crate::mode_plan::ensure_applyable(&plan, &args.acknowledge)?;
-    let warnings = crate::mode_plan::warnings(&plan);
-    let generation = config.set_mode_planned(&args.id, args.mode)?;
-    backend.write_config(&config)?;
-    Ok(Success::EntryMode {
-        ok: true,
-        generation,
-        acknowledged,
-        warnings,
-        mark: format!(
-            "CANOE-MARK: entry-mode-set id={} mode={} generation={generation}",
-            args.id, args.mode
-        ),
-    })
+fn entry_mode(backend: &Backend, args: &crate::cli::EntryModeArgs) -> Result<Success, AppError> {
+    backend
+        .with_temp_root_action(|root| {
+            let local = crate::backend::LocalDir::new(root).map_err(AppError::Backend)?;
+            super::operations_build::validate_mode_plan_target(args.mode)?;
+            let mut config = read_existing(&local)?;
+            if config.entry(&args.id).is_none() {
+                return Err(AppError::Config(crate::config::ConfigError::Invalid(
+                    format!("no such entry: {}", args.id),
+                )));
+            }
+            let evidence = ModeEvidence {
+                id: Some(&args.id),
+                target_mode: Some(args.mode),
+                from_mode: None,
+                prior_canoe: true,
+                acknowledge: &args.acknowledge,
+                current_vbmeta: args.current_vbmeta.as_ref(),
+                target_vbmeta: args.target_vbmeta.as_ref(),
+                target_image: args.target_image.as_ref(),
+                tools: args.tools.as_deref(),
+                replaces_artifacts: false,
+            };
+            let (acknowledged, warnings) = enforce_mode(root, Some(&config), &evidence)?;
+            let generation = config.set_mode_planned(&args.id, args.mode)?;
+            local.write_config(&config)?;
+            Ok(Success::EntryMode {
+                ok: true,
+                generation,
+                acknowledged,
+                warnings,
+                mark: format!(
+                    "CANOE-MARK: entry-mode-set id={} mode={} generation={generation}",
+                    args.id, args.mode
+                ),
+            })
+        })
+        .map_err(AppError::from_backend_action)
 }
 
 fn entry_set(backend: &dyn BootRoot, args: &EntrySetArgs) -> Result<Success, AppError> {
     let mut config = read_or_empty(backend)?;
+    if config
+        .entry(&args.id)
+        .is_some_and(|entry| args.mode.is_some_and(|mode| mode != entry.mode))
+    {
+        return Err(AppError::Request(
+            "entry.set cannot change an existing entry mode; use entry.mode".to_owned(),
+        ));
+    }
     let generation = config.upsert(EntryRequest {
         id: args.id.clone(),
         title: args.title.clone(),
@@ -135,7 +149,10 @@ fn entry_set(backend: &dyn BootRoot, args: &EntrySetArgs) -> Result<Success, App
         ),
     })
 }
-pub(super) fn default(backend: &dyn BootRoot, command: &DefaultCommand) -> Result<Success, AppError> {
+pub(super) fn default(
+    backend: &dyn BootRoot,
+    command: &DefaultCommand,
+) -> Result<Success, AppError> {
     match command {
         DefaultCommand::Get => {
             let (default, resolution) = match backend.read_config() {

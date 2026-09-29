@@ -12,7 +12,6 @@ use crate::fastboot::FastbootError;
 const STDERR_TAIL_BYTES: usize = 4096;
 const STDERR_READER_JOIN_TIMEOUT: Duration = Duration::from_millis(100);
 
-
 pub(crate) fn run(
     guard: &DeviceGuard,
     fastboot: &Path,
@@ -20,12 +19,11 @@ pub(crate) fn run(
     timeout: Duration,
 ) -> Result<(), FastbootError> {
     let command = crate::fastboot::display_command(fastboot, args);
-    let mut child = ReapedChild::spawn(guard, fastboot, args, Stdio::null(), Stdio::piped()).map_err(
-        |source| FastbootError::Spawn {
+    let mut child = ReapedChild::spawn(guard, fastboot, args, Stdio::null(), Stdio::piped())
+        .map_err(|source| FastbootError::Spawn {
             path: fastboot.to_owned(),
             source,
-        },
-    )?;
+        })?;
     let stderr = child.take_stderr().ok_or_else(|| FastbootError::Command {
         command: command.clone(),
         detail: "could not capture stderr".to_owned(),
@@ -61,7 +59,6 @@ pub(crate) fn run(
         }),
     }
 }
-
 
 fn wait_for_child(
     child: &mut ReapedChild,
@@ -124,14 +121,11 @@ fn join_with_timeout<T>(
     reader: thread::JoinHandle<T>,
     timeout: Duration,
 ) -> Option<thread::Result<T>> {
-    let deadline = Instant::now().checked_add(timeout);
+    let deadline = Instant::now().checked_add(timeout)?;
     loop {
         if reader.is_finished() {
             return Some(reader.join());
         }
-        let Some(deadline) = deadline else {
-            return None;
-        };
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             return None;
@@ -139,4 +133,3 @@ fn join_with_timeout<T>(
         thread::sleep(remaining.min(Duration::from_millis(1)));
     }
 }
-

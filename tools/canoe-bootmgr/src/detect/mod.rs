@@ -91,11 +91,11 @@ pub use windows::detect_windows;
 pub fn detect_sources() -> Result<Vec<SourceCandidate>, DetectError> {
     #[cfg(target_os = "linux")]
     {
-        return Ok(detect_linux(&default_probe()));
+        Ok(detect_linux(&default_probe()))
     }
     #[cfg(windows)]
     {
-        return detect_windows();
+        detect_windows()
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {
@@ -103,7 +103,7 @@ pub fn detect_sources() -> Result<Vec<SourceCandidate>, DetectError> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::{LinuxProbe, SourceCandidate, SourceKind, detect_linux};
     use std::fs;

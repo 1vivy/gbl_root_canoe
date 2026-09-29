@@ -13,20 +13,27 @@ pub struct BuildOptions {
 }
 
 pub fn parse(args: &[String]) -> Result<BuildOptions, CanoeError> {
-    let mut options = BuildOptions { abl: None, vbmeta: None };
+    let mut options = BuildOptions {
+        abl: None,
+        vbmeta: None,
+    };
     let mut index = 0;
     while index < args.len() {
         let flag = args[index].as_str();
         let target = match flag {
             "--abl" => &mut options.abl,
             "--vbmeta" => &mut options.vbmeta,
-            "-h" | "--help" => return Err(CanoeError::message("build help is provided by canoe --help")),
+            "-h" | "--help" => {
+                return Err(CanoeError::message(
+                    "build help is provided by canoe --help",
+                ));
+            }
             _ => return Err(CanoeError::message(format!("unexpected argument: {flag}"))),
         };
         index += 1;
-        let value = args.get(index).ok_or_else(|| {
-            CanoeError::message(format!("argument {flag} requires a value"))
-        })?;
+        let value = args
+            .get(index)
+            .ok_or_else(|| CanoeError::message(format!("argument {flag} requires a value")))?;
         *target = Some(PathBuf::from(value));
         index += 1;
     }
@@ -85,7 +92,8 @@ pub fn derive(toolkit: &Toolkit, options: &BuildOptions) -> Result<bool, CanoeEr
         patch_log: Some(toolkit.patch_log()),
         probe: false,
     };
-    let receipt = canoe_bootmgr::build(&args).map_err(|error| CanoeError::message(error.to_string()))?;
+    let receipt =
+        canoe_bootmgr::build(&args).map_err(|error| CanoeError::message(error.to_string()))?;
     if toolkit.patch_log().is_file() {
         let text = fs::read_to_string(toolkit.patch_log())
             .map_err(|error| CanoeError::message(format!("could not read patch log: {error}")))?;

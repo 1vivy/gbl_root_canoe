@@ -3,7 +3,14 @@ use std::fs;
 use canoe_bootmgr::operations::execute_request;
 use canoe_bootmgr::wire::parse_json;
 
-fn run_request(root: &std::path::Path, request: serde_json::Value) -> Result<canoe_bootmgr::cli::Success, canoe_bootmgr::operations::AppError> {
+#[cfg(unix)]
+#[path = "support/ext4.rs"]
+mod ext4_fixture;
+
+fn run_request(
+    root: &std::path::Path,
+    request: serde_json::Value,
+) -> Result<canoe_bootmgr::cli::Success, canoe_bootmgr::operations::AppError> {
     let bytes = serde_json::to_vec(&request).expect("request JSON");
     execute_request(root, parse_json(&bytes).expect("wire request"))
 }
@@ -29,26 +36,33 @@ fn tools_update_writes_sorted_files_and_preserves_existing_tools() {
 
     assert_eq!(response["operation"], "tools.update");
     assert_eq!(response["files"], serde_json::json!(["a.efi", "z.efi"]));
-    assert_eq!(fs::read(root.path().join("tools/a.efi")).expect("a output"), b"a");
-    assert_eq!(fs::read(root.path().join("tools/z.efi")).expect("z output"), b"z");
-    assert_eq!(fs::read(root.path().join("tools/old.efi")).expect("old output"), b"old");
+    assert_eq!(
+        fs::read(root.path().join("tools/a.efi")).expect("a output"),
+        b"a"
+    );
+    assert_eq!(
+        fs::read(root.path().join("tools/z.efi")).expect("z output"),
+        b"z"
+    );
+    assert_eq!(
+        fs::read(root.path().join("tools/old.efi")).expect("old output"),
+        b"old"
+    );
 }
 
 #[cfg(unix)]
 #[test]
-fn tools_update_rolls_back_after_a_mid_write_failure() {
-    use std::os::unix::fs::PermissionsExt;
+fn tools_update_refuses_symlink_destination_without_touching_its_target() {
+    use std::os::unix::fs::symlink;
 
     let root = tempfile::tempdir().expect("boot root");
     let source = tempfile::tempdir().expect("source directory");
     let tools = root.path().join("tools");
+    let outside = source.path().join("outside.efi");
     fs::create_dir(&tools).expect("tools directory");
-    fs::write(tools.join("b.efi"), b"before").expect("existing destination");
-    let mut readonly = fs::metadata(tools.join("b.efi")).expect("destination metadata").permissions();
-    readonly.set_mode(0o444);
-    fs::set_permissions(tools.join("b.efi"), readonly).expect("make destination read-only");
-    fs::write(source.path().join("a.efi"), b"new-a").expect("a tool");
-    fs::write(source.path().join("b.efi"), b"new-b").expect("b tool");
+    fs::write(&outside, b"outside").expect("outside sentinel");
+    symlink(&outside, tools.join("a.efi")).expect("destination symlink");
+    fs::write(source.path().join("a.efi"), b"new-a").expect("source tool");
 
     let error = run_request(
         root.path(),
@@ -57,41 +71,29 @@ fn tools_update_rolls_back_after_a_mid_write_failure() {
             "source": source.path(),
         }),
     )
-    .expect_err("read-only destination must fail");
+    .expect_err("symlink destination must be refused");
 
-    assert_eq!(error.protocol_code(), "tools-write");
-    assert!(!tools.join("a.efi").exists(), "new files must be removed on rollback");
-    assert_eq!(fs::read(tools.join("b.efi")).expect("restored destination"), b"before");
+    assert_eq!(error.protocol_code(), "tools-snapshot");
+    assert_eq!(fs::read(&outside).expect("outside sentinel"), b"outside");
+    assert!(
+        fs::symlink_metadata(tools.join("a.efi"))
+            .expect("destination metadata")
+            .file_type()
+            .is_symlink()
+    );
 }
 
 #[cfg(unix)]
 #[test]
 fn tools_update_uses_tools_source_and_separate_boot_root_source() {
-    use std::os::unix::fs::PermissionsExt;
-    use std::process::{Command, Stdio};
     use std::io::Write;
+    use std::process::{Command, Stdio};
 
     let root = tempfile::tempdir().expect("boot root");
     let tools = tempfile::tempdir().expect("tools source");
-    let source_image = root.path().join("persist.img");
-    fs::write(&source_image, b"fixture ext4 image").expect("source image");
+    let source_image = ext4_fixture::ext4_image(root.path(), "persist.img", 64 * 1024 * 1024);
     fs::write(tools.path().join("a.efi"), b"new tool").expect("tool");
-    let helper = root.path().join("fake-canoe-ext4");
-    let log = root.path().join("helper.log");
-    fs::write(
-        &helper,
-        format!(
-            "#!/bin/sh\n\
-             if [ \"$1\" = list ] || [ \"$1\" = read ]; then exit 7; fi\n\
-             if [ \"$3\" = mkdir ]; then exit 0; fi\n\
-             if [ \"$2\" = write ]; then cat >/dev/null; printf '%s\\n' \"$3\" >> '{}'; exit 0; fi\n\
-             if [ \"$2\" = remove ]; then exit 0; fi\n\
-             exit 0\n",
-            log.display()
-        ),
-    )
-    .expect("fake helper");
-    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).expect("helper executable");
+    let helper = ext4_fixture::helper_path();
 
     let request = serde_json::json!({
         "verb": "tools.update",
@@ -116,8 +118,68 @@ fn tools_update_uses_tools_source_and_separate_boot_root_source() {
     assert!(output.status.success(), "server failed: {:?}", output);
     let response: serde_json::Value = serde_json::from_slice(&output.stdout).expect("response");
     assert_eq!(response["operation"], "tools.update");
-    let writes = fs::read_to_string(&log).expect("helper writes");
-    let expected_source = source_image.display().to_string();
-    assert!(writes.lines().all(|line| line == expected_source));
-    assert!(writes.lines().any(|line| line == expected_source));
+    let installed = Command::new(&helper)
+        .arg("read")
+        .arg(&source_image)
+        .arg("/efisp/tools/a.efi")
+        .output()
+        .expect("read installed tool");
+    assert!(
+        installed.status.success(),
+        "tool read failed: {installed:?}"
+    );
+    assert_eq!(installed.stdout, b"new tool");
+    assert!(
+        !root.path().join("tools").exists(),
+        "process boot root must remain untouched"
+    );
+}
+
+#[test]
+fn tools_update_accepts_source_path_inventory_and_refuses_digest_mismatch() {
+    let root = tempfile::tempdir().expect("boot root");
+    let source = tempfile::tempdir().expect("source directory");
+    fs::write(source.path().join("a.efi"), b"reviewed tool").expect("source tool");
+
+    let inventory_response = run_request(
+        root.path(),
+        serde_json::json!({"verb":"tools.inventory","source":source.path()}),
+    )
+    .expect("source inventory");
+    let inventory = serde_json::to_value(inventory_response)
+        .expect("inventory response")
+        .get("inventory")
+        .expect("inventory field")
+        .clone();
+
+    run_request(
+        root.path(),
+        serde_json::json!({
+            "verb":"tools.update",
+            "source":source.path(),
+            "inventory":inventory,
+        }),
+    )
+    .expect("reviewed source-path inventory");
+    assert_eq!(
+        fs::read(root.path().join("tools/a.efi")).expect("committed tool"),
+        b"reviewed tool"
+    );
+
+    let mut mismatched = inventory;
+    mismatched[0]["sha256"] = serde_json::json!("0".repeat(64));
+    let error = run_request(
+        root.path(),
+        serde_json::json!({
+            "verb":"tools.update",
+            "source":source.path(),
+            "inventory":mismatched,
+        }),
+    )
+    .expect_err("digest mismatch");
+    assert_eq!(error.protocol_code(), "tools-write");
+    assert_eq!(
+        fs::read(root.path().join("tools/a.efi")).expect("unchanged tool"),
+        b"reviewed tool"
+    );
 }

@@ -4,9 +4,12 @@ use std::process::Stdio;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::fastboot_child::ReapedChild;
+#[cfg(windows)]
+#[path = "fastboot_export_windows.rs"]
+mod windows;
 use crate::device_access::DeviceGuard;
 use crate::fastboot::FastbootError;
-use super::fastboot_child::ReapedChild;
 
 #[derive(Debug)]
 pub struct Exported {
@@ -115,7 +118,11 @@ pub(crate) fn end_export(_guard: &DeviceGuard, node: &Path) -> Result<(), Fastbo
     {
         end_export_linux(node)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        windows::end_export(node)
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         let _ = node;
         Err(FastbootError::Unsupported {
@@ -134,7 +141,6 @@ fn end_export_linux(node: &Path) -> Result<(), FastbootError> {
     const SG_IO: libc::c_ulong = 0x2285;
     const SG_DXFER_NONE: libc::c_int = -1;
     const TIMEOUT_MS: u32 = 3_000;
-
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -231,9 +237,12 @@ struct SgIoHdr {
     duration: u32,
     info: u32,
 }
+#[cfg(target_os = "linux")]
 fn permission_error(detail: String) -> FastbootError {
     FastbootError::PermissionDenied {
-        message: format!("fastboot end-export needs permission to open the raw block node: fastboot command end-export failed: {detail}"),
+        message: format!(
+            "fastboot end-export needs permission to open the raw block node: fastboot command end-export failed: {detail}"
+        ),
     }
 }
 
@@ -245,3 +254,13 @@ fn command_error(command: &str, detail: String) -> FastbootError {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn eject_command_is_scsi_start_stop_load_eject_without_start() {
+        assert_eq!(
+            crate::fastboot::start_stop_unit_cdb(true, false),
+            [0x1B, 0, 0, 0, 0b10, 0]
+        );
+    }
+}

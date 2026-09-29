@@ -2,16 +2,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use super::AppError;
 use crate::build::{self, BuildArgs, BuildOutcome};
 use crate::cli::{AblCoverage, FastbootCommand, FastbootFlashReceipt, Success};
 use crate::detect::{self, SourceKind};
 use crate::fastboot::FastbootError;
-use super::AppError;
 
-pub(super) fn command(command: &FastbootCommand) -> Result<Success, AppError> {
+pub(super) fn command(
+    command: &FastbootCommand,
+    runtime_root: Option<&Path>,
+) -> Result<Success, AppError> {
     match command {
         FastbootCommand::Identify(args) => {
-            let fastboot = crate::fastboot::binary(None)?;
+            let fastboot = crate::fastboot::binary(runtime_root)?;
             let identity = crate::fastboot::identify_checked(
                 &fastboot,
                 Duration::from_secs(args.timeout_seconds),
@@ -23,10 +26,11 @@ pub(super) fn command(command: &FastbootCommand) -> Result<Success, AppError> {
                 devinfo: identity.devinfo,
                 last_launch: identity.last_launch,
                 is_userspace: identity.is_userspace,
+                boot_root: identity.boot_root,
             })
         }
         FastbootCommand::Export(args) => {
-            let fastboot = crate::fastboot::binary(None)?;
+            let fastboot = crate::fastboot::binary(runtime_root)?;
             let exported = crate::fastboot::export(
                 &fastboot,
                 &args.target,
@@ -46,7 +50,7 @@ pub(super) fn command(command: &FastbootCommand) -> Result<Success, AppError> {
             })
         }
         FastbootCommand::Fetch(args) => {
-            let fastboot = crate::fastboot::binary(None)?;
+            let fastboot = crate::fastboot::binary(runtime_root)?;
             crate::fastboot::fetch(
                 &fastboot,
                 &args.partition,
@@ -54,9 +58,7 @@ pub(super) fn command(command: &FastbootCommand) -> Result<Success, AppError> {
                 Duration::from_secs(30),
             )?;
             let sha256 = crate::build_tools::sha256_file(&args.output).map_err(AppError::Output)?;
-            let bytes = fs::metadata(&args.output)
-                .map_err(AppError::Output)?
-                .len();
+            let bytes = fs::metadata(&args.output).map_err(AppError::Output)?.len();
             Ok(Success::FastbootFetch {
                 ok: true,
                 partition: args.partition.clone(),
@@ -66,7 +68,7 @@ pub(super) fn command(command: &FastbootCommand) -> Result<Success, AppError> {
             })
         }
         FastbootCommand::AblCoverage(args) => {
-            let slots = match crate::fastboot::binary(None) {
+            let slots = match crate::fastboot::binary(runtime_root) {
                 Ok(fastboot) => ["a", "b"].map(|slot| probe_abl_slot(&fastboot, slot, args)),
                 Err(_) => [unknown_abl_coverage("a"), unknown_abl_coverage("b")],
             };
@@ -76,11 +78,14 @@ pub(super) fn command(command: &FastbootCommand) -> Result<Success, AppError> {
             })
         }
         FastbootCommand::Flash(args) => {
-            let fastboot = crate::fastboot::binary(None)?;
-            crate::fastboot::flash(
+            let fastboot = crate::fastboot::binary(runtime_root)?;
+            let identity = crate::fastboot::flash_verified(
                 &fastboot,
                 &args.partition,
                 &args.image,
+                args.expected_bytes,
+                args.expected_sha256.as_deref(),
+                args.expected_partition_bytes,
                 Duration::from_secs(30),
             )?;
             Ok(Success::FastbootFlash {
@@ -88,11 +93,13 @@ pub(super) fn command(command: &FastbootCommand) -> Result<Success, AppError> {
                 receipt: FastbootFlashReceipt {
                     partition: args.partition.clone(),
                     image: args.image.display().to_string(),
+                    bytes: identity.bytes,
+                    sha256: identity.sha256,
                 },
             })
         }
         FastbootCommand::Reboot(args) => {
-            let fastboot = crate::fastboot::binary(None)?;
+            let fastboot = crate::fastboot::binary(runtime_root)?;
             crate::fastboot::reboot(&fastboot, args.target.as_deref(), Duration::from_secs(30))?;
             Ok(Success::FastbootReboot {
                 ok: true,
@@ -131,7 +138,11 @@ fn probe_abl_slot(
         else {
             return None;
         };
-        Some(if receipt.gbl_patched { "vulnerable" } else { "stock" })
+        Some(if receipt.gbl_patched {
+            "vulnerable"
+        } else {
+            "stock"
+        })
     })() else {
         return unknown_abl_coverage(slot);
     };

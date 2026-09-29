@@ -14,6 +14,7 @@ PLATFORM_TOOLS_ARCHIVE = $(PLATFORM_TOOLS_CACHE)/platform-tools_$(PLATFORM_TOOLS
 
 CANOE_EXT4_WINDOWS ?= $(ROOT_DIR)/tools/canoe-ext4/canoe-ext4.exe
 CANOE_APP_WINDOWS_BIN ?= $(ROOT_DIR)/../canoe-boot-manager/src-tauri/target/x86_64-pc-windows-gnu/release/canoe-boot-manager.exe
+CANOE_WEBVIEW2_LOADER_WINDOWS ?= $(dir $(CANOE_APP_WINDOWS_BIN))WebView2Loader.dll
 
 clean:
 	rm -rf build || true
@@ -92,11 +93,10 @@ platform_tools: copy_resources
 		'platform-tools/fastboot.exe' \
 		'platform-tools/AdbWinApi.dll' \
 		'platform-tools/AdbWinUsbApi.dll' \
-		'platform-tools/libwinpthread-1.dll' \
 		'platform-tools/source.properties' \
 		-d "$$tmp"; \
 	mkdir -p "$$tmp/out"; \
-	for member in fastboot.exe AdbWinApi.dll AdbWinUsbApi.dll libwinpthread-1.dll source.properties; do \
+	for member in fastboot.exe AdbWinApi.dll AdbWinUsbApi.dll source.properties; do \
 		cp "$$tmp/platform-tools/$$member" "$$tmp/out/$$member"; \
 	done; \
 	rm -rf build/toolkit/Platform-Tools; \
@@ -115,7 +115,12 @@ canoe_app: copy_resources
 		echo "canoe-boot-manager Windows binary is required; run 'cd ../canoe-boot-manager && bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci' or set CANOE_APP_WINDOWS_BIN=/absolute/path/to/canoe-boot-manager.exe (required from a git worktree)" >&2; \
 		exit 1; \
 	}
+	@test -f "$(CANOE_WEBVIEW2_LOADER_WINDOWS)" || { \
+		echo "WebView2Loader.dll is required beside the GNU-target canoe-boot-manager.exe; rebuild the Tauri app or set CANOE_WEBVIEW2_LOADER_WINDOWS=/absolute/path/to/WebView2Loader.dll" >&2; \
+		exit 1; \
+	}
 	mkdir -p build/toolkit/bin
 	cp "$(CANOE_APP_WINDOWS_BIN)" ./build/toolkit/bin/canoe-boot-manager.exe
+	cp "$(CANOE_WEBVIEW2_LOADER_WINDOWS)" ./build/toolkit/bin/WebView2Loader.dll
 build: submodule_uefi submodule_patcher submodule_mode2_profile submodule_abl_tzmap submodule_canoe_bootmgr submodule_ablfvextractor submodule_vbmetafixer canoe platform_tools ext4_tools canoe_app
 	cd build/toolkit && zip -r ../toolkit_windows.zip ./

@@ -199,34 +199,69 @@ sha256sum "$ARCHIVE"
 cd /home/vivy/Projects/efisp-projects/gbl_root_canoe/.work/gui-work
 ```
 
-固件发布流程会先检出 app，再从本仓库源码构建与目标匹配的
-`canoe-bootmgr` sidecar，然后构建桌面二进制。将每个 sidecar 放到 app 的
-Tauri 输入目录旁，再构建桌面二进制：
+固件发布流程会先检出 app，再从本仓库源码构建所有与目标匹配的 Tauri 输入。
+Tauri 会在构建时为每个输入计算摘要，因此必须暂存完整集合，不能只暂存
+`canoe-bootmgr`。
+
+构建 Linux 输入，并暂存六个必需的目标 triple 名称：
+
+Linux 暂存输入名称为
+`canoe-bootmgr-x86_64-unknown-linux-gnu`、`canoe-ext4-x86_64-unknown-linux-gnu`、
+`extractfv-x86_64-unknown-linux-gnu`、`patch_abl-x86_64-unknown-linux-gnu`、
+`mode2_profile-x86_64-unknown-linux-gnu` 和 `abl_tzmap-x86_64-unknown-linux-gnu`。
 
 ```sh
-make -C targets/toolkit_linux submodule_canoe_bootmgr
-cp targets/toolkit_linux/build/toolkit/bin/canoe-bootmgr \
-  /home/vivy/Projects/efisp-projects/canoe-boot-manager/src-tauri/binaries/canoe-bootmgr-x86_64-unknown-linux-gnu
-(cd /home/vivy/Projects/efisp-projects/canoe-boot-manager && \
-  bunx tauri build --no-bundle --ci)
-make -C targets/toolkit_windows submodule_canoe_bootmgr
-cp targets/toolkit_windows/build/toolkit/bin/canoe-bootmgr.exe \
-  /home/vivy/Projects/efisp-projects/canoe-boot-manager/src-tauri/binaries/canoe-bootmgr-x86_64-pc-windows-gnu.exe
-(cd /home/vivy/Projects/efisp-projects/canoe-boot-manager && \
+make -C targets/toolkit_linux \
+  submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor \
+  submodule_patcher submodule_mode2_profile submodule_abl_tzmap
+APP=/home/vivy/Projects/efisp-projects/canoe-boot-manager
+for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+  cp "targets/toolkit_linux/build/toolkit/bin/$name" \
+    "$APP/src-tauri/binaries/${name}-x86_64-unknown-linux-gnu"
+done
+(cd "$APP" && bunx tauri build --no-bundle --ci)
+```
+
+不要将 Linux `fastboot` 暂存到 app 输入目录。运行时会从继承的 `PATH` 中
+选择可执行的 `fastboot`（或 `fastboot.exe`），然后为本次会话打开并封存这个
+外部可执行文件。
+
+构建 Windows GNU 输入（包括相邻的 Platform-Tools 文件），并暂存九个必需
+名称：
+Windows 暂存输入名称为
+`canoe-bootmgr-x86_64-pc-windows-gnu.exe`、`canoe-ext4-x86_64-pc-windows-gnu.exe`、
+`extractfv-x86_64-pc-windows-gnu.exe`、`patch_abl-x86_64-pc-windows-gnu.exe`、
+`mode2_profile-x86_64-pc-windows-gnu.exe`、`abl_tzmap-x86_64-pc-windows-gnu.exe`、
+`fastboot-x86_64-pc-windows-gnu.exe`、`AdbWinApi-x86_64-pc-windows-gnu.dll` 和
+`AdbWinUsbApi-x86_64-pc-windows-gnu.dll`。
+
+```sh
+make -C targets/toolkit_windows \
+  submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor \
+  submodule_patcher submodule_mode2_profile submodule_abl_tzmap \
+  platform_tools ext4_tools
+for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+  cp "targets/toolkit_windows/build/toolkit/bin/$name.exe" \
+    "$APP/src-tauri/binaries/${name}-x86_64-pc-windows-gnu.exe"
+done
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/fastboot.exe \
+  "$APP/src-tauri/binaries/fastboot-x86_64-pc-windows-gnu.exe"
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinApi.dll \
+  "$APP/src-tauri/binaries/AdbWinApi-x86_64-pc-windows-gnu.dll"
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinUsbApi.dll \
+  "$APP/src-tauri/binaries/AdbWinUsbApi-x86_64-pc-windows-gnu.dll"
+(cd "$APP" && \
   bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci)
 ```
 
-安装 `cargo-xwin` 后，MSVC 构建路径使用以下 Tauri target：
+Windows 运行时会将 `bin/*.exe` 和相邻的三个 `Platform-Tools` 文件暂存到私有
+目录，逐一与构建时摘要核对，并在 sidecar 可能启动期间拒绝替换。它不会从
+`PATH` 解析这些输入。Windows MSVC app CI 编译 fixture 使用相同的 helper stem，
+但名称中的 `x86_64-pc-windows-gnu` 换为 `x86_64-pc-windows-msvc`（并保留
+`.exe`/`.dll` 扩展名）；这些 fixture 不是发布构件。
 
-```sh
-(cd /home/vivy/Projects/efisp-projects/canoe-boot-manager && \
-  bunx tauri build --target x86_64-pc-windows-msvc --no-bundle --ci)
-```
-
-发布的 Windows 桌面资产是 GNU target；MSVC 命令用于检查构建路径，不用于生成
-安装程序。Tauri 会把每个 sidecar 放在发布包中对应的应用可执行文件旁边，因而
-每个最终 toolkit 都必须同时包含 `bin/canoe-boot-manager`（或其 `.exe` 形式）
-和 `bin/canoe-bootmgr`。
+上述 Tauri 构建完成后，打包配方才会将 app 二进制复制到工具包中，与
+`bin/canoe-bootmgr`（或 `.exe`）相邻，并保留 helper 的相邻布局。
 
 这是一个 git worktree。它的 app 普通 sibling 默认路径是相对 worktree 计算的，
 而不是 `/home/vivy/Projects/efisp-projects/canoe-boot-manager`；因此必须显式

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::{BackendError, BlsFile, BootRoot, LocalDir};
+use super::{BackendActionError, BackendError, BlsFile, BootRoot, LocalDir};
 use crate::config::ConfigDocument;
 
 #[derive(Debug, Clone)]
@@ -63,9 +63,33 @@ impl Backend {
     {
         match self {
             Self::Local(local) => action(local.root()).map_err(BackendError::Transaction),
-            Self::Ext4(ext4) => ext4
-                .with_temp_root(action)
-                .map_err(BackendError::Ext4Typed),
+            Self::Ext4(ext4) => ext4.with_temp_root(action).map_err(BackendError::Ext4Typed),
+        }
+    }
+
+    pub(crate) fn with_temp_root_action<T, E, F>(
+        &self,
+        action: F,
+    ) -> Result<T, BackendActionError<E>>
+    where
+        F: FnOnce(&Path) -> Result<T, E>,
+    {
+        match self {
+            Self::Local(local) => action(local.root()).map_err(BackendActionError::Action),
+            Self::Ext4(ext4) => ext4.with_temp_root_action(action),
+        }
+    }
+
+    pub(crate) fn with_temp_root_readonly_action<T, E, F>(
+        &self,
+        action: F,
+    ) -> Result<T, BackendActionError<E>>
+    where
+        F: FnOnce(&Path) -> Result<T, E>,
+    {
+        match self {
+            Self::Local(local) => action(local.root()).map_err(BackendActionError::Action),
+            Self::Ext4(ext4) => ext4.with_temp_root_readonly_action(action),
         }
     }
 

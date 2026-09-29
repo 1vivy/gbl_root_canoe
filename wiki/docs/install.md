@@ -138,18 +138,32 @@ They then request:
 fastboot oem mass-storage:persist
 ```
 
-After the export, the host asks `canoe-bootmgr source detect --json` for
-candidates and selects the first readable, unmounted block row with identity
-`1209:ca0e` (or compatibility identity `05c6:f000`). No drive letter or host
-filesystem directory is created. `canoe-bootmgr` routes all boot-root reads and
-writes through `canoe-ext4`; the helper creates `/efisp` when it is missing and
-the boot manager commits the selected slot triplet, configuration, sidecars,
-and rollback as one transaction:
+After the export, the command-line wrapper asks
+`canoe-bootmgr source detect --json` for candidates and selects the first
+readable, unmounted block row with identity `1209:ca0e` (or compatibility
+identity `05c6:f000`). The desktop app instead validates and attaches the
+exact raw node returned by its `fastboot.export` operation; it does not rescan
+for a different disk. No drive letter or host filesystem directory is created.
+`canoe-bootmgr` routes all boot-root reads and writes through `canoe-ext4`; the
+helper creates `/efisp` when it is missing and the boot manager commits the
+selected slot triplet, configuration, sidecars, and rollback as one
+transaction:
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --slot a --mode 1
+canoe install --slot a
 ```
+
+`canoe install` omits `--mode` to inherit the persisted mode. An explicit mode
+change through this wrapper must include `--mode 0|1|2`,
+`--from-mode 0|1|2`, and a repeated `--acknowledge <CODE>` for every
+acknowledgement required by `mode.plan`. The direct `canoe-bootmgr` interface
+also accepts `--id <ENTRY_ID>` for an existing managed row; a new row uses
+`--from-mode`. If image evidence is needed, pass `--current-vbmeta`,
+`--target-vbmeta`, and `--target-image`; these are evidence inputs, not
+implicit flash payloads.
+The writer evaluates `mode.plan` before mutating the boot root; a refusal or
+missing acknowledgement leaves it untouched.
 
 Use `--boot-root <persist>/efisp` only when a local directory is deliberately
 provided for tests or an operator-managed workflow. For an image or raw block
@@ -157,11 +171,22 @@ source, use the boot manager's direct backend instead:
 
 ```bash
 canoe-bootmgr --boot-root /path/to/efisp install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 canoe-bootmgr --source /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
+```
+
+For a mode change on an existing row, add `--mode 1 --id <ENTRY_ID>` and the
+reviewed evidence plus repeated acknowledgements, for example:
+
+```bash
+canoe-bootmgr --boot-root /path/to/efisp install \
+  --staged /path/to/staged --slot a --mode 1 --id android-a \
+  --current-vbmeta <CURRENT_VBMETA> --target-vbmeta <TARGET_VBMETA> \
+  --target-image <TARGET_IMAGE> \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
 ```
 
 `--ext4-image` is an alias for `--source`; the two direct-source forms accept
@@ -169,6 +194,12 @@ an ext4 image or block device and cannot be combined with `--boot-root`.
 `--slot a|b` is required for a direct install unless the caller deliberately
 uses the inactive-slot form with known active metadata and
 `--i-know-inactive-status`. An unknown slot is refused.
+
+Both direct-source forms always use `/efisp` inside the persist volume, never
+the filesystem root. Installation creates `/efisp` if it is missing and reuses
+it if it already exists. Inspection alone does not create it, and misplaced
+root-level files are not adopted, moved, or deleted. A `--boot-root` value still
+names the boot-root directory itself.
 
 Super Fastboot publishes these fastboot variables:
 
@@ -184,7 +215,7 @@ slot whose loader is being installed:
 
 ```bash
 canoe build --abl images/abl.img --vbmeta images/vbmeta.img
-canoe install --slot b --mode 1
+canoe install --slot b
 ```
 
 The selected slot's existing triplet is copied to `boot_backup.efi` with
@@ -247,18 +278,21 @@ for the active slot and then the bundled local-directory backend:
 
 ```sh
 su -c sh ./build.sh --mode 0
-su -c sh ./build.sh --mode 1
-su -c sh ./build.sh --mode 1 --abl /path/abl.img --vbmeta /path/vbmeta.img
+su -c sh ./build.sh --mode 1 --acknowledge P-FORMAT
+su -c sh ./build.sh --mode 1 --acknowledge P-FORMAT --abl /path/abl.img --vbmeta /path/vbmeta.img
 ```
 
-Only Mode 0 and Mode 1 are accepted by this wrapper. It changes only the boot
-root tree, validates every generated file, removes the complete staged set on
-failure, and performs no partition write. For a previously prepared staging
-directory, the equivalent script-side command is:
+Only Mode 0 and Mode 1 are accepted by this wrapper. Mode 1 requires the
+explicit `P-FORMAT` acknowledgement. The selected VBMETA is passed to the
+policy gate as read-only target evidence; it is never an implicit flash
+payload. The wrapper changes only the boot root tree, validates every generated
+file, removes the complete staged set on failure, and performs no partition
+write. For a previously prepared staging directory, the equivalent script-side
+command is:
 
 ```sh
 canoe-bootmgr --boot-root /mnt/vendor/persist/efisp install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 ```
 
 The `--boot-root` form is the local-directory backend; use `--source` or

@@ -8,7 +8,10 @@ use crate::bls::BlsEntry;
 impl Ext4Dir {
     pub(super) fn populate_temp(&self, root: &Path) -> Result<(), Ext4Error> {
         for remote in KNOWN_FILES {
-            let local = root.join(remote.trim_start_matches('/'));
+            let relative = remote.strip_prefix('/').ok_or_else(|| {
+                Ext4Error::Operation(format!("invalid known ext4 path: {remote:?}"))
+            })?;
+            let local = temp_destination(root, relative)?;
             if remote == "/loader/entries" || remote == "/.canoe-quarantine" {
                 fs::create_dir_all(&local)
                     .map_err(|source| io("create temporary directory", &local, source))?;
@@ -23,7 +26,35 @@ impl Ext4Dir {
                     .map_err(|source| io("populate temporary file", &local, source))?;
             }
         }
+        self.populate_config_artifacts(root)?;
         self.populate_bls(root)?;
+        Ok(())
+    }
+
+    fn populate_config_artifacts(&self, root: &Path) -> Result<(), Ext4Error> {
+        let Some(bytes) = self.read_path("/canoe.cfg")? else {
+            return Ok(());
+        };
+        let config = crate::config::ConfigDocument::parse(&bytes)
+            .map_err(|error| Ext4Error::Operation(error.to_string()))?;
+        for entry in config.entries {
+            let paths = ["", ".gm2p", ".tzmap"].map(|suffix| format!("{}{}", entry.image, suffix));
+            let destinations = paths
+                .iter()
+                .map(|path| temp_destination(root, path).map(|local| (path, local)))
+                .collect::<Result<Vec<_>, Ext4Error>>()?;
+            for (path, local) in destinations {
+                let Some(bytes) = self.read_path(&format!("/{path}"))? else {
+                    continue;
+                };
+                if let Some(parent) = local.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|source| io("create config artifact directory", parent, source))?;
+                }
+                fs::write(&local, bytes)
+                    .map_err(|source| io("populate config artifact", &local, source))?;
+            }
+        }
         Ok(())
     }
 
@@ -33,6 +64,7 @@ impl Ext4Dir {
             .to_str()
             .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
         let entries_dir = self.remote("/loader/entries");
+        self.ensure_remote_components(&entries_dir)?;
         let output = Command::new(&self.helper)
             .args(["list", source, entries_dir.as_str()])
             .output()
@@ -52,92 +84,96 @@ impl Ext4Dir {
         }
         let entries: Vec<Listed> = serde_json::from_slice(&output.stdout)
             .map_err(|error| Ext4Error::Output(error.to_string()))?;
-        let directory = root.join("loader/entries");
-        for entry in entries.into_iter().filter(|entry| entry.kind == "file") {
-            if let Some(bytes) = self.read_path(&format!("/loader/entries/{}", entry.name))? {
+        let entries = entries
+            .into_iter()
+            .filter(|entry| entry.kind == "file")
+            .map(|entry| parse_bls_name(&entry.name).map(str::to_owned))
+            .collect::<Result<Vec<_>, Ext4Error>>()?;
+        for name in entries {
+            let remote = format!("/loader/entries/{name}");
+            let local = temp_destination(root, &format!("loader/entries/{name}"))?;
+            if let Some(bytes) = self.read_path(&remote)? {
                 if let Ok(parsed) = BlsEntry::parse(&bytes) {
                     self.populate_artifacts(root, &parsed)?;
                 }
-                fs::write(directory.join(entry.name), bytes)
-                    .map_err(|error| io("populate BLS file", &directory, error))?;
+                fs::write(&local, bytes).map_err(|error| io("populate BLS file", &local, error))?;
             }
         }
         Ok(())
     }
 
     fn populate_artifacts(&self, root: &Path, entry: &BlsEntry) -> Result<(), Ext4Error> {
-        for path in [
+        let artifacts = [
             Some(entry.image.as_str()),
             entry.initrd.as_deref(),
             entry.devicetree.as_deref(),
         ]
         .into_iter()
         .flatten()
-        {
-            let relative = path.replace('\\', "/");
-            let relative = relative.trim_start_matches('/');
-            if relative.is_empty()
-                || relative
-                    .split('/')
-                    .any(|part| part.is_empty() || part == "." || part == "..")
-            {
-                continue;
-            }
+        .map(|path| bls_artifact_destination(root, path))
+        .collect::<Result<Vec<_>, Ext4Error>>()?;
+        for (relative, local) in artifacts {
             if let Some(bytes) = self.read_path(&format!("/{relative}"))? {
-                let local = root.join(relative);
                 if let Some(parent) = local.parent() {
                     fs::create_dir_all(parent)
                         .map_err(|error| io("create artifact directory", parent, error))?;
                 }
-                fs::write(local, bytes)
-                    .map_err(|error| io("populate BLS artifact", root, error))?;
+                fs::write(&local, bytes)
+                    .map_err(|error| io("populate BLS artifact", &local, error))?;
             }
         }
-        Ok(())
-    }
-
-    pub(super) fn sync_temp(&self, root: &Path) -> Result<(), Ext4Error> {
-        for remote in KNOWN_FILES {
-            let local = root.join(remote.trim_start_matches('/'));
-            if !local.exists() && !remote.ends_with('/') {
-                self.remove_path(remote)?;
-            }
-        }
-        sync_tree(self, root, root)?;
         Ok(())
     }
 }
 
-fn sync_tree(backend: &Ext4Dir, root: &Path, current: &Path) -> Result<(), Ext4Error> {
-    let entries =
-        fs::read_dir(current).map_err(|source| io("read temporary directory", current, source))?;
-    for item in entries {
-        let item = item.map_err(|source| io("read temporary entry", current, source))?;
-        let path = item.path();
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| Ext4Error::Output("temporary path escaped root".to_owned()))?;
-        let remote = format!("/{}", relative.to_string_lossy().replace('\\', "/"));
-        if item
-            .file_type()
-            .map_err(|source| io("stat temporary entry", &path, source))?
-            .is_dir()
-        {
-            let source = backend
-                .source
-                .to_str()
-                .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
-            let target = backend.remote(&remote);
-            backend.command(&["--recover", "--mkdir-p", "mkdir", source, &target], None)?;
-            sync_tree(backend, root, &path)?;
-        } else {
-            backend.write_path(
-                &remote,
-                &fs::read(&path).map_err(|source| io("read temporary file", &path, source))?,
-            )?;
-        }
+#[derive(Debug, PartialEq, Eq)]
+struct RelativePath<'a> {
+    components: Vec<&'a str>,
+}
+
+fn parse_relative_path(logical: &str) -> Result<RelativePath<'_>, Ext4Error> {
+    let components = logical.split('/').collect::<Vec<_>>();
+    if logical.is_empty()
+        || logical.starts_with('/')
+        || logical.contains('\\')
+        || logical.contains(':')
+        || components
+            .iter()
+            .any(|component| component.is_empty() || matches!(*component, "." | ".."))
+    {
+        return Err(unsafe_relative_path(logical));
     }
-    Ok(())
+    Ok(RelativePath { components })
+}
+
+fn parse_bls_name(logical: &str) -> Result<&str, Ext4Error> {
+    let path = parse_relative_path(logical)?;
+    match path.components.as_slice() {
+        [component] => Ok(*component),
+        _ => Err(unsafe_relative_path(logical)),
+    }
+}
+
+fn temp_destination(root: &Path, logical: &str) -> Result<PathBuf, Ext4Error> {
+    let relative = parse_relative_path(logical)?;
+    Ok(relative
+        .components
+        .into_iter()
+        .fold(root.to_path_buf(), |mut destination, component| {
+            destination.push(component);
+            destination
+        }))
+}
+
+fn bls_artifact_destination(root: &Path, logical: &str) -> Result<(String, PathBuf), Ext4Error> {
+    let folded = logical.replace('\\', "/");
+    let relative = folded.strip_prefix('/').unwrap_or(&folded);
+    let local = temp_destination(root, relative).map_err(|_| unsafe_relative_path(logical))?;
+    Ok((relative.to_owned(), local))
+}
+
+fn unsafe_relative_path(logical: &str) -> Ext4Error {
+    Ext4Error::Operation(format!("unsafe ext4 relative path: {logical:?}"))
 }
 
 fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Ext4Error {
@@ -147,3 +183,7 @@ fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Ext4Error
         source,
     }
 }
+
+#[cfg(test)]
+#[path = "ext4_sync_tests.rs"]
+mod tests;

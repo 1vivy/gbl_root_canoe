@@ -6,12 +6,12 @@ use crate::cli::{
     VendorBootCommand,
 };
 use crate::graft;
+use crate::mode_enforcement::{ModeEvidence, enforce_mode};
 use crate::slot_transaction::{self, InstallInput};
 use crate::slots::{self, Slot};
 use crate::vendorboot;
 
 use crate::operations::AppError;
-
 pub(crate) fn graft_command(args: &crate::cli::GraftArgs) -> Result<Success, AppError> {
     Ok(Success::VbmetaGraft {
         ok: true,
@@ -116,9 +116,24 @@ pub(crate) fn install_command(backend: &Backend, args: &InstallArgs) -> Result<S
         parse_optional_slot(args.slot.as_deref(), "slot")?
             .ok_or_else(|| AppError::Request("install requires --slot a|b".to_owned()))?
     };
-    let receipt = backend
-        .with_temp_root(|root| {
-            slot_transaction::install(
+    let (receipt, acknowledged, warnings) = backend
+        .with_temp_root_action(|root| {
+            let local = crate::backend::LocalDir::new(root).map_err(AppError::Backend)?;
+            let config = local.read_config().map_err(AppError::Backend)?;
+            let evidence = ModeEvidence {
+                id: args.id.as_deref(),
+                target_mode: args.mode,
+                from_mode: args.from_mode,
+                prior_canoe: args.prior_canoe,
+                acknowledge: &args.acknowledge,
+                current_vbmeta: args.current_vbmeta.as_ref(),
+                target_vbmeta: args.target_vbmeta.as_ref(),
+                target_image: args.target_image.as_ref(),
+                tools: None,
+                replaces_artifacts: true,
+            };
+            let (acknowledged, warnings) = enforce_mode(root, config.as_ref(), &evidence)?;
+            let receipt = slot_transaction::install(
                 root,
                 &InstallInput {
                     staged: args.staged.clone(),
@@ -127,12 +142,39 @@ pub(crate) fn install_command(backend: &Backend, args: &InstallArgs) -> Result<S
                     active: status.active_slot,
                     mode: args.mode,
                     allow_new_signer: args.allow_new_signer,
+                    staged_loader_bytes: args.staged_loader_bytes,
+                    staged_loader_sha256: args.staged_loader_sha256.clone(),
+                    staged_gm2p_bytes: args.staged_gm2p_bytes,
+                    staged_gm2p_sha256: args.staged_gm2p_sha256.clone(),
+                    staged_tzmap_bytes: args.staged_tzmap_bytes,
+                    staged_tzmap_sha256: args.staged_tzmap_sha256.clone(),
+                    staged_tools: args.staged_tools.clone(),
+                    mode_request: args.mode.map(|target_mode| {
+                        slot_transaction::ModeRequestIdentity {
+                            id: args.id.clone(),
+                            from_mode: args.from_mode,
+                            prior_canoe: args.prior_canoe,
+                            target_mode: Some(target_mode),
+                            current_vbmeta: args.current_vbmeta.clone(),
+                            target_vbmeta: args.target_vbmeta.clone(),
+                            target_image: args.target_image.clone(),
+                            tools: None,
+                            acknowledge: args.acknowledge.clone(),
+                        }
+                    }),
                 },
             )
-            .map_err(|error| error.to_string())
+            .map_err(AppError::Slot)?;
+            Ok::<_, AppError>((receipt, acknowledged, warnings))
         })
-        .map_err(AppError::from)?;
-    Ok(Success::Install { ok: true, receipt })
+        .map_err(AppError::from_backend_action)?;
+    let receipt = receipt.with_policy(acknowledged.clone(), warnings.clone());
+    Ok(Success::Install {
+        ok: true,
+        receipt,
+        acknowledged,
+        warnings,
+    })
 }
 
 pub(crate) fn ota_apply(backend: &Backend, args: &OtaApplyArgs) -> Result<Success, AppError> {
@@ -140,7 +182,8 @@ pub(crate) fn ota_apply(backend: &Backend, args: &OtaApplyArgs) -> Result<Succes
     let status = slots::resolve_active(None, args.bootctl_output.as_deref(), gpt);
     let target = match parse_optional_slot(args.target_slot.as_deref(), "target slot")? {
         Some(target) => {
-            if status.active_slot == Some(target) {
+            let active = status.active_slot.ok_or(AppError::OtaActiveSlotUnknown)?;
+            if active == target {
                 return Err(AppError::Request(
                     "OTA target is the running slot; refusing silent running-slot fallback"
                         .to_owned(),
@@ -155,9 +198,24 @@ pub(crate) fn ota_apply(backend: &Backend, args: &OtaApplyArgs) -> Result<Succes
             )
         })?,
     };
-    let receipt = backend
-        .with_temp_root(|root| {
-            slot_transaction::install(
+    let (receipt, acknowledged, warnings) = backend
+        .with_temp_root_action(|root| {
+            let local = crate::backend::LocalDir::new(root).map_err(AppError::Backend)?;
+            let config = local.read_config().map_err(AppError::Backend)?;
+            let evidence = ModeEvidence {
+                id: args.id.as_deref(),
+                target_mode: args.mode,
+                from_mode: args.from_mode,
+                prior_canoe: args.prior_canoe,
+                acknowledge: &args.acknowledge,
+                current_vbmeta: args.current_vbmeta.as_ref(),
+                target_vbmeta: args.target_vbmeta.as_ref(),
+                target_image: args.target_image.as_ref(),
+                tools: None,
+                replaces_artifacts: true,
+            };
+            let (acknowledged, warnings) = enforce_mode(root, config.as_ref(), &evidence)?;
+            let receipt = slot_transaction::install(
                 root,
                 &InstallInput {
                     staged: args.staged.clone(),
@@ -166,29 +224,59 @@ pub(crate) fn ota_apply(backend: &Backend, args: &OtaApplyArgs) -> Result<Succes
                     active: status.active_slot,
                     mode: args.mode,
                     allow_new_signer: args.allow_new_signer,
+                    staged_loader_bytes: args.staged_loader_bytes,
+                    staged_loader_sha256: args.staged_loader_sha256.clone(),
+                    staged_gm2p_bytes: args.staged_gm2p_bytes,
+                    staged_gm2p_sha256: args.staged_gm2p_sha256.clone(),
+                    staged_tzmap_bytes: args.staged_tzmap_bytes,
+                    staged_tzmap_sha256: args.staged_tzmap_sha256.clone(),
+                    staged_tools: args.staged_tools.clone(),
+                    mode_request: args.mode.map(|target_mode| {
+                        slot_transaction::ModeRequestIdentity {
+                            id: args.id.clone(),
+                            from_mode: args.from_mode,
+                            prior_canoe: args.prior_canoe,
+                            target_mode: Some(target_mode),
+                            current_vbmeta: args.current_vbmeta.clone(),
+                            target_vbmeta: args.target_vbmeta.clone(),
+                            target_image: args.target_image.clone(),
+                            tools: None,
+                            acknowledge: args.acknowledge.clone(),
+                        }
+                    }),
                 },
             )
-            .map_err(|error| error.to_string())
+            .map_err(AppError::Slot)?;
+            Ok::<_, AppError>((receipt, acknowledged, warnings))
         })
-        .map_err(AppError::from)?;
-    Ok(Success::OtaApply { ok: true, receipt })
+        .map_err(AppError::from_backend_action)?;
+    let receipt = receipt.with_policy(acknowledged.clone(), warnings.clone());
+    Ok(Success::OtaApply {
+        ok: true,
+        receipt,
+        acknowledged,
+        warnings,
+    })
 }
 
-pub(crate) fn tools_update(
-    backend: &Backend,
-    args: &ToolsUpdateArgs,
-) -> Result<Success, AppError> {
-    let files = match backend {
-        Backend::Local(local) => crate::tools_update::update(local.root(), &args.source)?,
+pub(crate) fn tools_update(backend: &Backend, args: &ToolsUpdateArgs) -> Result<Success, AppError> {
+    let receipt = match backend {
+        Backend::Local(local) => {
+            crate::tools_update::update_with_inventory(local.root(), &args.source, &args.inventory)?
+        }
         Backend::Ext4(_) => backend
             .with_temp_root(|root| {
-                crate::tools_update::update(root, &args.source).map_err(|error| error.to_string())
+                crate::tools_update::update_with_inventory(root, &args.source, &args.inventory)
+                    .map_err(|error| error.to_string())
             })
             .map_err(AppError::from)?,
     };
-    Ok(Success::ToolsUpdate { ok: true, files })
+    Ok(Success::ToolsUpdate {
+        ok: true,
+        files: receipt.files,
+        inventory: receipt.inventory,
+    })
 }
-
 pub(crate) fn vendorboot_command(command: &VendorBootCommand) -> Result<Success, AppError> {
     match command {
         VendorBootCommand::Patch(args) => Ok(Success::VendorBootPatch {

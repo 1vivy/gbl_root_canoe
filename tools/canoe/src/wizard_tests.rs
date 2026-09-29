@@ -4,23 +4,33 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{ask, confirm_identity, confirm_probe_failure, PromptIo, WizardPlan};
+use super::{PromptIo, WizardPlan, ask, confirm_identity, confirm_probe_failure};
 use crate::layout::Toolkit;
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 fn temp_toolkit() -> (Toolkit, PathBuf) {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock").as_nanos();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
     let serial = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
     let root = std::env::temp_dir().join(format!("canoe-wizard-unit-{stamp}-{serial}"));
     fs::create_dir_all(&root).expect("test root");
     (Toolkit { root: root.clone() }, root)
 }
 
-fn run_ask(toolkit: &Toolkit, identity: canoe_bootmgr::fastboot::Identity, input: &str) -> (Option<WizardPlan>, Vec<u8>) {
+fn run_ask(
+    toolkit: &Toolkit,
+    identity: canoe_bootmgr::fastboot::Identity,
+    input: &str,
+) -> (Option<WizardPlan>, Vec<u8>) {
     let mut reader = Cursor::new(input.as_bytes());
     let mut output = Vec::new();
-    let mut prompt = PromptIo { reader: &mut reader, writer: &mut output };
+    let mut prompt = PromptIo {
+        reader: &mut reader,
+        writer: &mut output,
+    };
     let plan = ask(toolkit, &identity, &mut prompt).expect("questionnaire");
     (plan, output)
 }
@@ -37,7 +47,15 @@ fn ask_uses_device_slot_and_empty_yes_no_answers_use_defaults() {
         },
         "0\n\n",
     );
-    assert_eq!(plan, Some(WizardPlan { slot: "b".to_owned(), mode: 0, vendor_boot: None }));
+    assert_eq!(
+        plan,
+        Some(WizardPlan {
+            slot: "b".to_owned(),
+            mode: 0,
+            vendor_boot: None,
+            acknowledge: Vec::new(),
+        })
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -54,9 +72,17 @@ fn ask_requests_unknown_device_slot_and_carries_mode_one_vendor_choice() {
             current_slot: None,
             ..Default::default()
         },
-        "b\n1\ny\ny\n\n",
+        "b\n1\ny\ny\ny\n\n",
     );
-    assert_eq!(plan, Some(WizardPlan { slot: "b".to_owned(), mode: 1, vendor_boot: Some(vendor_boot) }));
+    assert_eq!(
+        plan,
+        Some(WizardPlan {
+            slot: "b".to_owned(),
+            mode: 1,
+            vendor_boot: Some(vendor_boot),
+            acknowledge: vec!["P-GRAFT".to_owned(), "P-FORMAT".to_owned()],
+        })
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -136,4 +162,3 @@ fn confirm_environment_non_super_fastboot_defaults_to_abort() {
     assert!(!root.join("efisp").exists());
     let _ = fs::remove_dir_all(root);
 }
-

@@ -10,6 +10,10 @@ Options must precede the command. `--recover` explicitly authorizes journal
 recovery for a dirty source. `--mkdir-p` (or `-p`) gives `write` and `mkdir`
 parents semantics.
 
+New directories use libext2fs's permission umask without adding append-only,
+immutable, or compression flags. Existing directories' attributes are preserved;
+the helper does not clear protection flags as an implicit repair.
+
 ```
 canoe-ext4 inspect SOURCE [--path PATH]
 canoe-ext4 read SOURCE PATH
@@ -17,6 +21,7 @@ canoe-ext4 write SOURCE PATH < BYTES
 canoe-ext4 mkdir SOURCE PATH
 canoe-ext4 remove SOURCE PATH
 canoe-ext4 rename SOURCE OLD_PATH NEW_PATH
+canoe-ext4 sync SOURCE MANIFEST DESIRED_ROOT EXPECTED_ROOT
 canoe-ext4 list SOURCE DIRECTORY
 ```
 
@@ -26,13 +31,27 @@ With `--path`, it also includes `path` and `path_exists`. `list` emits a JSON
 array of `{name,inode,type}` objects. `read` writes only file bytes to stdout;
 recovery/status diagnostics are on stderr.
 
-Writes are limited to 64 MiB per invocation. Every invocation takes an
-exclusive lock on the source and refuses a source listed as mounted in
+Individual file contents are limited to 64 MiB. `sync` accepts at most 4096
+entries and retains at most 256 MiB of rollback snapshots. Every invocation takes
+an exclusive lock on the source and refuses a source listed as mounted in
 `/proc/self/mountinfo` (tests may provide `CANOE_EXT4_MOUNTINFO`). Mutation
 opens are fail-closed for unsupported feature bits and dirty state. They run
 `e2fsck`'s libext2fs-equivalent journal recovery boundary before mutation,
 then flush libext2fs, stop its filesystem/journal handle, fsync the source fd,
 and close it before returning success.
+
+`sync` applies a reviewed multi-file change under one source lock and filesystem
+owner. It verifies expected entries, snapshots affected contents, applies the
+desired tree, and restores those contents on an ordinary apply failure before
+flushing and closing. A successful rollback is logical recovery, not a claim of
+power-loss atomicity.
+
+The manifest contains space-separated `desired expected target_hex local_hex`
+records, each terminated by a newline and strictly ordered by decoded target
+path. Entry states are `a` (absent), `d` (directory), and `f` (file); expected
+state alone may be `u` (unobserved). Target paths are absolute inside the ext4
+filesystem; local paths are relative to the desired and expected host roots.
+Both paths are hex-encoded so whitespace cannot change field boundaries.
 
 ## Exit codes
 

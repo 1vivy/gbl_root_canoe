@@ -1,7 +1,7 @@
-use crate::backend::BootRoot;
+use super::AppError;
+use crate::backend::{Backend, LocalDir};
 use crate::build::{self, BuildArgs, BuildOutcome};
 use crate::cli::{ModePlanArgs, SourceCommand, Success};
-use super::AppError;
 
 pub(super) fn abl_verify(args: &crate::cli::AblVerifyArgs) -> Result<Success, AppError> {
     let receipt = crate::abl_verify::verify(&crate::abl_verify::AblVerifyRequest {
@@ -21,6 +21,11 @@ pub(super) fn block_write(args: &crate::cli::BlockWriteArgs) -> Result<Success, 
         image: args.image.clone(),
         snapshot: args.snapshot.clone(),
         slot: args.slot.clone(),
+        expected_bytes: args.expected_bytes,
+        expected_partition_bytes: args.expected_partition_bytes,
+        expected_sha256: args.expected_sha256.clone(),
+        expected_snapshot_bytes: args.expected_snapshot_bytes,
+        expected_snapshot_sha256: args.expected_snapshot_sha256.clone(),
     })?;
     Ok(Success::BlockWrite {
         ok: true,
@@ -29,7 +34,17 @@ pub(super) fn block_write(args: &crate::cli::BlockWriteArgs) -> Result<Success, 
         bytes_written: receipt.bytes_written,
         sha256: receipt.sha256,
         snapshot: receipt.snapshot,
+        snapshot_bytes: receipt.snapshot_bytes,
+        snapshot_sha256: receipt.snapshot_sha256,
         verified: receipt.verified,
+    })
+}
+
+pub(super) fn tools_inventory(args: &crate::cli::ToolsInventoryArgs) -> Result<Success, AppError> {
+    let inventory = crate::tools_inventory::inventory(&args.source)?;
+    Ok(Success::ToolsInventory {
+        ok: true,
+        inventory,
     })
 }
 
@@ -42,46 +57,45 @@ pub(super) fn validate_mode_plan_target(target_mode: u8) -> Result<(), AppError>
     Ok(())
 }
 
-pub(super) fn mode_plan(
-    backend: &dyn BootRoot,
-    args: &ModePlanArgs,
-) -> Result<Success, AppError> {
-    let (id, plan) = match args.id.as_deref() {
-        Some(id) => {
-            let config = super::operations_bootroot::read_existing(backend)?;
-            let entry = config.entry(id).cloned().ok_or_else(|| {
-                AppError::Config(crate::config::ConfigError::Invalid(format!(
-                    "no such entry: {id}"
-                )))
-            })?;
-            let plan = crate::mode_plan::plan_for_entry(
-                backend.root(),
-                &entry,
-                args.target_mode,
-                args.current_vbmeta.as_ref(),
-                args.target_vbmeta.as_ref(),
-                args.target_image.as_ref(),
-                args.tools.as_deref(),
-            )?;
-            (Some(id.to_owned()), plan)
-        }
-        None => {
-            let plan = crate::mode_plan::plan_for_mode(
-                args.from_mode.unwrap_or(0),
-                args.target_mode,
-                args.current_vbmeta.as_ref(),
-                args.target_vbmeta.as_ref(),
-                args.target_image.as_ref(),
-                args.tools.as_deref(),
-            )?;
-            (None, plan)
-        }
-    };
-    Ok(Success::ModePlan {
-        ok: true,
-        id,
-        plan,
-    })
+pub(super) fn mode_plan(backend: &Backend, args: &ModePlanArgs) -> Result<Success, AppError> {
+    backend
+        .with_temp_root_readonly_action(|root| {
+            let local = LocalDir::new(root).map_err(AppError::Backend)?;
+            let (id, plan) = match args.id.as_deref() {
+                Some(id) => {
+                    let config = super::operations_bootroot::read_existing(&local)?;
+                    let entry = config.entry(id).cloned().ok_or_else(|| {
+                        AppError::Config(crate::config::ConfigError::Invalid(format!(
+                            "no such entry: {id}"
+                        )))
+                    })?;
+                    let plan = crate::mode_plan::plan_for_entry(
+                        root,
+                        &entry,
+                        args.target_mode,
+                        args.current_vbmeta.as_ref(),
+                        args.target_vbmeta.as_ref(),
+                        args.target_image.as_ref(),
+                        args.tools.as_deref(),
+                    )?;
+                    (Some(id.to_owned()), plan)
+                }
+                None => {
+                    let plan = crate::mode_plan::plan_for_mode(
+                        args.from_mode,
+                        args.target_mode,
+                        args.current_vbmeta.as_ref(),
+                        args.target_vbmeta.as_ref(),
+                        args.target_image.as_ref(),
+                        args.tools.as_deref(),
+                        args.prior_canoe,
+                    )?;
+                    (None, plan)
+                }
+            };
+            Ok::<_, AppError>(Success::ModePlan { ok: true, id, plan })
+        })
+        .map_err(AppError::from_backend_action)
 }
 
 pub(super) fn build(args: &BuildArgs) -> Result<Success, AppError> {

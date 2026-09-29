@@ -157,7 +157,70 @@ cp "$IMAGE_DIR/16m-1024b-baseline.img" "$locked"
 ) 9>"$locked" &
 locker=$!
 sleep 0.1
-expect_code 6 "$BIN" inspect "$locked"
+set +e
+"$BIN" inspect "$locked" >/dev/null 2>"$TMP/locked.err"
+code=$?
+set -e
+assert_eq 6 "$code" 'locked source exit code'
+lock_error=$(<"$TMP/locked.err")
+assert_contains "$lock_error" 'errno=' 'locked source exposes OS lock errno'
 wait "$locker"
+
+# Every regular file this helper creates must be extent-mapped, and a
+# block-mapped file from an older generation must be re-mapped when it is
+# overwritten. The BDS reads the boot root with Ext4Pkg's read-only driver,
+# which refuses an inode without EXT4_EXTENTS_FL: a block-mapped canoe.cfg or
+# boot_a.efi opens and then fails every read, which the firmware reports as a
+# missing image. Only the inode layout distinguishes the two, so bytes read back
+# through this helper or a kernel mount cannot stand in for this check.
+inode_flags() {
+    debugfs -R "stat $2" "$1" 2>/dev/null | sed -n 's/.*Flags: \(0x[0-9a-f]*\).*/\1/p' | head -1
+}
+
+# Kernel users must be able to replace and delete entries in helper-created
+# directories. libext2fs itself ignores append-only flags when unlinking, so
+# its successful remove round trips above do not prove this contract.
+directories="$TMP/directories.img"
+cp "$IMAGE_DIR/16m-1024b-baseline.img" "$directories"
+"$BIN" mkdir "$directories" /direct
+"$BIN" --mkdir-p mkdir "$directories" /nested/child
+printf '%s\n' 'writable payload' |
+    "$BIN" --mkdir-p write "$directories" /written/child/payload
+for directory in /direct /nested /nested/child /written /written/child; do
+    flags=$(inode_flags "$directories" "$directory")
+    test -n "$flags" || fail "missing inode flags for $directory"
+    assert_eq 0 "$((flags & 0x1ff))" \
+        "unexpected protection/compression/legacy flags on $directory"
+done
+
+extents="$TMP/extents.img"
+cp "$IMAGE_DIR/16m-1024b-baseline.img" "$extents"
+printf '%s\n' 'extent mapped payload' | "$BIN" --mkdir-p write "$extents" /efisp/boot_a.efi
+created_flags=$(inode_flags "$extents" /efisp/boot_a.efi)
+case "$created_flags" in
+    0x8*) ;;
+    *) fail "created file is not extent-mapped (flags $created_flags)" ;;
+esac
+
+# The legacy shape: a file created while the volume had no extents feature,
+# which the feature being enabled afterwards leaves block-mapped. Overwriting it
+# must re-map it instead of preserving a file the loader cannot read.
+legacy="$TMP/legacy.img"
+dd if=/dev/zero of="$legacy" bs=1M count=16 status=none
+mkfs.ext4 -q -F -O ^extent,^64bit -b 1024 "$legacy"
+printf '%s\n' 'legacy generation' | "$BIN" write "$legacy" /canoe.cfg
+legacy_before=$(inode_flags "$legacy" /canoe.cfg)
+assert_eq '0x0' "$legacy_before" 'file on a no-extents volume is block-mapped'
+tune2fs -O extent "$legacy" >/dev/null 2>&1 || fail 'cannot enable extents on the legacy image'
+assert_eq '0x0' "$(inode_flags "$legacy" /canoe.cfg)" 'enabling extents must not re-map existing files'
+printf '%s\n' 'overwritten by canoe-ext4.' | "$BIN" write "$legacy" /canoe.cfg
+legacy_after=$(inode_flags "$legacy" /canoe.cfg)
+case "$legacy_after" in
+    0x8*) ;;
+    *) fail "overwritten file stayed block-mapped (flags $legacy_after)" ;;
+esac
+overwritten=$("$BIN" read "$legacy" /canoe.cfg | sha256sum | awk '{print $1}')
+assert_eq "$OVERWRITE_HASH" "$overwritten" 'remapped overwrite keeps its bytes'
+e2fsck -fn "$legacy" >/dev/null 2>&1 || fail 'remapped image fails e2fsck'
 
 printf 'PASS: %s feature variants; read/write/rename/remove/list/mkdir round trips; dirty journal recovery; mounted and unknown-feature fail-closed checks\n' "$variants"

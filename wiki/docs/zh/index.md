@@ -23,10 +23,10 @@ features:
     details: 一个 Svelte 应用、一套 JSON 协议和一个写入器，统一服务于 Linux、Windows 与 KernelSU Android
     link: /zh/intro
   - title: 桌面端（Linux 与 Windows）
-    details: 启动应用并等待 Super Fastboot 应答，然后使用 GENERAL、Boot entries、Settings、引导流程或 Graft
+    details: 在 Overview 启动应用，然后使用 Deploy 的 Provision、Prepare、Action 阶段以及 Entries、Settings、Diagnostics
     link: /zh/usage
   - title: KernelSU Android
-    details: 同一应用直接读取本地启动根目录；根目录可读时进入 GENERAL，不可用时进入首次安装 Provision
+    details: 同一应用直接读取本地启动根目录；Overview 报告状态，Deploy 提供相应 lane
     link: /zh/usage
   - title: CLI
     details: canoe 是操作员 CLI，canoe-bootmgr 是 JSON 协议写入器；两者提供相同的启动根目录操作

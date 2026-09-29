@@ -101,9 +101,11 @@ pub fn patch_cmdline(source: &Path, output: &Path) -> Result<PatchReceipt, Vendo
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), VendorBootError> {
-    let parent = path.parent().ok_or_else(|| VendorBootError::OutputInvalid {
-        message: "output has no parent".to_owned(),
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| VendorBootError::OutputInvalid {
+            message: "output has no parent".to_owned(),
+        })?;
     if !parent.as_os_str().is_empty() {
         fs::create_dir_all(parent).map_err(|error| io("create output directory", parent, error))?;
     }

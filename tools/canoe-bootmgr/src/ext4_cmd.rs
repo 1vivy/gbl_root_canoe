@@ -41,6 +41,13 @@ impl Ext4Dir {
             };
             return Err(if output.status.code() == Some(7) {
                 Ext4Error::Missing { message }
+            } else if message.contains("transaction_rollback=failed") {
+                Ext4Error::Rollback {
+                    sync: Box::new(Ext4Error::Helper {
+                        message: "helper transaction apply failed".to_owned(),
+                    }),
+                    rollback: Box::new(Ext4Error::Helper { message }),
+                }
             } else {
                 Ext4Error::Helper { message }
             });
@@ -50,6 +57,7 @@ impl Ext4Dir {
 
     pub(super) fn read_path(&self, path: &str) -> Result<Option<Vec<u8>>, Ext4Error> {
         let target = self.remote(path);
+        self.ensure_remote_components(&target)?;
         let output = Command::new(&self.helper)
             .args([
                 "read",
@@ -82,10 +90,13 @@ impl Ext4Dir {
             .to_str()
             .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
         let target = self.remote(path);
+        self.ensure_remote_components(&target)?;
         let parent =
             target.rsplit_once('/').map_or(
                 "/",
-                |(parent, _)| if parent.is_empty() { "/" } else { parent },
+                |(parent, _)| {
+                    if parent.is_empty() { "/" } else { parent }
+                },
             );
         self.command(&["--recover", "--mkdir-p", "mkdir", source, parent], None)?;
         self.command(
@@ -95,30 +106,54 @@ impl Ext4Dir {
         Ok(())
     }
 
-    pub(super) fn remove_path(&self, path: &str) -> Result<(), Ext4Error> {
+    pub(super) fn ensure_remote_components(&self, target: &str) -> Result<(), Ext4Error> {
+        let mut parent = String::from("/");
+        let mut components = target.trim_start_matches('/').split('/').peekable();
+        while let Some(component) = components.next() {
+            if component.is_empty() {
+                continue;
+            }
+            let entries = self.list_directory(&parent)?;
+            let Some(entry) = entries.iter().find(|entry| entry.name == component) else {
+                return Ok(());
+            };
+            if entry.kind == "symlink" {
+                return Err(Ext4Error::Operation(format!(
+                    "ext4 path crosses symlink component: {component}"
+                )));
+            }
+            if components.peek().is_some() && entry.kind != "directory" {
+                return Err(Ext4Error::Operation(format!(
+                    "ext4 path component is not a directory: {component}"
+                )));
+            }
+            if parent == "/" {
+                parent.push_str(component);
+            } else {
+                parent.push('/');
+                parent.push_str(component);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn list_directory(&self, directory: &str) -> Result<Vec<super::Listed>, Ext4Error> {
         let source = self
             .source
             .to_str()
             .ok_or_else(|| Ext4Error::Output("source path is not UTF-8".to_owned()))?;
-        let target = self.remote(path);
-        let output = Command::new(&self.helper)
-            .args(["--recover", "remove", source, target.as_str()])
-            .output()
-            .map_err(|source| io("remove", Path::new(&target), source))?;
-        if output.status.success() || output.status.code() == Some(7) {
-            return Ok(());
+        match self.command(&["list", source, directory], None) {
+            Ok(output) => serde_json::from_slice(&output)
+                .map_err(|error| Ext4Error::Output(error.to_string())),
+            Err(Ext4Error::Missing { .. }) => Ok(Vec::new()),
+            Err(error) => Err(error),
         }
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        Err(Ext4Error::Helper {
-            message: if message.is_empty() {
-                format!("helper exited {}", output.status)
-            } else {
-                message
-            },
-        })
     }
 }
 
+#[cfg(test)]
+#[path = "ext4_cmd_tests.rs"]
+mod tests;
 fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Ext4Error {
     Ext4Error::Io {
         operation,

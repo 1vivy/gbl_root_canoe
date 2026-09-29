@@ -14,9 +14,10 @@ using the same ext4 journal and boot-root files.
 
 ## Start an export
 
-The BDS menu still has the **USB Mass Storage** action. From the app, the
-Guided flow's Commit step requests the export and keeps it held only while the
-install transaction runs. The same operation is available to the CLI:
+The BDS menu still has the **USB Mass Storage** action. From the app, Deploy
+uses one export coordinator for the operation: it requests the export, attaches
+the validated source, and keeps it held through the boot-root transaction. The
+same export operation is available to the CLI:
 
 ```bash
 canoe-bootmgr fastboot export --target persist
@@ -55,12 +56,13 @@ this fallback is used:
 printf 'DisableSwitching=1\n' | sudo tee /etc/usb_modeswitch.d/05c6:f000
 ```
 
-`source.detect` is the single detector used by the app and CLI. It reports
-candidate kind (`block`, `image`, or `dir`), path, identity, model, size,
-boot-root presence, readability/writability, privilege need, mount point, and
-reason. An unmounted, readable Canoe export is an `export_candidate`. It is
-safe to retry a timed-out operation: a later run adopts the disk already
-reported by `source.detect` rather than asking BDS for another export.
+`source.detect` is the command-line detector. It reports candidate kind
+(`block`, `image`, or `dir`), path, identity, model, size, boot-root presence,
+readability/writability, privilege need, mount point, and reason. An unmounted,
+readable Canoe export is an `export_candidate`. The desktop app instead owns
+the exact raw node returned by `fastboot.export`; retries adopt that
+coordinator-owned live attachment rather than rescanning or asking BDS for
+another export.
 
 ```bash
 canoe source detect --json
@@ -78,19 +80,38 @@ selected raw block source to its libext2fs-backed `canoe-ext4` backend, which
 owns locking, journal recovery, bounded writes, flush, and close:
 
 ```bash
-canoe install --slot a --mode 1
+canoe install --slot a
 ```
 
-The `canoe` wrapper asks `source.detect` for a readable, unmounted export and
-adopts it. For an explicit source, use the global source selector:
+`canoe install` omits `--mode` to inherit the persisted mode. An explicit mode
+change through this wrapper must include `--mode 0|1|2`, `--from-mode 0|1|2`,
+and a repeated `--acknowledge <CODE>` for every acknowledgement required by
+`mode.plan`. The direct `canoe-bootmgr` interface accepts `--id <ENTRY_ID>` for
+an existing managed row; a new row uses `--from-mode`. If image evidence is
+needed, also provide `--current-vbmeta <PATH>`, `--target-vbmeta <PATH>`, and
+`--target-image <PATH>`; these paths are evidence, not implicit flash payloads.
+The writer evaluates `mode.plan` before mutating the boot root; a refusal or
+missing acknowledgement leaves it untouched.
+For a direct writer invocation:
 
 ```bash
 canoe-bootmgr --source <RAW_NODE> install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 canoe-bootmgr --source /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
 canoe-bootmgr --ext4-image /path/to/persist.ext4 install \
-  --staged /path/to/staged --slot a --mode 1
+  --staged /path/to/staged --slot a
+```
+
+For a mode change on an existing row, add the reviewed evidence and
+acknowledgements:
+
+```bash
+canoe-bootmgr --source <RAW_NODE> install \
+  --staged /path/to/staged --slot a --mode 1 --id android-a \
+  --current-vbmeta <CURRENT_VBMETA> --target-vbmeta <TARGET_VBMETA> \
+  --target-image <TARGET_IMAGE> \
+  --acknowledge <CODE_1> --acknowledge <CODE_2>
 ```
 
 The backend creates `/efisp` when it is missing and commits boot-root files,
@@ -124,5 +145,5 @@ using the live export.
 
 For the configuration format, see the normative
 [`canoe.cfg` contract](./canoe-cfg.md). For OTA and mode changes, use the
-app's Guided flow so the export, evidence, acknowledgement, write, and end step
-remain one reviewed sequence.
+app's Overview → Deploy flow: Provision → Prepare → Action keeps export,
+evidence, acknowledgement, write, and end steps in one reviewed sequence.

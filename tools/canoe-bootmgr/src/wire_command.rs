@@ -1,14 +1,14 @@
 use crate::artifact::ArtifactSpec;
 use crate::build::BuildArgs;
 use crate::cli::{
-    AblLookupArgs, BlsCommand, BlsStageArgs, BlockReadArgs, Command, ConfigCommand, DefaultCommand,
+    AblLookupArgs, BlockReadArgs, BlsCommand, BlsStageArgs, Command, ConfigCommand, DefaultCommand,
     DefaultSetArgs, EntryCommand, EntryIdArgs, EntryModeArgs, EntrySetArgs,
     FastbootAblCoverageArgs, FastbootCommand, FastbootEndExportArgs, FastbootExportArgs,
     FastbootFetchArgs, FastbootFlashArgs, FastbootIdentifyArgs, FastbootRebootArgs, GraftArgs,
-    ImageDigestArgs, InstallArgs, ModePlanArgs, OtaApplyArgs, PolicyArgs, SlotCommand,
-    SlotStatusArgs, SourceCommand, SystemRebootArgs, ToolsUpdateArgs, VbmetaCheckArgs,
-    VbmetaExtractArgs, VbmetaHeaderArgs, VbmetaInspectArgs, VendorBootCommand,
-    VendorBootPatchArgs,
+    ImageDigestArgs, ImageZeroArgs, InstallArgs, ModePlanArgs, OtaApplyArgs, PolicyArgs,
+    SlotCommand, SlotStatusArgs, SourceCommand, SystemRebootArgs, ToolsInventoryArgs,
+    ToolsUpdateArgs, VbmetaCheckArgs, VbmetaExtractArgs, VbmetaHeaderArgs, VbmetaInspectArgs,
+    VendorBootCommand, VendorBootPatchArgs,
 };
 use crate::wire::JsonRequest;
 
@@ -45,16 +45,29 @@ impl JsonRequest {
             Self::ImageDigest { image, bytes } => {
                 Command::ImageDigest(ImageDigestArgs { image, bytes })
             }
+            Self::ImageZero { output, bytes } => {
+                Command::ImageZero(ImageZeroArgs { output, bytes })
+            }
             Self::BlockWrite {
                 partition,
                 image,
                 snapshot,
                 slot,
+                expected_bytes,
+                expected_partition_bytes,
+                expected_sha256,
+                expected_snapshot_bytes,
+                expected_snapshot_sha256,
             } => Command::BlockWrite(crate::cli::BlockWriteArgs {
                 partition,
                 image,
                 snapshot,
                 slot,
+                expected_bytes,
+                expected_partition_bytes,
+                expected_sha256,
+                expected_snapshot_bytes,
+                expected_snapshot_sha256,
             }),
             Self::BlockRead {
                 partition,
@@ -68,10 +81,15 @@ impl JsonRequest {
             Self::ToolsUpdate {
                 source,
                 boot_root_source,
+                inventory,
             } => Command::ToolsUpdate(ToolsUpdateArgs {
                 source,
                 boot_root_source,
+                inventory,
             }),
+            Self::ToolsInventory { source } => {
+                Command::ToolsInventory(ToolsInventoryArgs { source })
+            }
             Self::ConfigShow => Command::Config {
                 command: ConfigCommand::Show,
             },
@@ -122,6 +140,7 @@ impl JsonRequest {
                 current_vbmeta,
                 target_vbmeta,
                 target_image,
+                tools,
             } => Command::Entry {
                 command: EntryCommand::Mode(EntryModeArgs {
                     id,
@@ -130,13 +149,14 @@ impl JsonRequest {
                     current_vbmeta,
                     target_vbmeta,
                     target_image,
-                    tools: None,
+                    tools,
                 }),
             },
             Self::ModePlan {
                 id,
                 target_mode,
                 from_mode,
+                prior_canoe,
                 current_vbmeta,
                 target_vbmeta,
                 target_image,
@@ -144,6 +164,7 @@ impl JsonRequest {
                 id,
                 target_mode,
                 from_mode,
+                prior_canoe,
                 current_vbmeta,
                 target_vbmeta,
                 target_image,
@@ -221,6 +242,20 @@ impl JsonRequest {
                 mode,
                 allow_new_signer,
                 boot_root_source,
+                id,
+                from_mode,
+                prior_canoe,
+                acknowledge,
+                current_vbmeta,
+                target_vbmeta,
+                target_image,
+                staged_loader_bytes,
+                staged_loader_sha256,
+                staged_gm2p_bytes,
+                staged_gm2p_sha256,
+                staged_tzmap_bytes,
+                staged_tzmap_sha256,
+                staged_tools,
             } => Command::Install(InstallArgs {
                 staged,
                 slot,
@@ -233,6 +268,20 @@ impl JsonRequest {
                 mode,
                 allow_new_signer,
                 boot_root_source,
+                id,
+                from_mode,
+                prior_canoe,
+                acknowledge,
+                current_vbmeta,
+                target_vbmeta,
+                target_image,
+                staged_loader_bytes,
+                staged_loader_sha256,
+                staged_gm2p_bytes,
+                staged_gm2p_sha256,
+                staged_tzmap_bytes,
+                staged_tzmap_sha256,
+                staged_tools,
             }),
             Self::OtaApply {
                 target_slot,
@@ -242,6 +291,20 @@ impl JsonRequest {
                 mode,
                 allow_new_signer,
                 boot_root_source,
+                id,
+                from_mode,
+                prior_canoe,
+                acknowledge,
+                current_vbmeta,
+                target_vbmeta,
+                target_image,
+                staged_loader_bytes,
+                staged_loader_sha256,
+                staged_gm2p_bytes,
+                staged_gm2p_sha256,
+                staged_tzmap_bytes,
+                staged_tzmap_sha256,
+                staged_tools,
             } => Command::OtaApply(OtaApplyArgs {
                 target_slot,
                 bootctl_output,
@@ -250,6 +313,20 @@ impl JsonRequest {
                 mode,
                 allow_new_signer,
                 boot_root_source,
+                id,
+                from_mode,
+                prior_canoe,
+                acknowledge,
+                current_vbmeta,
+                target_vbmeta,
+                target_image,
+                staged_loader_bytes,
+                staged_loader_sha256,
+                staged_gm2p_bytes,
+                staged_gm2p_sha256,
+                staged_tzmap_bytes,
+                staged_tzmap_sha256,
+                staged_tools,
             }),
             Self::VbmetaGraft {
                 vbmeta,
@@ -310,8 +387,20 @@ impl JsonRequest {
                     timeout_seconds,
                 }),
             },
-            Self::FastbootFlash { partition, image } => Command::Fastboot {
-                command: FastbootCommand::Flash(FastbootFlashArgs { partition, image }),
+            Self::FastbootFlash {
+                partition,
+                image,
+                expected_bytes,
+                expected_partition_bytes,
+                expected_sha256,
+            } => Command::Fastboot {
+                command: FastbootCommand::Flash(FastbootFlashArgs {
+                    partition,
+                    image,
+                    expected_bytes,
+                    expected_partition_bytes,
+                    expected_sha256,
+                }),
             },
             Self::FastbootReboot { target } => Command::Fastboot {
                 command: FastbootCommand::Reboot(FastbootRebootArgs { target }),

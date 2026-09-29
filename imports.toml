@@ -7,8 +7,8 @@ why = "Checked-in Web UI archive from canoe-boot-manager; its digest currently m
 path = "targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz"
 version = "0.1.0"
 url = "file://$(CANOE_ROOT_DIR)/targets/magisk_module/webui-cache/canoe-boot-manager-0.1.0.tar.gz"
-sha256 = "fc491ad94548b865789b86b37793ece0bb7f9dbf8edc97989e27a9eea27a9620"
-bytes = 171604
+sha256 = "ae0d34452a0fb301dce993aaca98665a88d14ccdc574d736215f2e35603e4efd"
+bytes = 191986
 make_prefix = "CANOE_WEBUI"
 [import.producer]
 repo = "canoe-boot-manager"
@@ -19,7 +19,7 @@ id = "msd-variant"
 kind = "artifact"
 why = "Calibrated canoe USB mass-storage DXE compiled by the canoe-msd repository."
 path = "submodules/uefi/blobs/canoe-usbmsd.efi"
-sha256 = "e1d6ec41f9b42ee273a13849540804cad4d9ab461993cf51e516ee700c7addb2"
+sha256 = "7ffbee7c7677fb28905ffd5fd468852c80bb182fac0e67f3479a1fa82b921514"
 bytes = 57344
 [import.producer]
 repo = "https://github.com/1vivy/canoe-msd.git"

@@ -1,12 +1,16 @@
 //! Safe host-side GM2P profile and preferred-mode primitives.
 
 mod avb;
+mod header_evidence;
 mod profile;
 
 pub use avb::{
     BuildProperties, ChainPartition, DeriveError, GraftClassification, GraftConfidence, GraftState,
     VbmetaHeader, VbmetaInspection, VbmetaKeyCheck, check_vbmeta, classify_graft, derive,
-    derive_profile, inspect_vbmeta, inspect_vbmeta_header,
+    derive_profile, inspect_vbmeta,
+};
+pub use header_evidence::{
+    VbmetaHeaderInspection, inspect_vbmeta_header, inspect_vbmeta_header_evidence,
 };
 pub use profile::{PROFILE_SIZE, Profile, ProfileError};
 
@@ -56,6 +60,7 @@ fn input_matches_output(
 
     #[cfg(not(unix))]
     {
+        let _ = vbmeta_file;
         let vbmeta = fs::canonicalize(vbmeta_path).map_err(DeriveFileError::ReadVbmeta)?;
         let output = match fs::canonicalize(output_path) {
             Ok(path) => path,

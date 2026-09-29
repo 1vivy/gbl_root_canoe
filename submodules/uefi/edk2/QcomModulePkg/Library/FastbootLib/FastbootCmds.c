@@ -103,6 +103,7 @@ found at
    concern, and FastbootLib is linked into the application it is extending. */
 #include "../../Application/LinuxLoader/SuperFbLog.h"
 #include "../../Application/LinuxLoader/Hook/SuperFbDevInfo.h"
+#include "../../Application/LinuxLoader/SuperFbBootRoot.h"
 #include "MetaFormat.h"
 #include "SparseFormat.h"
 STATIC struct GetVarPartitionInfo PublishedPartInfo[MAX_NUM_PARTITIONS];
@@ -2837,9 +2838,12 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   EFI_STATUS Status;
   CHAR8 HWPlatformBuf[MAX_RSP_SIZE] = "\0";
   CHAR8 DeviceType[MAX_RSP_SIZE] = "\0";
-  CHAR8 DevInfoBuf[SFB_DEVINFO_VALUE_BYTES];
-  CHAR8 LastLaunchBuf[SFB_LAST_LAUNCH_VALUE_BYTES];
+  /* FastbootPublishVar borrows these values until fastboot teardown. */
+  STATIC CHAR8 DevInfoBuf[SFB_DEVINFO_VALUE_BYTES];
+  STATIC CHAR8 LastLaunchBuf[SFB_LAST_LAUNCH_VALUE_BYTES];
+  STATIC CHAR8 BootRootBuf[SFB_BOOT_ROOT_VALUE_BYTES];
   SFB_OBSERVED_DEVINFO ObservedDevInfo;
+  SFB_BOOT_ROOT_OBSERVATION BootRootObservation;
   SFB_SLOT_RETRIES SlotRetries;
   UINT32 PartitionCount = 0;
   MemCardType Type = UNKNOWN;
@@ -2906,6 +2910,16 @@ FastbootCommandSetup (IN VOID *Base, IN UINT64 Size)
   if (!EFI_ERROR (SfbLastLaunchRead (LastLaunchBuf,
                                      sizeof (LastLaunchBuf)))) {
     FastbootPublishVar ("canoe-last-launch", LastLaunchBuf);
+  }
+
+  /* The observation is the one this boot already made before the menu; an
+   * unavailable observation stays absent rather than being re-probed here
+   * against a different filesystem state. */
+  BootRootObservation = SfbGetBootRootState ();
+  if (BootRootObservation.Available
+      && SfbBootRootFormat (BootRootObservation.State, BootRootBuf,
+                            sizeof (BootRootBuf))) {
+    FastbootPublishVar ("canoe-boot-root", BootRootBuf);
   }
 
   /*

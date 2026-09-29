@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-
+use crate::file_identity::FileIdentity;
 use clap::{Args, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Debug, Subcommand)]
 pub enum SlotCommand {
@@ -42,29 +42,34 @@ pub struct InstallArgs {
     pub allow_new_signer: bool,
     #[arg(long)]
     pub boot_root_source: Option<PathBuf>,
-}
-
-impl TryFrom<&InstallArgs> for crate::InstallRequest {
-    type Error = crate::AppError;
-
-    fn try_from(args: &InstallArgs) -> Result<Self, Self::Error> {
-        if args.both || args.inactive || args.i_know_inactive_status {
-            return Err(crate::AppError::Request(
-                "install request requires an explicit single slot".to_owned(),
-            ));
-        }
-        let slot_text = args
-            .slot
-            .as_deref()
-            .ok_or_else(|| crate::AppError::Request("install requires --slot a|b".to_owned()))?;
-        let slot = crate::slots::parse_slot(slot_text).map_err(crate::AppError::Slot)?;
-        Ok(Self {
-            staged: args.staged.clone(),
-            slot,
-            mode: args.mode.unwrap_or(0),
-            allow_new_signer: args.allow_new_signer,
-        })
-    }
+    #[arg(long)]
+    pub id: Option<String>,
+    #[arg(long)]
+    pub from_mode: Option<u8>,
+    #[arg(long)]
+    pub prior_canoe: bool,
+    #[arg(long)]
+    pub acknowledge: Vec<String>,
+    #[arg(long)]
+    pub current_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub target_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub target_image: Option<PathBuf>,
+    #[arg(long)]
+    pub staged_loader_bytes: Option<u64>,
+    #[arg(long)]
+    pub staged_loader_sha256: Option<String>,
+    #[arg(long)]
+    pub staged_gm2p_bytes: Option<u64>,
+    #[arg(long)]
+    pub staged_gm2p_sha256: Option<String>,
+    #[arg(long)]
+    pub staged_tzmap_bytes: Option<u64>,
+    #[arg(long)]
+    pub staged_tzmap_sha256: Option<String>,
+    #[arg(long = "staged-tool")]
+    pub staged_tools: Vec<FileIdentity>,
 }
 
 #[derive(Debug, Args)]
@@ -83,6 +88,34 @@ pub struct OtaApplyArgs {
     pub allow_new_signer: bool,
     #[arg(long)]
     pub boot_root_source: Option<PathBuf>,
+    #[arg(long)]
+    pub id: Option<String>,
+    #[arg(long)]
+    pub from_mode: Option<u8>,
+    #[arg(long)]
+    pub prior_canoe: bool,
+    #[arg(long)]
+    pub acknowledge: Vec<String>,
+    #[arg(long)]
+    pub current_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub target_vbmeta: Option<PathBuf>,
+    #[arg(long)]
+    pub target_image: Option<PathBuf>,
+    #[arg(long)]
+    pub staged_loader_bytes: Option<u64>,
+    #[arg(long)]
+    pub staged_loader_sha256: Option<String>,
+    #[arg(long)]
+    pub staged_gm2p_bytes: Option<u64>,
+    #[arg(long)]
+    pub staged_gm2p_sha256: Option<String>,
+    #[arg(long)]
+    pub staged_tzmap_bytes: Option<u64>,
+    #[arg(long)]
+    pub staged_tzmap_sha256: Option<String>,
+    #[arg(long = "staged-tool")]
+    pub staged_tools: Vec<FileIdentity>,
 }
 #[derive(Debug, Args)]
 pub struct ToolsUpdateArgs {
@@ -90,6 +123,13 @@ pub struct ToolsUpdateArgs {
     pub source: PathBuf,
     #[arg(long)]
     pub boot_root_source: Option<PathBuf>,
+    #[arg(long = "inventory")]
+    pub inventory: Vec<FileIdentity>,
+}
+#[derive(Debug, Args)]
+pub struct ToolsInventoryArgs {
+    #[arg(long)]
+    pub source: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -110,6 +150,16 @@ pub struct BlockWriteArgs {
     pub snapshot: PathBuf,
     #[arg(long, value_name = "A|B")]
     pub slot: Option<String>,
+    #[arg(long)]
+    pub expected_bytes: Option<u64>,
+    #[arg(long)]
+    pub expected_partition_bytes: Option<u64>,
+    #[arg(long)]
+    pub expected_sha256: Option<String>,
+    #[arg(long)]
+    pub expected_snapshot_bytes: Option<u64>,
+    #[arg(long)]
+    pub expected_snapshot_sha256: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -118,6 +168,14 @@ pub struct ImageDigestArgs {
     pub image: PathBuf,
     #[arg(long)]
     pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+pub struct ImageZeroArgs {
+    #[arg(long)]
+    pub output: PathBuf,
+    #[arg(long)]
+    pub bytes: u64,
 }
 
 #[derive(Debug, Args)]
@@ -147,12 +205,14 @@ pub struct AblLookupArgs {
 }
 #[derive(Debug, Args)]
 pub struct ModePlanArgs {
-    #[arg(long, required = true)]
+    #[arg(long)]
     pub id: Option<String>,
     #[arg(long)]
     pub target_mode: u8,
     #[arg(long)]
     pub from_mode: Option<u8>,
+    #[arg(long)]
+    pub prior_canoe: bool,
     #[arg(long)]
     pub current_vbmeta: Option<PathBuf>,
     #[arg(long)]
@@ -262,6 +322,12 @@ pub struct FastbootFlashArgs {
     pub partition: String,
     #[arg(long)]
     pub image: PathBuf,
+    #[arg(long)]
+    pub expected_bytes: Option<u64>,
+    #[arg(long)]
+    pub expected_partition_bytes: Option<u64>,
+    #[arg(long)]
+    pub expected_sha256: Option<String>,
 }
 
 #[derive(Debug, Args)]

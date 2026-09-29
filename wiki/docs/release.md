@@ -149,14 +149,14 @@ bun test
 bun run build
 ```
 
-`bun run typecheck` must report zero errors **and zero warnings**. `bun test` replays the
-protocol and UI suite (the current baseline is 216 passing tests and 924 expectations
-in 24 files). `bun run build` runs `vite build` and then `bun run check-assets`; the
-asset guard rejects absolute `/assets` URLs because the same output is loaded from a
-`file://` origin by the KernelSU WebUI and by Tauri.
+`bun run typecheck` must report zero errors **and zero warnings**. `bun test`
+must pass the complete protocol and UI suite. `bun run build` runs
+`vite build` and then `bun run check-assets`; the asset guard rejects absolute
+`/assets` URLs because the same output is loaded from a `file://` origin by the
+KernelSU WebUI and by Tauri.
 
-CI also asserts the protocol catalogue explicitly; it must remain 34 verbs with 17
-request/response fixture pairs:
+CI also asserts the protocol catalogue explicitly. The command is the
+authority for the current verb and request/response fixture matrices:
 
 ```sh
 bun run check-protocol-catalogue
@@ -214,33 +214,77 @@ cd /home/vivy/Projects/efisp-projects/gbl_root_canoe/.work/gui-work
 ```
 
 The firmware release builds the desktop binaries after it has checked out the app and
-built the target-compatible `canoe-bootmgr` sidecars from this repository. Stage each
-sidecar beside the app's Tauri inputs, then build the desktop binary:
+built every target-compatible Tauri input. Tauri hashes each input at build time, so
+stage the complete set rather than only `canoe-bootmgr`.
+
+Build the Linux inputs and stage the six required target-triple names:
+
+The Linux stage input names are
+`canoe-bootmgr-x86_64-unknown-linux-gnu`,
+`canoe-ext4-x86_64-unknown-linux-gnu`,
+`extractfv-x86_64-unknown-linux-gnu`,
+`patch_abl-x86_64-unknown-linux-gnu`,
+`mode2_profile-x86_64-unknown-linux-gnu`, and
+`abl_tzmap-x86_64-unknown-linux-gnu`.
 
 ```sh
-make -C targets/toolkit_linux submodule_canoe_bootmgr
-cp targets/toolkit_linux/build/toolkit/bin/canoe-bootmgr \
-  /home/vivy/Projects/efisp-projects/canoe-boot-manager/src-tauri/binaries/canoe-bootmgr-x86_64-unknown-linux-gnu
-(cd /home/vivy/Projects/efisp-projects/canoe-boot-manager && \
-  bunx tauri build --no-bundle --ci)
-make -C targets/toolkit_windows submodule_canoe_bootmgr
-cp targets/toolkit_windows/build/toolkit/bin/canoe-bootmgr.exe \
-  /home/vivy/Projects/efisp-projects/canoe-boot-manager/src-tauri/binaries/canoe-bootmgr-x86_64-pc-windows-gnu.exe
-(cd /home/vivy/Projects/efisp-projects/canoe-boot-manager && \
+make -C targets/toolkit_linux \
+  submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor \
+  submodule_patcher submodule_mode2_profile submodule_abl_tzmap
+APP=/home/vivy/Projects/efisp-projects/canoe-boot-manager
+for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+  cp "targets/toolkit_linux/build/toolkit/bin/$name" \
+    "$APP/src-tauri/binaries/${name}-x86_64-unknown-linux-gnu"
+done
+(cd "$APP" && bunx tauri build --no-bundle --ci)
+```
+
+Do not stage Linux `fastboot` in the app inputs. At runtime Linux selects an
+executable `fastboot` (or `fastboot.exe`) from the inherited `PATH`, then opens
+and seals that external executable for the session.
+
+Build the Windows GNU inputs, including the adjacent Platform-Tools files, and
+stage the nine required names:
+
+The Windows stage input names are
+`canoe-bootmgr-x86_64-pc-windows-gnu.exe`,
+`canoe-ext4-x86_64-pc-windows-gnu.exe`,
+`extractfv-x86_64-pc-windows-gnu.exe`,
+`patch_abl-x86_64-pc-windows-gnu.exe`,
+`mode2_profile-x86_64-pc-windows-gnu.exe`,
+`abl_tzmap-x86_64-pc-windows-gnu.exe`,
+`fastboot-x86_64-pc-windows-gnu.exe`,
+`AdbWinApi-x86_64-pc-windows-gnu.dll`, and
+`AdbWinUsbApi-x86_64-pc-windows-gnu.dll`.
+
+```sh
+make -C targets/toolkit_windows \
+  submodule_canoe_bootmgr submodule_canoe_ext4 submodule_ablfvextractor \
+  submodule_patcher submodule_mode2_profile submodule_abl_tzmap \
+  platform_tools ext4_tools
+for name in canoe-bootmgr canoe-ext4 extractfv patch_abl mode2_profile abl_tzmap; do
+  cp "targets/toolkit_windows/build/toolkit/bin/$name.exe" \
+    "$APP/src-tauri/binaries/${name}-x86_64-pc-windows-gnu.exe"
+done
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/fastboot.exe \
+  "$APP/src-tauri/binaries/fastboot-x86_64-pc-windows-gnu.exe"
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinApi.dll \
+  "$APP/src-tauri/binaries/AdbWinApi-x86_64-pc-windows-gnu.dll"
+cp targets/toolkit_windows/build/toolkit/Platform-Tools/AdbWinUsbApi.dll \
+  "$APP/src-tauri/binaries/AdbWinUsbApi-x86_64-pc-windows-gnu.dll"
+(cd "$APP" && \
   bunx tauri build --target x86_64-pc-windows-gnu --no-bundle --ci)
 ```
 
-The optional MSVC build uses the Tauri target below when `cargo-xwin` is installed:
+The Windows runtime privately stages `bin/*.exe` and the three adjacent
+`Platform-Tools` files, verifies each against its build-time digest, and denies
+replacement while the sidecar can spawn. It does not resolve these inputs from
+`PATH`. The MSVC app CI compile fixture uses the same helper stems with
+`x86_64-pc-windows-msvc` names (and `.exe`/`.dll` extensions); those fixture
+inputs are not release artifacts.
 
-```sh
-(cd /home/vivy/Projects/efisp-projects/canoe-boot-manager && \
-  bunx tauri build --target x86_64-pc-windows-msvc --no-bundle --ci)
-```
-
-The published Windows desktop asset is the GNU target; the MSVC command is a
-build-path check, not an installer-production step. Tauri places each sidecar beside
-its application executable in the shipped package, so each final toolkit must contain
-both `bin/canoe-boot-manager` (or its `.exe` form) and `bin/canoe-bootmgr`.
+After these Tauri builds, the package recipes copy each app binary beside
+`bin/canoe-bootmgr` (or `.exe`) and retain the helper adjacency in the toolkit.
 
 This is a git worktree. Its normal sibling default for the app points relative to the
 worktree, not to `/home/vivy/Projects/efisp-projects/canoe-boot-manager`; therefore

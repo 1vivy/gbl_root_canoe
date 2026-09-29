@@ -6,7 +6,6 @@
 //! to the triplet; a device installer usually stages none, and an absent
 //! directory is not an error.
 
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,11 +24,11 @@ pub(crate) fn staged(staged: &Path) -> Result<Vec<PathBuf>, SlotError> {
         )));
     }
     let entries = fs::read_dir(&directory)
-        .map_err(|error| crate::slot_transaction::io("read directory", &directory, error))?;
+        .map_err(|error| crate::slot_storage::io("read directory", &directory, error))?;
     let mut files = Vec::new();
     for entry in entries {
         let entry =
-            entry.map_err(|error| crate::slot_transaction::io("read entry", &directory, error))?;
+            entry.map_err(|error| crate::slot_storage::io("read entry", &directory, error))?;
         let path = entry.path();
         if path.is_file() {
             files.push(path);
@@ -52,7 +51,7 @@ pub(crate) fn destinations(root: &Path, sources: &[PathBuf]) -> Vec<PathBuf> {
 /// Copy every staged tool into the boot root, replacing an older generation.
 pub(crate) fn commit(root: &Path, sources: &[PathBuf]) -> Result<(), SlotError> {
     for (source, destination) in sources.iter().zip(destinations(root, sources)) {
-        crate::slot_transaction::copy_file(source, &destination)?;
+        crate::slot_storage::copy_file(source, &destination)?;
     }
     Ok(())
 }

@@ -63,6 +63,15 @@ pub struct SlotStatus {
 
 #[derive(Debug, Error)]
 pub enum SlotError {
+    #[error("tools inventory is required when staged tools are present")]
+    ToolsInventoryRequired,
+    #[error("tools inventory mismatch: {0}")]
+    ToolsInventoryMismatch(String),
+    #[error("slot rollback failed after {commit}: {rollback}")]
+    Rollback {
+        commit: Box<SlotError>,
+        rollback: Box<SlotError>,
+    },
     #[error("slot: {0}")]
     Invalid(String),
     #[error("slot {slot}: {operation} {path}: {source}")]
@@ -111,27 +120,22 @@ pub fn resolve_active(
 }
 
 fn parse_bootctl_output(output: &str) -> Option<Slot> {
-    let lower = output.to_ascii_lowercase();
-    for line in lower.lines() {
+    for line in output.lines() {
         let trimmed = line.trim();
-        if trimmed.contains("current-slot") || trimmed.contains("active-slot") {
-            if let Some(value) = trimmed.split([':', '=', ' ', '\t']).next_back() {
-                if let Ok(slot) = parse_slot(value) {
-                    return Some(slot);
-                }
-            }
+        let Some((marker, value)) = trimmed.split_once([':', '=']) else {
+            continue;
+        };
+        let marker = marker.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+        if !matches!(marker.as_str(), "current-slot" | "active-slot") {
+            continue;
         }
-    }
-    for token in
-        lower.split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
-    {
-        if let Ok(slot) = parse_slot(token) {
+        let value = value.split_ascii_whitespace().next()?;
+        if let Ok(slot) = parse_slot(value) {
             return Some(slot);
         }
     }
     None
 }
-
 #[must_use]
 pub fn triplet_paths(root: &Path, slot: Slot) -> [PathBuf; 3] {
     let loader = root.join(slot.loader_name());
@@ -202,4 +206,17 @@ fn valid_paths(paths: &[PathBuf; 3], slot: Slot) -> Result<bool, SlotError> {
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Slot, parse_bootctl_output};
+
+    #[test]
+    fn bootctl_parser_requires_an_explicit_active_marker() {
+        assert_eq!(parse_bootctl_output("current-slot: a"), Some(Slot::A));
+        assert_eq!(parse_bootctl_output("tries-left: 1"), None);
+        assert_eq!(parse_bootctl_output("slot index 0"), None);
+        assert_eq!(parse_bootctl_output(""), None);
+    }
 }
