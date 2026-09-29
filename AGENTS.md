@@ -85,4 +85,4 @@ For release-package changes, run the affected target build and inspect archive c
 - Flashing ABL or raw `efisp`, writing `persist`, changing slots, patching `vendor_boot`, and module install/OTA actions require explicit authorization at the point of action.
 - Do not use a live `persist` mass-storage export concurrently with Android; host writes can corrupt the filesystem.
 - Preserve rollback paths and the other-slot recovery story for every device-writing change.
-- Never commit or push unless explicitly requested. Keep device dumps, boot logs, extracted firmware, scratch binaries, and worktrees under ignored artifact paths.
+- Keep device dumps, boot logs, extracted firmware, scratch binaries, and worktrees under ignored artifact paths.
