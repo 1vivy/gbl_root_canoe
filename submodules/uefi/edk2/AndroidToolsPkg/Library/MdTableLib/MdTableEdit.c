@@ -1,134 +1,163 @@
 /** @file
- *  RAM-only edits to the live minidump table.
- *
- *  Two edits, both reversible by the next reboot (XBL rebuilds the table
- *  every boot, so a bad edit cannot persist):
- *
- *  - MdTableAppendRegion: add a region entry in the zero slack directly
- *    after an array's last used entry and bump the owning ToC's
- *    region_count. Appending into a subsystem whose encryption_required is
- *    clear makes the region dump plaintext - including when the entry's
- *    address aliases a region another subsystem encrypts, because the dump
- *    transport encrypts per subsystem policy, not per address.
- *  - MdTableSetEncryptionRequired: clear (or set) the subsystem policy word
- *    itself.
- *
- *  Every write is followed by a cache clean: the 900e collector is PBL code
- *  reading DRAM with caches off, and a dirty cache line would hide the edit
- *  from it.
- *
- *  Copyright (c) 2026, contributors to the canoe ABL tree.
- *  SPDX-License-Identifier: BSD-3-Clause
- */
+  Owned-subsystem edit for the live Qualcomm minidump table.
+
+  The only supported mutation stores one 32-byte subsystem ToC into a free slot
+  of the SMEM-provided global root. The slot is selected from the full bounded
+  root, cloned from the live AOP not-encryption-required template, range-gated,
+  cache-cleaned, and read back. XBL rebuilds the table on every boot.
+
+  Copyright (c) 2026, contributors to the canoe ABL tree.
+  SPDX-License-Identifier: BSD-3-Clause
+**/
+
 #include <Uefi.h>
-#include <Library/BaseLib.h>
+
 #include <Library/BaseMemoryLib.h>
 #include <Library/CacheMaintenanceLib.h>
 
 #include "MdTableLibInternal.h"
 
-/** True when the 40 bytes at Address are all zero (usable array slack). */
-STATIC
-BOOLEAN
-MdSlackIsZero (
-  IN EFI_PHYSICAL_ADDRESS Address
-  )
-{
-  UINT64 Slot[MD_REGION_ENTRY_SIZE / sizeof (UINT64)];
-
-  CopyMem (Slot, (VOID *)(UINTN)Address, sizeof (Slot));
-  return (BOOLEAN)((Slot[0] | Slot[1] | Slot[2] | Slot[3] | Slot[4]) == 0);
-}
-
 EFI_STATUS
-MdTableAppendRegion (
-  IN OUT MD_TABLE_MAP   *Map,
-  IN     UINTN          ArrayIndex,
-  IN     CONST CHAR8    *Name,
-  IN     UINT64         Address,
-  IN     UINT64         Size,
-  OUT    UINTN          *AppendedIndex OPTIONAL
+MdTablePlanSubsystemClaim (
+  IN  CONST MD_TABLE_MAP *Map,
+  OUT MD_SUBSYSTEM_CLAIM *Claim
   )
 {
-  MD_REGION_ARRAY      *Array;
-  MD_REGION_ENTRY      Entry;
-  EFI_PHYSICAL_ADDRESS Where;
-  UINTN                Length;
-  UINT32               *CountField;
-  UINTN                Index;
+  CONST MD_GLOBAL_TOC *Root;
+  MD_SUBSYSTEM_TOC    Toc;
+  EFI_STATUS          Status;
+  UINTN               Index;
+  UINTN               Chosen;
+  UINTN               Highest;
+  BOOLEAN             AboveHighest;
+  BOOLEAN             AnyUsed;
 
-  if (Map == NULL || Name == NULL || ArrayIndex >= Map->ArrayCount) {
+  if (Map == NULL || Claim == NULL) {
     return EFI_INVALID_PARAMETER;
   }
-  Length = AsciiStrLen (Name);
-  if (Length == 0 || Length > MD_REGION_NAME_LEN ||
-      Address < MD_MIN_REGION_ADDRESS || Address >= MD_MAX_REGION_ADDRESS ||
-      Size == 0 || Size > MD_MAX_REGION_SIZE) {
-    return EFI_INVALID_PARAMETER;
+  if (!Map->GtocFromSmem ||
+      Map->GtocAddress == 0 ||
+      Map->GtocBytes < sizeof (MD_GLOBAL_TOC) ||
+      !Map->GtocHeaderValid ||
+      !Map->GtocDescribed ||
+      !Map->GtocStructContiguous) {
+    return EFI_NOT_FOUND;
   }
-  Array = &Map->Arrays[ArrayIndex];
-  if (Array->Count >= MD_MAX_ARRAY_ENTRIES) {
-    return EFI_OUT_OF_RESOURCES;
-  }
-  Where = Array->Base + (EFI_PHYSICAL_ADDRESS)Array->Count *
-          MD_REGION_ENTRY_SIZE;
-  if (Where > MAX_UINTN || !MdSlackIsZero (Where)) {
-    /* No visible slack: appending would overwrite live firmware data. */
-    return EFI_BAD_BUFFER_SIZE;
+  if (!MdMemoryTypeReadable (Map->GtocMemory.Type, FALSE)) {
+    return EFI_NOT_FOUND;
   }
 
-  ZeroMem (&Entry, sizeof (Entry));
-  for (Index = 0; Index < Length; Index++) {
-    Entry.Name[Index] = Name[Index];
-  }
-  Entry.SeqNum = 0;
-  Entry.Valid = MD_REGION_VALID_VALUE;
-  Entry.Address = Address;
-  Entry.Size = Size;
-  CopyMem ((VOID *)(UINTN)Where, &Entry, sizeof (Entry));
-  WriteBackInvalidateDataCacheRange ((VOID *)(UINTN)Where,
-                                     sizeof (MD_REGION_ENTRY));
+  ZeroMem (Claim, sizeof (*Claim));
+  Claim->TemplateArray = MD_MAX_ARRAYS;
+  for (Index = 0; Index < Map->ArrayCount; ++Index) {
+    if (Map->Arrays[Index].SubsystemIndex != MD_SS_AOP ||
+        Map->Arrays[Index].SubsystemToc == 0 ||
+        Map->Arrays[Index].EncryptionRequired != MD_SS_ENCR_NOTREQ_VALUE) {
+      continue;
+    }
 
-  /* Bump the owning subsystem ToC when we know where it lives. */
-  if (Array->SubsystemToc != 0) {
-    CountField = (UINT32 *)(UINTN)(Array->SubsystemToc +
-                                   OFFSET_OF (MD_SUBSYSTEM_TOC, RegionCount));
-    *CountField = *CountField + 1;
-    WriteBackInvalidateDataCacheRange ((VOID *)CountField, sizeof (UINT32));
-    Array->TocRegionCount = *CountField;
+    CopyMem (&Toc, &Map->Arrays[Index].Toc, sizeof (Toc));
+    if (Toc.Status != MD_SS_AOP_TOC_MAGIC_VALUE ||
+        Toc.Enabled != MD_SS_ENABLED_VALUE ||
+        Toc.EncryptionStatus != MD_SS_ENCR_DONE_VALUE ||
+        Toc.EncryptionRequired != MD_SS_ENCR_NOTREQ_VALUE ||
+        Toc.Pad != 0) {
+      return EFI_COMPROMISED_DATA;
+    }
+    CopyMem (&Claim->Template, &Toc, sizeof (Toc));
+    Claim->TemplateArray = Index;
+    Claim->TemplateToc   = Map->Arrays[Index].SubsystemToc;
+    break;
   }
-  Array->Count++;
-  if (AppendedIndex != NULL) {
-    *AppendedIndex = Array->Count - 1;
+  if (Claim->TemplateToc == 0) {
+    return EFI_NOT_FOUND;
   }
+
+  Root = (CONST MD_GLOBAL_TOC *)(UINTN)Map->GtocAddress;
+  Status = MdTableSelectFreeSubsystem (
+             Root->Subsystems,
+             MD_MAX_SUBSYSTEMS,
+             &Chosen,
+             &AboveHighest,
+             &AnyUsed,
+             &Highest
+             );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Claim->Index        = Chosen;
+  Claim->TocAddress   = (EFI_PHYSICAL_ADDRESS)(UINTN)&Root->Subsystems[Chosen];
+  Claim->AboveHighest = AboveHighest;
+  Claim->AnyUsed      = AnyUsed;
+  Claim->HighestUsed  = Highest;
+
+  if (!MdRangeWritable ((UINT64)Claim->TocAddress, sizeof (Claim->Previous))) {
+    return EFI_ACCESS_DENIED;
+  }
+  CopyMem (
+    &Claim->Previous,
+    (VOID *)(UINTN)Claim->TocAddress,
+    sizeof (Claim->Previous)
+    );
   return EFI_SUCCESS;
 }
 
 EFI_STATUS
-MdTableSetEncryptionRequired (
-  IN OUT MD_TABLE_MAP *Map,
-  IN     UINTN        ArrayIndex,
-  IN     UINT32       Value,
-  OUT    UINT32       *Previous OPTIONAL
+MdTableClaimSubsystem (
+  IN OUT MD_TABLE_MAP        *Map,
+  IN     CONST MD_SUBSYSTEM_CLAIM *Claim,
+  IN     UINT64              RegionsBasePtr,
+  IN     UINT32              RegionCount,
+  OUT    MD_SUBSYSTEM_TOC    *Stored OPTIONAL
   )
 {
-  MD_REGION_ARRAY *Array;
-  UINT32          *Field;
+  MD_SUBSYSTEM_TOC     Current;
+  MD_SUBSYSTEM_TOC     Toc;
+  MD_SUBSYSTEM_TOC     ReadBack;
+  EFI_PHYSICAL_ADDRESS ExpectedSlot;
+  UINT64               Words[MD_SUBSYSTEM_TOC_SIZE / sizeof (UINT64)];
 
-  if (Map == NULL || ArrayIndex >= Map->ArrayCount) {
+  if (Map == NULL || Claim == NULL ||
+      !Map->GtocFromSmem ||
+      Claim->Index >= MD_MAX_SUBSYSTEMS || Claim->TocAddress == 0 ||
+      Claim->TemplateToc == 0 || Claim->Template.Status == 0 ||
+      RegionsBasePtr == 0 || RegionsBasePtr > MAX_UINTN ||
+      RegionCount == 0 || RegionCount > MD_MAX_APPEND_REGIONS) {
     return EFI_INVALID_PARAMETER;
   }
-  Array = &Map->Arrays[ArrayIndex];
-  if (Array->SubsystemToc == 0) {
-    return EFI_NOT_FOUND;
+
+  ExpectedSlot = Map->GtocAddress + MD_GTOC_HEADER_SIZE +
+                 Claim->Index * MD_SUBSYSTEM_TOC_SIZE;
+  if (Claim->TocAddress != ExpectedSlot ||
+      !MdRangeWritable ((UINT64)Claim->TocAddress, sizeof (Current))) {
+    return EFI_ACCESS_DENIED;
   }
-  Field = (UINT32 *)(UINTN)(Array->SubsystemToc +
-                            OFFSET_OF (MD_SUBSYSTEM_TOC, EncryptionRequired));
-  if (Previous != NULL) {
-    *Previous = *Field;
+
+  /* Recheck the slot immediately before the store. The intent record captured
+     an all-zero slot; any intervening change aborts rather than overwriting it. */
+  CopyMem (&Current, (VOID *)(UINTN)Claim->TocAddress, sizeof (Current));
+  if (CompareMem (&Current, &Claim->Previous, sizeof (Current)) != 0) {
+    return EFI_ABORTED;
   }
-  *Field = Value;
-  WriteBackInvalidateDataCacheRange ((VOID *)Field, sizeof (UINT32));
-  Array->EncryptionRequired = *Field;
-  return (*Field == Value) ? EFI_SUCCESS : EFI_DEVICE_ERROR;
+  CopyMem (Words, &Current, sizeof (Words));
+  if ((Words[0] | Words[1] | Words[2] | Words[3]) != 0) {
+    return EFI_ALREADY_STARTED;
+  }
+
+  CopyMem (&Toc, &Claim->Template, sizeof (Toc));
+  Toc.RegionCount   = RegionCount;
+  Toc.RegionsBasePtr = RegionsBasePtr;
+
+  CopyMem ((VOID *)(UINTN)Claim->TocAddress, &Toc, sizeof (Toc));
+  WriteBackInvalidateDataCacheRange (
+    (VOID *)(UINTN)Claim->TocAddress,
+    sizeof (Toc)
+    );
+  CopyMem (&ReadBack, (VOID *)(UINTN)Claim->TocAddress, sizeof (ReadBack));
+  if (Stored != NULL) {
+    CopyMem (Stored, &ReadBack, sizeof (ReadBack));
+  }
+  return (CompareMem (&Toc, &ReadBack, sizeof (Toc)) == 0)
+         ? EFI_SUCCESS : EFI_DEVICE_ERROR;
 }

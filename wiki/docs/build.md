@@ -177,11 +177,14 @@ The Android one-shot and module packages carry the same bytes for:
 `make -C submodules/uefi tools` builds three more that neither package carries:
 `LogTools.efi`, `MdTools.efi`, and `CrashTools.efi`. They are launched from a
 host with `fastboot boot <tool>.efi` against a device already running a
-vulnerable ABL, and they exist to investigate the firmware rather than to
-operate it - `MdTools` scans and edits the Qualcomm minidump region table in
-RAM, and `CrashTools` triggers deliberate faults to reach 900e memory-debug
-mode. The packaged list above is therefore narrower than the build output on
-purpose; do not "fix" it by adding them to a target.
+vulnerable ABL, and they exist to investigate the firmware rather than operate
+it. `MdTools` resolves minidump SMEM item 602, reads only its fixed global ToC
+and the AOP/BOOT arrays, and flushes a logfs stage marker before discovery. Its
+only table mutation claims one free subsystem slot for its own one-entry array,
+then triggers collection while the image remains resident. `CrashTools` uses
+the measured TZ_DDR target directly; it does not scan firmware memory.
+The packaged list above is therefore narrower than the build output on purpose;
+do not “fix” it by adding these tools to a target.
 
 The one-shot recipe requires existing canonical EDK2 output; the module recipe
 builds missing EFI artifacts once per workspace. Reuse one firmware build when

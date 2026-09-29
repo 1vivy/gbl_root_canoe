@@ -180,6 +180,10 @@ with the generated version files and the BDS build stamp.
 - Allowed kernel loop I/O to the persist boot root, and kept module policy
   comments readable by strict parsers.
 - Built BDS from clean objects so a stale header limit cannot survive a rebuild.
+- Replaced `MdTools`’ descriptor-wide minidump search with bounded SMEM item
+  602 discovery, flushed a durable stage marker before the first firmware
+  lookup, reduced its mutation surface to one owned subsystem slot, and made
+  both probe tools use the captured `TZ_DDR` base instead of the AES-key base.
 - Corrected `vendor_boot` patch preparation.
 - Reported the observed `DeviceInfo` state and the action taken on it, rather
   than leaving the decision implicit.

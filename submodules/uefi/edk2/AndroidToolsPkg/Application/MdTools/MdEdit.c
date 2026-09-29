@@ -1,233 +1,624 @@
 /** @file
- *  MdTools edit actions. Every action confirms first, edits DDR only, and
- *  ends on a result screen that says exactly what was changed or why not.
- *  The reboot-rebuild property of the table is the safety net: no edit
- *  survives a reset.
- *
- *  Copyright (c) 2026, contributors to the canoe ABL tree.
- *  SPDX-License-Identifier: BSD-3-Clause
- */
+  Durable gate, bounded report, and owned-subsystem crash probe.
+
+  Every attempt opens and flushes its evidence file before it asks firmware for
+  SMEM item 602. The mutation path then records and flushes the exact 32-byte
+  slot store before writing it, verifies the readback, and only then offers the
+  deliberate collection trigger.
+
+  Copyright (c) 2026, contributors to the canoe ABL tree.
+  SPDX-License-Identifier: BSD-3-Clause
+**/
+
 #include <Uefi.h>
+
+#include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
-#include <Library/UefiBootServicesTableLib.h>
+#include <Library/CacheMaintenanceLib.h>
+#include <Library/PrintLib.h>
 #include <Library/UefiLib.h>
 
 #include "MdTools.h"
 
-/** Power confirms, any volume key cancels. Returns TRUE on confirm. */
+STATIC UINT8 mProbeBuffer[MD_PROBE_BUFFER_SIZE]
+  __attribute__ ((aligned (EFI_PAGE_SIZE)));
+STATIC MD_REGION_ENTRY mProbeRegions[1]
+  __attribute__ ((aligned (EFI_PAGE_SIZE)));
+STATIC BOOLEAN mProbeFilled = FALSE;
+
+STATIC struct {
+  MD_SUBSYSTEM_CLAIM Claim;
+  UINT64             TriggerAddress;
+} mTarget;
+
+STATIC EFI_STATUS mScanStatus = EFI_NOT_STARTED;
+
 STATIC
-BOOLEAN
-MdConfirm (
-  IN CONST CHAR16 *Action
+EFI_STATUS
+MdGateOpen (
+  IN  CONST CHAR16 *Step,
+  IN  CONST CHAR16 *Tag,
+  IN  MD_INTENT_FN  Intent OPTIONAL,
+  OUT MD_EVIDENCE  *Evidence
   )
 {
-  AT_KEY Key;
+  CONST MD_TABLE_MAP *Map;
+  EFI_STATUS         Status;
+  EFI_STATUS         FlushStatus;
 
-  AtUiBeginScreen (Action, L"RAM-only edit; reboot rebuilds the table");
-  Print (L"Power = confirm, Vol +/- = cancel\r\n");
-  AtUiEndScreen (NULL);
-  Key = AtUiWaitForKey (0);
-  return (BOOLEAN)(Key == AtKeySelect);
+  Status = MdEvidenceOpen (Tag, Evidence);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+
+  Status = MdEvidencePrint (
+             Evidence,
+             L"=== rung %s: %s ===",
+             Tag,
+             Step
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"stage: discovery not-started; flushing durable marker"
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidenceFlush (Evidence);
+  }
+  if (EFI_ERROR (Status)) {
+    MdEvidenceClose (Evidence);
+    return Status;
+  }
+
+  mScanStatus = MdEnsureScan (Evidence);
+  Map = MdCachedMap ();
+  if (EFI_ERROR (mScanStatus)) {
+    MdEvidencePrint (
+      Evidence,
+      L"outcome: discovery REFUSED (%r); nothing written",
+      mScanStatus
+      );
+    MdEvidenceClose (Evidence);
+    return mScanStatus;
+  }
+
+  Status = MdEvidencePrint (
+             Evidence,
+             L"discovery=%r arrays=%u source=SMEM item %u",
+             mScanStatus,
+             (UINT32)((Map != NULL) ? Map->ArrayCount : 0),
+             MD_SMEM_ITEM_ID
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidenceWriteReports (Evidence);
+  }
+  if (!EFI_ERROR (Status) && Intent != NULL) {
+    Status = Intent (Evidence);
+  }
+  if (EFI_ERROR (Status)) {
+    MdEvidencePrint (
+      Evidence,
+      L"intent REFUSED (%r); nothing written",
+      Status
+      );
+    MdEvidenceClose (Evidence);
+    return Status;
+  }
+
+  FlushStatus = MdEvidenceFlush (Evidence);
+  if (EFI_ERROR (FlushStatus)) {
+    MdEvidencePrint (
+      Evidence,
+      L"intent FLUSH FAILED (%r): action skipped",
+      FlushStatus
+      );
+    MdEvidenceClose (Evidence);
+    return FlushStatus;
+  }
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS
+MdRecord (
+  IN CONST CHAR16 *Step,
+  IN CONST CHAR16 *Tag,
+  IN MD_INTENT_FN  Intent OPTIONAL
+  )
+{
+  MD_EVIDENCE Evidence;
+  EFI_STATUS  Status;
+
+  Status = MdGateOpen (Step, Tag, Intent, &Evidence);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+  Status = MdEvidencePrint (
+             &Evidence,
+             L"outcome: report complete, no table write"
+             );
+  MdEvidenceClose (&Evidence);
+  return Status;
+}
+
+EFI_STATUS
+MdAct (
+  IN CONST CHAR16 *Step,
+  IN CONST CHAR16 *Tag,
+  IN MD_INTENT_FN  Intent OPTIONAL,
+  IN MD_RUNG_FN    Act
+  )
+{
+  MD_EVIDENCE Evidence;
+  EFI_STATUS  Status;
+  EFI_STATUS  FlushStatus;
+
+  if (Act == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+
+  Status = MdGateOpen (Step, Tag, Intent, &Evidence);
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+  Status = Act (&Evidence);
+  if (EFI_ERROR (Status)) {
+    MdEvidencePrint (&Evidence, L"outcome: FAILED (%r)", Status);
+  } else {
+    MdEvidencePrint (&Evidence, L"outcome: rung complete");
+  }
+  FlushStatus = MdEvidenceFlush (&Evidence);
+  if (!EFI_ERROR (Status) && EFI_ERROR (FlushStatus)) {
+    Status = FlushStatus;
+  }
+  MdEvidenceClose (&Evidence);
+  return Status;
+}
+
+EFI_STATUS
+MdWalkPathway (
+  IN  CONST MD_PATHWAY *Pathway,
+  OUT UINTN            *CompletedRungs OPTIONAL
+  )
+{
+  CONST MD_RUNG *Rung;
+  EFI_STATUS     Status;
+  UINTN          Index;
+
+  if (Pathway == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  if (CompletedRungs != NULL) {
+    *CompletedRungs = 0;
+  }
+
+  for (Index = 0; Index < Pathway->RungCount; ++Index) {
+    Rung = &Pathway->Rungs[Index];
+    Status = (Rung->Act != NULL)
+             ? MdAct (Rung->Name, Rung->Tag, Rung->Intent, Rung->Act)
+             : MdRecord (Rung->Name, Rung->Tag, Rung->Intent);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+    if (CompletedRungs != NULL) {
+      *CompletedRungs = Index + 1;
+    }
+  }
+  return EFI_SUCCESS;
+}
+
+STATIC
+EFI_STATUS
+MdEvidenceMemoryRow (
+  IN OUT MD_EVIDENCE *Evidence,
+  IN CONST CHAR16    *What,
+  IN UINT64           Address
+  )
+{
+  MD_MEMORY_INFO Info;
+  EFI_STATUS     Status;
+
+  Status = MdDescribeAddress (Address, &Info);
+  if (EFI_ERROR (Status)) {
+    return MdEvidencePrint (
+             Evidence,
+             L"mem %s=0x%lx: NO DESCRIPTOR (%r)",
+             What,
+             Address,
+             Status
+             );
+  }
+  Status = MdEvidencePrint (
+             Evidence,
+             L"mem %s=0x%lx type=0x%x %s",
+             What,
+             Address,
+             (UINT32)Info.Type,
+             MdMemoryTypeName (Info.Type)
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"mem %s: base=0x%lx size=0x%lx attr=0x%lx",
+               What,
+               Info.Base,
+               Info.Size,
+               Info.Attributes
+               );
+  }
+  return Status;
+}
+
+STATIC
+EFI_STATUS
+MdEvidenceTocRows (
+  IN OUT MD_EVIDENCE        *Evidence,
+  IN CONST MD_SUBSYSTEM_TOC *Toc
+  )
+{
+  EFI_STATUS Status;
+
+  Status = MdEvidencePrint (
+             Evidence,
+             L"intent: toc init=0x%08x %s enabled=0x%08x %s",
+             Toc->Status,
+             MdFieldFourcc (Toc->Status),
+             Toc->Enabled,
+             MdFieldFourcc (Toc->Enabled)
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: toc encr_status=0x%08x %s encr_required=0x%08x %s",
+               Toc->EncryptionStatus,
+               MdFieldFourcc (Toc->EncryptionStatus),
+               Toc->EncryptionRequired,
+               MdFieldFourcc (Toc->EncryptionRequired)
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: toc count=%u baseptr=0x%lx",
+               Toc->RegionCount,
+               Toc->RegionsBasePtr
+               );
+  }
+  return Status;
 }
 
 STATIC
 VOID
-MdHoldResult (
+MdProbeInit (
   VOID
   )
 {
-  AtUiEndScreen (L"Power back");
-  while (AtUiWaitForKey (0) != AtKeySelect) {
+  if (mProbeFilled) {
+    return;
   }
+
+  ZeroMem (mProbeBuffer, sizeof (mProbeBuffer));
+  AsciiSPrint (
+    (CHAR8 *)mProbeBuffer,
+    sizeof (mProbeBuffer),
+    "%a %a addr=0x%lx size=%u\r\n",
+    MD_PROBE_BANNER,
+    MD_PROBE_REGION_NAME,
+    (UINT64)(UINTN)mProbeBuffer,
+    (UINT32)sizeof (mProbeBuffer)
+    );
+
+  ZeroMem (mProbeRegions, sizeof (mProbeRegions));
+  CopyMem (
+    mProbeRegions[0].Name,
+    MD_PROBE_REGION_NAME,
+    sizeof (MD_PROBE_REGION_NAME) - 1
+    );
+  mProbeRegions[0].SeqNum  = 0;
+  mProbeRegions[0].Valid   = MD_REGION_VALID_VALUE;
+  mProbeRegions[0].Address = (UINT64)(UINTN)mProbeBuffer;
+  mProbeRegions[0].Size    = sizeof (mProbeBuffer);
+
+  WriteBackInvalidateDataCacheRange (mProbeBuffer, sizeof (mProbeBuffer));
+  WriteBackInvalidateDataCacheRange (mProbeRegions, sizeof (mProbeRegions));
+  mProbeFilled = TRUE;
 }
 
-/** First array whose subsystem exists and does not require encryption. */
 STATIC
 EFI_STATUS
-MdFindPlaintextArray (
-  OUT UINTN *ArrayIndex
+MdClaimEvidenceRows (
+  IN OUT MD_EVIDENCE        *Evidence,
+  IN     CONST MD_TABLE_MAP *Map
+  )
+{
+  UINT32     Previous[MD_SUBSYSTEM_TOC_SIZE / sizeof (UINT32)];
+  EFI_STATUS Status;
+
+  CopyMem (Previous, &mTarget.Claim.Previous, sizeof (Previous));
+  Status = MdEvidencePrint (
+             Evidence,
+             L"intent: root source=SMEM item %u addr=0x%lx bytes=%u",
+             MD_SMEM_ITEM_ID,
+             (UINT64)Map->GtocAddress,
+             (UINT32)Map->GtocBytes
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: slot=%u of %u at 0x%lx (%s)",
+               (UINT32)mTarget.Claim.Index,
+               MD_MAX_SUBSYSTEMS,
+               (UINT64)mTarget.Claim.TocAddress,
+               mTarget.Claim.AboveHighest
+               ? L"above highest used" : L"first free fallback"
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: previous32=%08x %08x %08x %08x %08x %08x %08x %08x",
+               Previous[0],
+               Previous[1],
+               Previous[2],
+               Previous[3],
+               Previous[4],
+               Previous[5],
+               Previous[6],
+               Previous[7]
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: template=AOP slot %u toc=0x%lx",
+               MD_SS_AOP,
+               (UINT64)mTarget.Claim.TemplateToc
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidenceTocRows (Evidence, &mTarget.Claim.Template);
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: store 32 bytes after flush: count=1 baseptr=0x%lx",
+               (UINT64)(UINTN)mProbeRegions
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: region name=%a addr=0x%lx size=0x%lx",
+               MD_PROBE_REGION_NAME,
+               (UINT64)(UINTN)mProbeBuffer,
+               (UINT64)sizeof (mProbeBuffer)
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidenceMemoryRow (
+               Evidence,
+               L"claim-slot",
+               (UINT64)mTarget.Claim.TocAddress
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidenceMemoryRow (
+               Evidence,
+               L"our-regions",
+               (UINT64)(UINTN)mProbeRegions
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidenceMemoryRow (
+               Evidence,
+               L"our-buffer",
+               (UINT64)(UINTN)mProbeBuffer
+               );
+  }
+  return Status;
+}
+
+STATIC
+EFI_STATUS
+MdIntentClaimSubsystem (
+  IN OUT MD_EVIDENCE *Evidence
   )
 {
   CONST MD_TABLE_MAP *Map;
-  UINTN              Index;
+  EFI_STATUS         Status;
 
   Map = MdCachedMap ();
+  if (Map == NULL || EFI_ERROR (mScanStatus)) {
+    return EFI_NOT_STARTED;
+  }
+
+  MdProbeInit ();
+  Status = MdTablePlanSubsystemClaim (Map, &mTarget.Claim);
+  if (EFI_ERROR (Status)) {
+    MdEvidencePrint (
+      Evidence,
+      L"intent REFUSE: no safe free subsystem slot (%r)",
+      Status
+      );
+    return Status;
+  }
+  return MdClaimEvidenceRows (Evidence, Map);
+}
+
+STATIC
+EFI_STATUS
+MdActClaimSubsystem (
+  IN OUT MD_EVIDENCE *Evidence
+  )
+{
+  MD_TABLE_MAP     *Map;
+  MD_SUBSYSTEM_TOC Stored;
+  EFI_STATUS       Status;
+
+  Map = (MD_TABLE_MAP *)MdCachedMap ();
   if (Map == NULL) {
     return EFI_NOT_STARTED;
   }
-  for (Index = 0; Index < Map->ArrayCount; Index++) {
-    if (Map->Arrays[Index].SubsystemToc != 0 &&
-        Map->Arrays[Index].EncryptionRequired == 0) {
-      *ArrayIndex = Index;
-      return EFI_SUCCESS;
-    }
+
+  Status = MdTableClaimSubsystem (
+             Map,
+             &mTarget.Claim,
+             (UINT64)(UINTN)mProbeRegions,
+             1,
+             &Stored
+             );
+  if (EFI_ERROR (Status)) {
+    return Status;
   }
-  return EFI_NOT_FOUND;
+  Status = MdEvidencePrint (
+             Evidence,
+             L"outcome: slot %u stored init=0x%08x enabled=0x%08x",
+             (UINT32)mTarget.Claim.Index,
+             Stored.Status,
+             Stored.Enabled
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"outcome: stored count=%u baseptr=0x%lx encr_required=0x%08x",
+               Stored.RegionCount,
+               Stored.RegionsBasePtr,
+               Stored.EncryptionRequired
+               );
+  }
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+  if (Stored.RegionCount != 1 ||
+      Stored.RegionsBasePtr != (UINT64)(UINTN)mProbeRegions ||
+      Stored.Status != mTarget.Claim.Template.Status ||
+      Stored.Enabled != mTarget.Claim.Template.Enabled ||
+      Stored.EncryptionStatus != mTarget.Claim.Template.EncryptionStatus ||
+      Stored.EncryptionRequired != MD_SS_ENCR_NOTREQ_VALUE) {
+    return EFI_DEVICE_ERROR;
+  }
+  return MdEvidencePrint (
+           Evidence,
+           L"outcome: 32-byte readback verified; owned subsystem is live"
+           );
 }
 
-VOID
-MdAppendAliasesScreen (
-  VOID
+STATIC
+EFI_STATUS
+MdIntentTrigger (
+  IN OUT MD_EVIDENCE *Evidence
   )
 {
-  MD_TABLE_MAP   *Map;
-  MD_REGION_ENTRY Source;
-  UINTN          ArrayIndex;
-  UINTN          SourceArray;
-  UINTN          SourceEntry;
-  UINTN          Appended;
-  EFI_STATUS     Status;
-  EFI_STATUS     StatusX;
-  UINT64         UefiAddr;
-  UINT64         UefiSize;
-  UINT64         XblAddr;
-  UINT64         XblSize;
+  EFI_STATUS Status;
 
-  Status = MdEnsureScan ();
-  if (EFI_ERROR (Status)) {
-    AtUiReportStatus (L"Table scan", Status);
-    return;
+  if (MD_EXPECT_TZ_SIZE < sizeof (UINT32)) {
+    return EFI_COMPROMISED_DATA;
   }
-  if (!MdConfirm (L"Append UEFI/XBL log aliases")) {
-    return;
-  }
-  Map = (MD_TABLE_MAP *)MdCachedMap ();
+  mTarget.TriggerAddress = MD_EXPECT_TZ_ADDR + MD_EXPECT_TZ_SIZE / 2;
 
-  Status = MdFindPlaintextArray (&ArrayIndex);
-  if (EFI_ERROR (Status)) {
-    AtUiBeginScreen (L"Append Aliases", L"Failed");
-    Print (L"No subsystem with encryption_required=0 found.\r\n");
-    Print (L"Run 'Clear Encrypt' first, or the alias would be\r\n");
-    Print (L"encrypted like the original region.\r\n");
-    MdHoldResult ();
-    return;
-  }
-
-  /* The alias goes into the plaintext array no matter which array owns the
-     original region - it inherits the target subsystem's policy. */
-  Status = MdTableFindArray (Map, "UEFI_LOG", &SourceArray);
+  Status = MdEvidencePrint (
+             Evidence,
+             L"intent: measured TZ_DDR addr=0x%lx size=0x%lx",
+             (UINT64)MD_EXPECT_TZ_ADDR,
+             (UINT64)MD_EXPECT_TZ_SIZE
+             );
   if (!EFI_ERROR (Status)) {
-    Status = MdTableFindInArray (Map, SourceArray, "UEFI_LOG", &SourceEntry,
-                                 &Source);
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: fire 0x%08x at midpoint 0x%lx",
+               (UINT32)MD_CRASH_PATTERN,
+               mTarget.TriggerAddress
+               );
   }
   if (!EFI_ERROR (Status)) {
-    UefiAddr = Source.Address;
-    UefiSize = Source.Size;
-    Status = MdTableAppendRegion (Map, ArrayIndex, MD_ALIAS_UEFI,
-                                  UefiAddr, UefiSize, &Appended);
+    Status = MdEvidencePrint (
+               Evidence,
+               L"intent: no range gate: protected target is deliberate"
+               );
   }
-  StatusX = MdTableFindArray (Map, "XBL_LOG", &SourceArray);
-  if (!EFI_ERROR (StatusX)) {
-    StatusX = MdTableFindInArray (Map, SourceArray, "XBL_LOG", &SourceEntry,
-                                  &Source);
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidenceMemoryRow (
+               Evidence,
+               L"trigger",
+               mTarget.TriggerAddress
+               );
   }
-  if (!EFI_ERROR (StatusX)) {
-    XblAddr = Source.Address;
-    XblSize = Source.Size;
-    StatusX = MdTableAppendRegion (Map, ArrayIndex, MD_ALIAS_XBL,
-                                   XblAddr, XblSize, &Appended);
-  }
-  AtUiBeginScreen (L"Append Aliases",
-                   (!EFI_ERROR (Status) && !EFI_ERROR (StatusX)) ?
-                   L"Complete" : L"Partial/Failed");
-  Print (L"plaintext subsystem: array %u\r\n", (UINT32)ArrayIndex);
-  Print (L"%a -> %r\r\n", MD_ALIAS_UEFI, Status);
-  Print (L"%a -> %r\r\n", MD_ALIAS_XBL, StatusX);
-  Print (L"RAM only; next dump carries md_%a.BIN / md_%a.BIN\r\n",
-         MD_ALIAS_UEFI, MD_ALIAS_XBL);
-  MdHoldResult ();
+  return Status;
 }
 
-VOID
-MdClearEncryptionScreen (
-  VOID
+STATIC
+EFI_STATUS
+MdActTrigger (
+  IN OUT MD_EVIDENCE *Evidence
   )
 {
-  MD_TABLE_MAP *Map;
-  EFI_STATUS   Status;
-  UINTN        Index;
-  UINTN        Cleared;
-  UINT32       Previous;
+  EFI_STATUS Status;
+  UINT32     Readback;
 
-  Status = MdEnsureScan ();
-  if (EFI_ERROR (Status)) {
-    AtUiReportStatus (L"Table scan", Status);
-    return;
-  }
-  if (!MdConfirm (L"Clear encryption_required on log subsystems")) {
-    return;
-  }
-  Map = (MD_TABLE_MAP *)MdCachedMap ();
-  Cleared = 0;
-  AtUiBeginScreen (L"Clear Encrypt", NULL);
-  for (Index = 0; Index < Map->ArrayCount; Index++) {
-    if (Map->Arrays[Index].SubsystemToc == 0 ||
-        Map->Arrays[Index].EncryptionRequired == 0) {
-      continue;
-    }
-    Status = MdTableSetEncryptionRequired (Map, Index, 0, &Previous);
-    Print (L"array %u: encr_required %u -> %u (%r)\r\n", (UINT32)Index,
-           Previous, Map->Arrays[Index].EncryptionRequired, Status);
-    if (!EFI_ERROR (Status)) {
-      Cleared++;
-    }
-  }
-  if (Cleared == 0) {
-    Print (L"no subsystem needed clearing (all already 0 or ToC-less)\r\n");
-  }
-  MdHoldResult ();
-}
-
-VOID
-MdCrashTestScreen (
-  VOID
-  )
-{
-  CONST MD_TABLE_MAP *Map;
-  MD_REGION_ENTRY    Entry;
-  EFI_STATUS         Status;
-  UINTN              ArrayIndex;
-  UINTN              EntryIndex;
-  UINT32             Readback;
-
-  Status = MdEnsureScan ();
-  if (EFI_ERROR (Status)) {
-    AtUiReportStatus (L"Table scan", Status);
-    return;
-  }
-  Map = MdCachedMap ();
-  Status = MdTableFindArray (Map, "TZ_DDR", &ArrayIndex);
-  if (!EFI_ERROR (Status)) {
-    Status = MdTableFindInArray (Map, ArrayIndex, "TZ_DDR", &EntryIndex,
-                                 &Entry);
-  }
-  if (EFI_ERROR (Status)) {
-    AtUiReportStatus (L"Find TZ_DDR region", Status);
-    return;
-  }
-  AtUiBeginScreen (L"Crash Test: TZ Write", NULL);
-  Print (L"target: %a @0x%lx size=0x%lx\r\n", "TZ_DDR", Entry.Address,
-         Entry.Size);
-  Print (L"expected @0x%lx size=0x%lx %s\r\n", (UINT64)MD_EXPECT_TZ_ADDR,
-         (UINT64)MD_EXPECT_TZ_SIZE,
-         (Entry.Address == MD_EXPECT_TZ_ADDR && Entry.Size == MD_EXPECT_TZ_SIZE)
-         ? L"match" : L"DIFFERS");
-  Print (L"writes 0x%x to the secure carveout middle; an XPU\r\n",
-         MD_CRASH_PATTERN);
-  Print (L"refusal should fault the device into the 900e dump.\r\n");
-  Print (L"Power = fire, Vol +/- = cancel\r\n");
-  AtUiEndScreen (NULL);
+  AtUiBeginScreen (L"Trigger collection", L"Deliberate protected write");
+  Print (
+    L"write 0x%x at measured TZ_DDR midpoint 0x%lx\r\n",
+    (UINT32)MD_CRASH_PATTERN,
+    mTarget.TriggerAddress
+    );
+  Print (L"an XPU refusal should enter the 900e dump path\r\n");
+  Print (L"the owned subsystem is already registered\r\n");
+  AtUiEndScreen (L"Power = fire, Vol +/- = decline");
   if (AtUiWaitForKey (0) != AtKeySelect) {
-    return;
+    MdEvidencePrint (
+      Evidence,
+      L"outcome: DECLINED; no protected write attempted"
+      );
+    return EFI_ABORTED;
   }
 
-  AtUiShowMessage (L"Firing TZ write...");
-  MdTriggerWriteFault (Entry.Address + Entry.Size / 2, MD_CRASH_PATTERN,
-                       &Readback);
+  AtUiShowMessage (L"Firing trigger...");
+  MdTriggerWriteFault (
+    mTarget.TriggerAddress,
+    MD_CRASH_PATTERN,
+    &Readback
+    );
 
-  /* Reaching here means the device survived: the write did not fault. */
-  AtUiBeginScreen (L"Crash Test: TZ Write", L"SURVIVED - no fault taken");
-  Print (L"readback=0x%x (wrote 0x%x)\r\n", Readback, MD_CRASH_PATTERN);
-  Print (L"The XPU did not fault this path; try another trigger.\r\n");
-  MdHoldResult ();
+  Status = MdEvidencePrint (
+             Evidence,
+             L"outcome: SURVIVED; target writable, no fault occurred"
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = MdEvidencePrint (
+               Evidence,
+               L"outcome: readback=0x%08x wrote=0x%08x",
+               Readback,
+               (UINT32)MD_CRASH_PATTERN
+               );
+  }
+  return Status;
+}
+
+STATIC CONST MD_RUNG mPathwayReport[] = {
+  { L"Bounded map and region report to logfs", L"p1r1", NULL, NULL },
+};
+
+STATIC CONST MD_RUNG mPathwayOwnSubsystem[] = {
+  { L"Rung 1: bounded map and region report", L"own1", NULL, NULL },
+  { L"Rung 2: claim one owned subsystem slot", L"own2",
+    MdIntentClaimSubsystem, MdActClaimSubsystem },
+  { L"Rung 3: trigger collection (terminal)", L"own3",
+    MdIntentTrigger, MdActTrigger },
+};
+
+STATIC CONST MD_PATHWAY mPathways[] = {
+  { L"1 Report (bounded SMEM, no table write)", mPathwayReport,
+    sizeof (mPathwayReport) / sizeof (mPathwayReport[0]), TRUE, FALSE },
+  { L"2 Own subsystem + collection trigger", mPathwayOwnSubsystem,
+    sizeof (mPathwayOwnSubsystem) / sizeof (mPathwayOwnSubsystem[0]),
+    FALSE, TRUE },
+};
+
+CONST MD_PATHWAY *
+MdPathways (
+  OUT UINTN *Count
+  )
+{
+  *Count = sizeof (mPathways) / sizeof (mPathways[0]);
+  return mPathways;
 }

@@ -1,8 +1,7 @@
 #/** @file
-#  MdTools UEFI application - read-only minidump table scan/map, RAM-only
-#  table edits (region alias append, encryption_required clear), a crash
-#  test trigger, and a single logfs report writer. Launched from the ABL
-#  with `fastboot boot MdTools.efi`; never shipped in the release packages.
+#  MdTools UEFI application - bounded SMEM minidump report and one durable
+#  owned-subsystem crash probe. Launched from the ABL with
+#  `fastboot boot MdTools.efi`.
 #
 #  Copyright (c) 2026, contributors to the canoe ABL tree.
 #  SPDX-License-Identifier: BSD-3-Clause
@@ -19,6 +18,7 @@
 [Sources]
   MdTools.c
   MdTools.h
+  MdDiscovery.c
   MdReport.c
   MdEdit.c
   MdFat.c

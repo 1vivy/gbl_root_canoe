@@ -151,9 +151,11 @@ Android 一次性安装包与模块必须为以下文件携带相同字节：
 `make -C submodules/uefi tools` 还会构建三个这两个软件包都不携带的工具：
 `LogTools.efi`、`MdTools.efi` 和 `CrashTools.efi`。它们由主机通过
 `fastboot boot <tool>.efi` 针对已运行存在漏洞 ABL 的设备启动，用于调查固件
-而不是操作固件：`MdTools` 在 RAM 中扫描并编辑高通 minidump 区域表，
-`CrashTools` 触发有意的故障以进入 900e memory-debug 模式。因此上面的打包
-清单比构建输出更窄，这是有意的；不要通过把它们加入某个 target 来“修复”。
+而不是操作固件。`MdTools` 通过 SMEM 项 602 定位 minidump，只读取固定的全局
+ToC 以及 AOP/BOOT 数组，并在发现开始前先向 logfs 写入并刷新阶段标记。它唯一
+的表修改会为自身的单条目数组占用一个空闲子系统槽，然后在映像仍驻留时触发
+收集。`CrashTools` 直接使用已测量的 TZ_DDR 目标，不扫描固件内存。因此上面的
+打包清单比构建输出更窄，这是有意的；不要把这些工具加入某个 target。
 
 一次性安装包配方要求先有规范的 EDK2 构建输出；模块配方只构建缺失的 EFI
 构件。在两个包中复用同一次固件构建，不要为每个包重新链接：相同源码的 EDK2

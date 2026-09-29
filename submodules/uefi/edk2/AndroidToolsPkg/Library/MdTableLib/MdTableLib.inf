@@ -1,5 +1,5 @@
 #/** @file
-#  MdTableLib - content-scan discovery and RAM-only edits for the Qualcomm
+#  MdTableLib - bounded SMEM discovery and RAM-only edits for the Qualcomm
 #  Sahara minidump region table (see Include/MdTable.h).
 #
 #  Copyright (c) 2026, contributors to the canoe ABL tree.
@@ -16,9 +16,9 @@
 
 [Sources]
   MdTableMap.c
+  MdTableRoot.c
   MdTableScan.c
   MdTableFire.c
-  MdTableToc.c
   MdTableEdit.c
 
 [Packages]

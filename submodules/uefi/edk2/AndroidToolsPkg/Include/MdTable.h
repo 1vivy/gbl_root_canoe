@@ -1,25 +1,15 @@
 /** @file
- *  Qualcomm Sahara minidump table: on-DDR layout, scan/edit API.
+ *  Qualcomm Sahara minidump table: bounded SMEM discovery and RAM-only edits.
  *
- *  The 900e crash-dump collector has no hardcoded region list. It walks a
- *  live two-level table that boot firmware rebuilds in DDR every boot:
- *  a global table of contents (SMEM item 602) holds an inline array of
- *  per-subsystem ToCs, and each subsystem ToC points at that subsystem's
- *  array of region entries. Layout is the one upstream Linux parses in
- *  drivers/remoteproc/qcom_common.c:
+ *  The 900e collector walks a two-level live table rebuilt on every boot:
+ *  SMEM item 602 contains a global header and inline subsystem ToCs; each live
+ *  subsystem ToC points at its bounded region-entry array.
  *
- *    struct minidump_region    { char name[16]; le32 seq; le32 valid;
- *                                le64 address; le64 size; }         (40 bytes)
- *    struct minidump_subsystem { le32 status, enabled, encryption_status,
- *                                encryption_required, region_count;
- *                                le64 regions_baseptr; }            (32 bytes)
- *
- *  'valid' carries the fourcc 'VALI', subsystem 'enabled' carries 'ENBL' and
- *  'encryption_status' carries 'DONE' (stored little-endian on device).
- *
- *  Everything here is found by content scan, never by assumed platform
- *  constants: entries are anchored on known region names, subsystem ToCs are
- *  found by scanning for a pointer back to a discovered region array.
+ *  The current device collector uses a 16-byte global header and 29 subsystem
+ *  slots. MdTools obtains the item through the inherited Qualcomm SMEM UEFI
+ *  protocol and reads only that 944-byte root plus the explicitly required
+ *  BOOT and AOP arrays. It never searches arbitrary UEFI memory descriptors:
+ *  a descriptor classified as RAM can still be inaccessible from NS-EL1.
  *
  *  Copyright (c) 2026, contributors to the canoe ABL tree.
  *  SPDX-License-Identifier: BSD-3-Clause
@@ -34,15 +24,81 @@
 #define MD_REGION_ENTRY_SIZE 40u
 #define MD_SUBSYSTEM_TOC_SIZE 32u
 
+/* Qualcomm boot_minidump_common.c resolves the global ToC through this item. */
+#define MD_SMEM_ITEM_ID 602u
+
+/* Subsystem indices used by this tool. BOOT owns UEFI_LOG/XBL_LOG; AOP is the
+   measured not-encryption-required template used by the owned-subsystem path. */
+#define MD_SS_AOP  9u
+#define MD_SS_BOOT 14u
+
 /* Field magic values as read on a little-endian target (see qcom_common.c). */
 #define MD_REGION_VALID_VALUE  ((UINT32)(('V' << 24) | ('A' << 16) | ('L' << 8) | 'I'))
 #define MD_SS_ENABLED_VALUE    ((UINT32)(('E' << 24) | ('N' << 16) | ('B' << 8) | 'L'))
 #define MD_SS_ENCR_DONE_VALUE  ((UINT32)(('D' << 24) | ('O' << 16) | ('N' << 8) | 'E'))
 
-/* Walk/plausibility bounds. Deliberately loose: region addresses observed on
-   the target span 0x000d2000 (SOCCP) to 0xd85ff000 (TZ), sizes 4 B to 3.6 MB. */
-#define MD_MAX_ARRAY_ENTRIES   512u
-#define MD_MAX_ARRAYS          8u
+/*
+ * Remaining policy words, transcribed from the vendor header
+ * QcomPkg/Library/MinidumpLib/Include/boot_minidump.h (BOOT.MXF.2.5.1). They
+ * are compared verbatim by the loader, so they are spelled the vendor way
+ * rather than reduced to booleans:
+ *
+ *   boot_minidump_init    writes md_ss_toc_init = MD_SS_TOC_MAGIC
+ *   boot_add_minidump_region / loader encrypt iff encryption_required == REQ
+ *   loader enumerates a subsystem iff md_ss_toc_init != 0 and
+ *                                        md_ss_enable_status == ENABLED
+ */
+#define MD_SS_TOC_MAGIC_VALUE   ((UINT32)((0u << 24) | ('T' << 16) | ('O' << 8) | 'C'))
+#define MD_SS_DISABLED_VALUE    ((UINT32)(('D' << 24) | ('S' << 16) | ('B' << 8) | 'L'))
+#define MD_SS_ENCR_REQ_VALUE    ((UINT32)((0u << 24) | ('Y' << 16) | ('E' << 8) | 'S'))
+#define MD_SS_ENCR_NOTREQ_VALUE ((UINT32)((0u << 24) | (0u << 16) | ('N' << 8) | 'R'))
+#define MD_SS_ENCR_START_VALUE  ((UINT32)(('S' << 24) | ('T' << 16) | ('R' << 8) | 'T'))
+
+/*
+ * AOP registers itself into the same global table with its own init magic
+ * (RailwayLib/aopminidump.c: AOP_MD_SS_TOC_MAGIC), so a live subsystem's
+ * init word is not always MD_SS_TOC_MAGIC. Kept as evidence, not as a gate.
+ */
+#define MD_SS_AOP_TOC_MAGIC_VALUE 0xDEEDDEEDu
+
+/*
+ * G-ToC geometry.
+ *
+ * VERIFIED ON THE DEVICE'S OWN COLLECTOR, and this DIVERGES from the supplied
+ * BOOT.MXF.2.5.1 source tree the comments above quote. The shipped binary is
+ * xbl_ramdump.img, SHA-256
+ * 89a1dad14aca0be062d5463906ba2b5c899395ec6d34976afd7ef278c6776431, ELF64
+ * AArch64, embedded BOOT.MXF.2.5.3-00199-KAANAPALI-1.131443.27, tied to
+ * CPH2745_16.0.10.601(EX01). Four divergences, each load-bearing:
+ *
+ *   1. 29 subsystem slots, not 26. The collector walks indices 0..28 and
+ *      terminates at 29. Do NOT "correct" this back to the source's MD_SS_MAX.
+ *   2. The inline subsystem array starts at global offset 0x10, not 0x0c: the
+ *      lookup is literally `global + 0x10 + index * 0x20`, so the header is 16
+ *      bytes, not 12.
+ *   3. The whole global structure is 0x3b0 bytes (16 + 29 * 32 = 944), not the
+ *      844 the source layout implies.
+ *   4. Add-region capacity is 50, not the source's unexpanded
+ *      SCL_BOOT_MD_COUNT: the shipped add path accepts while the existing
+ *      count is below 50 (it rejects at `count > 49`). See
+ *      MD_MAX_APPEND_REGIONS.
+ */
+#define MD_MAX_SUBSYSTEMS    29u
+#define MD_GTOC_HEADER_SIZE  16u
+#define MD_GTOC_REVISION     1u
+#define MD_GTOC_SIZE_BYTES   \
+  (MD_GTOC_HEADER_SIZE + MD_MAX_SUBSYSTEMS * MD_SUBSYSTEM_TOC_SIZE)
+
+/*
+ * Shipped add-region capacity. The device rejects a new region once the
+ * subsystem's count has reached 50, so appending is refused at count >= 50 and
+ * a candidate ToC declaring more than this cannot be one the device produces.
+ */
+#define MD_MAX_APPEND_REGIONS 50u
+
+
+/* Region payload plausibility bounds, measured across the target's captures. */
+#define MD_MAX_ARRAYS          2u
 #define MD_MIN_REGION_ADDRESS  0x10000ULL
 #define MD_MAX_REGION_ADDRESS  0x200000000ULL
 #define MD_MAX_REGION_SIZE     (32u * 1024u * 1024u)
@@ -67,45 +123,107 @@ typedef struct {
   UINT64 RegionsBasePtr;
 } MD_SUBSYSTEM_TOC;
 
+/* One UEFI memory descriptor as it covers an address the tool touches. */
+typedef struct {
+  UINT64          Base;
+  UINT64          Size;
+  EFI_MEMORY_TYPE Type;
+  UINT64          Attributes;
+} MD_MEMORY_INFO;
+
+
 typedef struct {
   EFI_PHYSICAL_ADDRESS Base;          /* first entry of the region array   */
-  UINTN                Count;         /* entries that walked clean         */
-  EFI_PHYSICAL_ADDRESS SubsystemToc;  /* 0 when no back-reference found    */
-  UINT32               EncryptionRequired; /* valid when SubsystemToc != 0  */
-  UINT32               TocRegionCount;     /* region_count read from ToC    */
-  UINTN                AnchorCount;   /* anchor names that hit this array  */
+  UINTN                Count;         /* count declared by its live ToC    */
+  UINTN                SubsystemIndex;/* slot in the SMEM global ToC       */
+  EFI_PHYSICAL_ADDRESS SubsystemToc;  /* exact inline slot address         */
+  UINT32               EncryptionRequired;
+  UINT32               TocRegionCount;
+  MD_SUBSYSTEM_TOC     Toc;           /* full 32-byte ToC as read          */
+  UINT64               TocBasePtr;
+  BOOLEAN              BaseDescribed;
+  MD_MEMORY_INFO       BaseMemory;
+  BOOLEAN              TocDescribed;
+  MD_MEMORY_INFO       TocMemory;
   CHAR8                FirstName[MD_REGION_NAME_LEN + 1];
   CHAR8                LastName[MD_REGION_NAME_LEN + 1];
 } MD_REGION_ARRAY;
 
+/* The shipped header is 16 bytes: init at +0, revision at +4, the enable word
+   at +8, and a fourth word at +12 that the collector never tests. The fourth
+   word is kept so the report can show it rather than silently assume it. */
 typedef struct {
-  UINT32 Status;                   /* raw G-ToC header words, when found  */
-  UINT32 Revision;
-  UINT32 Enabled;
+  UINT32 Status;                   /* md_toc_init, nonzero when live      */
+  UINT32 Revision;                 /* MD_REVISION (1)                     */
+  UINT32 Enabled;                  /* md_enable_status                    */
+  UINT32 Pad;                      /* +12; not tested by the collector    */
 } MD_GTOC_HEADER;
+
+/* Exact SM8850 collector layout measured from xbl_ramdump 2.5.3. */
+typedef struct {
+  MD_GTOC_HEADER    Header;
+  MD_SUBSYSTEM_TOC Subsystems[MD_MAX_SUBSYSTEMS];
+} MD_GLOBAL_TOC;
 
 typedef struct {
   MD_REGION_ARRAY Arrays[MD_MAX_ARRAYS];
   UINTN           ArrayCount;
-  UINT64          BytesScanned;
-  UINT32          ScanSeconds;
-  UINTN           AnchorHits;
-  UINT32          AnchorMask;      /* bit N set when anchor N hit         */
-  UINT32          AnchorTotal;
-  BOOLEAN         ScanTruncated;   /* budget ran out; coverage is partial */
-  EFI_PHYSICAL_ADDRESS GtocAddress; /* 0 when no contiguous ToC run found */
+  EFI_PHYSICAL_ADDRESS GtocAddress;
+  UINTN           GtocBytes;
+  BOOLEAN         GtocFromSmem;
   MD_GTOC_HEADER  Gtoc;
-  UINTN           SubsystemCount;  /* ToC structs in the run at GtocAddress */
+  UINTN           SubsystemCount;
+  BOOLEAN         GtocDescribed;
+  MD_MEMORY_INFO  GtocMemory;
+  BOOLEAN         GtocHeaderValid;
+  BOOLEAN         GtocStructContiguous;
 } MD_TABLE_MAP;
 
 /**
-  Scan readable DDR for minidump region arrays and their subsystem ToCs.
-  Read-only: no byte is written. Returns EFI_SUCCESS when at least one array
-  was found, EFI_NOT_FOUND otherwise (Map is still populated for the report).
+  Resolve SMEM item 602 through the inherited Qualcomm UEFI SMEM protocol.
+  No fallback scan exists. The returned address remains owned by firmware.
 **/
 EFI_STATUS
-MdTableScan (
-  OUT MD_TABLE_MAP *Map
+MdTableLocateRoot (
+  OUT EFI_PHYSICAL_ADDRESS *Address,
+  OUT UINTN                *Bytes
+  );
+
+/**
+  Parse an already-bounded global ToC and map only AOP and BOOT. This pure
+  parser is also the host-test seam; it performs no UEFI memory-map walk.
+**/
+EFI_STATUS
+MdTableMapRoot (
+  IN  EFI_PHYSICAL_ADDRESS Address,
+  IN  UINTN                Bytes,
+  OUT MD_TABLE_MAP         *Map
+  );
+
+/**
+  Validate descriptor coverage for the SMEM root and selected arrays, then
+  capture their first/last entries and memory attributes.
+**/
+EFI_STATUS
+MdTableScanRoot (
+  IN  EFI_PHYSICAL_ADDRESS Address,
+  IN  UINTN                Bytes,
+  OUT MD_TABLE_MAP         *Map
+  );
+
+
+/**
+  Select a zero subsystem slot. Prefer the first zero slot above the highest
+  used slot; if the used tail reaches the end, fall back to the first zero.
+**/
+EFI_STATUS
+MdTableSelectFreeSubsystem (
+  IN  CONST MD_SUBSYSTEM_TOC *Slots,
+  IN  UINTN                  SlotCount,
+  OUT UINTN                  *Index,
+  OUT BOOLEAN                *AboveHighest,
+  OUT BOOLEAN                *AnyUsed,
+  OUT UINTN                  *HighestUsed
   );
 
 /** Read and validate one entry of a discovered array. **/
@@ -117,48 +235,79 @@ MdTableReadEntry (
   OUT MD_REGION_ENTRY    *Entry
   );
 
-/** Find an entry by NUL-terminated ASCII name inside one array. **/
-EFI_STATUS
-MdTableFindInArray (
-  IN  CONST MD_TABLE_MAP *Map,
-  IN  UINTN              ArrayIndex,
-  IN  CONST CHAR8        *Name,
-  OUT UINTN              *EntryIndex,
-  OUT MD_REGION_ENTRY    *Entry OPTIONAL
-  );
 
-/** Index of the array that contains Name, or EFI_NOT_FOUND. **/
+/** A chosen free md_ss_toc[] slot and everything read before writing it. **/
+typedef struct {
+  UINTN                Index;
+  EFI_PHYSICAL_ADDRESS TocAddress;
+  MD_SUBSYSTEM_TOC     Previous;
+  MD_SUBSYSTEM_TOC     Template;
+  UINTN                TemplateArray;
+  EFI_PHYSICAL_ADDRESS TemplateToc;
+  BOOLEAN              AboveHighest;
+  BOOLEAN              AnyUsed;
+  UINTN                HighestUsed;
+} MD_SUBSYSTEM_CLAIM;
+
+/**
+  Plan one owned subsystem claim from the SMEM-provided root.
+
+  Requires a valid, descriptor-contained SMEM root; the exact live AOP slot as
+  the enabled, DONE, not-encryption-required template; and a fully writable
+  all-zero destination slot. Prefers the first free slot above the highest used
+  slot. Writes nothing.
+**/
 EFI_STATUS
-MdTableFindArray (
+MdTablePlanSubsystemClaim (
   IN  CONST MD_TABLE_MAP *Map,
-  IN  CONST CHAR8        *Name,
-  OUT UINTN              *ArrayIndex
+  OUT MD_SUBSYSTEM_CLAIM *Claim
   );
 
 /**
-  Append one region entry to an array whose subsystem leaves the encryption
-  policy clear, then bump the ToC region_count. Requires 40 zero bytes of
-  slack directly after the last used entry; refuses (EFI_BAD_BUFFER_SIZE)
-  rather than overwrite live firmware data. Writes are followed by a cache
-  clean so the dump collector (which reads DRAM with caches off) sees them.
+  Recheck the planned slot, store one 32-byte ToC pointing at the caller's
+  region array, clean the cache, and verify the complete readback.
 **/
 EFI_STATUS
-MdTableAppendRegion (
-  IN OUT MD_TABLE_MAP   *Map,
-  IN     UINTN          ArrayIndex,
-  IN     CONST CHAR8    *Name,
-  IN     UINT64         Address,
-  IN     UINT64         Size,
-  OUT    UINTN          *AppendedIndex OPTIONAL
+MdTableClaimSubsystem (
+  IN OUT MD_TABLE_MAP             *Map,
+  IN     CONST MD_SUBSYSTEM_CLAIM *Claim,
+  IN     UINT64                   RegionsBasePtr,
+  IN     UINT32                   RegionCount,
+  OUT    MD_SUBSYSTEM_TOC         *Stored OPTIONAL
   );
 
-/** Write a subsystem ToC's encryption_required field and read it back. **/
+
+/**
+  Report the UEFI memory descriptor that contains Address: base, size, type
+  and attributes. EFI_NOT_FOUND when no descriptor contains Address.
+**/
 EFI_STATUS
-MdTableSetEncryptionRequired (
-  IN OUT MD_TABLE_MAP *Map,
-  IN     UINTN        ArrayIndex,
-  IN     UINT32       Value,
-  OUT    UINT32       *Previous OPTIONAL
+MdDescribeAddress (
+  IN  UINT64         Address,
+  OUT MD_MEMORY_INFO *Info
+  );
+
+/** Stable ASCII-ish name for one EFI memory type, for report rows. **/
+CONST CHAR16 *
+MdMemoryTypeName (
+  IN EFI_MEMORY_TYPE Type
+  );
+
+/**
+  TRUE only when the whole range [Address, Address + Bytes) is covered by
+  descriptors that are both DRAM-like (MdMemoryTypeReadable with conventional
+  memory excluded) and carry neither EFI_MEMORY_RO nor EFI_MEMORY_WP.
+
+  Range-based on purpose: a descriptor boundary can fall inside the range being
+  written, and a range that starts writable and ends read-only is not writable.
+  Fail-closed: a range with no covering descriptor, an empty memory map, a
+  zero length, or an overflowing end is reported NOT writable. This is the one
+  definition of "writable" for every store the tool performs.
+**/
+BOOLEAN
+MdRangeWritable (
+  IN UINT64 Address,
+  IN UINT64 Bytes
   );
 
 /**

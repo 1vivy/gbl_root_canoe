@@ -1,9 +1,9 @@
 /** @file
  *  CrashTools - force the device into Qualcomm 900e memory-debug mode.
  *
- *  Standalone companion to MdTools for the case where no table edit is
- *  needed (or to prove a trigger before trusting it in an edit+crash run).
- *  Launched from the ABL with `fastboot boot CrashTools.efi`.
+ *  Standalone companion to MdTools for proving collection triggers without a
+ *  table edit. It uses the TZ_DDR base and size measured from the captured
+ *  minidump metadata; it never searches firmware memory for a table.
  *
  *  Every trigger confirms first. A trigger that returns means the device
  *  did NOT go down - that survival is the finding, and the result screen
@@ -27,26 +27,10 @@
 #define ARRAY_SIZE(a)  (sizeof (a) / sizeof ((a)[0]))
 #endif
 
-/* 2026-09-02 capture measurement for the expected= line. */
-#define CT_EXPECT_TZ_ADDR  0xD85FF000ULL
+/* 2026-09-29 qdl capture measurement. */
+#define CT_EXPECT_TZ_ADDR  0xD820C000ULL
 #define CT_EXPECT_TZ_SIZE  0x3F3000ULL
 #define CT_CRASH_PATTERN   0xDEADBEEFu
-
-STATIC MD_TABLE_MAP mCtMap;
-STATIC BOOLEAN      mCtScanned = FALSE;
-
-STATIC
-EFI_STATUS
-CtEnsureScan (
-  VOID
-  )
-{
-  if (mCtScanned) {
-    return (mCtMap.ArrayCount > 0) ? EFI_SUCCESS : EFI_NOT_FOUND;
-  }
-  mCtScanned = TRUE;
-  return MdTableScan (&mCtMap);
-}
 
 /** Power fires, any volume key aborts. Returns TRUE to fire. */
 STATIC
@@ -79,33 +63,19 @@ CtFindTargetsScreen (
   VOID
   )
 {
-  MD_REGION_ENTRY Entry;
-  EFI_STATUS      Status;
-  UINTN           ArrayIndex;
-  UINTN           EntryIndex;
-  UINT64          Hole;
+  EFI_STATUS Status;
+  UINT64     Hole;
 
-  Status = CtEnsureScan ();
-  AtUiBeginScreen (L"Crash Targets", EFI_ERROR (Status) ? L"scan failed"
-                                                        : NULL);
-  if (EFI_ERROR (Status)) {
-    Print (L"table scan: %r (TZ target unknown)\r\n", Status);
-  } else {
-    Status = MdTableFindArray (&mCtMap, "TZ_DDR", &ArrayIndex);
-    if (!EFI_ERROR (Status)) {
-      Status = MdTableFindInArray (&mCtMap, ArrayIndex, "TZ_DDR",
-                                   &EntryIndex, &Entry);
-    }
-    if (EFI_ERROR (Status)) {
-      Print (L"TZ_DDR: not found in table\r\n");
-    } else {
-      Print (L"TZ_DDR @0x%lx size=0x%lx\r\n", Entry.Address, Entry.Size);
-      Print (L"expected @0x%lx size=0x%lx %s\r\n",
-             (UINT64)CT_EXPECT_TZ_ADDR, (UINT64)CT_EXPECT_TZ_SIZE,
-             (Entry.Address == CT_EXPECT_TZ_ADDR &&
-              Entry.Size == CT_EXPECT_TZ_SIZE) ? L"match" : L"DIFFERS");
-    }
-  }
+  AtUiBeginScreen (L"Crash Targets", L"Measured target; no table scan");
+  Print (
+    L"TZ_DDR measured @0x%lx size=0x%lx\r\n",
+    (UINT64)CT_EXPECT_TZ_ADDR,
+    (UINT64)CT_EXPECT_TZ_SIZE
+    );
+  Print (
+    L"TZ_DDR midpoint: 0x%lx\r\n",
+    (UINT64)(CT_EXPECT_TZ_ADDR + CT_EXPECT_TZ_SIZE / 2)
+    );
   Status = MdFindUnmappedAddress (&Hole);
   if (EFI_ERROR (Status)) {
     Print (L"unmapped hole: none found (%r)\r\n", Status);
@@ -121,32 +91,18 @@ CtTzWriteScreen (
   VOID
   )
 {
-  MD_REGION_ENTRY Entry;
-  EFI_STATUS      Status;
-  UINTN           ArrayIndex;
-  UINTN           EntryIndex;
-  UINT32          Readback;
+  UINT64 Target;
+  UINT32 Readback;
 
-  Status = CtEnsureScan ();
-  if (!EFI_ERROR (Status)) {
-    Status = MdTableFindArray (&mCtMap, "TZ_DDR", &ArrayIndex);
-  }
-  if (!EFI_ERROR (Status)) {
-    Status = MdTableFindInArray (&mCtMap, ArrayIndex, "TZ_DDR",
-                                 &EntryIndex, &Entry);
-  }
-  if (EFI_ERROR (Status)) {
-    AtUiReportStatus (L"Find TZ_DDR (run Find Targets first)", Status);
-    return;
-  }
+  Target = CT_EXPECT_TZ_ADDR + CT_EXPECT_TZ_SIZE / 2;
   if (!CtConfirm (L"Crash: TZ Secure Write",
-                  L"write to secure carveout; XPU should fault to 900e")) {
+                  L"measured secure carveout; XPU should fault to 900e")) {
     return;
   }
   AtUiShowMessage (L"Firing TZ write...");
-  MdTriggerWriteFault (Entry.Address + Entry.Size / 2, CT_CRASH_PATTERN,
-                       &Readback);
+  MdTriggerWriteFault (Target, CT_CRASH_PATTERN, &Readback);
   AtUiBeginScreen (L"Crash: TZ Secure Write", L"SURVIVED - no fault");
+  Print (L"target=0x%lx\r\n", Target);
   Print (L"readback=0x%x (wrote 0x%x)\r\n", Readback, CT_CRASH_PATTERN);
   Print (L"XPU did not fault this path.\r\n");
   CtHoldResult ();

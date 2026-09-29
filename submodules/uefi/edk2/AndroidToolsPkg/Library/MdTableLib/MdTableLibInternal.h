@@ -1,6 +1,5 @@
 /** @file
- *  MdTableLib internals: memory-map walk and the shared DDR scan driver.
- *
+ *  MdTableLib internals: memory-map snapshots and bounded range gates.
  *  Copyright (c) 2026, contributors to the canoe ABL tree.
  *  SPDX-License-Identifier: BSD-3-Clause
  */
@@ -32,9 +31,20 @@ MdMapWalkInit (
   );
 
 /**
-  Advance to the next descriptor the probe may safely read (no MMIO, and no
-  conventional memory unless requested). Returns FALSE when exhausted or when
-  the scan budget was spent (check Walk->Scanned against MD_SCAN_BUDGET_BYTES).
+  TRUE when a descriptor type is DRAM-like. This is only a secondary range
+  gate for addresses obtained from explicit firmware structures; it is never
+  permission to probe arbitrary bytes in that descriptor.
+**/
+BOOLEAN
+MdMemoryTypeReadable (
+  IN EFI_MEMORY_TYPE Type,
+  IN BOOLEAN         IncludeConventional
+  );
+
+/**
+  Advance to the next DRAM-like descriptor without reading its contents.
+  Used by CrashTools to choose an unmapped address. Returns FALSE when
+  exhausted or when the descriptor-coverage budget was spent.
 **/
 BOOLEAN
 MdMapWalkNext (
@@ -49,29 +59,31 @@ MdMapWalkFree (
   );
 
 /**
-  Called for every 8-aligned UINT64 in a readable range that equals one of the
-  needles. Return TRUE to keep scanning, FALSE to stop the pass early.
+  Find the descriptor containing Address in an already-taken snapshot.
+  Deliberately unfiltered by memory type because callers report the actual
+  type and attributes. Does not disturb the walk cursor.
 **/
-typedef BOOLEAN (*MD_SCAN_HIT_FN) (
-  IN EFI_PHYSICAL_ADDRESS Address,
-  IN UINTN                NeedleIndex,
-  IN OUT VOID             *Context
+EFI_STATUS
+MdMapFindDescriptor (
+  IN  CONST MD_MAP_WALK *Walk,
+  IN  UINT64            Address,
+  OUT MD_MEMORY_INFO    *Info
   );
 
 /**
-  Drive one scan pass over the readable map. OnHit fires on needle matches.
-  *BytesScanned accumulates the coverage. Returns EFI_SUCCESS normally,
-  EFI_NOT_FOUND if no hit, EFI_BUFFER_TOO_SMALL if the budget ran out.
+  TRUE when the whole range [Address, Address + Bytes) lies inside one
+  DRAM-like, non-conventional descriptor. This is a secondary range check for
+  explicit firmware-provided pointers, never authority for arbitrary reads.
+  Fail closed on an empty map, overflow, zero length, or missing descriptor.
 **/
-EFI_STATUS
-MdScanPass (
-  IN     CONST UINT64 *Needles,
-  IN     UINTN        NeedleCount,
-  IN     MD_SCAN_HIT_FN OnHit,
-  IN OUT VOID         *Context,
-  IN     BOOLEAN      IncludeConventional,
-  OUT    UINT64       *BytesScanned
+BOOLEAN
+MdRangeInOneReadableDescriptor (
+  IN UINT64 Address,
+  IN UINT64 Bytes
   );
+
+
+
 
 /** Plausibility check for a would-be region entry at Address. **/
 BOOLEAN
@@ -80,10 +92,5 @@ MdEntryPlausible (
   OUT MD_REGION_ENTRY     *Entry OPTIONAL
   );
 
-/** Subsystem ToC discovery pass (MdTableToc.c); called by MdTableScan. **/
-VOID
-MdTableFindTocs (
-  IN OUT MD_TABLE_MAP *Map
-  );
 
 #endif /* __MD_TABLE_LIB_INTERNAL_H__ */
