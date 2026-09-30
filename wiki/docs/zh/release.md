@@ -11,7 +11,7 @@ KernelSU 模块，并将已发布的在线应用归档部署到 Cloudflare Worke
 修改各处版本字段：
 
 ```sh
-make bump VERSION=7.0.7 VERSION_CODE=24
+make bump VERSION=7.0.8 VERSION_CODE=25
 make test
 docker build -t gbl_builder - < Dockerfile
 docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc \
