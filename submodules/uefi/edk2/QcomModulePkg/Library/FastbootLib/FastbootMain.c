@@ -113,6 +113,11 @@ static USB_DEVICE_DESCRIPTOR_SET DescSet;
  * teardown both need.
  */
 STATIC BOOLEAN mUsbDeviceStarted;
+/* Every queued OUT transfer borrows its destination until the completion
+ * event. Reusing gRxBuffer for two requests lets one host command overwrite
+ * another before its BytesCompleted event is consumed. */
+STATIC BOOLEAN mUsbRxPending;
+
 
 STATIC
 CONST
@@ -344,8 +349,39 @@ FastbootUsbDeviceRelease (VOID)
   Status = Fbd.UsbDeviceProtocol->Stop ();
   if (!EFI_ERROR (Status)) {
     mUsbDeviceStarted = FALSE;
+    mUsbRxPending = FALSE;
   }
   return Status;
+}
+
+/*
+ * Queue exactly one host-to-device transfer. Both StartEx and the USB event
+ * stream can announce the same connection, while response completion also
+ * primes the next request. They must converge here instead of submitting
+ * multiple requests backed by the same buffer.
+ */
+EFI_STATUS
+FastbootUsbQueueReceive (IN UINTN Size, IN VOID *Buffer)
+{
+  EFI_STATUS Status;
+
+  if (mUsbRxPending) {
+    return EFI_SUCCESS;
+  }
+  Status = Fbd.UsbDeviceProtocol->Send (ENDPOINT_IN, Size, Buffer);
+  if (!EFI_ERROR (Status)) {
+    mUsbRxPending = TRUE;
+  }
+  return Status;
+}
+
+STATIC EFI_STATUS
+FastbootUsbQueueNextReceive (VOID)
+{
+  if (FastbootCurrentState () == ExpectDataState) {
+    return FastbootUsbQueueReceive (GetXfrSize (), FastbootNextDataBuffer ());
+  }
+  return FastbootUsbQueueReceive (511, Fbd.gRxBuffer);
 }
 
 /*
@@ -357,8 +393,7 @@ FastbootUsbDeviceRelease (VOID)
  * replug (a fresh attach event) revives it. Do exactly what the first start
  * does - signal the controller-init event, StartEx the descriptor set again,
  * and re-prime the receive queue that the Connected event normally seeds.
- * The RX Send is best-effort: a stack that did re-deliver Connected already
- * has a pending receive, and the duplicate attempt just fails.
+ * FastbootUsbQueueReceive coalesces that seed with a later Connected event.
  */
 EFI_STATUS
 FastbootUsbReconnect (VOID)
@@ -378,8 +413,9 @@ FastbootUsbReconnect (VOID)
     return Status;
   }
   mUsbDeviceStarted = TRUE;
+  mUsbRxPending = FALSE;
 
-  Status = Fbd.UsbDeviceProtocol->Send (0x1, 511, Fbd.gRxBuffer);
+  Status = FastbootUsbQueueNextReceive ();
   DEBUG ((EFI_D_ERROR, "SFB: MARK fb-usb-reseed status=%r\n", Status));
   return EFI_SUCCESS;
 }
@@ -471,13 +507,7 @@ ProcessBulkXfrCompleteTx (IN USB_DEVICE_TRANSFER_OUTCOME *Uto)
   switch (Uto->Status) {
   case UsbDeviceTransferStatusCompleteOK:
     DEBUG ((EFI_D_VERBOSE, "UsbDeviceTransferStatusCompleteOK\n"));
-    /* Just Queue the next recieve, must be a Command */
-    if (FastbootCurrentState () == ExpectDataState)
-      Status = Fbd.UsbDeviceProtocol->Send (ENDPOINT_IN, GetXfrSize (),
-                                            FastbootDloadBuffer ());
-    else
-      Status = Fbd.UsbDeviceProtocol->Send (ENDPOINT_IN, GetXfrSize (),
-                                            Fbd.gRxBuffer);
+    Status = FastbootUsbQueueNextReceive ();
     break;
 
   case UsbDeviceTransferStatusCancelled:
@@ -506,11 +536,11 @@ EFI_STATUS HandleUsbEvents (VOID)
   if (UsbDeviceEventDeviceStateChange == Msg) {
     if (UsbDeviceStateConnected == Payload.DeviceState) {
       DEBUG ((EFI_D_VERBOSE, "Fastboot Device connected\n"));
-      /* Queue receive buffer */
-      Status = Fbd.UsbDeviceProtocol->Send (0x1, 511, Fbd.gRxBuffer);
+      Status = FastbootUsbQueueNextReceive ();
     }
     if (UsbDeviceStateDisconnected == Payload.DeviceState) {
       DEBUG ((EFI_D_VERBOSE, "Fastboot Device disconnected\n"));
+      mUsbRxPending = FALSE;
     }
   } else if (UsbDeviceEventTransferNotification == Msg) {
     /* Check if the transfer notification is on the Bulk EP and process it*/
@@ -519,6 +549,7 @@ EFI_STATUS HandleUsbEvents (VOID)
       if (USB_ENDPOINT_DIRECTION_OUT ==
           USB_INDEX_TO_EPDIR (Payload.TransferOutcome.EndpointIndex)) {
 
+        mUsbRxPending = FALSE;
         Status = ProcessBulkXfrCompleteRx (&Payload.TransferOutcome);
         if (EFI_ERROR (Status)) {
           /* Should not happen, even if it happens we keep waiting for USB to be

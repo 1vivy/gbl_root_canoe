@@ -213,6 +213,7 @@ BOOLEAN FastbootFatal (VOID);
 VOID PartitionDump (VOID);
 
 VOID *FastbootDloadBuffer (VOID);
+VOID *FastbootNextDataBuffer (VOID);
 
 ANDROID_FASTBOOT_STATE FastbootCurrentState (VOID);
 
