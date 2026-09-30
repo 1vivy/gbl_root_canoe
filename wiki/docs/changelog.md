@@ -159,6 +159,13 @@ reserved notice row: an unavailable target leaves normal policy in effect,
 while a failed launch after the target command was written leaves that command
 pending in `misc` for the next boot.
 
+Fastboot receive requests are now serialized across gadget reconnects,
+connection events and response completions. Those paths previously could queue
+multiple host-to-device transfers against the same buffer after a mass-storage
+export, allowing a later command to overwrite one still awaiting completion.
+This source fix has not yet been qualified on the phone; a fresh SFB session
+remains the safe starting point for device experiments.
+
 ### Firmware artifacts and release pipeline
 
 Firmware CI builds `BDS.efi` plus eight standalone EFI tools — `ArbTools`,
