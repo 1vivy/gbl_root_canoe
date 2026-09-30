@@ -62,7 +62,10 @@ SetEntry (
   )
 {
   memset (Entry, 0, sizeof (*Entry));
-  strncpy (Entry->Name, Name, sizeof (Entry->Name));
+  size_t Length = strlen (Name);
+
+  memcpy (Entry->Name, Name,
+          Length < sizeof (Entry->Name) ? Length : sizeof (Entry->Name));
   Entry->SeqNum = Sequence;
   Entry->Valid = MD_REGION_VALID_VALUE;
   Entry->Address = Address;
