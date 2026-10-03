@@ -1,5 +1,173 @@
 # Changelog
 
+## 7.0.8
+
+### Boot-once targets and direct launch
+
+Boot-once records gained a tagged form and a direct-launch verb. `fastboot oem
+boot-once <selector> [<target>]` and `fastboot oem boot-direct <selector>
+[<target>]` join the 7.0.5 colon form and the clear verb. Only `recovery` and
+`fastbootd` are accepted as targets, only a managed Android ABL row may carry
+one, and only `boot-direct` also accepts the literal `default`; it resolves and
+launches without a reset and never arms a record. A tagged record reads
+`canoe-once:<selector>+<target>` in the same 32-byte BCB command field, so it
+budgets 11 selector bytes for `recovery` and 10 for `fastbootd` instead of the
+untagged 20. An oversized selector is refused before anything is written.
+Consumption reports two mutually exclusive outcomes through one reserved notice
+row: an unavailable target leaves normal policy in effect, while a failed launch
+after the target command was written leaves that command pending in `misc` for
+the next boot.
+
+### Super Fastboot USB receive
+
+Fastboot receive requests are now serialized across gadget reconnects,
+connection events and response completions. Those paths previously could queue
+multiple host-to-device transfers against the same buffer after a mass-storage
+export, allowing a later command to overwrite one still awaiting completion.
+This source fix has not yet been qualified on the phone; a fresh SFB session
+remains the safe starting point for device experiments.
+
+### MdTools
+
+`MdTools`' descriptor-wide minidump search is replaced with bounded SMEM item
+602 discovery. It flushes a durable stage marker before the first firmware
+lookup and limits each mutation to one owned subsystem slot. A new interactive
+shadow submenu enumerates validated AOP/BOOT regions and can register one
+selected live payload under a unique alias with encryption not required before
+the terminal collection trigger. The shadow array remains inside MdTools RAM and
+deliberately does not carry into Android userspace. Both probe tools use the
+captured `TZ_DDR` base instead of the AES-key base.
+
+### Manager
+
+Canoe Boot Manager 7.0.8 packages this firmware and has no manager-side changes.
+
+## 7.0.7
+
+### Boot menu notices and slots
+
+Notice rows (skipped config lines, an unavailable boot-once target, a fallback to
+the previous configuration, a default for the other slot) carry a `!` marker and
+explain themselves on the selection line. The entry for the slot currently
+booted is labelled `(current slot)`, computed live. After an OTA, BDS compares
+the default entry's slot, derived from its id or image, with the active slot
+rather than stored roles, so saving the current slot's entry as the default is
+the whole fix. `active` and `inactive` roles are still parsed for older configs
+but are no longer written or shown; `(backup)` still is.
+
+### KernelSU module updates
+
+The module's `module.prop` points `updateJson` at the latest firmware release.
+The manager's mirror workflow attaches `update.json` beside the KSU ZIP there,
+so KernelSU can offer module updates in place.
+
+### Manager
+
+- OTA preparation offers making the target slot's entry the default, on by
+  default, so the phone boots the updated slot unattended. Managed entries no
+  longer carry an active/inactive role. The inputs warn that root must be
+  reinstalled on the target slot before rebooting.
+- Inspection reports the kernel release and the `slot_suffix` and
+  `secure_user_mode` values from `/proc/cmdline` and, separately, from
+  `/proc/bootconfig`.
+
+### Fixes
+
+- The one-shot installer writes the manager's Android entry shape: title
+  `Android - Slot A` with `androidboot.slot_suffix=_a`, instead of `Android a`
+  with no options. Its NDK guard also accepts `ANDROID_NDK_HOME` and
+  `ANDROID_NDK_ROOT`.
+- Firmware CI runs its jobs in parallel, and a release tag reuses the verified
+  build of the same commit from `main`.
+
+## 7.0.6
+
+### Fastbootd in Mode 2
+
+The patched ABL can flash from bootloader fastboot, but userspace Fastbootd
+reads the lock state the managed launch projects: under Mode 1 it sees a locked
+device and refuses to flash. BDS now reads the Android BCB command at startup;
+when it is exactly `boot-fastboot`, managed Android launches in that session
+request Mode 2 regardless of the entry's mode. The read never consumes or
+rewrites `misc`, so ABL and recovery still enter Fastbootd. Other reboot
+targets keep the configured mode.
+
+`canoe.cfg` gains `fastbootd-mode2 yes|no` (default `yes`); `no` disables the
+override. It is exposed in the BDS boot policy menu, as
+`canoe-bootmgr config set-policy --fastbootd-mode2`, and as **Use Mode 2 for
+Fastbootd** in the manager's Settings. The manager only edits it through a
+worker that advertises `boot-policy-fastbootd-mode2-v1`, because an older worker
+would drop the key on save.
+
+### One-shot Android installer
+
+The retired Android, Linux and Windows toolkit targets are replaced by
+`canoe-one-shot-<version>-android-arm64.zip`, a rooted-Android installer built
+from the same firmware output and attached to each firmware release.
+
+### Fixes
+
+- Cleared the read-only flag Android's updater leaves on verified partitions
+  before writing, so the updated slot's `abl` can be written after an OTA
+  without a reboot. A Baseband Guard (BBG) kernel denial now reports BBG's
+  kernel-log line and the command-line values its allowlist uses.
+- Gave `persist/efisp.fat` the persist folder's SELinux label. Hosted builds
+  created it unlabeled, so on 6.12 kernels before 6.12.25, which SELinux-check
+  loop I/O, KSU boot-file work failed with EIO. New containers copy the parent's
+  label; the worker labels an existing unlabeled container before attaching its
+  loop and leaves other labels unchanged.
+
+## 7.0.5
+
+### Super Fastboot entry
+
+**Advanced** can write a Super Fastboot row into `canoe.cfg`, so it appears in
+the menu like any other entry. Adding and arming stay separate: the row only
+exists until it is deliberately saved as the default, which makes the phone
+enter Super Fastboot unattended. The edit preserves comments, unknown keys and
+every other entry, and refuses a second resident row, a taken id, a full table
+or no room to append. The manager's entry editor can add the same row.
+
+### Boot once
+
+A one-shot launch is recorded as `canoe-once:<selector>` in the 32-byte Android
+BCB command field in `misc`, leaving `canoe.cfg` untouched and later BCB bytes
+intact. Selectors resolve like `default`: an entry id, `bls:<stem>` or a
+fastboot action. The record is cleared and flushed before anything is resolved
+or launched, so a crashing target cannot re-arm itself. Arm it from the
+Advanced menu, `fastboot oem boot-once`, or a rooted Android shell; `reboot
+recovery` and `reboot bootloader` overwrite the same field, so restart normally
+afterwards.
+
+Super Fastboot also publishes a volatile source descriptor (base, size and
+SHA-256) for an EFI image booted from RAM, for consumers that must verify the
+bytes they were started from.
+
+### Manager
+
+- Settings can restart the phone into system, recovery or Super Fastboot. On
+  Android, Super Fastboot arms the boot-once record and then restarts normally.
+- Settings offers the saved persist backup, plus an optional copy with only
+  `/efisp.fat` and `/efisp` removed.
+- A fresh deployment no longer defaults to Mode 2: Prepare stays disabled until
+  a mode is chosen, unless the phone's observed mode pre-selects it.
+- The KSU module no longer ships the ABL catalogue; ABL images are always chosen
+  by the operator.
+
+### Installer
+
+`install-canoe.sh` installs Canoe from a root shell on a phone whose active slot
+already carries the signed vulnerable ABL. It writes only raw `efisp`, never an
+ABL partition, requires an explicit mode, and only plans until `--apply`.
+
+### Fixes
+
+- Session logs rotate on a sequence counter in each header instead of FAT
+  timestamps, which have no RTC that early in boot and caused each new session
+  to overwrite the previous one.
+- The added Super Fastboot row can be saved as the default, a device without
+  `canoe.cfg` can add it, and it is titled apart from the built-in action.
+
 ## 7.0.1
 
 First stable release of the 7.x line. It supersedes the `7.0.0-b1` … `7.0.0-b7`
@@ -45,7 +213,6 @@ Boot policy is now explicit instead of implied:
 | `key-window` | 500–5000 ms | 1200 |
 | `menu-timeout` | 0–300 s, Menu mode only | 3 |
 | `show-booting` | `yes`, `no` | `yes` |
-| `fastbootd-mode2` | `yes`, `no` | `yes` |
 | `default` | an entry id or `bls:<stem>` | none |
 | `mode` | `0`, `1`, `2` | `1` |
 | `devinfo-repair` | `asneeded`, `never` | `asneeded` |
@@ -62,10 +229,6 @@ manages a per-slot set — `boot_a.efi`, `boot_b.efi` and `boot_backup.efi` — 
 every generation carries its own 120-byte `.gm2p` and 256-byte `.tzmap`.
 Generations must not be mixed. `boot.efi` is still read as a pre-b2
 compatibility name.
-
-A `boot-fastboot` BCB target now temporarily forces the managed Android handoff
-to Mode 2 by default, without consuming the target or changing the saved entry
-mode. `fastbootd-mode2 no` disables this narrow override.
 
 Prepared managed ABL images now disable their own efisp lookup through the ABL
 patcher rather than relying on a runtime Block I/O hiding hook, so an unmodified
@@ -84,14 +247,6 @@ An empty or absent boot root opens that same menu with a temporary **Entering
 Super Fastboot** row highlighted on a three-second countdown, instead of a
 separate first-run screen. An unreadable filesystem is reported separately and
 is not classified as a new installation.
-
-Notice rows (skipped config lines, an unavailable boot-once target, a fallback to
-the previous configuration, a default for the other slot) carry a `!` marker and
-explain themselves on the selection line. The entry for the slot currently
-booted is labelled `(current slot)`, computed live. After an OTA, BDS compares
-the default entry's slot with the active slot rather than stored roles, so
-saving the current slot's entry as the default is the whole fix; `active` and
-`inactive` roles are no longer written or shown, while `(backup)` still is.
 
 ### Chainloading
 
@@ -145,27 +300,6 @@ userspace-fastbootd reboot targets, and exports storage over USB through
 ordinary removable FAT storage, raw `persist`, and `logfs`. Raw persist export
 is a separate, deliberate operation.
 
-Boot-once records gained a tagged form and a direct-launch verb. `fastboot oem
-boot-once <selector> [<target>]` and `fastboot oem boot-direct <selector>
-[<target>]` join the pre-existing colon form and the clear verb. Only
-`recovery` and `fastbootd` are accepted as targets, only a managed Android ABL
-row may carry one, and only `boot-direct` also accepts the literal `default`;
-it resolves and launches without a reset and never arms a record. A tagged
-record reads `canoe-once:<selector>+<target>` in the same 32-byte BCB command
-field, so it budgets 11 selector bytes for `recovery` and 10 for `fastbootd`
-instead of the untagged 20. An oversized selector is refused before anything is
-written. Consumption reports two mutually exclusive outcomes through one
-reserved notice row: an unavailable target leaves normal policy in effect,
-while a failed launch after the target command was written leaves that command
-pending in `misc` for the next boot.
-
-Fastboot receive requests are now serialized across gadget reconnects,
-connection events and response completions. Those paths previously could queue
-multiple host-to-device transfers against the same buffer after a mass-storage
-export, allowing a later command to overwrite one still awaiting completion.
-This source fix has not yet been qualified on the phone; a fresh SFB session
-remains the safe starting point for device experiments.
-
 ### Firmware artifacts and release pipeline
 
 Firmware CI builds `BDS.efi` plus eight standalone EFI tools — `ArbTools`,
@@ -187,28 +321,11 @@ with the generated version files and the BDS build stamp.
 - Allowed kernel loop I/O to the persist boot root, and kept module policy
   comments readable by strict parsers.
 - Built BDS from clean objects so a stale header limit cannot survive a rebuild.
-- Replaced `MdTools`’ descriptor-wide minidump search with bounded SMEM item
-  602 discovery, flushed a durable stage marker before the first firmware
-  lookup, and limited each mutation to one owned subsystem slot. Its new
-  interactive shadow submenu enumerates validated AOP/BOOT regions and can
-  register one selected live payload under a unique alias with encryption not
-  required before the terminal collection trigger. The shadow array remains
-  inside MdTools RAM and deliberately does not carry into Android userspace.
-  Both probe tools use the captured `TZ_DDR` base instead of the AES-key base.
 - Corrected `vendor_boot` patch preparation.
 - Reported the observed `DeviceInfo` state and the action taken on it, rather
   than leaving the decision implicit.
 - Published the last-boot launch record under a checked contract, cleared on BDS
   entry, before launch, and on child return or menu/fastboot re-entry.
-- Cleared the read-only flag Android's updater leaves on verified partitions
-  before writing, so the updated slot's `abl` can be written after an OTA
-  without a reboot. A Baseband Guard (BBG) kernel denial now reports BBG's
-  kernel-log line and the command-line values its allowlist uses.
-- Gave `persist/efisp.fat` the persist folder's SELinux label. Hosted builds
-  created it unlabeled, so on 6.12 kernels before 6.12.25, which SELinux-check
-  loop I/O, KSU boot-file work failed with EIO. New containers copy the parent's
-  label; the worker labels an existing unlabeled container before attaching its
-  loop and leaves other labels unchanged.
 
 ### Hardening
 
