@@ -46,4 +46,8 @@ bool PeImageRvaToFileOffset(const PE_IMAGE *Image,
                             size_t Length,
                             size_t *Offset);
 
+/* Decode a same-register ADRP+ADD pointer in executable PE coordinates. */
+bool PeImageDecodeAdrpAdd(const PE_IMAGE *Image, size_t Offset,
+                          uint32_t *TargetRva);
+
 #endif /* PATCHS_PE_SECTIONS_H */

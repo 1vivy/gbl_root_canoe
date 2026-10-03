@@ -248,3 +248,39 @@ bool PeImageRvaToFileOffset(const PE_IMAGE *Image,
     }
     return false;
 }
+
+bool PeImageDecodeAdrpAdd(const PE_IMAGE *Image, size_t Offset,
+                          uint32_t *TargetRva) {
+    uint32_t Adrp, Add, AdrpRva, Imm21, Imm12, Reg;
+    int32_t SignedImm;
+    int64_t Target;
+
+    if (TargetRva == NULL || Image == NULL || Image->Data == NULL ||
+        !RangeInside(Offset, 8, Image->Size) ||
+        !PeImageFileOffsetToRva(Image, Offset, 8, &AdrpRva)) {
+        return false;
+    }
+    Adrp = ReadU32(Image->Data + Offset);
+    Add = ReadU32(Image->Data + Offset + 4);
+    if ((Adrp & UINT32_C(0x9F000000)) != UINT32_C(0x90000000) ||
+        (Add & UINT32_C(0xFF800000)) != UINT32_C(0x91000000)) {
+        return false;
+    }
+    Reg = Adrp & 31;
+    if (Reg == 31 || (Add & 31) != Reg || ((Add >> 5) & 31) != Reg) {
+        return false;
+    }
+    Imm21 = (((Adrp >> 5) & UINT32_C(0x7FFFF)) << 2) | ((Adrp >> 29) & 3);
+    SignedImm = (int32_t)((Imm21 ^ UINT32_C(0x100000)) - UINT32_C(0x100000));
+    Imm12 = (Add >> 10) & 0xFFF;
+    if ((Add & (UINT32_C(1) << 22)) != 0) {
+        Imm12 <<= 12;
+    }
+    Target = (int64_t)(AdrpRva & UINT32_C(0xFFFFF000)) +
+             (int64_t)SignedImm * 4096 + Imm12;
+    if (Target < 0 || (uint64_t)Target > UINT32_MAX) {
+        return false;
+    }
+    *TargetRva = (uint32_t)Target;
+    return true;
+}

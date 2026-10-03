@@ -11,6 +11,7 @@ fn main() {
     for source in [
         "patchs/core.c",
         "patchs/libavb_force_success.c",
+        "patchs/dice_mode.c",
         "patchs/fastboot_lock_gates.c",
         "patchs/pe_sections.c",
         "patchs/oplus/warning.c",

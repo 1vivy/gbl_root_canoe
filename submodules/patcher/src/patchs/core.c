@@ -1,5 +1,6 @@
 #include "patchs/core.h"
 #include "patchs/libavb_force_success.h"
+#include "patchs/dice_mode.h"
 #include "patchs/fastboot_lock_gates.h"
 #include "patchs/oplus/forceenablefastboot.h"
 #include "patchs/oplus/warning.h"
@@ -112,9 +113,14 @@ uint32_t PatchBufferFlags(char *Data, int32_t Size) {
     uint32_t Flags = 0;
     LIBAVB_FORCE_RESULT Result;
     int32_t GlobalVarOffset = -1;
+    DICE_PLAN Dice;
 
     if (Data == NULL || Size <= 0) {
         return false;
+    }
+    if (!PlanDiceModeNormal(Data, Size, &Dice)) {
+        PATCH_LOG("Error: mandatory DICE Normal patch could not be resolved\n");
+        return 0;
     }
 
     Result = patch_libavb_force_success(Data, Size);
@@ -125,6 +131,8 @@ uint32_t PatchBufferFlags(char *Data, int32_t Size) {
     }
     Flags |= PATCH_REQUIRED_AVB;
     PATCH_LOG("libavb_force_success patch applied\n");
+    ApplyDiceModeNormal(Data, &Dice);
+    Flags |= PATCH_REQUIRED_DICE;
     if (patch_abl_gbl(Data, Size) != 0) {
         PATCH_LOG("Warning: Failed to patch ABL GBL\n");
     } else {
@@ -176,5 +184,7 @@ uint32_t PatchBufferFlags(char *Data, int32_t Size) {
 
 
 bool PatchBuffer(char *Data, int32_t Size) {
-    return (PatchBufferFlags(Data, Size) & PATCH_REQUIRED_AVB) != 0;
+    uint32_t Flags = PatchBufferFlags(Data, Size);
+    return (Flags & (PATCH_REQUIRED_AVB | PATCH_REQUIRED_DICE)) ==
+           (PATCH_REQUIRED_AVB | PATCH_REQUIRED_DICE);
 }

@@ -177,6 +177,23 @@ static void MakeFixture(uint8_t Image[IMAGE_SIZE], bool Executable) {
     WriteU32(Image + CODE_OFFSET + 12, 0x91100000);
     WriteU32(Image + CODE_OFFSET + 16, 0x2a0703e0);
     WriteU32(Image + CODE_OFFSET + 20, 0xd65f03c0);
+    /* Two BCC paths in the same PE, with string xrefs in executable code. */
+    WriteU32(Image + 0x300 - 0x20, 0x1a8a0548);
+    WriteU32(Image + 0x300 - 4, 0x52800069);
+    WriteU32(Image + 0x300, 0x1a890108);
+    WriteU32(Image + 0x304, 0x90000009);
+    WriteU32(Image + 0x308, 0xb9000128);
+    WriteU32(Image + 0x380, 0x90000001);
+    WriteU32(Image + 0x384, 0x910b0021); /* ADD X1,X1,#0x2c0 */
+    WriteU32(Image + 0x400, 0x90000001);
+    WriteU32(Image + 0x404, 0x910d4021); /* ADD X1,X1,#0x350 */
+    WriteU32(Image + 0x414, 0x34000068);
+    WriteU32(Image + 0x418, 0x52800048);
+    WriteU32(Image + 0x41c, 0xb9006268);
+    memcpy(Image + 0x4c0, "VB: PopulateBccParams: Parameter receivedis NULL",
+           sizeof("VB: PopulateBccParams: Parameter receivedis NULL"));
+    memcpy(Image + 0x550, "VB: Setting Dummy DICE params\n",
+           sizeof("VB: Setting Dummy DICE params\n"));
     memcpy(Image + ANCHOR_OFFSET, Anchor, sizeof(Anchor) - 1);
 }
 
@@ -397,11 +414,21 @@ static void TestPipelineKeepsOnlySelectedPatches(void) {
     assert(memcmp(Image + 0x6a0, Efisp, sizeof(Efisp)) == 0);
     assert(ReadU32(Image + CODE_OFFSET + 4) == 0x32000065);
     assert(ReadU32(Image + CODE_OFFSET + 16) == 0x52800000);
+    assert(ReadU32(Image + 0x300) == 0x52800028);
+    assert(ReadU32(Image + 0x414) == 0xd503201f);
+    assert(ReadU32(Image + 0x418) == 0x52800028);
     AssertRetiredSignaturesUnchanged(Before, Image);
 
     // Given/When/Then: missing efisp stays nonfatal when the mandatory libavb force succeeds.
     MakeFixture(Image, true);
     assert(PatchBuffer((char *)Image, IMAGE_SIZE));
+    // Missing one DICE anchor rejects before AVB or efisp writes.
+    MakeFixture(Image, true);
+    memcpy(Image + 0x680, Efisp, sizeof(Efisp));
+    Image[0x550] ^= 1;
+    memcpy(Before, Image, sizeof(Before));
+    assert(!PatchBuffer((char *)Image, IMAGE_SIZE));
+    assert(memcmp(Image, Before, sizeof(Image)) == 0);
 
 
     // Given/When/Then: a missing libavb force is a hard, whole-pipeline atomic failure.

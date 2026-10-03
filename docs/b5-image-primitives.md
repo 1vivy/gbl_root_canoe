@@ -39,6 +39,15 @@ are no runtime C helpers, filesystem calls, subprocesses or imported WASM host
 functions in this pipeline. The standalone C extractor remains a reference and
 an investigator for its additional BMP/all-PE modes.
 
+The host patcher also requires both BCC paths to emit Normal DICE mode for every
+prepared loader, independently of the entry's mode. It resolves each path from
+a unique DEBUG string xref and its bounded AArch64 instruction shape. The main
+path replaces the conditional mode select; the dummy fallback removes the
+branch that skipped its mode store and writes Normal instead of Debug. The
+dummy function has direct callers in the stock OPlus and myron ABLs; it is not
+safe to omit. A missing or ambiguous site rejects preparation before any
+mandatory patch writes. This does not establish device attestation behavior.
+
 `prepare_loader(abl, vbmeta, TzMapPolicy)` returns the modified PE loader, its
 120-byte GM2P, its 256-byte TZ map, and source/patch inspection. The original ABL
 is borrowed and never becomes an implicit flash payload. The TZ map binds the
@@ -64,12 +73,15 @@ Reference output hashes are committed in
 `submodules/ablfvextractor/tests/goldens.json`: all 13 bundled ABL images, the
 legacy extractor fixture, and four optional existing stock/reference images from
 the sibling `gbl-chainload`. The optional inputs are not build dependencies and
-are explicitly skipped when absent. Hashes came from the pre-refactor native
-`extractfv`, `patch_abl`, `mode2_profile`, and `abl_tzmap` commands. Both native and
-actual WASM execution matched all 18 cases on this machine. The four external
-cases include firmware without the vulnerable boot path; they still match their
-managed-loader outputs. Peak WASM linear memory for this corpus was 5,701,632
-bytes. This measured corpus result is not a guarantee for maximum-sized inputs.
+are explicitly skipped when absent. The original hashes came from the
+pre-refactor native `extractfv`, `patch_abl`, `mode2_profile`, and `abl_tzmap`
+commands. The patched-loader digests now include the three DICE instruction
+rewrites; reverting just those three words reproduces every previous digest.
+Native patch preparation succeeded on all 13 bundled images and the four
+optional sibling fixtures. Actual WASM execution matched the 14 bundled and
+legacy cases (the four external fixtures were absent from the isolated
+worktree). The historical full-corpus WASM run measured 5,701,632 bytes of peak
+linear memory; that is not a guarantee for maximum-sized inputs.
 
 ```sh
 cargo test --locked --manifest-path submodules/ablfvextractor/Cargo.toml

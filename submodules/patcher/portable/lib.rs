@@ -22,8 +22,8 @@ pub fn prepare(mut pe: Vec<u8>) -> Result<(Vec<u8>, PatchReport), &'static str> 
     // The PE and 32-MiB bound above satisfy the C parser's pointer/length contract.
     // No references into this uniquely owned Vec survive the call.
     let flags = unsafe { PatchBufferFlags(pe.as_mut_ptr(), pe.len() as i32) };
-    if flags & 1 == 0 {
-        return Err("required ABL AVB patch could not be resolved uniquely");
+    if flags & (1 | 32) != (1 | 32) {
+        return Err("required ABL AVB or DICE Normal patch could not be resolved uniquely");
     }
     Ok((
         pe,

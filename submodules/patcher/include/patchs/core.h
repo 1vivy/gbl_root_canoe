@@ -7,6 +7,7 @@
 #define PATCH_FASTBOOT_GATES 4u
 #define PATCH_OPLUS_WARNING 8u
 #define PATCH_OPLUS_FASTBOOT 16u
+#define PATCH_REQUIRED_DICE 32u
 uint32_t PatchBufferFlags(char* data, int32_t size);
 bool PatchBuffer(char* data, int32_t size);
 #endif /* PATCHS_CORE_H */

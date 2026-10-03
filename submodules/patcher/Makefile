@@ -3,6 +3,7 @@
 SRCS := src/patch_abl.c \
 	src/patchs/core.c \
 	src/patchs/libavb_force_success.c \
+	src/patchs/dice_mode.c \
 	src/patchs/fastboot_lock_gates.c \
 	src/patchs/pe_sections.c \
 	src/patchs/oplus/warning.c \
@@ -24,12 +25,13 @@ build_android:
 	mkdir -p build
 	$(NDK_PATH)/toolchains/llvm/prebuilt/linux-x86_64/bin/$(ANDROID_ARCH)-linux-android31-clang $(CFLAGS) -o build/patch_abl_android $(SRCS)
 
-test: tests/test_libavb_force_success.c tests/test_fastboot_lock_gates.c
+test: tests/test_libavb_force_success.c tests/test_fastboot_lock_gates.c tests/test_dice_mode.c
 	mkdir -p build
 	$(CC) $(CFLAGS) -o build/test_libavb_force_success \
 		tests/test_libavb_force_success.c \
 		src/patchs/core.c \
 		src/patchs/libavb_force_success.c \
+		src/patchs/dice_mode.c \
 		src/patchs/fastboot_lock_gates.c \
 		src/patchs/pe_sections.c \
 		src/patchs/oplus/warning.c \
@@ -43,6 +45,9 @@ test: tests/test_libavb_force_success.c tests/test_fastboot_lock_gates.c
 		src/arm64_inst/arm64_inst_decoder.c \
 		src/arm64_inst/utils.c
 	./build/test_fastboot_lock_gates
+	$(CC) $(CFLAGS) -o build/test_dice_mode \
+		tests/test_dice_mode.c src/patchs/dice_mode.c src/patchs/pe_sections.c
+	./build/test_dice_mode
 
 build_windows:
 	mkdir -p build

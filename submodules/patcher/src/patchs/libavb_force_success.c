@@ -31,13 +31,6 @@ static void WriteU32(uint8_t *Data, uint32_t Value) {
     Data[3] = (uint8_t)(Value >> 24);
 }
 
-static int32_t SignExtend(uint32_t Value, uint32_t Bits) {
-    uint32_t Sign = UINT32_C(1) << (Bits - 1);
-    uint32_t Mask = (UINT32_C(1) << Bits) - 1;
-    Value &= Mask;
-    return (Value & Sign) != 0 ? (int32_t)(Value | ~Mask) : (int32_t)Value;
-}
-
 static bool ReadInstruction(const uint8_t *Buffer,
                             size_t Size,
                             size_t Offset,
@@ -49,61 +42,6 @@ static bool ReadInstruction(const uint8_t *Buffer,
     return true;
 }
 
-static bool DecodeAdrpAdd(const PE_IMAGE *Image,
-                          size_t Offset,
-                          uint32_t *TargetRva) {
-    uint32_t Adrp;
-    uint32_t Add;
-    uint32_t ImmLo;
-    uint32_t ImmHi;
-    uint32_t Imm21;
-    uint32_t AdrpRegister;
-    uint32_t AddRegister;
-    uint32_t AddDestination;
-    uint32_t Imm12;
-    uint32_t AdrpRva;
-    int64_t Page;
-    int64_t Target;
-
-    if (TargetRva == NULL ||
-        !ReadInstruction(Image->Data, Image->Size, Offset, &Adrp) ||
-        !ReadInstruction(Image->Data, Image->Size, Offset + 4, &Add) ||
-        !PeImageFileOffsetToRva(Image, Offset, 8, &AdrpRva)) {
-        return false;
-    }
-    if ((Adrp & UINT32_C(0x9F000000)) != UINT32_C(0x90000000) ||
-        (Add & UINT32_C(0xFF800000)) != UINT32_C(0x91000000)) {
-        return false;
-    }
-    ImmLo = (Adrp >> 29) & 3;
-    ImmHi = (Adrp >> 5) & UINT32_C(0x7FFFF);
-    Imm21 = (ImmHi << 2) | ImmLo;
-    AdrpRegister = Adrp & 0x1F;
-    AddRegister = (Add >> 5) & 0x1F;
-    AddDestination = Add & 0x1F;
-    /* Register 31 is never address formation: ADRP cannot target XZR, and in
-     * ADD (sf=1, S=0) an Rn or Rd of 31 denotes SP. Accepting it would let a
-     * crafted ADRP+ADD pair pose as the sole anchor xref and steer the patch
-     * into the wrong function. A real pointer pair uses X0-X30. */
-    if (AdrpRegister == 31 || AddRegister == 31 || AddDestination == 31) {
-        return false;
-    }
-    if (AddRegister != AdrpRegister || AddDestination != AdrpRegister) {
-        return false;
-    }
-    Imm12 = (Add >> 10) & 0xFFF;
-    if ((Add & UINT32_C(1) << 22) != 0) {
-        Imm12 <<= 12;
-    }
-    Page = (int64_t)(AdrpRva & UINT32_C(0xFFFFF000)) +
-           (int64_t)SignExtend(Imm21, 21) * INT64_C(4096);
-    Target = Page + Imm12;
-    if (Target < 0 || (uint64_t)Target > UINT32_MAX) {
-        return false;
-    }
-    *TargetRva = (uint32_t)Target;
-    return true;
-}
 
 static LIBAVB_FORCE_RESULT FindUniqueAnchor(const uint8_t *Buffer,
                                        size_t Size,
@@ -147,7 +85,7 @@ static LIBAVB_FORCE_RESULT FindAdrpAddReference(const PE_IMAGE *Image,
         size_t CurrentSection;
         uint32_t Resolved;
         if (!PeImageFindSectionForOffset(Image, Current, 8, true, &CurrentSection) ||
-            !DecodeAdrpAdd(Image, Current, &Resolved) || Resolved != TargetRva) {
+            !PeImageDecodeAdrpAdd(Image, Current, &Resolved) || Resolved != TargetRva) {
             continue;
         }
         if (Found == 0) {
