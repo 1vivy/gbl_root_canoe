@@ -261,6 +261,18 @@ version-check:
 			'wiki/docs/zh/canoe-cfg.md 受管理三件套' "$$version" "$$actual"; \
 		fail=1; \
 	fi; \
+	for doc in wiki/docs/changelog.md wiki/docs/zh/changelog.md; do \
+		if [ -f "$$doc" ]; then \
+			actual="$$(sed -n -E '/^## /{s/^## //p;q;}' "$$doc")"; \
+		else \
+			actual='<missing>'; \
+		fi; \
+		if [ "$$actual" != "$$version" ]; then \
+			printf 'version mismatch: %s newest section expected %s actual %s\n' \
+				"$$doc" "$$version" "$$actual"; \
+			fail=1; \
+		fi; \
+	done; \
 	stamp='submodules/uefi/edk2/Build/.canoe-version'; \
 	if [ -f "$$stamp" ] || [ -f submodules/uefi/build/BDS.efi ]; then \
 		if [ -f "$$stamp" ]; then \

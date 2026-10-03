@@ -29,6 +29,12 @@ from that same firmware output. Existing generated package archives must match
 the current BDS or be moved out of their build directories before the version
 gate.
 
+Add a `## <version>` section at the top of both `wiki/docs/changelog.md` and
+`wiki/docs/zh/changelog.md`. The KernelSU module's `update.json` links the
+English changelog on `main`, so this is the text KernelSU shows for the update;
+`make version-check` fails when either file's newest section is not the release
+version.
+
 Commit the release-ready source and create the requested version checkpoint tag.
 The pipeline tag is `release-<version>` at that same commit. Frozen prior tags and
 branches remain unchanged. Pushing the pipeline tag starts **Prepare firmware

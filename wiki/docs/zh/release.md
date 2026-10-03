@@ -26,6 +26,11 @@ make version-check
 `targets/one_shot_android/build/canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`。
 现存生成归档必须与当前 BDS 一致，否则先将旧产物移出其构建目录。
 
+在 `wiki/docs/changelog.md` 与 `wiki/docs/zh/changelog.md` 顶部新增
+`## <version>` 小节。KernelSU 模块的 `update.json` 链接 `main` 上的英文更新日志，
+即 KernelSU 显示的更新说明；任一文件的最新小节不是发布版本时，
+`make version-check` 会失败。
+
 提交准备发布的源码并创建版本检查点标签。流水线使用同一提交上的
 `release-<version>` 标签；保持旧版冻结标签与分支不变。推送流水线标签会启动
 **Prepare firmware draft release**。如果该提交在 `main` 的成功 `build.yml`
