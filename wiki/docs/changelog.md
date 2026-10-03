@@ -1,5 +1,21 @@
 # Changelog
 
+## 7.0.9
+
+### Myron support (untested)
+
+Mode 2 profile derivation now falls back to `init_boot` AVB properties when
+the corresponding `boot` properties are absent, supporting root vbmeta images
+such as Myron's. Myron support has not been tested on hardware.
+
+### DICE spoofing
+
+Prepared ABLs now report Normal DICE mode on both BCC paths. Mode 2 users get
+DICE spoofing, which should improve compatibility with Google's Remote Key
+Provisioning (RKP).
+
+Thanks to [@NullCode1337](https://github.com/NullCode1337) for bringing this up.
+
 ## 7.0.8
 
 ### Boot-once targets and direct launch

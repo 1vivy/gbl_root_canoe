@@ -1,5 +1,14 @@
 # 更新日志
 
+## 7.0.9
+
+- **Myron 支持（未经测试）**：Mode 2 配置派生在缺少对应 `boot` AVB 属性时回退到
+  `init_boot` 属性，支持 Myron 等设备的根 vbmeta 镜像。尚未在 Myron 硬件上测试。
+- **DICE 伪装**：准备的 ABL 现在在两条 BCC 路径上报告 Normal DICE 模式。Mode 2
+  用户可获得 DICE 伪装，预期可改善与 Google 远程密钥配置（RKP）的兼容性。
+
+感谢 [@NullCode1337](https://github.com/NullCode1337) 提出此问题。
+
 ## 7.0.8
 
 - **一次性启动目标与直接启动**：新增 `fastboot oem boot-once <selector> [<target>]`
