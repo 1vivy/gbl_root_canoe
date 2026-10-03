@@ -126,6 +126,13 @@ canoe-bootmgr --boot-root /mnt/canoe entry set --id android-a --title 'Android A
   --image boot_a.efi --role active --mode 1 --default
 ```
 
+Use the **root** `vbmeta.img` matching the firmware ABL for the prepared
+loader. Do not substitute `vbmeta_system.img` or the AVB metadata embedded in
+`boot.img` or `init_boot.img`. For Mode 2, the profile uses root-vbmeta
+`boot.os_version` and `boot.security_patch` properties where present; each
+falls back to its `init_boot.*` counterpart when absent. This supports root
+vbmeta images such as myron's without mixing firmware generations or regions.
+
 `loader install` checks the triplet and publishes the sidecars before the EFI
 file. Add `--replace` only when replacement is intended. It does not rotate an
 old loader to a backup, assess data compatibility or write an ABL partition.

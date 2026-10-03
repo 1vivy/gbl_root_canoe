@@ -10,6 +10,8 @@ const RELEASE_STRING_SIZE: usize = 48;
 const PROPERTY_TAG: u64 = 0;
 const CHAIN_PARTITION_TAG: u64 = 4;
 const OS_VERSION_KEY: &[u8] = b"com.android.build.boot.os_version";
+const INIT_BOOT_OS_VERSION_KEY: &[u8] = b"com.android.build.init_boot.os_version";
+const INIT_BOOT_SECURITY_PATCH_KEY: &[u8] = b"com.android.build.init_boot.security_patch";
 const SYSTEM_OS_VERSION_KEY: &[u8] = b"com.android.build.system.os_version";
 const SYSTEM_SECURITY_PATCH_KEY: &[u8] = b"com.android.build.system.security_patch";
 const VENDOR_SECURITY_PATCH_KEY: &[u8] = b"com.android.build.vendor.security_patch";
@@ -261,6 +263,8 @@ fn encode_security_patch(value: &str) -> Result<u32, DeriveError> {
 pub(crate) struct ParsedProperties {
     profile_os_version: Option<String>,
     profile_security_patch: Option<String>,
+    init_boot_os_version: Option<String>,
+    init_boot_security_patch: Option<String>,
     pub(crate) build: BuildProperties,
 }
 
@@ -313,6 +317,10 @@ fn inspect_property(body: &[u8], properties: &mut ParsedProperties) -> Result<()
             std::str::from_utf8(value_bytes).map_err(|_| DeriveError::InvalidPropertyUtf8)?;
         // This legacy profile-only key intentionally retains its previous last-value behavior.
         properties.profile_os_version = Some(value.to_owned());
+    } else if key == INIT_BOOT_OS_VERSION_KEY {
+        let value =
+            std::str::from_utf8(value_bytes).map_err(|_| DeriveError::InvalidPropertyUtf8)?;
+        properties.init_boot_os_version = Some(value.to_owned());
     } else if key == SYSTEM_OS_VERSION_KEY {
         let value =
             std::str::from_utf8(value_bytes).map_err(|_| DeriveError::InvalidPropertyUtf8)?;
@@ -346,6 +354,10 @@ fn inspect_property(body: &[u8], properties: &mut ParsedProperties) -> Result<()
             value,
         )?;
         properties.profile_security_patch = Some(value.to_owned());
+    } else if key == INIT_BOOT_SECURITY_PATCH_KEY {
+        let value =
+            std::str::from_utf8(value_bytes).map_err(|_| DeriveError::InvalidPropertyUtf8)?;
+        properties.init_boot_security_patch = Some(value.to_owned());
     }
     Ok(())
 }
@@ -727,11 +739,15 @@ pub fn inspect_vbmeta(vbmeta: &[u8]) -> Result<VbmetaInspection, DeriveError> {
     let mut properties = ParsedProperties::default();
     let mut chain_partitions = Vec::new();
     inspect_profile_descriptors(descriptors, &mut properties, &mut chain_partitions)?;
+    // Prefer boot properties where present; init_boot supplies them on devices
+    // whose root vbmeta carries only the GKI-era init_boot descriptors.
     let os_version = properties
         .profile_os_version
+        .or(properties.init_boot_os_version)
         .ok_or(DeriveError::NoOsVersionProperty)?;
     let security_patch = properties
         .profile_security_patch
+        .or(properties.init_boot_security_patch)
         .ok_or(DeriveError::NoSecurityPatchProperty)?;
     Ok(VbmetaInspection {
         profile: Profile {

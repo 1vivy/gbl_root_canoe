@@ -412,6 +412,45 @@ fn duplicate_profile_only_os_version_retains_legacy_last_value_behavior() {
 }
 
 #[test]
+fn init_boot_properties_supply_profile_when_boot_properties_are_absent() {
+    let mut descriptors = property(b"com.android.build.init_boot.os_version", b"16");
+    descriptors.extend(property(
+        b"com.android.build.init_boot.security_patch",
+        b"2026-09-01",
+    ));
+    let profile = derive_profile(&fixture_from_descriptors(descriptors)).unwrap();
+    assert_eq!(profile.system_version, 0x40000);
+    assert_eq!(profile.system_spl, 0x9a9);
+}
+
+#[test]
+fn boot_properties_win_independently_of_init_boot_and_descriptor_order() {
+    for reverse in [false, true] {
+        let mut entries = vec![
+            property(b"com.android.build.init_boot.os_version", b"15"),
+            property(b"com.android.build.boot.os_version", b"16"),
+            property(b"com.android.build.init_boot.security_patch", b"2026-01-01"),
+            property(b"com.android.build.boot.security_patch", b"2026-09-01"),
+        ];
+        if reverse {
+            entries.reverse();
+        }
+        let profile = derive_profile(&fixture_from_descriptors(entries.concat())).unwrap();
+        assert_eq!(profile.system_version, 0x40000);
+        assert_eq!(profile.system_spl, 0x9a9);
+    }
+
+    let mut mixed = property(b"com.android.build.boot.os_version", b"16");
+    mixed.extend(property(
+        b"com.android.build.init_boot.security_patch",
+        b"2026-09-01",
+    ));
+    let profile = derive_profile(&fixture_from_descriptors(mixed)).unwrap();
+    assert_eq!(profile.system_version, 0x40000);
+    assert_eq!(profile.system_spl, 0x9a9);
+}
+
+#[test]
 fn donor_infiniti_vbmeta_accepts_identical_named_property() {
     let vbmeta = include_bytes!("fixtures/vbmeta-infiniti-IN-16.0.7.201.img");
     let inspection = inspect_vbmeta(vbmeta).expect("identical named property derives");
