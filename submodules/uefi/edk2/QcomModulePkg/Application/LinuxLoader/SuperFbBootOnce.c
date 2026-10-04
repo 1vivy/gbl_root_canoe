@@ -398,7 +398,9 @@ SfbBootOnceExecute (
    */
   Status = EFI_SUCCESS;
   if (Request->Target != RebootBootOnceTargetNone) {
-    if (RebootTargetBootOnceTagTarget (Request->Target, &Reboot)) {
+    if (Request->Target == RebootBootOnceTargetMenu) {
+      Status = RebootTargetPrepareSurfacerMenu ();
+    } else if (RebootTargetBootOnceTagTarget (Request->Target, &Reboot)) {
       Status = RebootTargetPrepare (Reboot, &Reason);
     } else {
       Status = EFI_INVALID_PARAMETER;

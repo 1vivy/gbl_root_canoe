@@ -17,19 +17,20 @@ typedef enum {
  * The 11-byte prefix leaves 20 selector bytes plus the NUL. A target tag spends
  * the '+' delimiter, the tag and room for the terminator out of the same field,
  * so a tagged selector is capped at 32 - 11 - 1 - tag bytes - 1: 11 bytes for
- * "recovery" and 10 for "fastbootd". '+' is the delimiter precisely because it
- * is not a selector character, so splitting on the first '+' cannot be
- * ambiguous - a colon delimiter could not tell "bls:recovery" from a selector
- * named "recovery" that carries a tag.
+ * "recovery", 10 for "fastbootd", and 15 for "menu". '+' is the delimiter
+ * precisely because it is not a selector character, so splitting on the first
+ * '+' cannot be ambiguous - a colon delimiter could not tell "bls:recovery"
+ * from a selector named "recovery" that carries a tag.
  *
  * Selectors are 1-20 bytes from [A-Za-z0-9._:-] and name a canoe.cfg entry id,
- * "bls:<stem>", or "fastboot". A tag names one of the standard AOSP targets this
- * firmware writes through RebootTargetPrepare: "recovery" (boot-recovery) and
- * "fastbootd" (boot-fastboot). Bootloader is deliberately absent - it writes no
- * command, and its reset reason means nothing to a handoff that does not reset.
- * A tagged record is valid only for a managed Android ABL row: those commands
- * are the stock bootloader's contract, and every other row reaches those modes
- * by its own means.
+ * "bls:<stem>", or "fastboot". Recovery and fastbootd name standard AOSP
+ * targets written through RebootTargetPrepare. "menu" writes the private
+ * one-shot `surfacer-menu` command; Surfacer consumes and clears it before
+ * showing its firmware menu, while exposing normal boot to GBL. Bootloader is
+ * deliberately absent - it writes no command, and its reset reason means
+ * nothing to a handoff that does not reset. A tagged record is valid only for
+ * a managed Android ABL row: those commands are interpreted after that row
+ * dispatches, and every other row reaches its modes by its own means.
  *
  * ABL ignores this unknown command and still dispatches efisp, allowing BDS to
  * consume it. Bytes [32,...) (status/recovery/stage) are never changed, so
@@ -44,6 +45,7 @@ typedef enum {
   RebootBootOnceTargetNone = 0,
   RebootBootOnceTargetRecovery,
   RebootBootOnceTargetFastbootd,
+  RebootBootOnceTargetMenu,
   RebootBootOnceTargetCount
 } REBOOT_BOOT_ONCE_TARGET;
 
@@ -51,14 +53,17 @@ typedef enum {
  * Writes only the command field and flushes before success. No reset on failure. */
 EFI_STATUS RebootTargetPrepare (REBOOT_TARGET Target, UINT8 *Reason);
 
+/* Write the private Surfacer menu command, preserving bytes [32,...), and flush. */
+EFI_STATUS RebootTargetPrepareSurfacerMenu (VOID);
+
 /* Inspect the Android BCB command without consuming or changing it. */
 EFI_STATUS RebootTargetIsFastbootd (OUT BOOLEAN *Detected);
 
 /* Write a validated boot-once selector without resetting the device. Target is
  * RebootBootOnceTargetNone for the plain record, or the tag of a record that
- * names a standard target. An oversized selector or an unknown tag is refused
- * with EFI_INVALID_PARAMETER before misc is read or written, so a refusal never
- * leaves a partial record behind. */
+ * names a standard target or the Surfacer menu. An oversized selector or an
+ * unknown tag is refused with EFI_INVALID_PARAMETER before misc is read or
+ * written, so a refusal never leaves a partial record behind. */
 EFI_STATUS
 RebootTargetBootOnceArm (
   IN CONST CHAR8             *Selector,

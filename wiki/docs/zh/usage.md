@@ -31,11 +31,11 @@ fastboot oem boot-direct <selector> [<target>]
 
 两个选择命令的 `<selector>` 都是可解析的 `canoe.cfg` 启动项 id、`bls:<stem>`，或 `fastboot`（常驻 Super Fastboot 操作）。只有 `boot-direct` 还接受字面量 `default`，它选择 `canoe.cfg` 的 `default` 所解析到的启动项；未配置默认项时命令失败，绝不回退到当前高亮的那一行。`boot-once default` 会被拒绝，因为存储的记录必须指向稳定目标。
 
-可选 `<target>` 只能是 `recovery` 或 `fastbootd`，即会向 bootloader control block 写入命令的两个重启目标。仅当解析到的行是受管理的 Android ABL 启动项时才接受 target；否则命令失败且不写入任何内容。不带 target 时，`boot-direct` 完全不写 BCB，而 `boot-once` 只写 Canoe 记录，不写标准重启目标命令。
+可选 `<target>` 只能是 `recovery`、`fastbootd` 或 `menu`。前两者向 bootloader control block 写入标准 Android 命令；`menu` 写入私有的一次性命令 `surfacer-menu`，Surfacer 会在显示固件菜单前清除它，并向 GBL 暴露为普通启动，以免菜单选择随后被旧的 recovery 意图覆盖。仅当解析到的行是受管理的 Android ABL 启动项时才接受 target；否则命令失败且不写入任何内容。不带 target 时，`boot-direct` 完全不写 BCB，而 `boot-once` 只写 Canoe 记录，不写目标命令。
 
-该记录只占用 misc LBA 0 处 32 字节的 Android BCB 命令字段，为 NUL 结尾的 ASCII。不加标签的语法是 `canoe-once:<selector>`：11 字节的 `canoe-once:` 前缀和结尾 NUL 共同留下 20 字节的 selector 空间。加标签的记录是 `canoe-once:<selector>+<target>`，其 selector 预算为 `32 - 11 - 1 - len(tag) - 1` 字节：`recovery` 为 11 字节（`+recovery` 占 9 字节），`fastbootd` 为 10 字节（`+fastbootd` 占 10 字节）。selector 使用 `[A-Za-z0-9._:-]`；超长会在任何写入之前被拒绝，绝不截断。命令字段之后的字节保持不变。
+该记录只占用 misc LBA 0 处 32 字节的 Android BCB 命令字段，为 NUL 结尾的 ASCII。不加标签的语法是 `canoe-once:<selector>`：11 字节的 `canoe-once:` 前缀和结尾 NUL 共同留下 20 字节的 selector 空间。加标签的记录是 `canoe-once:<selector>+<target>`，其 selector 预算为 `32 - 11 - 1 - len(tag) - 1` 字节：`recovery` 为 11 字节，`fastbootd` 为 10 字节，`menu` 为 15 字节。selector 使用 `[A-Za-z0-9._:-]`；超长会在任何写入之前被拒绝，绝不截断。命令字段之后的字节保持不变。
 
-BDS 在解析或启动目标之前先清除并刷新该记录；因此清除失败会回退到正常启动策略，而不会冒着启动循环的风险。加标签的记录若指向的行已无法解析，或该行不是受管理的 Android ABL 启动项，则走既有的 **Boot-once target unavailable** 提示路径，不启动任何内容，并继续采用正常启动策略。如果加标签的记录已被消费、标准目标命令已写入，但启动随后失败，该命令会留在 `misc` 中，因此下一次启动仍会遵循该目标；菜单显示 **Reboot target command pending**，而不会声称已采用正常启动策略。两种结果共用一个保留的提示行，因此只会显示其中一个提示。
+BDS 在解析或启动目标之前先清除并刷新该记录；因此清除失败会回退到正常启动策略，而不会冒着启动循环的风险。加标签的记录若指向的行已无法解析，或该行不是受管理的 Android ABL 启动项，则走既有的 **Boot-once target unavailable** 提示路径，不启动任何内容，并继续采用正常启动策略。如果加标签的记录已被消费、目标命令已写入，但启动随后失败，该命令会留在 `misc` 中，因此下一次启动仍会遵循该目标；菜单显示 **Reboot target command pending**，而不会声称已采用正常启动策略。两种结果共用一个保留的提示行，因此只会显示其中一个提示。
 
 一次性启动不复位手机，也不写入 `canoe.cfg`。它在下一次 BDS 启动时被消费，即使所选子项失败或返回也如此；无法再解析的启动项会打开正常菜单并给出提示，而不是启动另一行。
 

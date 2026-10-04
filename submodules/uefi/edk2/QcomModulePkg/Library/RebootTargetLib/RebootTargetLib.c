@@ -42,6 +42,8 @@ STATIC CONST BOOT_ONCE_TAG mBootOnceTags[RebootBootOnceTargetCount - 1] = {
     RebootBootOnceTargetRecovery  },
   { "fastbootd", sizeof ("fastbootd") - 1, RebootTargetFastbootd,
     RebootBootOnceTargetFastbootd },
+  { "menu",      sizeof ("menu") - 1,      RebootTargetCount,
+    RebootBootOnceTargetMenu      },
 };
 
 STATIC CONST BOOT_ONCE_TAG *
@@ -247,6 +249,21 @@ RebootTargetPrepare (REBOOT_TARGET Target, UINT8 *Reason)
 }
 
 EFI_STATUS
+RebootTargetPrepareSurfacerMenu (VOID)
+{
+  EFI_STATUS     Status;
+  REBOOT_MISC_IO Misc;
+
+  Status = RebootTargetReadMisc (&Misc);
+  if (!EFI_ERROR (Status)) {
+    Status = RebootTargetWriteCommand (
+               &Misc, "surfacer-menu", sizeof ("surfacer-menu") - 1);
+  }
+  RebootTargetCloseMisc (&Misc);
+  return Status;
+}
+
+EFI_STATUS
 RebootTargetIsFastbootd (OUT BOOLEAN *Detected)
 {
   EFI_STATUS Status;
@@ -418,7 +435,7 @@ RebootTargetBootOnceTagTarget (
     return FALSE;
   }
   Tag = RebootTargetTagByTarget (Target);
-  if (Tag == NULL) {
+  if (Tag == NULL || Tag->Reboot >= RebootTargetCount) {
     return FALSE;
   }
   *Reboot = Tag->Reboot;

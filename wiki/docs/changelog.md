@@ -16,6 +16,14 @@ Provisioning (RKP).
 
 Thanks to [@NullCode1337](https://github.com/NullCode1337) for bringing this up.
 
+### Surfacer transient menu target
+
+`fastboot oem boot-direct <selector> menu` now hands a managed Android ABL row
+the private one-shot `surfacer-menu` BCB command. Surfacer consumes and clears
+the command before waiting in its firmware menu. The same `menu` tag is
+available to `boot-once`; it leaves fifteen selector bytes in the 32-byte BCB
+command field. Recovery, status, stage and reserved BCB bytes remain unchanged.
+
 ## 7.0.8
 
 ### Boot-once targets and direct launch

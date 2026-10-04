@@ -9,6 +9,11 @@
 
 感谢 [@NullCode1337](https://github.com/NullCode1337) 提出此问题。
 
+- **Surfacer 临时菜单目标**：新增 `fastboot oem boot-direct <selector> menu`。
+  它向受管理的 Android ABL 启动项传递私有的一次性 `surfacer-menu` BCB 命令；
+  Surfacer 在等待固件菜单前消费并清除该命令。`boot-once` 同样支持 `menu`
+  标签，其 32 字节命令字段为 selector 保留 15 字节；其余 BCB 字节保持不变。
+
 ## 7.0.8
 
 - **一次性启动目标与直接启动**：新增 `fastboot oem boot-once <selector> [<target>]`

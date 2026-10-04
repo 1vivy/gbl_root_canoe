@@ -53,13 +53,14 @@ static EFI_STATUS EFIAPI Write (EFI_BLOCK_IO_PROTOCOL *This, UINT32 Id, EFI_LBA 
   (void)This; (void)Id; assert(Lba == 0 && Size == sizeof Misc); Writes++;
   if (EFI_ERROR(WriteError)) return WriteError;
   /*
-   * Positive recognition of the standard AOSP commands, which arrive here as the
-   * whole zeroed 32-byte field. The event counter is what lets the tests assert
-   * that the Canoe record is cleared before the command is written and that the
-   * command is written before anything launches.
+   * Positive recognition of every transient target command, which arrives here
+   * as the whole zeroed 32-byte field. The event counter is what lets the tests
+   * assert that the Canoe record is cleared before the command is written and
+   * that the command is written before anything launches.
    */
   if (memcmp(In, "boot-recovery", sizeof("boot-recovery")) == 0 ||
-      memcmp(In, "boot-fastboot", sizeof("boot-fastboot")) == 0) {
+      memcmp(In, "boot-fastboot", sizeof("boot-fastboot")) == 0 ||
+      memcmp(In, "surfacer-menu", sizeof("surfacer-menu")) == 0) {
     TargetWriteEvent = ++Event;
     if (FailTargetWrite) return EFI_DEVICE_ERROR;
   }
@@ -107,7 +108,8 @@ EFI_STATUS SfbLaunchEntry (CONST SFB_BOOT_ENTRY *Entry, BOOLEAN Clear, SFB_BOOT_
   if (ReadyEvent != 0) assert(ReadyEvent < LaunchEvent);
   if (TargetWriteEvent != 0) {
     assert(TargetWriteEvent < LaunchEvent);
-    assert(strncmp((char *)Misc, "boot-", 5) == 0);
+    assert(strncmp((char *)Misc, "boot-", 5) == 0 ||
+           strcmp((char *)Misc, "surfacer-menu") == 0);
   } else if (RequireClearBeforeLaunch) {
     assert(Misc[0] == 0);
   }
@@ -145,6 +147,9 @@ static void TestOemParser (void) {
   assert(SfbBootOnceParseOemArg("boot-direct bls:pmos fastbootd", &Verb, Selector, &Target) == EFI_SUCCESS);
   assert(Verb == SfbBootOnceVerbDirect && Target == RebootBootOnceTargetFastbootd &&
          strcmp(Selector, "bls:pmos") == 0);
+  assert(SfbBootOnceParseOemArg("boot-direct android menu", &Verb, Selector, &Target) == EFI_SUCCESS);
+  assert(Verb == SfbBootOnceVerbDirect && Target == RebootBootOnceTargetMenu &&
+         strcmp(Selector, "android") == 0);
   assert(SfbBootOnceParseOemArg("boot-direct default", &Verb, Selector, &Target) == EFI_SUCCESS);
   assert(Verb == SfbBootOnceVerbDirect && Target == RebootBootOnceTargetNone &&
          strcmp(Selector, "default") == 0);
@@ -167,6 +172,8 @@ static void TestOemParser (void) {
   assert(SfbBootOnceParseOemArg("boot-direct abcdefghij fastbootd", &Verb, Selector, &Target) == EFI_SUCCESS);
   assert(SfbBootOnceParseOemArg("boot-direct abcdefghijk fastbootd", &Verb, Selector, &Target) == EFI_INVALID_PARAMETER);
   assert(SfbBootOnceParseOemArg("boot-direct 12345678901234567890 recovery", &Verb, Selector, &Target) == EFI_INVALID_PARAMETER);
+  assert(SfbBootOnceParseOemArg("boot-direct 123456789012345 menu", &Verb, Selector, &Target) == EFI_SUCCESS);
+  assert(SfbBootOnceParseOemArg("boot-direct 1234567890123456 menu", &Verb, Selector, &Target) == EFI_INVALID_PARAMETER);
 
   /* An argument that names no boot-once form at all stays available to the
    * caller's other OEM commands; one that names a verb and then breaks is
@@ -282,6 +289,12 @@ static void TestDirectLaunch (void) {
   assert(RunDirect("android", RebootBootOnceTargetFastbootd, SfbBootModeAblFakeLocked, TRUE, ReadyToLaunch) == SfbBootOnceExecReturned);
   assert(strcmp((char *)Misc, "boot-fastboot") == 0 && TargetWriteEvent < LaunchEvent);
 
+  ResetMisc(""); RequireClearBeforeLaunch = FALSE;
+  assert(RunDirect("android", RebootBootOnceTargetMenu, SfbBootModeAblFakeLocked, TRUE, ReadyToLaunch) == SfbBootOnceExecReturned);
+  assert(strcmp((char *)Misc, "surfacer-menu") == 0);
+  assert(TargetWriteEvent < ReadyEvent && ReadyEvent < LaunchEvent);
+  assert(TargetPendingSeen);
+
   /* A standard command that cannot be written stops the launch: no answer has
    * been sent yet, so the host still learns about it over the intact link. */
   ResetMisc(""); RequireClearBeforeLaunch = FALSE; FailTargetWrite = TRUE;
@@ -376,6 +389,8 @@ static void TestArmBudgets (void) {
   char Twelve[] = "abcdefghijkl";
   char Ten[] = "abcdefghij";
   char TwentyOne[] = "123456789012345678901";
+  char Fifteen[] = "123456789012345";
+  char Sixteen[] = "1234567890123456";
 
   ResetMisc("");
   assert(SfbBootOnceArm("android", RebootBootOnceTargetRecovery) == EFI_SUCCESS);
@@ -397,6 +412,14 @@ static void TestArmBudgets (void) {
   assert(strcmp((char *)Misc, "canoe-once:abcdefghij+fastbootd") == 0);
   ResetMisc("");
   assert(RebootTargetBootOnceArm(Eleven, RebootBootOnceTargetFastbootd) == EFI_INVALID_PARAMETER);
+  assert(Writes == 0 && memcmp(Misc, Before, sizeof Misc) == 0);
+
+  /* The private menu tag leaves fifteen selector bytes. */
+  ResetMisc("");
+  assert(RebootTargetBootOnceArm(Fifteen, RebootBootOnceTargetMenu) == EFI_SUCCESS);
+  assert(strcmp((char *)Misc, "canoe-once:123456789012345+menu") == 0);
+  ResetMisc("");
+  assert(RebootTargetBootOnceArm(Sixteen, RebootBootOnceTargetMenu) == EFI_INVALID_PARAMETER);
   assert(Writes == 0 && memcmp(Misc, Before, sizeof Misc) == 0);
 
   /* The plain record keeps its full budget, and bad input writes nothing. */
@@ -421,6 +444,10 @@ static void TestReadAndTaggedConsume (void) {
   ResetMisc("canoe-once:android+fastbootd");
   assert(RebootTargetBootOnceReadAndClear(Selector, &Target, &Found) == EFI_SUCCESS);
   assert(Found && Target == RebootBootOnceTargetFastbootd && strcmp(Selector, "android") == 0);
+  assert(Misc[0] == 0 && Writes == 1);
+  ResetMisc("canoe-once:android+menu");
+  assert(RebootTargetBootOnceReadAndClear(Selector, &Target, &Found) == EFI_SUCCESS);
+  assert(Found && Target == RebootBootOnceTargetMenu && strcmp(Selector, "android") == 0);
   assert(Misc[0] == 0 && Writes == 1);
   ResetMisc("canoe-once:android");
   assert(RebootTargetBootOnceReadAndClear(Selector, &Target, &Found) == EFI_SUCCESS);

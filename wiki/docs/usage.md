@@ -136,34 +136,36 @@ to which `canoe.cfg`'s `default` resolves. It fails if no default is configured
 and never falls back to the currently highlighted row. `boot-once default` is
 refused because a stored record must name a stable target.
 
-The optional `<target>` is exactly `recovery` or `fastbootd`, the two reboot
-targets that write a standard command into the bootloader control block. A
+The optional `<target>` is exactly `recovery`, `fastbootd`, or `menu`. Recovery
+and fastbootd write their standard Android command into the bootloader control
+block. `menu` writes the private one-shot command `surfacer-menu`; Surfacer
+clears it before rendering its firmware menu and exposes normal boot to GBL, so
+the eventual menu selection is not overridden by a stale recovery intent. A
 target is accepted only when the resolved row is a managed Android ABL entry;
 otherwise the command fails and writes nothing. Without a target,
 `boot-direct` performs no BCB write, while `boot-once` writes only its Canoe
-record and no standard reboot-target command.
+record and no target command.
 
 The record occupies only the 32-byte Android BCB command field at misc LBA 0
 and is NUL-terminated ASCII. The untagged grammar is
 `canoe-once:<selector>`; its 11-byte `canoe-once:` prefix and terminating NUL
 leave a 20-byte selector. A tagged record is
 `canoe-once:<selector>+<target>`. Its selector budget is
-`32 - 11 - 1 - len(tag) - 1` bytes: 11 bytes for `recovery` because
-`+recovery` costs 9 bytes, and 10 bytes for `fastbootd` because `+fastbootd`
-costs 10. Selectors use `[A-Za-z0-9._:-]`. An oversized selector is refused before
-anything is written and is never truncated. Bytes after the command field are
-untouched.
+`32 - 11 - 1 - len(tag) - 1` bytes: 11 bytes for `recovery`, 10 bytes for
+`fastbootd`, and 15 bytes for `menu`. Selectors use `[A-Za-z0-9._:-]`. An
+oversized selector is refused before anything is written and is never
+truncated. Bytes after the command field are untouched.
 
 BDS clears and flushes the record before resolving or launching the target. A
 failed clear therefore falls back to normal boot policy instead of risking a
 boot loop. A tagged record whose row no longer resolves, or whose row is not a
 managed Android ABL entry, takes the existing **Boot-once target unavailable**
 notice path, launches nothing, and leaves normal boot policy in effect. If a
-launch fails after the tagged record was spent and its standard target command
-was written, that command remains in `misc`, so the next boot still follows
-that target; the menu shows **Reboot target command pending** instead of
-claiming normal policy applies. The two outcomes share one reserved notice row,
-so only one notice can appear.
+launch fails after the tagged record was spent and its target command was
+written, that command remains in `misc`, so the next boot still follows that
+target; the menu shows **Reboot target command pending** instead of claiming
+normal policy applies. The two outcomes share one reserved notice row, so only
+one notice can appear.
 
 Boot once neither resets the phone when armed nor writes `canoe.cfg`. It is
 consumed on the next BDS start even if the selected child fails or returns; an
