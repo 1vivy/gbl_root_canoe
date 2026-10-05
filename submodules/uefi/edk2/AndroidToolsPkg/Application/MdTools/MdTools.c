@@ -64,7 +64,7 @@ MdRunPathwayScreen (
     Print (L"NO FAULT TAKEN: nothing was collected this run\r\n");
     Print (L"the registration is void once MdTools exits\r\n");
   }
-  Print (L"evidence: %s\\md-<rung>-<n>.txt\r\n", MD_EVIDENCE_DIR);
+  Print (L"evidence: %s\\md-<rung>-<n>.txt\r\n", AT_EVIDENCE_DIR);
   Print (L"files are never overwritten; oldest pruned last\r\n");
   AtUiEndScreen (L"Power back");
   while (AtUiWaitForKey (0) != AtKeySelect) {

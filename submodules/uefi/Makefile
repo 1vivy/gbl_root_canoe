@@ -37,7 +37,7 @@ build:
 	@echo "BDS built successfully: build/BDS.efi"
 
 # Build the standalone AndroidToolsPkg applications (RebootTools, ArbTools,
-# BLTools, SurfaceTools, UsbTools, LogTools, MdTools, CrashTools).
+# BLTools, SurfaceTools, UsbTools, LogTools, MdTools, CrashTools, EudTools).
 # These are independent UEFI apps launched from the boot menu or from a boot
 # entry on removable media; they do not affect the main BDS image. Passes the
 # same toolchain env as `build` so the CLANG35 toolchain and BaseTools resolve
@@ -56,7 +56,8 @@ tools:
 	if [ ! -f $$TOOLS_DIR/RebootTools.efi ] || [ ! -f $$TOOLS_DIR/ArbTools.efi ] || \
 	   [ ! -f $$TOOLS_DIR/BLTools.efi ] || [ ! -f $$TOOLS_DIR/SurfaceTools.efi ] || \
 	   [ ! -f $$TOOLS_DIR/UsbTools.efi ] || [ ! -f $$TOOLS_DIR/LogTools.efi ] || \
-	   [ ! -f $$TOOLS_DIR/MdTools.efi ] || [ ! -f $$TOOLS_DIR/CrashTools.efi ]; then \
+	   [ ! -f $$TOOLS_DIR/MdTools.efi ] || [ ! -f $$TOOLS_DIR/CrashTools.efi ] || \
+	   [ ! -f $$TOOLS_DIR/EudTools.efi ]; then \
 		echo "AndroidToolsPkg build failed"; \
 		exit 1; \
 	fi
@@ -69,7 +70,8 @@ tools:
 	cp edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64/LogTools.efi ./build/LogTools.efi
 	cp edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64/MdTools.efi ./build/MdTools.efi
 	cp edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64/CrashTools.efi ./build/CrashTools.efi
-	@echo "AndroidTools built successfully: build/RebootTools.efi build/ArbTools.efi build/BLTools.efi build/SurfaceTools.efi build/UsbTools.efi build/LogTools.efi build/MdTools.efi build/CrashTools.efi"
+	cp edk2/Build/AndroidToolsPkg/RELEASE_CLANG35/AARCH64/EudTools.efi ./build/EudTools.efi
+	@echo "AndroidTools built successfully: build/RebootTools.efi build/ArbTools.efi build/BLTools.efi build/SurfaceTools.efi build/UsbTools.efi build/LogTools.efi build/MdTools.efi build/CrashTools.efi build/EudTools.efi"
 
 tools-clean:
 	bash -c 'cd edk2 && . ./edksetup.sh && make tools-clean TARGET_ARCHITECTURE=AARCH64 TARGET=RELEASE \
@@ -77,7 +79,8 @@ tools-clean:
   		PREBUILT_HOST_TOOLS="BUILD_CC=clang BUILD_CXX=clang++ LDPATH=-fuse-ld=lld BUILD_AR=llvm-ar"' || true
 	rm -f ./build/RebootTools.efi ./build/ArbTools.efi ./build/BLTools.efi \
 		./build/SurfaceTools.efi ./build/LogTools.efi \
-		./build/UsbTools.efi ./build/MdTools.efi ./build/CrashTools.efi || true
+		./build/UsbTools.efi ./build/MdTools.efi ./build/CrashTools.efi \
+		./build/EudTools.efi || true
 
 test:
 	$(MAKE) -C tests test

@@ -276,6 +276,21 @@ MdTableClaimSubsystem (
   OUT    MD_SUBSYSTEM_TOC         *Stored OPTIONAL
   );
 
+/**
+  Restore a slot claimed by MdTableClaimSubsystem.
+
+  The current 32-byte value must still exactly match Expected; an intervening
+  owner or mutation is refused rather than overwritten. The original value
+  captured in Claim is restored, cache-cleaned, and read back.
+**/
+EFI_STATUS
+MdTableReleaseSubsystemClaim (
+  IN OUT MD_TABLE_MAP             *Map,
+  IN     CONST MD_SUBSYSTEM_CLAIM *Claim,
+  IN     CONST MD_SUBSYSTEM_TOC   *Expected
+  );
+
+
 
 /**
   Report the UEFI memory descriptor that contains Address: base, size, type

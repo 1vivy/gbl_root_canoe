@@ -1,0 +1,33 @@
+#/** @file
+#  Crash-safe append-only evidence library for AndroidToolsPkg applications.
+#
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = AndroidToolsEvidence
+  FILE_GUID                      = D3F84C21-8A79-4E74-9A47-1D27D816A7F2
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 0.1
+  LIBRARY_CLASS                  = AndroidToolsEvidence
+
+[Sources]
+  AndroidToolsEvidence.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+
+[LibraryClasses]
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  PrintLib
+  UefiBootServicesTableLib
+
+[Protocols]
+  gEfiPartitionInfoProtocolGuid
+  gEfiPartitionRecordGuid
+  gEfiSimpleFileSystemProtocolGuid

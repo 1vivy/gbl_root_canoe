@@ -1,7 +1,7 @@
 #/** @file
 #  AndroidToolsPkg - standalone UEFI tools for reboot, AVB rollback, bootloader
-#  unlock state and firmware surface inventory. Launched from the super-fastboot
-#  boot menu; self-contained modules depend only on declared package interfaces.
+#  unlock state, firmware surface inventory, minidump diagnostics and EUD
+#  secure/MMIO/COM instrumentation.
 #
 #  Copyright (c) 2026, contributors to the canoe ABL tree.
 #  SPDX-License-Identifier: BSD-3-Clause
@@ -19,6 +19,8 @@
 [LibraryClasses]
   ## Super-fastboot style console menu (volume up/down + power).
   AndroidToolsUi|AndroidToolsPkg/Library/AndroidToolsUi/AndroidToolsUi.inf
+  ## Crash-safe append-only logfs evidence files.
+  AndroidToolsEvidence|AndroidToolsPkg/Library/AndroidToolsEvidence/AndroidToolsEvidence.inf
 
 [Protocols]
   ## Qualcomm Verified Boot protocol (produced by platform DXE at runtime).

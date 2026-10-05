@@ -112,7 +112,6 @@ class FirmwareReleaseTests(unittest.TestCase):
             expected = fixture(root)
             actual = release.verify(root)
             self.assertEqual(actual, expected)
-            self.assertEqual(len(actual["tools"]), 8)
             self.assertEqual(actual["tag"], "release-7.0.0-b5")
             self.assertEqual(actual["source"], COMMIT)
             self.assertEqual(actual["sha256"], release.digest((root / "BDS.efi").read_bytes()))

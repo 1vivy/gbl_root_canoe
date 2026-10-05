@@ -15,7 +15,7 @@ STATIC EFI_STATUS   mMdScanStatus = EFI_NOT_READY;
 
 EFI_STATUS
 MdEnsureScan (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   )
 {
   EFI_STATUS           Status;
@@ -26,7 +26,7 @@ MdEnsureScan (
     return EFI_INVALID_PARAMETER;
   }
   if (mMdScanned) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"stage: discovery cached status=%r arrays=%u",
                mMdScanStatus,
@@ -35,11 +35,11 @@ MdEnsureScan (
     if (EFI_ERROR (Status)) {
       return Status;
     }
-    Status = MdEvidenceFlush (Evidence);
+    Status = AtEvidenceFlush (Evidence);
     return EFI_ERROR (Status) ? Status : mMdScanStatus;
   }
 
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"stage: smem-locate pending item=%u",
              MD_SMEM_ITEM_ID
@@ -47,7 +47,7 @@ MdEnsureScan (
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  Status = MdEvidenceFlush (Evidence);
+  Status = AtEvidenceFlush (Evidence);
   if (EFI_ERROR (Status)) {
     return Status;
   }
@@ -57,7 +57,7 @@ MdEnsureScan (
   Bytes      = 0;
   Status = MdTableLocateRoot (&Address, &Bytes);
   mMdScanStatus = Status;
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"stage: smem-locate status=%r root=0x%lx bytes=%u",
              mMdScanStatus,
@@ -67,12 +67,12 @@ MdEnsureScan (
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  Status = MdEvidenceFlush (Evidence);
+  Status = AtEvidenceFlush (Evidence);
   if (EFI_ERROR (Status) || EFI_ERROR (mMdScanStatus)) {
     return EFI_ERROR (Status) ? Status : mMdScanStatus;
   }
 
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"stage: bounded-map pending root=0x%lx bytes=%u",
              (UINT64)Address,
@@ -81,13 +81,13 @@ MdEnsureScan (
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  Status = MdEvidenceFlush (Evidence);
+  Status = AtEvidenceFlush (Evidence);
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
   mMdScanStatus = MdTableScanRoot (Address, Bytes, &mMdMap);
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"stage: bounded-map status=%r arrays=%u",
              mMdScanStatus,
@@ -96,7 +96,7 @@ MdEnsureScan (
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  Status = MdEvidenceFlush (Evidence);
+  Status = AtEvidenceFlush (Evidence);
   return EFI_ERROR (Status) ? Status : mMdScanStatus;
 }
 

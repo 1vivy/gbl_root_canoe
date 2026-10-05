@@ -1,0 +1,42 @@
+#/** @file
+#  EudTools UEFI application - durable EUD secure/MMIO probes, rejection-path
+#  activation, bidirectional COM testing, and minidump telemetry.
+#
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = EudTools
+  FILE_GUID                      = A6D76E19-3C28-4CF1-9A83-BEA1845A2D71
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = EudToolsEntry
+
+[Sources]
+  EudTools.c
+  EudTools.h
+  EudModel.c
+  EudPlatform.c
+
+[Packages]
+  ArmPkg/ArmPkg.dec
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+
+[LibraryClasses]
+  AndroidToolsEvidence
+  AndroidToolsUi
+  BaseLib
+  BaseMemoryLib
+  CacheMaintenanceLib
+  IoLib
+  MdTableLib
+  PrintLib
+  UefiApplicationEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+
+[Protocols]
+  gQcomScmProtocolGuid

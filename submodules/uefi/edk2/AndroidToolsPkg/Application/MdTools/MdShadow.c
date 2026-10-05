@@ -143,7 +143,7 @@ MdShadowIntro (
 STATIC
 EFI_STATUS
 MdIntentShadowClaim (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   )
 {
   CONST MD_TABLE_MAP *Map;
@@ -166,7 +166,7 @@ MdIntentShadowClaim (
              );
   if (EFI_ERROR (Status) ||
       CompareMem (&Current, &mSelectedTarget.Source, sizeof (Current)) != 0) {
-    MdEvidencePrint (
+    AtEvidencePrint (
       Evidence,
       L"intent REFUSE: selected source descriptor changed (%r)",
       EFI_ERROR (Status) ? Status : EFI_ABORTED
@@ -174,7 +174,7 @@ MdIntentShadowClaim (
     return EFI_ERROR (Status) ? Status : EFI_ABORTED;
   }
 
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"intent: shadow source=%s array=%u entry=%u name=%a",
              MdShadowSubsystemName (mSelectedTarget.SubsystemIndex),
@@ -183,13 +183,13 @@ MdIntentShadowClaim (
              mSelectedSourceName
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: selected source descriptor readback verified"
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: source addr=0x%lx size=0x%lx encr_required=0x%08x %s",
                mSelectedTarget.Source.Address,
@@ -199,7 +199,7 @@ MdIntentShadowClaim (
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: alias=%a seq=0; payload is not copied",
                mSelectedTarget.Alias
@@ -218,7 +218,7 @@ MdIntentShadowClaim (
 STATIC
 EFI_STATUS
 MdActShadowClaim (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   )
 {
   EFI_STATUS Status;
@@ -231,7 +231,7 @@ MdActShadowClaim (
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  return MdEvidencePrint (
+  return AtEvidencePrint (
            Evidence,
            L"outcome: shadow %a aliases %s[%u] %a",
            mSelectedTarget.Alias,

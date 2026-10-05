@@ -25,8 +25,8 @@
 #define __MD_TOOLS_H__
 
 #include <Uefi.h>
-#include <Protocol/SimpleFileSystem.h>
 #include <AndroidToolsUi.h>
+#include <Library/AndroidToolsEvidence.h>
 #include <MdTable.h>
 
 /* 2026-09-02 capture measurements used for expected= lines. */
@@ -46,12 +46,11 @@
 #define MD_PROBE_REGION_NAME  "CANOEPROBE"
 #define MD_PROBE_BANNER       "CANOE-BDS-PLAINTEXT-PROBE"
 
-typedef struct MD_EVIDENCE MD_EVIDENCE;
 
 /** Run bounded discovery once, recording and flushing each stage. **/
 EFI_STATUS
 MdEnsureScan (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   );
 
 /** Session-cached scan result; NULL until the first scan. **/
@@ -85,66 +84,13 @@ CONST AT_REPORT_SOURCE *
 MdReportSources (
   OUT UINTN *Count
   );
-
-/*
- * Durable evidence (MdDump.c).
- *
- * One file per rung attempt, named md-<tag>-<seq>.txt under \canoe, where tag
- * identifies the pathway and rung (for example `own2`); seq is one above the
- * highest sequence already present. A new attempt therefore never overwrites an
- * earlier one; the oldest files are pruned only after a later attempt has been
- * written, flushed and closed, and only down to MD_EVIDENCE_KEEP.
- */
-#define MD_EVIDENCE_DIR        L"\\canoe"
-#define MD_EVIDENCE_KEEP       4u
-#define MD_EVIDENCE_PATH_CHARS 64u
-
-struct MD_EVIDENCE {
-  EFI_FILE_PROTOCOL *File;
-  CHAR16             Path[MD_EVIDENCE_PATH_CHARS];
-  UINTN              Rows;
-  BOOLEAN            Open;
-};
-
-/**
-  Create this attempt's evidence file. Fails rather than reuse a name that
-  already exists, so no durable record is destroyed by starting a new one.
-**/
+/** Append every report section to the active durable evidence file. */
 EFI_STATUS
-MdEvidenceOpen (
-  IN  CONST CHAR16 *Tag,
-  OUT MD_EVIDENCE  *Evidence
+MdWriteReports (
+  IN OUT AT_EVIDENCE *Evidence
   );
 
-/**
-  Append one ASCII row. Returns EFI_BAD_BUFFER_SIZE instead of writing a row
-  that would not fit AT_ROW_CHARS - a silently shortened measurement is worse
-  than a failed rung.
-**/
-EFI_STATUS
-MdEvidencePrint (
-  IN OUT MD_EVIDENCE *Evidence,
-  IN     CONST CHAR16 *Format,
-  ...
-  );
 
-/** Append every report section (same sections the menu shows). **/
-EFI_STATUS
-MdEvidenceWriteReports (
-  IN OUT MD_EVIDENCE *Evidence
-  );
-
-/** Push buffered bytes to the partition. EFI_UNSUPPORTED when no Flush. **/
-EFI_STATUS
-MdEvidenceFlush (
-  IN OUT MD_EVIDENCE *Evidence
-  );
-
-/** Flush, close, then prune older attempts. **/
-EFI_STATUS
-MdEvidenceClose (
-  IN OUT MD_EVIDENCE *Evidence
-  );
 
 /*
  * Gate and walker (MdEdit.c).
@@ -153,7 +99,7 @@ MdEvidenceClose (
  * is written and the refusal is recorded.
  */
 typedef EFI_STATUS (*MD_INTENT_FN) (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   );
 
 /*
@@ -162,7 +108,7 @@ typedef EFI_STATUS (*MD_INTENT_FN) (
  * rows; the gate flushes those before closing.
  */
 typedef EFI_STATUS (*MD_RUNG_FN) (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   );
 
 /**
@@ -202,7 +148,7 @@ typedef struct {
 **/
 EFI_STATUS
 MdPrepareOwnedRegistration (
-  IN OUT MD_EVIDENCE            *Evidence,
+  IN OUT AT_EVIDENCE            *Evidence,
   IN     CONST MD_TABLE_MAP     *Map,
   IN OUT MD_OWNED_REGISTRATION  *Registration
   );
@@ -210,19 +156,19 @@ MdPrepareOwnedRegistration (
 /** Store and verify the previously planned owned registration. **/
 EFI_STATUS
 MdApplyOwnedRegistration (
-  IN OUT MD_EVIDENCE           *Evidence,
+  IN OUT AT_EVIDENCE           *Evidence,
   IN OUT MD_OWNED_REGISTRATION *Registration
   );
 
 /** Shared terminal collection-trigger rung for resident registrations. **/
 EFI_STATUS
 MdIntentCollectionTrigger (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   );
 
 EFI_STATUS
 MdActCollectionTrigger (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   );
 
 typedef VOID (*MD_PATHWAY_INTRO_FN) (
@@ -275,34 +221,5 @@ MdWalkPathway (
   OUT UINTN            *CompletedRungs OPTIONAL
   );
 
-/* logfs plumbing (MdFat.c / MdDump.c). */
-VOID
-MdStartFatStack (
-  VOID
-  );
-
-EFI_STATUS
-MdWriteBytes (
-  IN EFI_FILE_PROTOCOL *File,
-  IN CONST VOID        *Buffer,
-  IN UINTN              BufferSize
-  );
-
-EFI_STATUS
-MdWriteAscii (
-  IN EFI_FILE_PROTOCOL *File,
-  IN CONST CHAR8       *Text
-  );
-
-EFI_STATUS
-MdOpenLogfsRoot (
-  OUT EFI_FILE_PROTOCOL **Root
-  );
-
-EFI_STATUS
-MdWriteUnicodeLine (
-  IN EFI_FILE_PROTOCOL *File,
-  IN CONST CHAR16      *Text
-  );
 
 #endif /* __MD_TOOLS_H__ */

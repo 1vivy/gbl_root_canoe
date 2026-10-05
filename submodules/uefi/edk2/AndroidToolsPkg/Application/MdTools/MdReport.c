@@ -17,6 +17,25 @@
 
 #define MD_REPORT_ROWS  384u
 
+CONST CHAR16 *
+MdFieldFourcc (
+  IN UINT32 Value
+  )
+{
+  switch (Value) {
+  case MD_SS_TOC_MAGIC_VALUE:      return L"(TOC)";
+  case MD_SS_AOP_TOC_MAGIC_VALUE:  return L"(AOP)";
+  case MD_SS_ENABLED_VALUE:        return L"(ENBL)";
+  case MD_SS_DISABLED_VALUE:       return L"(DSBL)";
+  case MD_SS_ENCR_DONE_VALUE:      return L"(DONE)";
+  case MD_SS_ENCR_REQ_VALUE:       return L"(YES)";
+  case MD_SS_ENCR_NOTREQ_VALUE:    return L"(NR)";
+  case MD_SS_ENCR_START_VALUE:     return L"(STRT)";
+  default:                         return L"(----)";
+  }
+}
+
+
 STATIC
 VOID
 MdAsciiName (

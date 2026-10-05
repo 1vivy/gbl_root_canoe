@@ -29,13 +29,57 @@ STATIC BOOLEAN mProbeFilled = FALSE;
 STATIC MD_OWNED_REGISTRATION mProbeRegistration;
 STATIC UINT64                mTriggerAddress;
 
+EFI_STATUS
+MdWriteReports (
+  IN OUT AT_EVIDENCE *Evidence
+  )
+{
+  CONST AT_REPORT_SOURCE *Sources;
+  AT_REPORT               Report;
+  EFI_STATUS              Status;
+  UINTN                   Count;
+  UINTN                   Index;
+  UINTN                   Row;
+
+  if (Evidence == NULL || !Evidence->Open) {
+    return EFI_INVALID_PARAMETER;
+  }
+  Sources = MdReportSources (&Count);
+  for (Index = 0; Index < Count; Index++) {
+    ZeroMem (&Report, sizeof (Report));
+    Status = AtEvidenceWriteAscii (Evidence, "\r\n");
+    if (!EFI_ERROR (Status)) {
+      Status = AtEvidencePrint (Evidence, L"[%s]", Sources[Index].Title);
+    }
+    if (!EFI_ERROR (Status)) {
+      Status = Sources[Index].Builder (&Report);
+    }
+    if (EFI_ERROR (Status)) {
+      AtReportFree (&Report);
+      return Status;
+    }
+    for (Row = 0; Row < Report.Count && !EFI_ERROR (Status); Row++) {
+      Status = AtEvidencePrint (Evidence, L"%s", Report.Rows[Row].Text);
+    }
+    if (!EFI_ERROR (Status) && Report.Truncated) {
+      Status = AtEvidenceWriteAscii (Evidence, "<truncated>\r\n");
+    }
+    AtReportFree (&Report);
+    if (EFI_ERROR (Status)) {
+      return Status;
+    }
+  }
+  return EFI_SUCCESS;
+}
+
+
 STATIC
 EFI_STATUS
 MdGateOpen (
   IN  CONST CHAR16 *Step,
   IN  CONST CHAR16 *Tag,
   IN  MD_INTENT_FN  Intent OPTIONAL,
-  OUT MD_EVIDENCE  *Evidence
+  OUT AT_EVIDENCE  *Evidence
   )
 {
   CONST MD_TABLE_MAP *Map;
@@ -43,44 +87,44 @@ MdGateOpen (
   EFI_STATUS         ScanStatus;
   EFI_STATUS         FlushStatus;
 
-  Status = MdEvidenceOpen (Tag, Evidence);
+  Status = AtEvidenceOpen (L"md", Tag, 4u, Evidence);
   if (EFI_ERROR (Status)) {
     return Status;
   }
 
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"=== rung %s: %s ===",
              Tag,
              Step
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"stage: discovery not-started; flushing durable marker"
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidenceFlush (Evidence);
+    Status = AtEvidenceFlush (Evidence);
   }
   if (EFI_ERROR (Status)) {
-    MdEvidenceClose (Evidence);
+    AtEvidenceClose (Evidence);
     return Status;
   }
 
   ScanStatus = MdEnsureScan (Evidence);
   Map = MdCachedMap ();
   if (EFI_ERROR (ScanStatus)) {
-    MdEvidencePrint (
+    AtEvidencePrint (
       Evidence,
       L"outcome: discovery REFUSED (%r); nothing written",
       ScanStatus
       );
-    MdEvidenceClose (Evidence);
+    AtEvidenceClose (Evidence);
     return ScanStatus;
   }
 
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"discovery=%r arrays=%u source=SMEM item %u",
              ScanStatus,
@@ -88,29 +132,29 @@ MdGateOpen (
              MD_SMEM_ITEM_ID
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidenceWriteReports (Evidence);
+    Status = MdWriteReports (Evidence);
   }
   if (!EFI_ERROR (Status) && Intent != NULL) {
     Status = Intent (Evidence);
   }
   if (EFI_ERROR (Status)) {
-    MdEvidencePrint (
+    AtEvidencePrint (
       Evidence,
       L"intent REFUSED (%r); nothing written",
       Status
       );
-    MdEvidenceClose (Evidence);
+    AtEvidenceClose (Evidence);
     return Status;
   }
 
-  FlushStatus = MdEvidenceFlush (Evidence);
+  FlushStatus = AtEvidenceFlush (Evidence);
   if (EFI_ERROR (FlushStatus)) {
-    MdEvidencePrint (
+    AtEvidencePrint (
       Evidence,
       L"intent FLUSH FAILED (%r): action skipped",
       FlushStatus
       );
-    MdEvidenceClose (Evidence);
+    AtEvidenceClose (Evidence);
     return FlushStatus;
   }
   return EFI_SUCCESS;
@@ -123,18 +167,18 @@ MdRecord (
   IN MD_INTENT_FN  Intent OPTIONAL
   )
 {
-  MD_EVIDENCE Evidence;
+  AT_EVIDENCE Evidence;
   EFI_STATUS  Status;
 
   Status = MdGateOpen (Step, Tag, Intent, &Evidence);
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              &Evidence,
              L"outcome: report complete, no table write"
              );
-  MdEvidenceClose (&Evidence);
+  AtEvidenceClose (&Evidence);
   return Status;
 }
 
@@ -146,7 +190,7 @@ MdAct (
   IN MD_RUNG_FN    Act
   )
 {
-  MD_EVIDENCE Evidence;
+  AT_EVIDENCE Evidence;
   EFI_STATUS  Status;
   EFI_STATUS  FlushStatus;
 
@@ -160,15 +204,15 @@ MdAct (
   }
   Status = Act (&Evidence);
   if (EFI_ERROR (Status)) {
-    MdEvidencePrint (&Evidence, L"outcome: FAILED (%r)", Status);
+    AtEvidencePrint (&Evidence, L"outcome: FAILED (%r)", Status);
   } else {
-    MdEvidencePrint (&Evidence, L"outcome: rung complete");
+    AtEvidencePrint (&Evidence, L"outcome: rung complete");
   }
-  FlushStatus = MdEvidenceFlush (&Evidence);
+  FlushStatus = AtEvidenceFlush (&Evidence);
   if (!EFI_ERROR (Status) && EFI_ERROR (FlushStatus)) {
     Status = FlushStatus;
   }
-  MdEvidenceClose (&Evidence);
+  AtEvidenceClose (&Evidence);
   return Status;
 }
 
@@ -206,8 +250,8 @@ MdWalkPathway (
 
 STATIC
 EFI_STATUS
-MdEvidenceMemoryRow (
-  IN OUT MD_EVIDENCE *Evidence,
+MdMemoryRow (
+  IN OUT AT_EVIDENCE *Evidence,
   IN CONST CHAR16    *What,
   IN UINT64           Address
   )
@@ -217,7 +261,7 @@ MdEvidenceMemoryRow (
 
   Status = MdDescribeAddress (Address, &Info);
   if (EFI_ERROR (Status)) {
-    return MdEvidencePrint (
+    return AtEvidencePrint (
              Evidence,
              L"mem %s=0x%lx: NO DESCRIPTOR (%r)",
              What,
@@ -225,7 +269,7 @@ MdEvidenceMemoryRow (
              Status
              );
   }
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"mem %s=0x%lx type=0x%x %s",
              What,
@@ -234,7 +278,7 @@ MdEvidenceMemoryRow (
              MdMemoryTypeName (Info.Type)
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"mem %s: base=0x%lx size=0x%lx attr=0x%lx",
                What,
@@ -248,14 +292,14 @@ MdEvidenceMemoryRow (
 
 STATIC
 EFI_STATUS
-MdEvidenceTocRows (
-  IN OUT MD_EVIDENCE        *Evidence,
+MdTocRows (
+  IN OUT AT_EVIDENCE        *Evidence,
   IN CONST MD_SUBSYSTEM_TOC *Toc
   )
 {
   EFI_STATUS Status;
 
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"intent: toc init=0x%08x %s enabled=0x%08x %s",
              Toc->Status,
@@ -264,7 +308,7 @@ MdEvidenceTocRows (
              MdFieldFourcc (Toc->Enabled)
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: toc encr_status=0x%08x %s encr_required=0x%08x %s",
                Toc->EncryptionStatus,
@@ -274,7 +318,7 @@ MdEvidenceTocRows (
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: toc count=%u baseptr=0x%lx",
                Toc->RegionCount,
@@ -323,7 +367,7 @@ MdProbeInit (
 
 EFI_STATUS
 MdPrepareOwnedRegistration (
-  IN OUT MD_EVIDENCE           *Evidence,
+  IN OUT AT_EVIDENCE           *Evidence,
   IN     CONST MD_TABLE_MAP    *Map,
   IN OUT MD_OWNED_REGISTRATION *Registration
   )
@@ -347,7 +391,7 @@ MdPrepareOwnedRegistration (
 
   Status = MdTablePlanSubsystemClaim (Map, &Registration->Claim);
   if (EFI_ERROR (Status)) {
-    MdEvidencePrint (
+    AtEvidencePrint (
       Evidence,
       L"intent REFUSE: no safe free subsystem slot (%r)",
       Status
@@ -356,7 +400,7 @@ MdPrepareOwnedRegistration (
   }
 
   CopyMem (Previous, &Registration->Claim.Previous, sizeof (Previous));
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"intent: root source=SMEM item %u addr=0x%lx bytes=%u",
              MD_SMEM_ITEM_ID,
@@ -364,7 +408,7 @@ MdPrepareOwnedRegistration (
              (UINT32)Map->GtocBytes
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: slot=%u of %u at 0x%lx (%s)",
                (UINT32)Registration->Claim.Index,
@@ -375,7 +419,7 @@ MdPrepareOwnedRegistration (
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: previous32=%08x %08x %08x %08x %08x %08x %08x %08x",
                Previous[0],
@@ -389,7 +433,7 @@ MdPrepareOwnedRegistration (
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: template=AOP slot %u toc=0x%lx",
                MD_SS_AOP,
@@ -397,10 +441,10 @@ MdPrepareOwnedRegistration (
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidenceTocRows (Evidence, &Registration->Claim.Template);
+    Status = MdTocRows (Evidence, &Registration->Claim.Template);
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: store 32 bytes after flush: count=%u baseptr=0x%lx",
                Registration->RegionCount,
@@ -408,7 +452,7 @@ MdPrepareOwnedRegistration (
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: region name=%a addr=0x%lx size=0x%lx",
                Region->Name,
@@ -417,21 +461,21 @@ MdPrepareOwnedRegistration (
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidenceMemoryRow (
+    Status = MdMemoryRow (
                Evidence,
                L"claim-slot",
                (UINT64)Registration->Claim.TocAddress
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidenceMemoryRow (
+    Status = MdMemoryRow (
                Evidence,
                L"owned-regions",
                (UINT64)(UINTN)Registration->Regions
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidenceMemoryRow (
+    Status = MdMemoryRow (
                Evidence,
                L"registered-payload",
                Region->Address
@@ -442,7 +486,7 @@ MdPrepareOwnedRegistration (
 
 EFI_STATUS
 MdApplyOwnedRegistration (
-  IN OUT MD_EVIDENCE           *Evidence,
+  IN OUT AT_EVIDENCE           *Evidence,
   IN OUT MD_OWNED_REGISTRATION *Registration
   )
 {
@@ -469,7 +513,7 @@ MdApplyOwnedRegistration (
   if (EFI_ERROR (Status)) {
     return Status;
   }
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"outcome: slot %u stored init=0x%08x enabled=0x%08x",
              (UINT32)Registration->Claim.Index,
@@ -477,7 +521,7 @@ MdApplyOwnedRegistration (
              Stored.Enabled
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"outcome: stored count=%u baseptr=0x%lx encr_required=0x%08x",
                Stored.RegionCount,
@@ -496,7 +540,7 @@ MdApplyOwnedRegistration (
       Stored.EncryptionRequired != MD_SS_ENCR_NOTREQ_VALUE) {
     return EFI_DEVICE_ERROR;
   }
-  return MdEvidencePrint (
+  return AtEvidencePrint (
            Evidence,
            L"outcome: 32-byte readback verified; owned subsystem is live"
            );
@@ -505,7 +549,7 @@ MdApplyOwnedRegistration (
 STATIC
 EFI_STATUS
 MdIntentClaimSubsystem (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   )
 {
   CONST MD_TABLE_MAP *Map;
@@ -524,7 +568,7 @@ MdIntentClaimSubsystem (
 STATIC
 EFI_STATUS
 MdActClaimSubsystem (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   )
 {
   return MdApplyOwnedRegistration (Evidence, &mProbeRegistration);
@@ -532,7 +576,7 @@ MdActClaimSubsystem (
 
 EFI_STATUS
 MdIntentCollectionTrigger (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   )
 {
   EFI_STATUS Status;
@@ -542,14 +586,14 @@ MdIntentCollectionTrigger (
   }
   mTriggerAddress = MD_EXPECT_TZ_ADDR + MD_EXPECT_TZ_SIZE / 2;
 
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"intent: measured TZ_DDR addr=0x%lx size=0x%lx",
              (UINT64)MD_EXPECT_TZ_ADDR,
              (UINT64)MD_EXPECT_TZ_SIZE
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: fire 0x%08x at midpoint 0x%lx",
                (UINT32)MD_CRASH_PATTERN,
@@ -557,13 +601,13 @@ MdIntentCollectionTrigger (
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"intent: no range gate: protected target is deliberate"
                );
   }
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidenceMemoryRow (
+    Status = MdMemoryRow (
                Evidence,
                L"trigger",
                mTriggerAddress
@@ -574,7 +618,7 @@ MdIntentCollectionTrigger (
 
 EFI_STATUS
 MdActCollectionTrigger (
-  IN OUT MD_EVIDENCE *Evidence
+  IN OUT AT_EVIDENCE *Evidence
   )
 {
   EFI_STATUS Status;
@@ -590,7 +634,7 @@ MdActCollectionTrigger (
   Print (L"the owned subsystem is already registered\r\n");
   AtUiEndScreen (L"Power = fire, Vol +/- = decline");
   if (AtUiWaitForKey (0) != AtKeySelect) {
-    MdEvidencePrint (
+    AtEvidencePrint (
       Evidence,
       L"outcome: DECLINED; no protected write attempted"
       );
@@ -604,12 +648,12 @@ MdActCollectionTrigger (
     &Readback
     );
 
-  Status = MdEvidencePrint (
+  Status = AtEvidencePrint (
              Evidence,
              L"outcome: SURVIVED; target writable, no fault occurred"
              );
   if (!EFI_ERROR (Status)) {
-    Status = MdEvidencePrint (
+    Status = AtEvidencePrint (
                Evidence,
                L"outcome: readback=0x%08x wrote=0x%08x",
                Readback,

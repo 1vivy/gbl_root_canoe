@@ -31,6 +31,20 @@ CompareMem (CONST VOID *First, CONST VOID *Second, UINTN Size)
   return memcmp (First, Second, Size);
 }
 
+BOOLEAN
+MdRangeWritable (UINT64 Address, UINT64 Bytes)
+{
+  return (BOOLEAN)(Address != 0 && Bytes != 0);
+}
+
+VOID
+WriteBackInvalidateDataCacheRange (VOID *Address, UINTN Length)
+{
+  (void)Address;
+  (void)Length;
+}
+
+
 static void
 SetLiveToc (
   MD_SUBSYSTEM_TOC *Toc,
@@ -198,6 +212,48 @@ TestFreeSlotRefusesAFullTable (void)
           EFI_NOT_FOUND);
 }
 
+static void
+TestClaimReleaseRefusesInterveningMutation (void)
+{
+  MD_GLOBAL_TOC       Root;
+  MD_REGION_ENTRY     Region;
+  MD_SUBSYSTEM_CLAIM  Claim;
+  MD_SUBSYSTEM_TOC    Expected;
+  MD_SUBSYSTEM_TOC    Tampered;
+  MD_TABLE_MAP        Map;
+
+  ZeroMem (&Root, sizeof (Root));
+  ZeroMem (&Region, sizeof (Region));
+  ZeroMem (&Claim, sizeof (Claim));
+  ZeroMem (&Map, sizeof (Map));
+  Map.GtocFromSmem = TRUE;
+  Map.GtocAddress = (EFI_PHYSICAL_ADDRESS)(UINTN)&Root;
+  Map.GtocBytes = sizeof (Root);
+  Claim.Index = 3;
+  Claim.TocAddress =
+    (EFI_PHYSICAL_ADDRESS)(UINTN)&Root.Subsystems[Claim.Index];
+  Claim.TemplateToc = 1;
+  Claim.Template.Status = MD_SS_AOP_TOC_MAGIC_VALUE;
+  Claim.Template.Enabled = MD_SS_ENABLED_VALUE;
+  Claim.Template.EncryptionStatus = MD_SS_ENCR_DONE_VALUE;
+  Claim.Template.EncryptionRequired = MD_SS_ENCR_NOTREQ_VALUE;
+
+  assert (MdTableClaimSubsystem (&Map, &Claim, (UINT64)(UINTN)&Region, 1,
+                                 &Expected) == EFI_SUCCESS);
+  Tampered = Expected;
+  Tampered.RegionCount = 2;
+  assert (MdTableReleaseSubsystemClaim (&Map, &Claim, &Tampered) ==
+          EFI_ABORTED);
+  assert (memcmp (&Root.Subsystems[Claim.Index], &Expected,
+                  sizeof (Expected)) == 0);
+
+  assert (MdTableReleaseSubsystemClaim (&Map, &Claim, &Expected) ==
+          EFI_SUCCESS);
+  assert (memcmp (&Root.Subsystems[Claim.Index], &Claim.Previous,
+                  sizeof (Claim.Previous)) == 0);
+}
+
+
 int
 main (void)
 {
@@ -208,6 +264,7 @@ main (void)
   TestFreeSlotPrefersSpaceAboveHighestUsed ();
   TestFreeSlotFallsBackBelowAUsedTail ();
   TestFreeSlotRefusesAFullTable ();
+  TestClaimReleaseRefusesInterveningMutation ();
   puts ("md table tests passed");
   return 0;
 }

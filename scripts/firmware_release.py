@@ -18,8 +18,9 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = (
-    "ArbTools.efi", "BLTools.efi", "CrashTools.efi", "LogTools.efi",
-    "MdTools.efi", "RebootTools.efi", "SurfaceTools.efi", "UsbTools.efi",
+    "ArbTools.efi", "BLTools.efi", "CrashTools.efi", "EudTools.efi",
+    "LogTools.efi", "MdTools.efi", "RebootTools.efi", "SurfaceTools.efi",
+    "UsbTools.efi",
 )
 EFI_FILES = ("BDS.efi", *TOOLS)
 # The Android one-shot installer ships in the same release as the firmware it

@@ -161,3 +161,40 @@ MdTableClaimSubsystem (
   return (CompareMem (&Toc, &ReadBack, sizeof (Toc)) == 0)
          ? EFI_SUCCESS : EFI_DEVICE_ERROR;
 }
+
+EFI_STATUS
+MdTableReleaseSubsystemClaim (
+  IN OUT MD_TABLE_MAP             *Map,
+  IN     CONST MD_SUBSYSTEM_CLAIM *Claim,
+  IN     CONST MD_SUBSYSTEM_TOC   *Expected
+  )
+{
+  MD_SUBSYSTEM_TOC     Current;
+  MD_SUBSYSTEM_TOC     ReadBack;
+  EFI_PHYSICAL_ADDRESS ExpectedSlot;
+
+  if (Map == NULL || Claim == NULL || Expected == NULL ||
+      !Map->GtocFromSmem || Claim->Index >= MD_MAX_SUBSYSTEMS ||
+      Claim->TocAddress == 0) {
+    return EFI_INVALID_PARAMETER;
+  }
+  ExpectedSlot = Map->GtocAddress + MD_GTOC_HEADER_SIZE +
+                 Claim->Index * MD_SUBSYSTEM_TOC_SIZE;
+  if (Claim->TocAddress != ExpectedSlot ||
+      !MdRangeWritable ((UINT64)Claim->TocAddress, sizeof (Current))) {
+    return EFI_ACCESS_DENIED;
+  }
+  CopyMem (&Current, (VOID *)(UINTN)Claim->TocAddress, sizeof (Current));
+  if (CompareMem (&Current, Expected, sizeof (Current)) != 0) {
+    return EFI_ABORTED;
+  }
+  CopyMem ((VOID *)(UINTN)Claim->TocAddress, &Claim->Previous,
+           sizeof (Claim->Previous));
+  WriteBackInvalidateDataCacheRange (
+    (VOID *)(UINTN)Claim->TocAddress,
+    sizeof (Claim->Previous)
+    );
+  CopyMem (&ReadBack, (VOID *)(UINTN)Claim->TocAddress, sizeof (ReadBack));
+  return (CompareMem (&Claim->Previous, &ReadBack, sizeof (ReadBack)) == 0)
+         ? EFI_SUCCESS : EFI_DEVICE_ERROR;
+}

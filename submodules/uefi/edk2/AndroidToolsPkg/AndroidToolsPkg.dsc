@@ -1,9 +1,10 @@
 #/** @file
 #  AndroidToolsPkg platform description. Builds standalone RebootTools,
-#  ArbTools, BLTools, SurfaceTools, UsbTools and LogTools applications plus
-#  the shared AndroidToolsUi menu library. The package is self-contained: it
-#  ports the r32 reboot/recovery code it needs and only relies on standard
-#  EDK2 base classes, so it does not depend on the stripped QcomModulePkg config.
+#  ArbTools, BLTools, SurfaceTools, UsbTools, LogTools, MdTools, CrashTools and
+#  EudTools applications plus the shared menu and crash-safe evidence
+#  libraries. The package is self-contained: it ports the r32 reboot/recovery
+#  code it needs and only relies on standard EDK2 base classes, so it does not
+#  depend on the stripped QcomModulePkg config.
 #
 #  Build with, for example:
 #    build -p AndroidToolsPkg/AndroidToolsPkg.dsc -a AARCH64 -b RELEASE
@@ -50,6 +51,7 @@
   IoLib|MdePkg/Library/BaseIoLibIntrinsic/BaseIoLibIntrinsic.inf
   PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
   AndroidToolsUi|AndroidToolsPkg/Library/AndroidToolsUi/AndroidToolsUi.inf
+  AndroidToolsEvidence|AndroidToolsPkg/Library/AndroidToolsEvidence/AndroidToolsEvidence.inf
   MdTableLib|AndroidToolsPkg/Library/MdTableLib/MdTableLib.inf
   # Clang may enable stack protection heuristically; satisfy its guard symbols.
   NULL|MdePkg/Library/BaseStackCheckLib/BaseStackCheckLib.inf
@@ -111,4 +113,5 @@
   AndroidToolsPkg/Application/UsbTools/UsbTools.inf
   AndroidToolsPkg/Application/LogTools/LogTools.inf
   AndroidToolsPkg/Application/MdTools/MdTools.inf
+  AndroidToolsPkg/Application/EudTools/EudTools.inf
   AndroidToolsPkg/Application/CrashTools/CrashTools.inf

@@ -34,8 +34,8 @@ ResetEvents (void)
 }
 
 EFI_STATUS
-MdEvidencePrint (
-  IN OUT MD_EVIDENCE *Evidence,
+AtEvidencePrint (
+  IN OUT AT_EVIDENCE *Evidence,
   IN     CONST CHAR16 *Format,
   ...
   )
@@ -48,8 +48,8 @@ MdEvidencePrint (
 }
 
 EFI_STATUS
-MdEvidenceFlush (
-  IN OUT MD_EVIDENCE *Evidence
+AtEvidenceFlush (
+  IN OUT AT_EVIDENCE *Evidence
   )
 {
   assert (Evidence != NULL);
@@ -93,7 +93,7 @@ MdTableScanRoot (
 int
 main (void)
 {
-  MD_EVIDENCE Evidence;
+  AT_EVIDENCE Evidence;
   EFI_STATUS  Status;
 
   memset (&Evidence, 0, sizeof (Evidence));

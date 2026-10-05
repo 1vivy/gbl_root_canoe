@@ -24,8 +24,6 @@
   MdDiscovery.c
   MdReport.c
   MdEdit.c
-  MdFat.c
-  MdDump.c
 
 [Packages]
   ArmPkg/ArmPkg.dec
@@ -35,6 +33,7 @@
 
 [LibraryClasses]
   AndroidToolsUi
+  AndroidToolsEvidence
   BaseLib
   BaseMemoryLib
   CacheMaintenanceLib
@@ -44,9 +43,3 @@
   UefiApplicationEntryPoint
   UefiBootServicesTableLib
   UefiLib
-  UefiRuntimeServicesTableLib
-
-[Protocols]
-  gEfiPartitionInfoProtocolGuid
-  gEfiPartitionRecordGuid
-  gEfiSimpleFileSystemProtocolGuid

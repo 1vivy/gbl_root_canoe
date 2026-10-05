@@ -29,7 +29,7 @@ The release assets are:
 
 - `BDS.efi`
 - `ArbTools.efi`, `BLTools.efi`, `RebootTools.efi`, `SurfaceTools.efi`,
-  `UsbTools.efi`, `LogTools.efi`, `MdTools.efi`, `CrashTools.efi`
+  `UsbTools.efi`, `LogTools.efi`, `MdTools.efi`, `CrashTools.efi`, `EudTools.efi`
 - `canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`
 - `manifest.json` and `SHA256SUMS`
 
@@ -54,10 +54,10 @@ The manifest extends the manager's existing firmware catalogue shape:
 }
 ```
 
-`tools` contains all eight tools. `oneShot` records the exact archive built by
+`tools` contains all nine tools. `oneShot` records the exact archive built by
 `make target_one_shot_android`. The release helper rejects it unless its
 `BDS.efi` and five staged EFI tools are byte-identical to this firmware build
-and its commands are ARM64 Android executables. `SHA256SUMS` covers all nine EFI
+and its commands are ARM64 Android executables. `SHA256SUMS` covers all ten EFI
 files, the one-shot archive, and the manifest itself. Main CI produces a
 candidate manifest with the intended tag name; that field does not claim that a
 tag or published release already exists.
