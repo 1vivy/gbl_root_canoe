@@ -12,7 +12,13 @@
 - **Surfacer 临时菜单目标**：新增 `fastboot oem boot-direct <selector> menu`。
   它向受管理的 Android ABL 启动项传递私有的一次性 `surfacer-menu` BCB 命令；
   Surfacer 在等待固件菜单前消费并清除该命令。`boot-once` 同样支持 `menu`
-  标签，其 32 字节命令字段为 selector 保留 15 字节；其余 BCB 字节保持不变。
+  标签，其 32 字节命令字段为 selector 保留 15 字节。
+- **通用 BCB 命令**：新增 `bcb-command get|set|replace|clear`，用于组合 RAM
+  包启动。写入只修改 32 字节命令字段，采用比较后写入，保留 `misc` 的其余
+  内容，并要求刷新后的精确读回。既有重启与带标签启动路径共用该存储原语。
+- **只读 pstore**：新增 `pstore info|console|pmsg`，从活动设备树发现唯一的
+  ramoops 区域，验证内存映射与持久环形缓冲头，最多输出最新 48 KiB；不存在
+  清除或写入操作。
 
 ## 7.0.8
 

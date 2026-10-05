@@ -112,6 +112,8 @@ found at
 #include "../../Application/LinuxLoader/SuperFbBootRoot.h"
 #include "../../Application/LinuxLoader/SuperFbContainer.h"
 #include "../../Application/LinuxLoader/SuperFbBootOnce.h"
+#include "../../Application/LinuxLoader/SuperFbBcbCommand.h"
+#include "../../Application/LinuxLoader/SuperFbPstore.h"
 /* The session mode a boot-direct launch runs under is published by
    LinuxLoader.c before this loop starts; nothing here may invent one. */
 #include "../../Application/LinuxLoader/SuperFbLaunchPolicy.h"
@@ -2432,6 +2434,83 @@ CmdOemBootLaunchReady (IN VOID *Context)
   return Status;
 }
 
+STATIC VOID
+CmdOemInfo (IN CONST CHAR8 *Payload)
+{
+  FastbootInfo (Payload);
+  WaitForTransferComplete ();
+}
+
+STATIC VOID
+CmdOemPstoreLayout (IN CONST SFB_PSTORE_LAYOUT *Layout)
+{
+  CHAR8 Payload[SFB_FASTBOOT_PAYLOAD_BYTES + 1u];
+
+  AsciiSPrint (
+    Payload, sizeof (Payload), "ramoops address=0x%llx bytes=0x%lx",
+    Layout->RegionAddress, Layout->RegionBytes);
+  CmdOemInfo (Payload);
+  AsciiSPrint (
+    Payload, sizeof (Payload), "console offset=0x%lx bytes=0x%lx",
+    Layout->ConsoleOffset, Layout->ConsoleBytes);
+  CmdOemInfo (Payload);
+  AsciiSPrint (
+    Payload, sizeof (Payload), "pmsg offset=0x%lx bytes=0x%lx",
+    Layout->PmsgOffset, Layout->PmsgBytes);
+  CmdOemInfo (Payload);
+}
+
+STATIC VOID
+CmdOemPstoreRecord (IN CONST SFB_PSTORE_RECORD *Record)
+{
+  STATIC CONST CHAR8 Hex[] = "0123456789abcdef";
+  CHAR8              Payload[SFB_FASTBOOT_PAYLOAD_BYTES + 1u];
+  UINTN              Used = 0;
+  UINTN              Index;
+  UINT8              Byte;
+
+  AsciiSPrint (
+    Payload, sizeof (Payload), "record stored=%lu emitted=%lu dropped=%lu",
+    Record->StoredBytes, Record->BytesCount, Record->DroppedBytes);
+  CmdOemInfo (Payload);
+  for (Index = 0; Index < Record->BytesCount; Index++) {
+    Byte = Record->Bytes[Index];
+    if (Byte == '\r') {
+      continue;
+    }
+    if (Byte == '\n') {
+      if (Used != 0) {
+        Payload[Used] = '\0';
+        CmdOemInfo (Payload);
+        Used = 0;
+      }
+      continue;
+    }
+    if (Byte >= 0x20 && Byte <= 0x7e) {
+      if (Used == SFB_FASTBOOT_PAYLOAD_BYTES) {
+        Payload[Used] = '\0';
+        CmdOemInfo (Payload);
+        Used = 0;
+      }
+      Payload[Used++] = (CHAR8)Byte;
+    } else {
+      if (Used > SFB_FASTBOOT_PAYLOAD_BYTES - 4) {
+        Payload[Used] = '\0';
+        CmdOemInfo (Payload);
+        Used = 0;
+      }
+      Payload[Used++] = '\\';
+      Payload[Used++] = 'x';
+      Payload[Used++] = Hex[Byte >> 4];
+      Payload[Used++] = Hex[Byte & 0xf];
+    }
+  }
+  if (Used != 0) {
+    Payload[Used] = '\0';
+    CmdOemInfo (Payload);
+  }
+}
+
 /*
  * Fastboot's command transport and the mass-storage gadget share the USB
  * controller. StartDevice takes the link away from fastboot and StopDevice
@@ -2456,6 +2535,86 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
   if (Arg == NULL) {
     FastbootFail ("unknown oem command");
     return;
+  }
+
+
+  /*
+   * A bounded command-field API for composed handoffs such as:
+   *   bcb-command set surfacer-menu
+   *   boot <RAM package>
+   * It is compare-and-write rather than a raw misc editor: a host cannot
+   * unknowingly replace or clear a command that changed since it was observed.
+   */
+  {
+    SFB_BCB_COMMAND_REQUEST BcbRequest;
+    CHAR8                   Current[REBOOT_TARGET_COMMAND_BYTES];
+
+    Status = SfbBcbCommandParse (Arg, &BcbRequest);
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("invalid bcb-command argument");
+      return;
+    }
+    if (BcbRequest.Action != SfbBcbCommandNone) {
+      WaitForFlashFinished ();
+      if (BcbRequest.Action == SfbBcbCommandGet) {
+        Status = RebootTargetCommandRead (Current);
+        if (!EFI_ERROR (Status)) {
+          FastbootOkay (Current[0] == '\0' ? "<empty>" : Current);
+        }
+      } else {
+        Status = RebootTargetCommandCompareAndWrite (
+                   BcbRequest.Expected, BcbRequest.Replacement);
+        if (!EFI_ERROR (Status)) {
+          FastbootOkay ("");
+        }
+      }
+      DEBUG ((EFI_D_ERROR, "SFB: MARK bcb-command action=%u status=%r\n",
+              (UINT32)BcbRequest.Action, Status));
+      if (EFI_ERROR (Status)) {
+        FastbootFail (
+          Status == EFI_ACCESS_DENIED
+            ? "bcb command does not match" : "bcb command operation failed");
+      }
+      return;
+    }
+  }
+
+  {
+    SFB_PSTORE_ACTION Action;
+    SFB_PSTORE_LAYOUT Layout;
+    SFB_PSTORE_RECORD Record;
+
+    Status = SfbPstoreParseOemArg (Arg, &Action);
+    if (EFI_ERROR (Status)) {
+      FastbootFail ("invalid pstore argument");
+      return;
+    }
+    if (Action != SfbPstoreNone) {
+      WaitForFlashFinished ();
+      ZeroMem (&Record, sizeof (Record));
+      Status = SfbPstoreLocate (&Layout);
+      if (!EFI_ERROR (Status)) {
+        CmdOemPstoreLayout (&Layout);
+      }
+      if (!EFI_ERROR (Status) && Action != SfbPstoreInfo) {
+        Status = SfbPstoreRead (&Layout, Action, &Record);
+        if (Status == EFI_NOT_FOUND) {
+          CmdOemInfo ("no valid persistent record");
+          Status = EFI_SUCCESS;
+        } else if (!EFI_ERROR (Status)) {
+          CmdOemPstoreRecord (&Record);
+        }
+      }
+      SfbPstoreFree (&Record);
+      DEBUG ((EFI_D_ERROR, "SFB: MARK pstore action=%u status=%r\n",
+              (UINT32)Action, Status));
+      if (EFI_ERROR (Status)) {
+        FastbootFail ("pstore inspection failed");
+      } else {
+        FastbootOkay ("");
+      }
+      return;
+    }
   }
 
   /*

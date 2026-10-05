@@ -172,6 +172,54 @@ consumed on the next BDS start even if the selected child fails or returns; an
 entry that no longer resolves opens the normal menu with a notice instead of
 launching another row.
 
+### BCB command composition
+
+Super Fastboot exposes the Android BCB command field as a bounded
+compare-and-write operation:
+
+```text
+fastboot oem bcb-command get
+fastboot oem bcb-command set <new>
+fastboot oem bcb-command replace <expected> <new>
+fastboot oem bcb-command clear <expected>
+```
+
+`set` requires an empty field. `replace` and `clear` require the current logical
+command to equal `<expected>`; a mismatch writes nothing. Tokens are 1–31
+printable non-space ASCII bytes. Every change rewrites only bytes `[0,32)`,
+preserves the rest of `misc`, flushes, and verifies the command by reading it
+back. This is deliberately not an arbitrary-offset or whole-BCB editor.
+
+The command composes with either launch path. For a Surfacer RAM package:
+
+```text
+fastboot oem bcb-command set surfacer-menu
+fastboot boot phone-<build>.efisp
+```
+
+If the RAM launch fails before Surfacer consumes the command, inspect it with
+`get` and remove only that value with `clear surfacer-menu`. The friendly
+`boot-direct`/`boot-once` recovery, fastbootd and menu targets use the same
+command-field storage boundary internally.
+
+### Read-only pstore
+
+SFB can inspect the active device tree's single `ramoops` or `qcom,ramoops`
+region without changing it:
+
+```text
+fastboot oem pstore
+fastboot oem pstore info
+fastboot oem pstore console
+fastboot oem pstore pmsg
+```
+
+The first two forms report the resolved physical region and console/pmsg
+geometry. The record forms validate the persistent-RAM header and emit at most
+the newest 48 KiB through bounded `INFO` packets; non-printing bytes are escaped
+as `\xNN`. Discovery refuses ambiguous nodes, malformed geometry, unreadable
+memory-map ranges and ECC layouts. There is no clear, erase or write form.
+
 ### From a rooted Android shell
 
 The module ships the same operation as a command, so a destination can be armed

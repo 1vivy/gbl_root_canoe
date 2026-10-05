@@ -9,7 +9,6 @@
 #include <Library/UefiRuntimeServicesTableLib.h>
 #include <Protocol/BlockIo.h>
 
-#define BCB_COMMAND_BYTES  32
 #define BOOT_ONCE_PREFIX   "canoe-once:"
 /* Derived from the literal so the length and the text cannot drift apart. */
 #define BOOT_ONCE_PREFIX_BYTES  (sizeof (BOOT_ONCE_PREFIX) - 1)
@@ -84,7 +83,8 @@ RebootTargetTagByLiteral (IN CONST CHAR8 *Record, IN UINTN RoomBytes)
 STATIC UINTN
 RebootTargetTaggedSelectorMax (IN CONST BOOT_ONCE_TAG *Tag)
 {
-  return BCB_COMMAND_BYTES - BOOT_ONCE_PREFIX_BYTES - 1 - Tag->Bytes - 1;
+  return REBOOT_TARGET_COMMAND_BYTES - BOOT_ONCE_PREFIX_BYTES -
+         1 - Tag->Bytes - 1;
 }
 
 STATIC VOID
@@ -124,7 +124,7 @@ RebootTargetReadMisc (OUT REBOOT_MISC_IO *Misc)
   if (Misc->Io == NULL || Misc->Io->Media == NULL ||
       Misc->Io->ReadBlocks == NULL || Misc->Io->WriteBlocks == NULL ||
       Misc->Io->FlushBlocks == NULL ||
-      Misc->Io->Media->BlockSize < BCB_COMMAND_BYTES) {
+      Misc->Io->Media->BlockSize < REBOOT_TARGET_COMMAND_BYTES) {
     return EFI_UNSUPPORTED;
   }
   Misc->Pages = EFI_SIZE_TO_PAGES (Misc->Io->Media->BlockSize);
@@ -140,21 +140,38 @@ RebootTargetReadMisc (OUT REBOOT_MISC_IO *Misc)
 }
 
 STATIC EFI_STATUS
-RebootTargetWriteCommand (IN OUT REBOOT_MISC_IO *Misc,
-                          IN CONST CHAR8         *Command,
-                          IN UINTN                CommandBytes)
+RebootTargetWriteCommand (
+  IN OUT REBOOT_MISC_IO *Misc,
+  IN CONST CHAR8         *Command,
+  IN UINTN                CommandBytes
+  )
 {
   EFI_STATUS Status;
+  CHAR8      Expected[REBOOT_TARGET_COMMAND_BYTES];
 
-  ZeroMem (Misc->Bytes, BCB_COMMAND_BYTES);
-  if (CommandBytes != 0) {
-    CopyMem (Misc->Bytes, Command, CommandBytes);
+  if (CommandBytes > REBOOT_TARGET_COMMAND_MAX ||
+      (CommandBytes != 0 && Command == NULL)) {
+    return EFI_INVALID_PARAMETER;
   }
+  ZeroMem (Expected, sizeof (Expected));
+  if (CommandBytes != 0) {
+    CopyMem (Expected, Command, CommandBytes);
+  }
+  CopyMem (Misc->Bytes, Expected, sizeof (Expected));
   Status = Misc->Io->WriteBlocks (
                        Misc->Io, Misc->Io->Media->MediaId, 0,
                        Misc->Io->Media->BlockSize, Misc->Bytes);
   if (!EFI_ERROR (Status)) {
     Status = Misc->Io->FlushBlocks (Misc->Io);
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = Misc->Io->ReadBlocks (
+                         Misc->Io, Misc->Io->Media->MediaId, 0,
+                         Misc->Io->Media->BlockSize, Misc->Bytes);
+  }
+  if (!EFI_ERROR (Status) &&
+      CompareMem (Misc->Bytes, Expected, sizeof (Expected)) != 0) {
+    Status = EFI_COMPROMISED_DATA;
   }
   return Status;
 }
@@ -214,6 +231,106 @@ RebootTargetSelectorSlice (
     }
   }
   return TRUE;
+}
+
+/* Copy one logical command out of the fixed field. Generic host operations use
+ * a token rather than arbitrary bytes so fastboot responses and comparisons
+ * stay unambiguous. Bytes after the first NUL are intentionally ignored. */
+STATIC EFI_STATUS
+RebootTargetCopyCommand (
+  IN  CONST CHAR8 *Field,
+  OUT CHAR8        Command[REBOOT_TARGET_COMMAND_BYTES]
+  )
+{
+  UINTN Index;
+
+  ZeroMem (Command, REBOOT_TARGET_COMMAND_BYTES);
+  for (Index = 0; Index < REBOOT_TARGET_COMMAND_BYTES; Index++) {
+    if (Field[Index] == '\0') {
+      CopyMem (Command, Field, Index);
+      return EFI_SUCCESS;
+    }
+    if (Field[Index] < 0x21 || Field[Index] > 0x7e) {
+      return EFI_COMPROMISED_DATA;
+    }
+  }
+  return EFI_COMPROMISED_DATA;
+}
+
+STATIC BOOLEAN
+RebootTargetCommandTextValid (
+  IN  CONST CHAR8 *Command,
+  OUT UINTN       *CommandBytes
+  )
+{
+  UINTN Index;
+
+  if (Command == NULL || CommandBytes == NULL) {
+    return FALSE;
+  }
+  for (Index = 0; Index < REBOOT_TARGET_COMMAND_BYTES; Index++) {
+    if (Command[Index] == '\0') {
+      *CommandBytes = Index;
+      return TRUE;
+    }
+    if (Command[Index] < 0x21 || Command[Index] > 0x7e) {
+      return FALSE;
+    }
+  }
+  return FALSE;
+}
+
+EFI_STATUS
+RebootTargetCommandRead (
+  OUT CHAR8 Command[REBOOT_TARGET_COMMAND_BYTES]
+  )
+{
+  EFI_STATUS     Status;
+  REBOOT_MISC_IO Misc;
+
+  if (Command == NULL) {
+    return EFI_INVALID_PARAMETER;
+  }
+  Command[0] = '\0';
+  Status = RebootTargetReadMisc (&Misc);
+  if (!EFI_ERROR (Status)) {
+    Status = RebootTargetCopyCommand (Misc.Bytes, Command);
+  }
+  RebootTargetCloseMisc (&Misc);
+  return Status;
+}
+
+EFI_STATUS
+RebootTargetCommandCompareAndWrite (
+  IN CONST CHAR8 *Expected,
+  IN CONST CHAR8 *Replacement
+  )
+{
+  EFI_STATUS     Status;
+  REBOOT_MISC_IO Misc;
+  CHAR8          Current[REBOOT_TARGET_COMMAND_BYTES];
+  UINTN          ExpectedBytes;
+  UINTN          ReplacementBytes;
+
+  if (!RebootTargetCommandTextValid (Expected, &ExpectedBytes) ||
+      !RebootTargetCommandTextValid (Replacement, &ReplacementBytes)) {
+    return EFI_INVALID_PARAMETER;
+  }
+  Status = RebootTargetReadMisc (&Misc);
+  if (!EFI_ERROR (Status)) {
+    Status = RebootTargetCopyCommand (Misc.Bytes, Current);
+  }
+  if (!EFI_ERROR (Status) && AsciiStrCmp (Current, Expected) != 0) {
+    Status = EFI_ACCESS_DENIED;
+  }
+  if (!EFI_ERROR (Status) &&
+      (ExpectedBytes != ReplacementBytes ||
+       CompareMem (Expected, Replacement, ExpectedBytes) != 0)) {
+    Status = RebootTargetWriteCommand (
+               &Misc, Replacement, ReplacementBytes);
+  }
+  RebootTargetCloseMisc (&Misc);
+  return Status;
 }
 
 EFI_STATUS
@@ -291,7 +408,7 @@ RebootTargetBootOnceArm (
 {
   EFI_STATUS           Status;
   REBOOT_MISC_IO       Misc;
-  CHAR8                Command[BCB_COMMAND_BYTES];
+  CHAR8                Command[REBOOT_TARGET_COMMAND_BYTES];
   CONST BOOT_ONCE_TAG *Tag;
   UINTN                SelectorBytes;
   UINTN                CommandBytes;
@@ -340,7 +457,9 @@ RebootTargetBootOnceReadAndClear (
   CHAR8                    Parsed[REBOOT_BOOT_ONCE_SELECTOR_BYTES];
   CONST CHAR8             *Record;
   CONST BOOT_ONCE_TAG     *Tag;
-  UINTN                    FieldBytes = BCB_COMMAND_BYTES - BOOT_ONCE_PREFIX_BYTES;
+  UINTN                    FieldBytes =
+                              REBOOT_TARGET_COMMAND_BYTES -
+                              BOOT_ONCE_PREFIX_BYTES;
   UINTN                    Index;
   UINTN                    SelectorBytes = 0;
   BOOLEAN                  Valid;

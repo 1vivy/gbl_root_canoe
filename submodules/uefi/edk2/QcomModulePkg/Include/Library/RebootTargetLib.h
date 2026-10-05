@@ -9,6 +9,11 @@ typedef enum {
   RebootTargetSystem, RebootTargetCount
 } REBOOT_TARGET;
 
+/* Android bootloader_message.command is one NUL-terminated string in bytes
+ * [0,32). Generic command operations never access the rest of misc. */
+#define REBOOT_TARGET_COMMAND_BYTES  32
+#define REBOOT_TARGET_COMMAND_MAX    (REBOOT_TARGET_COMMAND_BYTES - 1)
+
 /*
  * Canoe boot-once record in the Android BCB command field (misc LBA 0 bytes
  * [0,32)): NUL-terminated ASCII "canoe-once:<selector>", optionally tagged as
@@ -55,6 +60,23 @@ EFI_STATUS RebootTargetPrepare (REBOOT_TARGET Target, UINT8 *Reason);
 
 /* Write the private Surfacer menu command, preserving bytes [32,...), and flush. */
 EFI_STATUS RebootTargetPrepareSurfacerMenu (VOID);
+
+/* Read the bounded printable command field without changing it. Empty is valid;
+ * malformed, unterminated or whitespace-containing fields are refused. */
+EFI_STATUS
+RebootTargetCommandRead (
+  OUT CHAR8 Command[REBOOT_TARGET_COMMAND_BYTES]
+  );
+
+/* Atomically compare the current logical command and replace it. Expected and
+ * Replacement are empty or 1-31 printable non-space ASCII bytes. A mismatch is
+ * EFI_ACCESS_DENIED. Success means write, flush and readback all completed;
+ * bytes [32, block_size) are preserved. */
+EFI_STATUS
+RebootTargetCommandCompareAndWrite (
+  IN CONST CHAR8 *Expected,
+  IN CONST CHAR8 *Replacement
+  );
 
 /* Inspect the Android BCB command without consuming or changing it. */
 EFI_STATUS RebootTargetIsFastbootd (OUT BOOLEAN *Detected);

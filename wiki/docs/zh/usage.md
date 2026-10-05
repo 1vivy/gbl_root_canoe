@@ -39,6 +39,49 @@ BDS 在解析或启动目标之前先清除并刷新该记录；因此清除失�
 
 一次性启动不复位手机，也不写入 `canoe.cfg`。它在下一次 BDS 启动时被消费，即使所选子项失败或返回也如此；无法再解析的启动项会打开正常菜单并给出提示，而不是启动另一行。
 
+### BCB 命令组合
+
+Super Fastboot 将 Android BCB 命令字段公开为有界的比较后写入操作：
+
+```text
+fastboot oem bcb-command get
+fastboot oem bcb-command set <new>
+fastboot oem bcb-command replace <expected> <new>
+fastboot oem bcb-command clear <expected>
+```
+
+`set` 要求字段为空；`replace` 与 `clear` 要求当前逻辑命令精确等于
+`<expected>`，不匹配时绝不写入。token 必须是 1–31 字节的可打印非空格
+ASCII。每次修改只重写 `[0,32)`，保留 `misc` 的其余内容，并在刷新后精确
+读回验证；这不是任意偏移或整个 BCB 的编辑器。
+
+Surfacer RAM 包可用以下组合：
+
+```text
+fastboot oem bcb-command set surfacer-menu
+fastboot boot phone-<build>.efisp
+```
+
+若 RAM 启动在 Surfacer 消费该命令前失败，先用 `get` 检查，再用
+`clear surfacer-menu` 仅移除该值。`boot-direct`/`boot-once` 的 recovery、
+fastbootd 与 menu 便捷 target 在内部共用同一命令字段存储边界。
+
+### 只读 pstore
+
+SFB 可以只读检查活动设备树中唯一的 `ramoops` 或 `qcom,ramoops` 区域：
+
+```text
+fastboot oem pstore
+fastboot oem pstore info
+fastboot oem pstore console
+fastboot oem pstore pmsg
+```
+
+前两种形式报告解析出的物理区域及 console/pmsg 几何信息。记录命令验证
+持久 RAM 头，并通过有界的 `INFO` 包最多输出最新 48 KiB；不可打印字节显示
+为 `\xNN`。发现过程会拒绝歧义节点、错误几何、内存映射中不可读的范围及
+ECC 布局。不存在清除、擦除或写入形式。
+
 ### 从已 root 的 Android shell
 
 模块以命令形式提供同一操作，因此无需进入菜单或连接主机即可指定目标：

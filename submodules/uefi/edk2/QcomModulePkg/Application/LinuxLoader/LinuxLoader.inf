@@ -72,6 +72,10 @@
 	LinuxLoader.c
 	SuperFbBootOnce.h
 	SuperFbBootOnce.c
+	SuperFbBcbCommand.h
+	SuperFbBcbCommand.c
+	SuperFbPstore.h
+	SuperFbPstore.c
 	SuperFbMenu.h
 	SuperFbGptName.h
 	SuperFbLog.h
@@ -161,6 +165,7 @@
 	PrintLib
 	MemoryAllocationLib
 	UefiRuntimeServicesTableLib
+	FdtLib
 	# FAT stack carried inside the image: the boot menu starts these by hand
 	# instead of relying on a DXE dispatcher to do it.
 	UnicodeCollationEngLib
@@ -203,6 +208,7 @@
 	gEfiFileSystemVolumeLabelInfoIdGuid
 	# Identifies the ESP whose tail holds the boot menu's settings.
 	gEfiPartTypeSystemPartGuid
+	gFdtTableGuid
 
 [Protocols]
 	gEfiSimpleTextInputExProtocolGuid

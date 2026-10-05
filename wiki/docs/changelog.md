@@ -16,13 +16,23 @@ Provisioning (RKP).
 
 Thanks to [@NullCode1337](https://github.com/NullCode1337) for bringing this up.
 
-### Surfacer transient menu target
+### Transient BCB and pstore tools
 
 `fastboot oem boot-direct <selector> menu` now hands a managed Android ABL row
 the private one-shot `surfacer-menu` BCB command. Surfacer consumes and clears
 the command before waiting in its firmware menu. The same `menu` tag is
 available to `boot-once`; it leaves fifteen selector bytes in the 32-byte BCB
-command field. Recovery, status, stage and reserved BCB bytes remain unchanged.
+command field.
+
+The new generic `bcb-command get|set|replace|clear` interface supports composed
+RAM-package launches. Writes are compare-and-write operations over only the
+32-byte command field; they preserve the rest of `misc`, flush, and require an
+exact readback. Existing reboot and tagged-launch paths share that storage
+primitive rather than maintaining another BCB writer.
+
+The read-only `pstore info|console|pmsg` interface discovers the active DT's
+single ramoops region, validates its memory-map range and persistent-ring
+header, and emits at most the newest 48 KiB. It has no clear or write operation.
 
 ## 7.0.8
 
