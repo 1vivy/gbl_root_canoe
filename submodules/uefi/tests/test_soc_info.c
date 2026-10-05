@@ -15,6 +15,7 @@ TestSm8845Ids (void)
   assert (AtSocKindFromRawChipId (0x02ad) == AtSocSm8845);
   assert (AtSocKindFromRawChipId (0x02c0) == AtSocSm8845);
   assert (AtSocKindFromRawChipId (0x02d7) == AtSocSm8845);
+  assert (AtSocKindFromRawChipId (0x02fd) == AtSocSm8845);
   assert (AtSocKindFromRawChipId (0x10002c0) == AtSocSm8845);
 }
 
@@ -25,6 +26,16 @@ TestSm8850Ids (void)
   assert (AtSocKindFromRawChipId (0x0295) == AtSocSm8850);
   assert (AtSocKindFromRawChipId (0x1000294) == AtSocSm8850);
   assert (AtSocKindFromRawChipId (0x1010295) == AtSocSm8850);
+}
+
+static void
+TestChipInfoNameFallback (void)
+{
+  assert (AtSocKindFromChipIdString ("SM8845") == AtSocSm8845);
+  assert (AtSocKindFromChipIdString ("SM8850") == AtSocSm8850);
+  assert (AtSocKindFromChipIdString ("sm8845") == AtSocUnknown);
+  assert (AtSocKindFromChipIdString ("MACAN") == AtSocUnknown);
+  assert (AtSocKindFromChipIdString (NULL) == AtSocUnknown);
 }
 
 static void
@@ -40,7 +51,8 @@ main (void)
 {
   TestSm8845Ids ();
   TestSm8850Ids ();
+  TestChipInfoNameFallback ();
   TestUnknownIdsFailClosed ();
-  puts ("soc info: SM8845/SM8850 raw IDs and unknown fail-closed passed");
+  puts ("soc info: raw IDs, exact-name fallback and unknown fail-closed passed");
   return 0;
 }

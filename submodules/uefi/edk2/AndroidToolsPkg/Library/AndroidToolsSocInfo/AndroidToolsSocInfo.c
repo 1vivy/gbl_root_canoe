@@ -45,10 +45,14 @@ AtSocDetect (
       );
     Info->ChipIdString[sizeof (Info->ChipIdString) - 1] = '\0';
   }
-  if (EFI_ERROR (Info->RawIdStatus)) {
-    Info->Kind = AtSocUnknown;
-    return Info->RawIdStatus;
+  if (!EFI_ERROR (Info->RawIdStatus)) {
+    Info->Kind = AtSocKindFromRawChipId (Info->RawChipId);
   }
-  Info->Kind = AtSocKindFromRawChipId (Info->RawChipId);
-  return (Info->Kind == AtSocUnknown) ? EFI_UNSUPPORTED : EFI_SUCCESS;
+  if (Info->Kind == AtSocUnknown && !EFI_ERROR (Info->NameStatus)) {
+    Info->Kind = AtSocKindFromChipIdString (Info->ChipIdString);
+  }
+  if (Info->Kind != AtSocUnknown) {
+    return EFI_SUCCESS;
+  }
+  return EFI_ERROR (Info->RawIdStatus) ? Info->RawIdStatus : EFI_UNSUPPORTED;
 }

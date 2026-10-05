@@ -31,6 +31,12 @@ AtSocKindFromRawChipId (
   IN UINT32 RawChipId
   );
 
+/** Classify an exact ChipInfo name when its raw ID is not catalogued. */
+AT_SOC_KIND
+AtSocKindFromChipIdString (
+  IN CONST CHAR8 *ChipIdString
+  );
+
 CONST CHAR16 *
 AtSocKindName (
   IN AT_SOC_KIND Kind

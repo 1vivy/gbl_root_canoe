@@ -22,10 +22,12 @@ the shared `eud.ko`:
 - COM payload: at most 14 bytes
 - captured DT UTMI delay: low `0x00ff`, high `0x0000`
 
-Recognized raw ChipInfo IDs are `0x2ad`, `0x2c0`, and `0x2d7` for SM8845,
-and `0x294` and `0x295` for SM8850; upper variant bits are ignored. Unknown
-SoCs may produce identity/status evidence, but all EUD MMIO and secure-IO
-operations fail closed with `EFI_UNSUPPORTED`.
+Recognized ChipInfo IDs are `0x2ad`, `0x2c0`, `0x2d7`, and `0x2fd` for
+SM8845, and `0x294` and `0x295` for SM8850; upper variant bits are ignored.
+`0x2fd` was observed directly on an SM8845 Macan device. Exact ChipInfo names
+`SM8845` and `SM8850` provide a fallback for uncatalogued raw IDs. Unknown SoCs
+may produce identity/status evidence, but all EUD MMIO and secure-IO operations
+fail closed with `EFI_UNSUPPORTED`.
 
 ## Menu
 
