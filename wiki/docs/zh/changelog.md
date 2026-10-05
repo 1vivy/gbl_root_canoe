@@ -16,9 +16,10 @@
 - **通用 BCB 命令**：新增 `bcb-command get|set|replace|clear`，用于组合 RAM
   包启动。写入只修改 32 字节命令字段，采用比较后写入，保留 `misc` 的其余
   内容，并要求刷新后的精确读回。既有重启与带标签启动路径共用该存储原语。
-- **只读 pstore**：新增 `pstore info|console|pmsg`，从活动设备树发现唯一的
-  ramoops 区域，验证内存映射与持久环形缓冲头，最多输出最新 48 KiB；不存在
-  清除或写入操作。
+- **只读 pstore**：新增 `pstore info|console|pmsg`，从 UEFI 设备树发现唯一的
+  ramoops 区域，验证内存映射与持久环形缓冲头，最多输出最新 48 KiB。若
+  Linux 动态分配该区域，或 UEFI 未发布最终地址，console 与 pmsg 也接受
+  显式物理 zone。不存在清除或写入操作。
 
 ## 7.0.8
 

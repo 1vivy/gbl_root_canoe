@@ -30,9 +30,11 @@ RAM-package launches. Writes are compare-and-write operations over only the
 exact readback. Existing reboot and tagged-launch paths share that storage
 primitive rather than maintaining another BCB writer.
 
-The read-only `pstore info|console|pmsg` interface discovers the active DT's
+The read-only `pstore info|console|pmsg` interface discovers the UEFI DT's
 single ramoops region, validates its memory-map range and persistent-ring
-header, and emits at most the newest 48 KiB. It has no clear or write operation.
+header, and emits at most the newest 48 KiB. Console and pmsg also accept an
+explicit physical zone when Linux dynamically allocated the region or UEFI did
+not publish its final address. It has no clear or write operation.
 
 ## 7.0.8
 

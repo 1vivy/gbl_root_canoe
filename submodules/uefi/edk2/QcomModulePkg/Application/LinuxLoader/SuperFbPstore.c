@@ -290,28 +290,104 @@ ReadableRange (IN EFI_PHYSICAL_ADDRESS Address, IN UINTN Bytes)
   return FALSE;
 }
 
-EFI_STATUS
-SfbPstoreParseOemArg (
-  IN  CONST CHAR8       *Argument,
-  OUT SFB_PSTORE_ACTION *Action
+STATIC BOOLEAN
+ParseHexToken (
+  IN  CONST CHAR8  *Text,
+  OUT CONST CHAR8 **End,
+  OUT UINT64       *Value
   )
 {
-  if (Argument == NULL || Action == NULL) {
+  CONST CHAR8 *Cursor;
+  UINT64       Result = 0;
+  UINT8        Digit;
+  BOOLEAN      Any = FALSE;
+
+  if (Text == NULL || End == NULL || Value == NULL ||
+      Text[0] != '0' || (Text[1] != 'x' && Text[1] != 'X')) {
+    return FALSE;
+  }
+  Cursor = Text + 2;
+  while (*Cursor != '\0' && *Cursor != ' ') {
+    if (*Cursor >= '0' && *Cursor <= '9') {
+      Digit = (UINT8)(*Cursor - '0');
+    } else if (*Cursor >= 'a' && *Cursor <= 'f') {
+      Digit = (UINT8)(*Cursor - 'a' + 10);
+    } else if (*Cursor >= 'A' && *Cursor <= 'F') {
+      Digit = (UINT8)(*Cursor - 'A' + 10);
+    } else {
+      return FALSE;
+    }
+    if (Result > (MAX_UINT64 - Digit) / 16) {
+      return FALSE;
+    }
+    Result = Result * 16 + Digit;
+    Any = TRUE;
+    Cursor++;
+  }
+  if (!Any) {
+    return FALSE;
+  }
+  *End = Cursor;
+  *Value = Result;
+  return TRUE;
+}
+
+EFI_STATUS
+SfbPstoreParseOemArg (
+  IN  CONST CHAR8        *Argument,
+  OUT SFB_PSTORE_REQUEST *Request
+  )
+{
+  CONST CHAR8 *Cursor;
+  CONST CHAR8 *End;
+  UINT64       Address;
+  UINT64       Bytes;
+
+  if (Argument == NULL || Request == NULL) {
     return EFI_INVALID_PARAMETER;
   }
-  *Action = SfbPstoreNone;
+  ZeroMem (Request, sizeof (*Request));
   if (AsciiStrCmp (Argument, "pstore") == 0 ||
       AsciiStrCmp (Argument, "pstore info") == 0) {
-    *Action = SfbPstoreInfo;
-  } else if (AsciiStrCmp (Argument, "pstore console") == 0) {
-    *Action = SfbPstoreConsole;
-  } else if (AsciiStrCmp (Argument, "pstore pmsg") == 0) {
-    *Action = SfbPstorePmsg;
-  } else if (AsciiStrnCmp (Argument, "pstore", sizeof ("pstore") - 1) == 0 &&
+    Request->Action = SfbPstoreInfo;
+    return EFI_SUCCESS;
+  }
+  if (AsciiStrCmp (Argument, "pstore console") == 0) {
+    Request->Action = SfbPstoreConsole;
+    return EFI_SUCCESS;
+  }
+  if (AsciiStrCmp (Argument, "pstore pmsg") == 0) {
+    Request->Action = SfbPstorePmsg;
+    return EFI_SUCCESS;
+  }
+  if (AsciiStrnCmp (
+        Argument, "pstore console ", sizeof ("pstore console ") - 1) == 0) {
+    Request->Action = SfbPstoreConsole;
+    Cursor = Argument + sizeof ("pstore console ") - 1;
+  } else if (AsciiStrnCmp (
+               Argument, "pstore pmsg ", sizeof ("pstore pmsg ") - 1) == 0) {
+    Request->Action = SfbPstorePmsg;
+    Cursor = Argument + sizeof ("pstore pmsg ") - 1;
+  } else if (AsciiStrnCmp (
+               Argument, "pstore", sizeof ("pstore") - 1) == 0 &&
              (Argument[sizeof ("pstore") - 1] == '\0' ||
               Argument[sizeof ("pstore") - 1] == ' ')) {
     return EFI_INVALID_PARAMETER;
+  } else {
+    return EFI_SUCCESS;
   }
+
+  if (!ParseHexToken (Cursor, &End, &Address) ||
+      *End != ' ' || End[1] == '\0' ||
+      !ParseHexToken (End + 1, &End, &Bytes) || *End != '\0' ||
+      Address > MAX_UINTN || Bytes < sizeof (SFB_PSTORE_HEADER) ||
+      Bytes > SFB_PSTORE_MAX_REGION_BYTES ||
+      Address > MAX_UINT64 - Bytes) {
+    return EFI_INVALID_PARAMETER;
+  }
+  Request->ExplicitZone = TRUE;
+  Request->ZoneAddress = (EFI_PHYSICAL_ADDRESS)Address;
+  Request->ZoneBytes = (UINTN)Bytes;
   return EFI_SUCCESS;
 }
 
@@ -454,6 +530,7 @@ SfbPstoreExtractZone (
   ZeroMem (Record, sizeof (*Record));
   CopyMem (&Header, Zone, sizeof (Header));
   DataCapacity = ZoneBytes - sizeof (Header);
+  Record->Signature = Header.Signature;
   if (Header.Signature != SFB_PSTORE_SIGNATURE) {
     return EFI_NOT_FOUND;
   }
@@ -486,6 +563,25 @@ SfbPstoreExtractZone (
 }
 
 EFI_STATUS
+SfbPstoreReadZone (
+  IN  EFI_PHYSICAL_ADDRESS Address,
+  IN  UINTN                ZoneBytes,
+  OUT SFB_PSTORE_RECORD   *Record
+  )
+{
+  if (Record == NULL || ZoneBytes < sizeof (SFB_PSTORE_HEADER) ||
+      ZoneBytes > SFB_PSTORE_MAX_REGION_BYTES ||
+      Address > MAX_UINTN || Address > MAX_UINT64 - ZoneBytes) {
+    return EFI_INVALID_PARAMETER;
+  }
+  if (!ReadableRange (Address, ZoneBytes)) {
+    return EFI_ACCESS_DENIED;
+  }
+  return SfbPstoreExtractZone (
+           (CONST UINT8 *)(UINTN)Address, ZoneBytes, Record);
+}
+
+EFI_STATUS
 SfbPstoreRead (
   IN  CONST SFB_PSTORE_LAYOUT *Layout,
   IN  SFB_PSTORE_ACTION        Action,
@@ -509,13 +605,11 @@ SfbPstoreRead (
   }
   if (Offset > Layout->RegionBytes ||
       ZoneBytes > Layout->RegionBytes - Offset ||
-      Layout->RegionAddress > MAX_UINTN - Offset ||
-      !ReadableRange (Layout->RegionAddress + Offset, ZoneBytes)) {
+      Layout->RegionAddress > MAX_UINTN - Offset) {
     return EFI_ACCESS_DENIED;
   }
-  return SfbPstoreExtractZone (
-           (CONST UINT8 *)(UINTN)(Layout->RegionAddress + Offset),
-           ZoneBytes, Record);
+  return SfbPstoreReadZone (
+           Layout->RegionAddress + Offset, ZoneBytes, Record);
 }
 
 VOID

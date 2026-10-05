@@ -204,8 +204,8 @@ command-field storage boundary internally.
 
 ### Read-only pstore
 
-SFB can inspect the active device tree's single `ramoops` or `qcom,ramoops`
-region without changing it:
+SFB can inspect a single `ramoops` or `qcom,ramoops` region without changing
+it. Automatic forms use the FDT published by UEFI:
 
 ```text
 fastboot oem pstore
@@ -214,11 +214,18 @@ fastboot oem pstore console
 fastboot oem pstore pmsg
 ```
 
-The first two forms report the resolved physical region and console/pmsg
-geometry. The record forms validate the persistent-RAM header and emit at most
-the newest 48 KiB through bounded `INFO` packets; non-printing bytes are escaped
-as `\xNN`. Discovery refuses ambiguous nodes, malformed geometry, unreadable
-memory-map ranges and ECC layouts. There is no clear, erase or write form.
+If UEFI publishes no fixed ramoops address, console and pmsg also accept an
+explicit Linux-reported physical zone:
+
+```text
+fastboot oem pstore console 0x<address> 0x<bytes>
+fastboot oem pstore pmsg 0x<address> 0x<bytes>
+```
+
+Record forms validate the memory-map range and persistent-RAM header, then emit
+at most the newest 48 KiB. There is no clear, erase or write form. See
+[Read-only pstore inspection](./pstore) for address discovery, safety limits,
+and the non-panic marker test.
 
 ### From a rooted Android shell
 

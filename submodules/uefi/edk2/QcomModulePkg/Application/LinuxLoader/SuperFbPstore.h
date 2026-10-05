@@ -14,6 +14,13 @@ typedef enum {
 } SFB_PSTORE_ACTION;
 
 typedef struct {
+  SFB_PSTORE_ACTION   Action;
+  BOOLEAN             ExplicitZone;
+  EFI_PHYSICAL_ADDRESS ZoneAddress;
+  UINTN               ZoneBytes;
+} SFB_PSTORE_REQUEST;
+
+typedef struct {
   EFI_PHYSICAL_ADDRESS RegionAddress;
   UINTN                RegionBytes;
   UINTN                ConsoleOffset;
@@ -25,17 +32,19 @@ typedef struct {
 typedef struct {
   UINT8 *Bytes;
   UINTN  BytesCount;
+  UINT32 Signature;
   UINTN  StoredBytes;
   UINTN  DroppedBytes;
   UINT32 Start;
 } SFB_PSTORE_RECORD;
 
-/* Exact OEM forms: `pstore`, `pstore info`, `pstore console`, `pstore pmsg`.
- * Arguments outside this namespace return Action=None. */
+/* Exact OEM forms: `pstore [info|console|pmsg]`, plus explicit bounded zones:
+ * `pstore console|pmsg 0x<address> 0x<bytes>`. Arguments outside this
+ * namespace return Action=None. */
 EFI_STATUS
 SfbPstoreParseOemArg (
-  IN  CONST CHAR8       *Argument,
-  OUT SFB_PSTORE_ACTION *Action
+  IN  CONST CHAR8        *Argument,
+  OUT SFB_PSTORE_REQUEST *Request
   );
 
 /* Pure ramoops geometry calculation; sizes follow the Linux DT binding and
@@ -62,6 +71,13 @@ SfbPstoreRead (
   IN  CONST SFB_PSTORE_LAYOUT *Layout,
   IN  SFB_PSTORE_ACTION        Action,
   OUT SFB_PSTORE_RECORD       *Record
+  );
+
+EFI_STATUS
+SfbPstoreReadZone (
+  IN  EFI_PHYSICAL_ADDRESS Address,
+  IN  UINTN                ZoneBytes,
+  OUT SFB_PSTORE_RECORD   *Record
   );
 
 VOID SfbPstoreFree (IN OUT SFB_PSTORE_RECORD *Record);

@@ -2580,36 +2580,58 @@ CmdOem (IN CONST CHAR8 *Arg, IN VOID *Data, IN UINT32 Size)
   }
 
   {
-    SFB_PSTORE_ACTION Action;
-    SFB_PSTORE_LAYOUT Layout;
-    SFB_PSTORE_RECORD Record;
+    SFB_PSTORE_REQUEST Request;
+    SFB_PSTORE_LAYOUT  Layout;
+    SFB_PSTORE_RECORD  Record;
+    CONST CHAR8       *PstoreFailure = "pstore FDT discovery failed";
 
-    Status = SfbPstoreParseOemArg (Arg, &Action);
+    Status = SfbPstoreParseOemArg (Arg, &Request);
     if (EFI_ERROR (Status)) {
       FastbootFail ("invalid pstore argument");
       return;
     }
-    if (Action != SfbPstoreNone) {
+    if (Request.Action != SfbPstoreNone) {
       WaitForFlashFinished ();
       ZeroMem (&Record, sizeof (Record));
-      Status = SfbPstoreLocate (&Layout);
-      if (!EFI_ERROR (Status)) {
-        CmdOemPstoreLayout (&Layout);
-      }
-      if (!EFI_ERROR (Status) && Action != SfbPstoreInfo) {
-        Status = SfbPstoreRead (&Layout, Action, &Record);
-        if (Status == EFI_NOT_FOUND) {
-          CmdOemInfo ("no valid persistent record");
-          Status = EFI_SUCCESS;
-        } else if (!EFI_ERROR (Status)) {
-          CmdOemPstoreRecord (&Record);
+      if (Request.ExplicitZone) {
+        AsciiSPrint (
+          Failure, sizeof (Failure), "explicit %a address=0x%llx bytes=0x%lx",
+          Request.Action == SfbPstoreConsole ? "console" : "pmsg",
+          Request.ZoneAddress, Request.ZoneBytes);
+        CmdOemInfo (Failure);
+        PstoreFailure = "pstore explicit range or record failed";
+        Status = SfbPstoreReadZone (
+                   Request.ZoneAddress, Request.ZoneBytes, &Record);
+      } else {
+        Status = SfbPstoreLocate (&Layout);
+        if (!EFI_ERROR (Status)) {
+          CmdOemPstoreLayout (&Layout);
+        }
+        if (!EFI_ERROR (Status) && Request.Action != SfbPstoreInfo) {
+          PstoreFailure = "pstore discovered range or record failed";
+          Status = SfbPstoreRead (&Layout, Request.Action, &Record);
         }
       }
+      if (Status == EFI_NOT_FOUND && Request.Action != SfbPstoreInfo) {
+        if (Request.ExplicitZone) {
+          AsciiSPrint (
+            Failure, sizeof (Failure),
+            "no valid persistent record (signature=0x%08x)",
+            Record.Signature);
+          CmdOemInfo (Failure);
+        } else {
+          CmdOemInfo ("no valid persistent record");
+        }
+        Status = EFI_SUCCESS;
+      } else if (!EFI_ERROR (Status) &&
+                 Request.Action != SfbPstoreInfo) {
+        CmdOemPstoreRecord (&Record);
+      }
       SfbPstoreFree (&Record);
-      DEBUG ((EFI_D_ERROR, "SFB: MARK pstore action=%u status=%r\n",
-              (UINT32)Action, Status));
+      DEBUG ((EFI_D_ERROR, "SFB: MARK pstore action=%u explicit=%u status=%r\n",
+              (UINT32)Request.Action, (UINT32)Request.ExplicitZone, Status));
       if (EFI_ERROR (Status)) {
-        FastbootFail ("pstore inspection failed");
+        FastbootFail (PstoreFailure);
       } else {
         FastbootOkay ("");
       }

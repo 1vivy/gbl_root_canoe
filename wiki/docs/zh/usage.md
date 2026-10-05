@@ -68,7 +68,8 @@ fastbootd 与 menu 便捷 target 在内部共用同一命令字段存储边界�
 
 ### 只读 pstore
 
-SFB 可以只读检查活动设备树中唯一的 `ramoops` 或 `qcom,ramoops` 区域：
+SFB 可以在不修改内容的前提下检查唯一的 `ramoops` 或 `qcom,ramoops` 区域。
+自动形式使用 UEFI 发布的 FDT：
 
 ```text
 fastboot oem pstore
@@ -77,10 +78,17 @@ fastboot oem pstore console
 fastboot oem pstore pmsg
 ```
 
-前两种形式报告解析出的物理区域及 console/pmsg 几何信息。记录命令验证
-持久 RAM 头，并通过有界的 `INFO` 包最多输出最新 48 KiB；不可打印字节显示
-为 `\xNN`。发现过程会拒绝歧义节点、错误几何、内存映射中不可读的范围及
-ECC 布局。不存在清除、擦除或写入形式。
+若 UEFI 没有发布固定的 ramoops 地址，console 与 pmsg 也接受 Linux 报告的
+显式物理 zone：
+
+```text
+fastboot oem pstore console 0x<address> 0x<bytes>
+fastboot oem pstore pmsg 0x<address> 0x<bytes>
+```
+
+记录形式会验证内存映射范围及持久 RAM 头，然后最多输出最新 48 KiB。不存在
+清除、擦除或写入形式。地址发现、安全限制及无需 panic 的标记测试见
+[只读 pstore 检查](./pstore)。
 
 ### 从已 root 的 Android shell
 

@@ -35,16 +35,39 @@ static void Header(UINT8 *Zone, UINT32 Start, UINT32 Size) {
 }
 
 static void TestParser(void) {
-  SFB_PSTORE_ACTION Action;
-  assert(SfbPstoreParseOemArg("other", &Action) == EFI_SUCCESS && Action == SfbPstoreNone);
-  assert(SfbPstoreParseOemArg("pstore", &Action) == EFI_SUCCESS && Action == SfbPstoreInfo);
-  assert(SfbPstoreParseOemArg("pstore info", &Action) == EFI_SUCCESS && Action == SfbPstoreInfo);
-  assert(SfbPstoreParseOemArg("pstore console", &Action) == EFI_SUCCESS && Action == SfbPstoreConsole);
-  assert(SfbPstoreParseOemArg("pstore pmsg", &Action) == EFI_SUCCESS && Action == SfbPstorePmsg);
-  assert(SfbPstoreParseOemArg("pstore clear", &Action) == EFI_INVALID_PARAMETER);
-  assert(SfbPstoreParseOemArg("pstore console extra", &Action) == EFI_INVALID_PARAMETER);
-  assert(SfbPstoreParseOemArg("pstoreish", &Action) == EFI_SUCCESS && Action == SfbPstoreNone);
-  assert(SfbPstoreParseOemArg(NULL, &Action) == EFI_INVALID_PARAMETER);
+  SFB_PSTORE_REQUEST Request;
+  assert(SfbPstoreParseOemArg("other", &Request) == EFI_SUCCESS &&
+         Request.Action == SfbPstoreNone);
+  assert(SfbPstoreParseOemArg("pstore", &Request) == EFI_SUCCESS &&
+         Request.Action == SfbPstoreInfo && !Request.ExplicitZone);
+  assert(SfbPstoreParseOemArg("pstore info", &Request) == EFI_SUCCESS &&
+         Request.Action == SfbPstoreInfo && !Request.ExplicitZone);
+  assert(SfbPstoreParseOemArg("pstore console", &Request) == EFI_SUCCESS &&
+         Request.Action == SfbPstoreConsole && !Request.ExplicitZone);
+  assert(SfbPstoreParseOemArg("pstore pmsg 0x100040000 0x200000", &Request) ==
+         EFI_SUCCESS && Request.Action == SfbPstorePmsg &&
+         Request.ExplicitZone && Request.ZoneAddress == 0x100040000ULL &&
+         Request.ZoneBytes == 0x200000);
+  assert(SfbPstoreParseOemArg("pstore console 0X100000000 0X40000", &Request) ==
+         EFI_SUCCESS && Request.Action == SfbPstoreConsole &&
+         Request.ExplicitZone && Request.ZoneAddress == 0x100000000ULL &&
+         Request.ZoneBytes == 0x40000);
+  assert(SfbPstoreParseOemArg("pstore info 0x1 0x20", &Request) ==
+         EFI_INVALID_PARAMETER);
+  assert(SfbPstoreParseOemArg("pstore pmsg 1234 0x20", &Request) ==
+         EFI_INVALID_PARAMETER);
+  assert(SfbPstoreParseOemArg("pstore pmsg 0x1 0x0", &Request) ==
+         EFI_INVALID_PARAMETER);
+  assert(SfbPstoreParseOemArg("pstore pmsg 0x1 0x1000001", &Request) ==
+         EFI_INVALID_PARAMETER);
+  assert(SfbPstoreParseOemArg("pstore pmsg 0xfffffffffffffff0 0x20", &Request) ==
+         EFI_INVALID_PARAMETER);
+  assert(SfbPstoreParseOemArg("pstore clear", &Request) == EFI_INVALID_PARAMETER);
+  assert(SfbPstoreParseOemArg("pstore console extra", &Request) ==
+         EFI_INVALID_PARAMETER);
+  assert(SfbPstoreParseOemArg("pstoreish", &Request) == EFI_SUCCESS &&
+         Request.Action == SfbPstoreNone);
+  assert(SfbPstoreParseOemArg(NULL, &Request) == EFI_INVALID_PARAMETER);
   assert(SfbPstoreParseOemArg("pstore", NULL) == EFI_INVALID_PARAMETER);
 }
 
@@ -77,6 +100,7 @@ static void TestRecord(void) {
   UINT8 Zone[sizeof(HEADER) + 16];
   SFB_PSTORE_RECORD Record;
   const char *Expected = "EFGHIJABCD";
+  const UINT32 BadSignature = 0x12345678;
 
   memset(Zone, 0, sizeof Zone);
   Header(Zone, 4, 10);
@@ -96,7 +120,9 @@ static void TestRecord(void) {
   memset(Zone, 0, sizeof Zone); Header(Zone, 0, 17);
   assert(SfbPstoreExtractZone(Zone, sizeof Zone, &Record) == EFI_COMPROMISED_DATA);
   memset(Zone, 0, sizeof Zone);
+  memcpy(Zone, &BadSignature, sizeof BadSignature);
   assert(SfbPstoreExtractZone(Zone, sizeof Zone, &Record) == EFI_NOT_FOUND);
+  assert(Record.Signature == BadSignature);
   assert(SfbPstoreExtractZone(NULL, sizeof Zone, &Record) == EFI_INVALID_PARAMETER);
 }
 
