@@ -43,6 +43,21 @@ EudClassifySecureResult (
          ? EudSecureAccepted : EudSecureRejected;
 }
 
+BOOLEAN
+EudSecureRestoreRequired (
+  IN UINT32                BeforeValue,
+  IN CONST EUD_SCM_RESULT *WriteResult,
+  IN CONST EUD_SCM_RESULT *AfterResult
+  )
+{
+  if (AfterResult != NULL && AfterResult->ValueValid) {
+    return (BOOLEAN)(((BeforeValue ^ AfterResult->Value) & 1u) != 0);
+  }
+  return (BOOLEAN)(
+    EudClassifySecureResult (TRUE, WriteResult) == EudSecureAccepted
+    );
+}
+
 CONST EUD_SOC_PROFILE *
 EudProfileForSocKind (
   IN AT_SOC_KIND Kind
@@ -53,6 +68,14 @@ EudProfileForSocKind (
   case AtSocSm8850:  return &mSm8850Profile;
   default:           return NULL;
   }
+}
+
+UINT32
+EudRegisterValue (
+  IN UINT32 RawValue
+  )
+{
+  return RawValue & EUD_REGISTER_VALUE_MASK;
 }
 
 BOOLEAN

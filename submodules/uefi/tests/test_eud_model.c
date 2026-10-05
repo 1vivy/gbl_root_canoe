@@ -43,6 +43,31 @@ TestSecureResultClassification (void)
 }
 
 static void
+TestSecureRestoreDecision (void)
+{
+  EUD_SCM_RESULT Write;
+  EUD_SCM_RESULT After;
+
+  memset (&Write, 0, sizeof (Write));
+  memset (&After, 0, sizeof (After));
+  Write.TransportStatus = EFI_BAD_BUFFER_SIZE;
+  After.ValueValid = TRUE;
+  After.Value = 0;
+  assert (!EudSecureRestoreRequired (0, &Write, &After));
+
+  Write.TransportStatus = EFI_SUCCESS;
+  Write.Results[0] = 1;
+  After.Value = 1;
+  assert (EudSecureRestoreRequired (0, &Write, &After));
+  assert (!EudSecureRestoreRequired (1, &Write, &After));
+
+  After.ValueValid = FALSE;
+  assert (EudSecureRestoreRequired (0, &Write, &After));
+  Write.Results[0] = 0;
+  assert (!EudSecureRestoreRequired (0, &Write, &After));
+}
+
+static void
 TestComFrameBounds (void)
 {
   const UINT32 ExpectedId = 0x90;
@@ -52,6 +77,15 @@ TestComFrameBounds (void)
   assert (!EudComFrameValid (ExpectedId, ExpectedId,
                              EUD_COM_MAX_PAYLOAD + 1));
   assert (!EudComFrameValid (ExpectedId, 0x81, 1));
+}
+
+static void
+TestGeneratedHwioRegisterMask (void)
+{
+  assert (EudRegisterValue (0x01010101) == 0x01);
+  assert (EudRegisterValue (0x1c1c1c1c) == 0x1c);
+  assert (EudRegisterValue (0xffffffff) == 0xff);
+  assert (EudRegisterValue (0x12345678) == 0x78);
 }
 
 static void
@@ -92,9 +126,11 @@ int
 main (void)
 {
   TestSecureResultClassification ();
+  TestSecureRestoreDecision ();
   TestComFrameBounds ();
+  TestGeneratedHwioRegisterMask ();
   TestSocProfiles ();
   TestEveryTelemetryStageHasAStableName ();
-  puts ("eud model: SoC profiles, secure rejection, COM bounds and telemetry stages passed");
+  puts ("eud model: HWIO masks, SoC profiles, secure rejection, COM bounds and telemetry stages passed");
   return 0;
 }

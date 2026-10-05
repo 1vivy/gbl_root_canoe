@@ -20,7 +20,13 @@ the shared `eud.ko`:
 - attach-pet: EUD base `+0x1018`
 - COM execution ID: `0x90`
 - COM payload: at most 14 bytes
-- captured DT UTMI delay: low `0x00ff`, high `0x0000`
+- captured DT UTMI delay: low `0xff`, high `0x00`
+
+Qualcomm's generated HWIO definitions require 32-bit transactions for these
+registers even though every consumed field has an `0xff` register mask. EudTools
+therefore uses `MmioRead32`/`MmioWrite32` and masks every read to the low byte.
+This is required on SM8845, where unmasked reads replicate the byte across the
+word (for example, enabled CSR reads as `0x01010101`).
 
 Recognized ChipInfo IDs are `0x2ad`, `0x2c0`, `0x2d7`, and `0x2fd` for
 SM8845, and `0x294` and `0x295` for SM8850; upper variant bits are ignored.
@@ -47,8 +53,8 @@ fail closed with `EFI_UNSUPPORTED`.
    requests TX and records valid ID/length-bounded RX frames. Received bytes are
    never interpreted as commands or SysRq.
 7. **Restore** restores the exact nonsecure register snapshot saved by the first
-   enable-path run. It restores the secure bit only when its original value was
-   successfully read.
+   enable-path run. It restores the secure bit only when the post-write readback
+   proves the tool changed it, or when an accepted write cannot be read back.
 
 Returning to the caller deliberately leaves the current EUD state unchanged.
 Use Restore first when that is not desired.
@@ -84,3 +90,8 @@ kernel driver writes the nonsecure CSR and configures the PHY before its SCM
 write, logs SCM failure, and continues. Only host USB descriptors and a valid
 COM frame prove the channel works. The evidence file therefore reports host
 enumeration as unobserved rather than inferring it from register readback.
+
+The SCM call shape matches Qualcomm's `EudLib`: two value parameters containing
+the mode-manager address and desired value. Transport failures remain visible
+verbatim. The post-write secure read is authoritative for state tracking; an
+error with unchanged readback does not cause a redundant secure restore write.

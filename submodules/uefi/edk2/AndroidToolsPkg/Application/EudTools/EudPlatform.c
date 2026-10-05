@@ -31,6 +31,7 @@ typedef struct {
   BOOLEAN                UnsafeToExit;
   BOOLEAN                MinidumpArmed;
   BOOLEAN                ModeBeforeValid;
+  BOOLEAN                SecureModeChanged;
   UINT32                 ModeBefore;
   AT_SOC_INFO            Soc;
   CONST EUD_SOC_PROFILE *Profile;
@@ -64,6 +65,28 @@ EudProfileSupported (
   return (BOOLEAN)(mSession.Profile != NULL);
 }
 
+/**
+  Qualcomm HWIO defines every EUD field used here as a 32-bit transaction with
+  an 8-bit register mask. Some fabrics replicate the low byte across all lanes,
+  so every read must apply the generated RMSK rather than expose the raw word.
+**/
+STATIC UINT32
+EudReadRegister (
+  IN UINT32 Offset
+  )
+{
+  return EudRegisterValue (MmioRead32 (EudAddress (Offset)));
+}
+
+STATIC VOID
+EudWriteRegister (
+  IN UINT32 Offset,
+  IN UINT32 Value
+  )
+{
+  MmioWrite32 (EudAddress (Offset), Value & EUD_REGISTER_VALUE_MASK);
+}
+
 STATIC VOID
 EudTelemetryCommit (
   IN EUD_STAGE  Stage,
@@ -85,17 +108,17 @@ EudSnapshotRegisters (
   )
 {
   ZeroMem (Snapshot, sizeof (*Snapshot));
-  Snapshot->TxId = MmioRead32 (EudAddress (EUD_REG_COM_TX_ID));
-  Snapshot->TxLength = MmioRead32 (EudAddress (EUD_REG_COM_TX_LEN));
-  Snapshot->RxId = MmioRead32 (EudAddress (EUD_REG_COM_RX_ID));
-  Snapshot->RxLength = MmioRead32 (EudAddress (EUD_REG_COM_RX_LEN));
-  Snapshot->InterruptMask = MmioRead32 (EudAddress (EUD_REG_INT1_ENABLE_MASK));
-  Snapshot->InterruptStatus = MmioRead32 (EudAddress (EUD_REG_INT_STATUS_1));
-  Snapshot->ControlOut = MmioRead32 (EudAddress (EUD_REG_CONTROL_OUT_1));
-  Snapshot->CsrEnable = MmioRead32 (EudAddress (EUD_REG_CSR_ENABLE));
-  Snapshot->AttachDetect = MmioRead32 (EudAddress (EUD_REG_SW_ATTACH_DETECT));
-  Snapshot->UtmiDelayLow = MmioRead16 (EudAddress (EUD_REG_UTMI_DELAY_LOW));
-  Snapshot->UtmiDelayHigh = MmioRead16 (EudAddress (EUD_REG_UTMI_DELAY_HIGH));
+  Snapshot->TxId = EudReadRegister (EUD_REG_COM_TX_ID);
+  Snapshot->TxLength = EudReadRegister (EUD_REG_COM_TX_LEN);
+  Snapshot->RxId = EudReadRegister (EUD_REG_COM_RX_ID);
+  Snapshot->RxLength = EudReadRegister (EUD_REG_COM_RX_LEN);
+  Snapshot->InterruptMask = EudReadRegister (EUD_REG_INT1_ENABLE_MASK);
+  Snapshot->InterruptStatus = EudReadRegister (EUD_REG_INT_STATUS_1);
+  Snapshot->ControlOut = EudReadRegister (EUD_REG_CONTROL_OUT_1);
+  Snapshot->CsrEnable = EudReadRegister (EUD_REG_CSR_ENABLE);
+  Snapshot->AttachDetect = EudReadRegister (EUD_REG_SW_ATTACH_DETECT);
+  Snapshot->UtmiDelayLow = (UINT16)EudReadRegister (EUD_REG_UTMI_DELAY_LOW);
+  Snapshot->UtmiDelayHigh = (UINT16)EudReadRegister (EUD_REG_UTMI_DELAY_HIGH);
 }
 
 STATIC EFI_STATUS
@@ -566,16 +589,16 @@ EudBuildStatusReport (
                EudSecureOutcomeName (Outcome));
   AtReportAdd (Report, L"secure.mode.value=%s0x%08x",
                Secure.ValueValid ? L"" : L"unknown/", Secure.Value);
-  AtReportAdd (Report, L"csr.enable=0x%08x", Snapshot.CsrEnable);
-  AtReportAdd (Report, L"sw.attach=0x%08x", Snapshot.AttachDetect);
-  AtReportAdd (Report, L"interrupt.mask=0x%08x", Snapshot.InterruptMask);
-  AtReportAdd (Report, L"interrupt.status=0x%08x", Snapshot.InterruptStatus);
-  AtReportAdd (Report, L"control.out=0x%08x", Snapshot.ControlOut);
-  AtReportAdd (Report, L"com.tx.id=0x%08x len=%u",
+  AtReportAdd (Report, L"csr.enable=0x%02x", Snapshot.CsrEnable);
+  AtReportAdd (Report, L"sw.attach=0x%02x", Snapshot.AttachDetect);
+  AtReportAdd (Report, L"interrupt.mask=0x%02x", Snapshot.InterruptMask);
+  AtReportAdd (Report, L"interrupt.status=0x%02x", Snapshot.InterruptStatus);
+  AtReportAdd (Report, L"control.out=0x%02x", Snapshot.ControlOut);
+  AtReportAdd (Report, L"com.tx.id=0x%02x len=%u",
                Snapshot.TxId, Snapshot.TxLength);
-  AtReportAdd (Report, L"com.rx.id=0x%08x len=%u",
+  AtReportAdd (Report, L"com.rx.id=0x%02x len=%u",
                Snapshot.RxId, Snapshot.RxLength);
-  AtReportAdd (Report, L"utmi.delay.low=0x%04x high=0x%04x",
+  AtReportAdd (Report, L"utmi.delay.low=0x%02x high=0x%02x",
                Snapshot.UtmiDelayLow, Snapshot.UtmiDelayHigh);
   AtReportAdd (
     Report,
@@ -630,8 +653,10 @@ EudProbeSecureGate (
   EUD_SCM_RESULT    Restore;
   EUD_SCM_RESULT    Verify;
   EFI_STATUS        Status;
+  BOOLEAN           RestoreNeeded;
   UINT32            RestoreValue;
 
+  RestoreNeeded = FALSE;
   Status = EudEvidenceOpen (L"scm", L"secure EUD mode-manager write probe",
                             &Evidence);
   if (EFI_ERROR (Status)) {
@@ -677,6 +702,13 @@ EudProbeSecureGate (
     Status = EudLogScmResult (&Evidence, L"secure.enable", &Enable);
   }
   if (!EFI_ERROR (Status)) {
+    Status = AtEvidencePrint (
+               &Evidence,
+               L"secure.enable.outcome=%s",
+               EudSecureOutcomeName (EudClassifySecureResult (TRUE, &Enable))
+               );
+  }
+  if (!EFI_ERROR (Status)) {
     Status = AtEvidenceFlush (&Evidence);
   }
   if (EFI_ERROR (Status)) {
@@ -694,10 +726,17 @@ EudProbeSecureGate (
     Status = AtEvidenceFlush (&Evidence);
   }
 
-  if (!EFI_ERROR (Status) && (Before.Value & 1u) == 0) {
-    RestoreValue = 0;
+  if (!EFI_ERROR (Status)) {
+    RestoreNeeded = EudSecureRestoreRequired (
+                      Before.Value,
+                      &Enable,
+                      &After
+                      );
+  }
+  if (!EFI_ERROR (Status) && RestoreNeeded) {
+    RestoreValue = Before.Value & 1u;
     Status = EudIntent (&Evidence, EudStageSecureRestore,
-                        L"restore the mode-manager bit observed before probe");
+                        L"restore changed mode-manager bit after probe");
     if (!EFI_ERROR (Status)) {
       EudScmIoWrite (RestoreValue, &Restore);
       EudRememberScmResult (&Restore);
@@ -716,9 +755,14 @@ EudProbeSecureGate (
         (!Verify.ValueValid || (Verify.Value & 1u) != RestoreValue)) {
       Status = EFI_DEVICE_ERROR;
     }
-    if (!EFI_ERROR (Status)) {
-      Status = AtEvidenceFlush (&Evidence);
-    }
+  } else if (!EFI_ERROR (Status)) {
+    Status = AtEvidencePrint (
+               &Evidence,
+               L"secure.restore=skipped; mode-manager readback unchanged"
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = AtEvidenceFlush (&Evidence);
   }
   return EudFinishEvidence (&Evidence, Status);
 }
@@ -731,11 +775,11 @@ EudPetAttach (
   UINT32 Current;
   UINTN  Attempt;
 
-  Current = MmioRead32 (EudAddress (EUD_REG_SW_ATTACH_DETECT));
+  Current = EudReadRegister (EUD_REG_SW_ATTACH_DETECT);
   if ((Current & 1u) != 0) {
-    MmioWrite32 (EudAddress (EUD_REG_SW_ATTACH_DETECT), 0);
+    EudWriteRegister (EUD_REG_SW_ATTACH_DETECT, 0);
     for (Attempt = 0; Attempt < 100; Attempt++) {
-      if ((MmioRead32 (EudAddress (EUD_REG_SW_ATTACH_DETECT)) & 1u) == 0) {
+      if ((EudReadRegister (EUD_REG_SW_ATTACH_DETECT) & 1u) == 0) {
         break;
       }
       gBS->Stall (1);
@@ -744,8 +788,8 @@ EudPetAttach (
       return EFI_TIMEOUT;
     }
   }
-  MmioWrite32 (EudAddress (EUD_REG_SW_ATTACH_DETECT), 1);
-  return ((MmioRead32 (EudAddress (EUD_REG_SW_ATTACH_DETECT)) & 1u) != 0)
+  EudWriteRegister (EUD_REG_SW_ATTACH_DETECT, 1);
+  return ((EudReadRegister (EUD_REG_SW_ATTACH_DETECT) & 1u) != 0)
          ? EFI_SUCCESS : EFI_DEVICE_ERROR;
 }
 
@@ -813,6 +857,15 @@ EudEnablePath (
       Status = EudLogScmResult (&Evidence, L"secure.enable", &SecureEnable);
     }
     if (!EFI_ERROR (Status)) {
+      Status = AtEvidencePrint (
+                 &Evidence,
+                 L"secure.enable.outcome=%s",
+                 EudSecureOutcomeName (
+                   EudClassifySecureResult (TRUE, &SecureEnable)
+                   )
+                 );
+    }
+    if (!EFI_ERROR (Status)) {
       Status = AtEvidenceFlush (&Evidence);
     }
     if (EFI_ERROR (Status)) {
@@ -826,6 +879,14 @@ EudEnablePath (
       EudRememberScmResult (&SecureAfter);
       mTelemetry.Data.ModeAfter = SecureAfter.Value;
       Status = EudLogScmResult (&Evidence, L"secure.after", &SecureAfter);
+      if (mSession.ModeBeforeValid &&
+          EudSecureRestoreRequired (
+            mSession.ModeBefore,
+            &SecureEnable,
+            &SecureAfter
+            )) {
+        mSession.SecureModeChanged = TRUE;
+      }
     }
     if (!EFI_ERROR (Status)) {
       Status = AtEvidenceFlush (&Evidence);
@@ -848,19 +909,19 @@ EudEnablePath (
                         L"program profile UTMI delay");
   }
   if (!EFI_ERROR (Status)) {
-    MmioWrite16 (
-      EudAddress (EUD_REG_UTMI_DELAY_HIGH),
+    EudWriteRegister (
+      EUD_REG_UTMI_DELAY_HIGH,
       mSession.Profile->UtmiDelayHigh
       );
-    MmioWrite16 (
-      EudAddress (EUD_REG_UTMI_DELAY_LOW),
+    EudWriteRegister (
+      EUD_REG_UTMI_DELAY_LOW,
       mSession.Profile->UtmiDelayLow
       );
     Status = AtEvidencePrint (
                &Evidence,
-               L"utmi.readback low=0x%04x high=0x%04x",
-               MmioRead16 (EudAddress (EUD_REG_UTMI_DELAY_LOW)),
-               MmioRead16 (EudAddress (EUD_REG_UTMI_DELAY_HIGH))
+               L"utmi.readback low=0x%02x high=0x%02x",
+               EudReadRegister (EUD_REG_UTMI_DELAY_LOW),
+               EudReadRegister (EUD_REG_UTMI_DELAY_HIGH)
                );
   }
   if (!EFI_ERROR (Status)) {
@@ -873,14 +934,16 @@ EudEnablePath (
   Status = EudIntent (&Evidence, EudStageCsrEnable,
                       L"write CSR enable and VBUS/charger/safe-mode mask");
   if (!EFI_ERROR (Status)) {
-    MmioWrite32 (EudAddress (EUD_REG_CSR_ENABLE), 1);
-    MmioWrite32 (EudAddress (EUD_REG_INT1_ENABLE_MASK),
-                 EUD_ENABLE_INTERRUPT_MASK);
+    EudWriteRegister (EUD_REG_CSR_ENABLE, 1);
+    EudWriteRegister (
+      EUD_REG_INT1_ENABLE_MASK,
+      EUD_ENABLE_INTERRUPT_MASK
+      );
     Status = AtEvidencePrint (
                &Evidence,
-               L"csr.readback=0x%08x interrupt.mask=0x%08x",
-               MmioRead32 (EudAddress (EUD_REG_CSR_ENABLE)),
-               MmioRead32 (EudAddress (EUD_REG_INT1_ENABLE_MASK))
+               L"csr.readback=0x%02x interrupt.mask=0x%02x",
+               EudReadRegister (EUD_REG_CSR_ENABLE),
+               EudReadRegister (EUD_REG_INT1_ENABLE_MASK)
                );
   }
   if (!EFI_ERROR (Status)) {
@@ -902,7 +965,7 @@ EudEnablePath (
     mSession.EnabledByTool = TRUE;
     Status = AtEvidencePrint (
                &Evidence,
-               L"attach.readback=0x%08x control.out=0x%08x interrupt.status=0x%08x",
+               L"attach.readback=0x%02x control.out=0x%02x interrupt.status=0x%02x",
                mTelemetry.Data.After.AttachDetect,
                mTelemetry.Data.After.ControlOut,
                mTelemetry.Data.After.InterruptStatus
@@ -947,20 +1010,27 @@ EudRestoreBaseline (
   Status = EudIntent (&Evidence, EudStageRestoreNonsecure,
                       L"restore attach, mask, CSR and UTMI snapshots");
   if (!EFI_ERROR (Status)) {
-    MmioWrite32 (EudAddress (EUD_REG_SW_ATTACH_DETECT),
-                 mSession.Baseline.AttachDetect);
-    MmioWrite32 (EudAddress (EUD_REG_INT1_ENABLE_MASK),
-                 mSession.Baseline.InterruptMask);
-    MmioWrite32 (EudAddress (EUD_REG_CSR_ENABLE),
-                 mSession.Baseline.CsrEnable);
-    MmioWrite16 (EudAddress (EUD_REG_UTMI_DELAY_LOW),
-                 mSession.Baseline.UtmiDelayLow);
-    MmioWrite16 (EudAddress (EUD_REG_UTMI_DELAY_HIGH),
-                 mSession.Baseline.UtmiDelayHigh);
+    EudWriteRegister (
+      EUD_REG_SW_ATTACH_DETECT,
+      mSession.Baseline.AttachDetect
+      );
+    EudWriteRegister (
+      EUD_REG_INT1_ENABLE_MASK,
+      mSession.Baseline.InterruptMask
+      );
+    EudWriteRegister (EUD_REG_CSR_ENABLE, mSession.Baseline.CsrEnable);
+    EudWriteRegister (
+      EUD_REG_UTMI_DELAY_LOW,
+      mSession.Baseline.UtmiDelayLow
+      );
+    EudWriteRegister (
+      EUD_REG_UTMI_DELAY_HIGH,
+      mSession.Baseline.UtmiDelayHigh
+      );
     EudSnapshotRegisters (&After);
     Status = AtEvidencePrint (
                &Evidence,
-               L"restore.readback csr=0x%08x attach=0x%08x mask=0x%08x utmi=%04x/%04x",
+               L"restore.readback csr=0x%02x attach=0x%02x mask=0x%02x utmi=%02x/%02x",
                After.CsrEnable, After.AttachDetect, After.InterruptMask,
                After.UtmiDelayLow, After.UtmiDelayHigh
                );
@@ -973,7 +1043,8 @@ EudRestoreBaseline (
       Status = EFI_DEVICE_ERROR;
     }
   }
-  if (!EFI_ERROR (Status) && mSession.ModeBeforeValid) {
+  if (!EFI_ERROR (Status) && mSession.ModeBeforeValid &&
+      mSession.SecureModeChanged) {
     Status = EudIntent (&Evidence, EudStageSecureRestore,
                         L"restore secure mode-manager bit observed before enable");
     if (!EFI_ERROR (Status)) {
@@ -991,6 +1062,11 @@ EudRestoreBaseline (
          (Verify.Value & 1u) != (mSession.ModeBefore & 1u))) {
       Status = EFI_DEVICE_ERROR;
     }
+  } else if (!EFI_ERROR (Status) && mSession.ModeBeforeValid) {
+    Status = AtEvidencePrint (
+               &Evidence,
+               L"secure.restore=skipped; mode-manager was unchanged"
+               );
   }
   if (!EFI_ERROR (Status)) {
     Status = AtEvidenceFlush (&Evidence);
@@ -999,6 +1075,7 @@ EudRestoreBaseline (
     mSession.EnabledByTool = FALSE;
     mSession.BaselineValid = FALSE;
     mSession.ModeBeforeValid = FALSE;
+    mSession.SecureModeChanged = FALSE;
     mTelemetry.Data.Flags &= ~(EUD_FLAG_NONSECURE_ENABLED |
                                EUD_FLAG_ATTACH_SET);
   }
@@ -1013,13 +1090,10 @@ EudComWriteFrame (
 {
   UINT32 Index;
 
-  MmioWrite32 (
-    EudAddress (EUD_REG_COM_TX_ID),
-    mSession.Profile->ComExecutionId
-    );
-  MmioWrite32 (EudAddress (EUD_REG_COM_TX_LEN), Length);
+  EudWriteRegister (EUD_REG_COM_TX_ID, mSession.Profile->ComExecutionId);
+  EudWriteRegister (EUD_REG_COM_TX_LEN, Length);
   for (Index = 0; Index < Length; Index++) {
-    MmioWrite32 (EudAddress (EUD_REG_COM_TX_DATA), Data[Index]);
+    EudWriteRegister (EUD_REG_COM_TX_DATA, Data[Index]);
   }
 }
 
@@ -1032,13 +1106,13 @@ EudComReadFrame (
 {
   UINT32 Index;
 
-  *Id = MmioRead32 (EudAddress (EUD_REG_COM_RX_ID));
-  *Length = MmioRead32 (EudAddress (EUD_REG_COM_RX_LEN));
+  *Id = EudReadRegister (EUD_REG_COM_RX_ID);
+  *Length = EudReadRegister (EUD_REG_COM_RX_LEN);
   if (!EudComFrameValid (mSession.Profile->ComExecutionId, *Id, *Length)) {
     return FALSE;
   }
   for (Index = 0; Index < *Length; Index++) {
-    Data[Index] = (UINT8)MmioRead32 (EudAddress (EUD_REG_COM_RX_DATA));
+    Data[Index] = (UINT8)EudReadRegister (EUD_REG_COM_RX_DATA);
   }
   return TRUE;
 }
@@ -1062,7 +1136,7 @@ EudRunComTest (
     return EFI_UNSUPPORTED;
   }
 
-  if ((MmioRead32 (EudAddress (EUD_REG_CSR_ENABLE)) & 1u) == 0) {
+  if ((EudReadRegister (EUD_REG_CSR_ENABLE) & 1u) == 0) {
     return EFI_NOT_STARTED;
   }
   Status = EudEvidenceOpen (L"com", L"bounded bidirectional EUD COM test",
@@ -1071,17 +1145,19 @@ EudRunComTest (
     return Status;
   }
   EudArmMinidump (&Evidence);
-  OriginalMask = MmioRead32 (EudAddress (EUD_REG_INT1_ENABLE_MASK));
+  OriginalMask = EudReadRegister (EUD_REG_INT1_ENABLE_MASK);
   Status = EudIntent (&Evidence, EudStageComTest,
                       L"enable RX/TX indications and poll for ten seconds");
   if (EFI_ERROR (Status)) {
     return EudFinishEvidence (&Evidence, Status);
   }
-  MmioWrite32 (EudAddress (EUD_REG_INT1_ENABLE_MASK),
-               OriginalMask | EUD_INT_RX | EUD_INT_TX);
+  EudWriteRegister (
+    EUD_REG_INT1_ENABLE_MASK,
+    OriginalMask | EUD_INT_RX | EUD_INT_TX
+    );
   BannerSent = FALSE;
   for (Index = 0; Index < EUD_COM_TEST_MS; Index++) {
-    InterruptStatus = MmioRead32 (EudAddress (EUD_REG_INT_STATUS_1));
+    InterruptStatus = EudReadRegister (EUD_REG_INT_STATUS_1);
     if (!BannerSent && (InterruptStatus & EUD_INT_TX) != 0) {
       EudComWriteFrame (Banner, sizeof (Banner) - 1);
       mTelemetry.Data.ComTxFrames++;
@@ -1106,7 +1182,7 @@ EudRunComTest (
     }
     gBS->Stall (1000);
   }
-  MmioWrite32 (EudAddress (EUD_REG_INT1_ENABLE_MASK), OriginalMask);
+  EudWriteRegister (EUD_REG_INT1_ENABLE_MASK, OriginalMask);
   Status = AtEvidencePrint (
              &Evidence,
              L"com.outcome tx=%lu rx=%lu invalid=%lu banner=%s",

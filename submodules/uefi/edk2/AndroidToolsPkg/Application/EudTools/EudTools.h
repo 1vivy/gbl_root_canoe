@@ -39,6 +39,7 @@
 
 #define EUD_COM_MAX_PAYLOAD        14u
 #define EUD_COM_TEST_MS            10000u
+#define EUD_REGISTER_VALUE_MASK     0xffu
 
 #define EUD_TELEMETRY_MAGIC        0x44554543u /* "CEUD" */
 #define EUD_TELEMETRY_VERSION      1u
@@ -140,11 +141,23 @@ EudClassifySecureResult (
   IN BOOLEAN               Attempted,
   IN CONST EUD_SCM_RESULT *Result
   );
+
+BOOLEAN
+EudSecureRestoreRequired (
+  IN UINT32                BeforeValue,
+  IN CONST EUD_SCM_RESULT *WriteResult,
+  IN CONST EUD_SCM_RESULT *AfterResult
+  );
 CONST EUD_SOC_PROFILE *
 EudProfileForSocKind (
   IN AT_SOC_KIND Kind
   );
 
+
+UINT32
+EudRegisterValue (
+  IN UINT32 RawValue
+  );
 
 BOOLEAN
 EudComFrameValid (
