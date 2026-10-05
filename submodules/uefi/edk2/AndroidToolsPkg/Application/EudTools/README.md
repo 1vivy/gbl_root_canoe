@@ -22,11 +22,20 @@ the shared `eud.ko`:
 - COM payload: at most 14 bytes
 - captured DT UTMI delay: low `0xff`, high `0x00`
 
-Qualcomm's generated HWIO definitions require 32-bit transactions for these
-registers even though every consumed field has an `0xff` register mask. EudTools
-therefore uses `MmioRead32`/`MmioWrite32` and masks every read to the low byte.
-This is required on SM8845, where unmasked reads replicate the byte across the
-word (for example, enabled CSR reads as `0x01010101`).
+Qualcomm's generated HWIO definitions use 32-bit transactions and low-byte
+masks for ordinary EUD registers. The shipping OEM `eud.ko` instead uses
+halfword transactions for the two UTMI delay fields. EudTools follows those
+widths and masks all register reads; this is required on SM8845, where unmasked
+reads replicate the byte across the word (for example, enabled CSR reads as
+`0x01010101`).
+
+Two independently captured OEM `eud.ko` builds use the same enable sequence.
+Before host attachment they enable the chicken-bit delay counter at EUD
+`+0x118c`, program UTMI, CSR and the interrupt mask, attempt the optional secure
+write, wait 50–100 microseconds, then publish USB/SDP extcon state. The current
+experiment adds the delay-counter write and 50-microsecond settling delay. The
+captured DT has no EUD PHY or clock-vote properties, so those optional kernel
+operations are no-ops on this platform.
 
 Recognized ChipInfo IDs are `0x2ad`, `0x2c0`, `0x2d7`, and `0x2fd` for
 SM8845, and `0x294` and `0x295` for SM8850; upper variant bits are ignored.
@@ -44,17 +53,18 @@ fail closed with `EFI_UNSUPPORTED`.
    `TZ_IO_ACCESS_WRITE(0x88e2000, 1)`, reads it back, and restores the original
    bit when the readback changed. It does not enable the nonsecure CSR.
 4. **Enable: secure + rejection continuation** records the secure response and
-   then programs UTMI, CSR, interrupt mask, and attach-pet regardless of secure
-   rejection. This reproduces the shipping Linux driver's best-effort control
-   flow.
+   then programs the OEM delay counter, UTMI, CSR, interrupt mask, and
+   attach-pet regardless of secure rejection. This exercises the hardware
+   portion of the shipping OEM driver's best-effort flow.
 5. **Enable: nonsecure only** skips the SCM write and isolates whether COM/hub
    enumeration works through the normal-world controls alone.
 6. **COM test** polls for ten seconds. It sends `SOC-EUD OK` only when the host
    requests TX and records valid ID/length-bounded RX frames. Received bytes are
    never interpreted as commands or SysRq.
 7. **Restore** restores the exact nonsecure register snapshot saved by the first
-   enable-path run. It restores the secure bit only when the post-write readback
-   proves the tool changed it, or when an accepted write cannot be read back.
+   enable-path run, including the OEM delay counter. It restores the secure bit
+   only when the post-write readback proves the tool changed it, or when an
+   accepted write cannot be read back.
 
 Returning to the caller deliberately leaves the current EUD state unchanged.
 Use Restore first when that is not desired.

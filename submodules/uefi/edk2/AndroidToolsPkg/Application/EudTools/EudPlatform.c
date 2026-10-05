@@ -23,6 +23,7 @@
 #define EUD_FLAG_COM_TRAFFIC       (1u << 6)
 
 #define EUD_STATUS_REPORT_ROWS  48u
+#define EUD_OEM_SETTLE_DELAY_US  50u
 
 typedef struct {
   BOOLEAN                Initialized;
@@ -66,9 +67,10 @@ EudProfileSupported (
 }
 
 /**
-  Qualcomm HWIO defines every EUD field used here as a 32-bit transaction with
+  Qualcomm HWIO uses 32-bit transactions for the ordinary EUD registers and
   an 8-bit register mask. Some fabrics replicate the low byte across all lanes,
   so every read must apply the generated RMSK rather than expose the raw word.
+  The shipping OEM eud.ko uses halfword transactions for the two UTMI fields.
 **/
 STATIC UINT32
 EudReadRegister (
@@ -85,6 +87,28 @@ EudWriteRegister (
   )
 {
   MmioWrite32 (EudAddress (Offset), Value & EUD_REGISTER_VALUE_MASK);
+}
+
+STATIC UINT16
+EudReadUtmiRegister (
+  IN UINT32 Offset
+  )
+{
+  return (UINT16)(
+           MmioRead16 (EudAddress (Offset)) & EUD_REGISTER_VALUE_MASK
+           );
+}
+
+STATIC VOID
+EudWriteUtmiRegister (
+  IN UINT32 Offset,
+  IN UINT16 Value
+  )
+{
+  MmioWrite16 (
+    EudAddress (Offset),
+    (UINT16)(Value & EUD_REGISTER_VALUE_MASK)
+    );
 }
 
 STATIC VOID
@@ -117,8 +141,10 @@ EudSnapshotRegisters (
   Snapshot->ControlOut = EudReadRegister (EUD_REG_CONTROL_OUT_1);
   Snapshot->CsrEnable = EudReadRegister (EUD_REG_CSR_ENABLE);
   Snapshot->AttachDetect = EudReadRegister (EUD_REG_SW_ATTACH_DETECT);
-  Snapshot->UtmiDelayLow = (UINT16)EudReadRegister (EUD_REG_UTMI_DELAY_LOW);
-  Snapshot->UtmiDelayHigh = (UINT16)EudReadRegister (EUD_REG_UTMI_DELAY_HIGH);
+  Snapshot->ChickenDelayEnable =
+    EudReadRegister (EUD_REG_CHICKEN_DELAY_EN) & 1u;
+  Snapshot->UtmiDelayLow = EudReadUtmiRegister (EUD_REG_UTMI_DELAY_LOW);
+  Snapshot->UtmiDelayHigh = EudReadUtmiRegister (EUD_REG_UTMI_DELAY_HIGH);
 }
 
 STATIC EFI_STATUS
@@ -600,6 +626,8 @@ EudBuildStatusReport (
                Snapshot.RxId, Snapshot.RxLength);
   AtReportAdd (Report, L"utmi.delay.low=0x%02x high=0x%02x",
                Snapshot.UtmiDelayLow, Snapshot.UtmiDelayHigh);
+  AtReportAdd (Report, L"oem.chicken_delay_enable=0x%x",
+               Snapshot.ChickenDelayEnable);
   AtReportAdd (
     Report,
     L"minidump.telemetry=%s",
@@ -905,23 +933,39 @@ EudEnablePath (
   }
 
   if (!EFI_ERROR (Status)) {
-    Status = EudIntent (&Evidence, EudStageUtmiProgram,
-                        L"program profile UTMI delay");
+    Status = AtEvidencePrint (
+               &Evidence,
+               L"oem.settle_delay_us=%u",
+               EUD_OEM_SETTLE_DELAY_US
+               );
   }
   if (!EFI_ERROR (Status)) {
-    EudWriteRegister (
+    Status = AtEvidenceFlush (&Evidence);
+  }
+  if (!EFI_ERROR (Status)) {
+    gBS->Stall (EUD_OEM_SETTLE_DELAY_US);
+    Status = EudIntent (
+               &Evidence,
+               EudStageUtmiProgram,
+               L"enable OEM delay counter and program profile UTMI delay"
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    EudWriteRegister (EUD_REG_CHICKEN_DELAY_EN, 1);
+    EudWriteUtmiRegister (
       EUD_REG_UTMI_DELAY_HIGH,
       mSession.Profile->UtmiDelayHigh
       );
-    EudWriteRegister (
+    EudWriteUtmiRegister (
       EUD_REG_UTMI_DELAY_LOW,
       mSession.Profile->UtmiDelayLow
       );
     Status = AtEvidencePrint (
                &Evidence,
-               L"utmi.readback low=0x%02x high=0x%02x",
-               EudReadRegister (EUD_REG_UTMI_DELAY_LOW),
-               EudReadRegister (EUD_REG_UTMI_DELAY_HIGH)
+               L"oem.chicken_delay_enable=0x%x utmi.readback low=0x%02x high=0x%02x",
+               EudReadRegister (EUD_REG_CHICKEN_DELAY_EN) & 1u,
+               EudReadUtmiRegister (EUD_REG_UTMI_DELAY_LOW),
+               EudReadUtmiRegister (EUD_REG_UTMI_DELAY_HIGH)
                );
   }
   if (!EFI_ERROR (Status)) {
@@ -1008,7 +1052,7 @@ EudRestoreBaseline (
   }
   EudArmMinidump (&Evidence);
   Status = EudIntent (&Evidence, EudStageRestoreNonsecure,
-                      L"restore attach, mask, CSR and UTMI snapshots");
+                      L"restore attach, mask, CSR, OEM delay and UTMI snapshots");
   if (!EFI_ERROR (Status)) {
     EudWriteRegister (
       EUD_REG_SW_ATTACH_DETECT,
@@ -1020,24 +1064,31 @@ EudRestoreBaseline (
       );
     EudWriteRegister (EUD_REG_CSR_ENABLE, mSession.Baseline.CsrEnable);
     EudWriteRegister (
+      EUD_REG_CHICKEN_DELAY_EN,
+      mSession.Baseline.ChickenDelayEnable
+      );
+    EudWriteUtmiRegister (
       EUD_REG_UTMI_DELAY_LOW,
       mSession.Baseline.UtmiDelayLow
       );
-    EudWriteRegister (
+    EudWriteUtmiRegister (
       EUD_REG_UTMI_DELAY_HIGH,
       mSession.Baseline.UtmiDelayHigh
       );
     EudSnapshotRegisters (&After);
     Status = AtEvidencePrint (
                &Evidence,
-               L"restore.readback csr=0x%02x attach=0x%02x mask=0x%02x utmi=%02x/%02x",
+               L"restore.readback csr=0x%02x attach=0x%02x mask=0x%02x chicken=0x%x utmi=%02x/%02x",
                After.CsrEnable, After.AttachDetect, After.InterruptMask,
-               After.UtmiDelayLow, After.UtmiDelayHigh
+               After.ChickenDelayEnable, After.UtmiDelayLow,
+               After.UtmiDelayHigh
                );
     if (!EFI_ERROR (Status) &&
         (After.CsrEnable != mSession.Baseline.CsrEnable ||
          After.AttachDetect != mSession.Baseline.AttachDetect ||
          After.InterruptMask != mSession.Baseline.InterruptMask ||
+         After.ChickenDelayEnable !=
+         mSession.Baseline.ChickenDelayEnable ||
          After.UtmiDelayLow != mSession.Baseline.UtmiDelayLow ||
          After.UtmiDelayHigh != mSession.Baseline.UtmiDelayHigh)) {
       Status = EFI_DEVICE_ERROR;

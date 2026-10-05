@@ -91,7 +91,7 @@ EudRunEnableScreen (
          AttemptSecure
          ? L"Secure write, then nonsecure path even on rejection"
          : L"Skip secure write; exercise only nonsecure controls",
-         L"Programs UTMI delay, CSR, interrupt mask and attach-pet.",
+         L"Programs OEM delay, UTMI, CSR, interrupt mask and attach-pet.",
          L"USB may disconnect, re-enumerate, hang, or enter crashdump.")) {
     return;
   }
@@ -132,8 +132,8 @@ EudRunRestoreScreen (
   if (!EudConfirm (
          L"Restore Pre-tool EUD State?",
          L"Uses the exact first enable-path snapshot",
-         L"Restores attach, interrupt mask, CSR and UTMI values.",
-         L"Restores the secure bit only when its prior value was read.")) {
+         L"Restores attach, mask, CSR, OEM delay and UTMI values.",
+         L"Restores the secure bit only when readback shows it changed.")) {
     return;
   }
   AtUiShowMessage (L"Restoring captured EUD state...");

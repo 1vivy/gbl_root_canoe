@@ -29,6 +29,7 @@
 #define EUD_REG_SW_ATTACH_DETECT   0x1018u
 #define EUD_REG_UTMI_DELAY_LOW     0x1030u
 #define EUD_REG_UTMI_DELAY_HIGH    0x1034u
+#define EUD_REG_CHICKEN_DELAY_EN    0x118Cu
 
 #define EUD_INT_RX                 (1u << 0)
 #define EUD_INT_TX                 (1u << 1)
@@ -42,7 +43,7 @@
 #define EUD_REGISTER_VALUE_MASK     0xffu
 
 #define EUD_TELEMETRY_MAGIC        0x44554543u /* "CEUD" */
-#define EUD_TELEMETRY_VERSION      1u
+#define EUD_TELEMETRY_VERSION      2u
 #define EUD_TELEMETRY_BYTES        EFI_PAGE_SIZE
 #define EUD_MD_REGION_NAME         "SM8850-EUD"
 #define EUD_EVIDENCE_KEEP          8u
@@ -101,6 +102,7 @@ typedef struct {
   UINT32 ControlOut;
   UINT32 CsrEnable;
   UINT32 AttachDetect;
+  UINT32 ChickenDelayEnable;
   UINT16 UtmiDelayLow;
   UINT16 UtmiDelayHigh;
 } EUD_REGISTER_SNAPSHOT;
