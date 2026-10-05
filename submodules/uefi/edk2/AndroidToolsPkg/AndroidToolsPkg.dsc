@@ -52,6 +52,7 @@
   PcdLib|MdePkg/Library/BasePcdLibNull/BasePcdLibNull.inf
   AndroidToolsUi|AndroidToolsPkg/Library/AndroidToolsUi/AndroidToolsUi.inf
   AndroidToolsEvidence|AndroidToolsPkg/Library/AndroidToolsEvidence/AndroidToolsEvidence.inf
+  AndroidToolsSocInfo|AndroidToolsPkg/Library/AndroidToolsSocInfo/AndroidToolsSocInfo.inf
   MdTableLib|AndroidToolsPkg/Library/MdTableLib/MdTableLib.inf
   # Clang may enable stack protection heuristically; satisfy its guard symbols.
   NULL|MdePkg/Library/BaseStackCheckLib/BaseStackCheckLib.inf

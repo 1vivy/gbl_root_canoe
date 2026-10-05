@@ -45,11 +45,36 @@ TestSecureResultClassification (void)
 static void
 TestComFrameBounds (void)
 {
-  assert (EudComFrameValid (EUD_COM_EXECUTION_ID, 0));
-  assert (EudComFrameValid (EUD_COM_EXECUTION_ID, EUD_COM_MAX_PAYLOAD));
-  assert (!EudComFrameValid (EUD_COM_EXECUTION_ID,
+  const UINT32 ExpectedId = 0x90;
+
+  assert (EudComFrameValid (ExpectedId, ExpectedId, 0));
+  assert (EudComFrameValid (ExpectedId, ExpectedId, EUD_COM_MAX_PAYLOAD));
+  assert (!EudComFrameValid (ExpectedId, ExpectedId,
                              EUD_COM_MAX_PAYLOAD + 1));
-  assert (!EudComFrameValid (0x81, 1));
+  assert (!EudComFrameValid (ExpectedId, 0x81, 1));
+}
+
+static void
+TestSocProfiles (void)
+{
+  const EUD_SOC_PROFILE *Sm8845;
+  const EUD_SOC_PROFILE *Sm8850;
+
+  Sm8845 = EudProfileForSocKind (AtSocSm8845);
+  Sm8850 = EudProfileForSocKind (AtSocSm8850);
+  assert (Sm8845 != NULL);
+  assert (Sm8850 != NULL);
+  assert (EudProfileForSocKind (AtSocUnknown) == NULL);
+  assert (Sm8845->SocKind == AtSocSm8845);
+  assert (Sm8850->SocKind == AtSocSm8850);
+  assert (Sm8845->RegisterBase == 0x088e0000ULL);
+  assert (Sm8845->RegisterBase == Sm8850->RegisterBase);
+  assert (Sm8845->ModeManagerAddress == Sm8850->ModeManagerAddress);
+  assert (Sm8845->ComExecutionId == Sm8850->ComExecutionId);
+  assert (Sm8845->UtmiDelayLow == Sm8850->UtmiDelayLow);
+  assert (Sm8845->UtmiDelayHigh == Sm8850->UtmiDelayHigh);
+  assert (!Sm8845->MinidumpTelemetrySupported);
+  assert (Sm8850->MinidumpTelemetrySupported);
 }
 
 static void
@@ -68,7 +93,8 @@ main (void)
 {
   TestSecureResultClassification ();
   TestComFrameBounds ();
+  TestSocProfiles ();
   TestEveryTelemetryStageHasAStableName ();
-  puts ("eud model: secure rejection, COM bounds and telemetry stages passed");
+  puts ("eud model: SoC profiles, secure rejection, COM bounds and telemetry stages passed");
   return 0;
 }

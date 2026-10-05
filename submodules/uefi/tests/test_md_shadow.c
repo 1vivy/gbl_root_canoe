@@ -127,15 +127,15 @@ TestEnumeratesEveryValidatedTargetInArrayOrder (void)
   assert (Targets[0].EntryIndex == 0);
   assert (Targets[0].SubsystemIndex == MD_SS_AOP);
   assert (Targets[0].EncryptionRequired == MD_SS_ENCR_NOTREQ_VALUE);
-  assert (strcmp (Targets[0].Alias, "CANOE-A00") == 0);
+  assert (strcmp (Targets[0].Alias, "SM8850-A00") == 0);
   assert (memcmp (&Targets[0].Source, &Aop[0], sizeof (Aop[0])) == 0);
 
   assert (Targets[2].ArrayIndex == 1);
   assert (Targets[2].EntryIndex == 0);
   assert (Targets[2].SubsystemIndex == MD_SS_BOOT);
   assert (Targets[2].EncryptionRequired == MD_SS_ENCR_REQ_VALUE);
-  assert (strcmp (Targets[2].Alias, "CANOE-B00") == 0);
-  assert (strcmp (Targets[3].Alias, "CANOE-B01") == 0);
+  assert (strcmp (Targets[2].Alias, "SM8850-B00") == 0);
+  assert (strcmp (Targets[3].Alias, "SM8850-B01") == 0);
   assert (memcmp (&Targets[3].Source, &Boot[1], sizeof (Boot[1])) == 0);
 }
 
@@ -153,7 +153,7 @@ TestBuildsAliasEntryOverTheExistingPayload (void)
   assert (MdShadowCollectTargets (&Map, Targets, MD_SHADOW_MAX_TARGETS,
                                   &Count) == EFI_SUCCESS);
   assert (MdShadowBuildRegion (&Targets[3], &Region) == EFI_SUCCESS);
-  assert (strcmp (Region.Name, "CANOE-B01") == 0);
+  assert (strcmp (Region.Name, "SM8850-B01") == 0);
   assert (Region.SeqNum == 0);
   assert (Region.Valid == MD_REGION_VALID_VALUE);
   assert (Region.Address == Boot[1].Address);

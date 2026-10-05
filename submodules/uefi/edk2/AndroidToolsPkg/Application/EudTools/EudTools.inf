@@ -27,6 +27,7 @@
 
 [LibraryClasses]
   AndroidToolsEvidence
+  AndroidToolsSocInfo
   AndroidToolsUi
   BaseLib
   BaseMemoryLib

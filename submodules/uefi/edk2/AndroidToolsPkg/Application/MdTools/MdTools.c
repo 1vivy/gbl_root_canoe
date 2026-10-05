@@ -7,6 +7,7 @@
  *  SPDX-License-Identifier: BSD-3-Clause
 */
 #include <Uefi.h>
+#include <Library/AndroidToolsSocInfo.h>
 #include <Library/MemoryAllocationLib.h>
 #include <Library/UefiLib.h>
 #include <AndroidToolsUi.h>
@@ -94,9 +95,26 @@ MdToolsEntry (
   UINTN               Count;
   UINTN               Index;
   UINTN               Selected;
+  AT_SOC_INFO         Soc;
 
   (VOID)ImageHandle;
   (VOID)SystemTable;
+  Status = AtSocDetect (&Soc);
+  if (EFI_ERROR (Status) || Soc.Kind != AtSocSm8850) {
+    AtUiEnterMenu (L"Minidump Tools");
+    AtUiBeginScreen (L"Unsupported SoC", L"SM8850 minidump layout required");
+    Print (L"detected: %s\r\n", AtSocKindName (Soc.Kind));
+    Print (L"raw chip ID: 0x%08x\r\n", Soc.RawChipId);
+    Print (L"ChipInfo name: %a\r\n", Soc.ChipIdString);
+    Print (L"detection status: %r\r\n", Status);
+    Print (L"MdTools is gated to the measured SM8850 XBL collector\r\n");
+    Print (L"geometry and expected UEFI/XBL/TZ table addresses.\r\n");
+    Print (L"No SMEM table discovery or mutation was attempted.\r\n");
+    AtUiEndScreen (L"Power back");
+    while (AtUiWaitForKey (0) != AtKeySelect) {
+    }
+    return EFI_UNSUPPORTED;
+  }
 
   Pathways = MdPathways (&Count);
   Items = AllocateZeroPool ((Count + 2) * sizeof (CHAR16 *));

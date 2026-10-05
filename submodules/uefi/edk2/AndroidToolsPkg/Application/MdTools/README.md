@@ -1,17 +1,23 @@
 # MdTools
 
-MdTools is a directly RAM-booted diagnostic application for bounded Qualcomm
-minidump discovery and controlled collection experiments. It resolves SMEM item
-602, reads only the fixed global ToC and validated AOP/BOOT region arrays, and
-writes durable intent evidence before any table mutation.
+MdTools is a directly RAM-booted, SM8850-only diagnostic application for
+bounded Qualcomm minidump discovery and controlled collection experiments. It
+identifies the SoC through Qualcomm ChipInfo and refuses all discovery or table
+mutation unless the result is SM8850. Its 29-slot/944-byte SMEM item 602
+collector geometry and expected UEFI/XBL/TZ addresses were measured from the
+SM8850 XBL collector; the SM8845 collector contract has not been qualified and
+is not assumed compatible.
+
+On SM8850, MdTools reads only the fixed global ToC and validated AOP/BOOT region
+arrays, and writes durable intent evidence before any table mutation.
 
 ## Current shadow experiment
 
 The interactive shadow submenu enumerates validated AOP/BOOT regions. A selected
-payload is registered under a unique `CANOE-Axx` or `CANOE-Bxx` alias by claiming
-one free subsystem slot and cloning the AOP not-encryption-required policy. The
-payload is not copied. The one-entry region array remains in MdTools image RAM,
-so the current experiment triggers collection before MdTools exits.
+payload is registered under a unique `SM8850-Axx` or `SM8850-Bxx` alias by
+claiming one free subsystem slot and cloning the AOP not-encryption-required
+policy. The payload is not copied. The one-entry region array remains in MdTools
+image RAM, so the current experiment triggers collection before MdTools exits.
 
 “Reset” in this context means a full platform reboot through XBL: a warm reboot,
 cold reboot, or power cycle. It does not mean returning to the menu or launching
@@ -30,7 +36,7 @@ kernel runs.
 
 1. Enumerate validated AOP/BOOT entries and let the operator select one target.
 2. Before launching the child, allocate an `EfiReservedMemoryType` page and
-   place the one-entry shadow array there. The entry carries the unique Canoe
+   place the one-entry shadow array there. The entry carries the unique SM8850
    alias and the selected payload’s original address and size; it does not copy
    the payload.
 3. Flush a durable pre-launch record containing the selected descriptor,
@@ -82,4 +88,4 @@ capture means the EBS registration or later collection path remains unproven.
 - Deferred EBS registration, child-lifecycle cleanup, and managed launch policy
   belong under `QcomModulePkg/Application/LinuxLoader`.
 - Existing vendor AOP/BOOT ToCs are never modified. Only one previously free
-  subsystem slot is claimed for the Canoe-owned shadow array.
+  subsystem slot is claimed for the SM8850-owned shadow array.

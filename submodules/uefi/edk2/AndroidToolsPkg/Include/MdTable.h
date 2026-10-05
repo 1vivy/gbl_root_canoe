@@ -5,7 +5,7 @@
  *  SMEM item 602 contains a global header and inline subsystem ToCs; each live
  *  subsystem ToC points at its bounded region-entry array.
  *
- *  The current device collector uses a 16-byte global header and 29 subsystem
+ *  The measured SM8850 collector uses a 16-byte global header and 29 subsystem
  *  slots. MdTools obtains the item through the inherited Qualcomm SMEM UEFI
  *  protocol and reads only that 944-byte root plus the explicitly required
  *  BOOT and AOP arrays. It never searches arbitrary UEFI memory descriptors:

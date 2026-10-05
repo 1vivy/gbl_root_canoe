@@ -1,7 +1,6 @@
 /** @file
   Target model for one-entry minidump shadow registrations.
-
-  A target copies one live AOP/BOOT region descriptor under a unique Canoe
+  A target copies one live AOP/BOOT region descriptor under a unique SM8850
   alias. The payload stays where firmware placed it; only the one-entry region
   array lives in MdTools memory, so the registration is valid only while the
   image remains resident.

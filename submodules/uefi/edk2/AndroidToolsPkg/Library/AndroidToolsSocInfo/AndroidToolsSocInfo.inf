@@ -1,0 +1,29 @@
+#/** @file
+#  Qualcomm SoC identification library for platform-gated AndroidTools apps.
+#
+#  SPDX-License-Identifier: BSD-3-Clause
+#**/
+
+[Defines]
+  INF_VERSION                    = 0x00010006
+  BASE_NAME                      = AndroidToolsSocInfo
+  FILE_GUID                      = 7A68CC6D-ABF1-44C7-8F68-575463F8A2E1
+  MODULE_TYPE                    = BASE
+  VERSION_STRING                 = 0.1
+  LIBRARY_CLASS                  = AndroidToolsSocInfo
+
+[Sources]
+  AndroidToolsSocInfo.c
+  AndroidToolsSocModel.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+  AndroidToolsPkg/AndroidToolsPkg.dec
+  QcomModulePkg/QcomModulePkg.dec
+
+[LibraryClasses]
+  BaseMemoryLib
+  UefiBootServicesTableLib
+
+[Protocols]
+  gEfiChipInfoProtocolGuid

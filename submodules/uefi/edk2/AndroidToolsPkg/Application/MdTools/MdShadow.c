@@ -2,8 +2,8 @@
   Interactive one-region shadow registration for bounded AOP/BOOT targets.
 
   The selected payload is not copied. MdTools registers one resident region
-  entry with a unique Canoe alias and the AOP not-encryption-required template,
-  then triggers collection before its image can exit.
+  entry with a unique SM8850 alias and the AOP not-encryption-required
+  template, then triggers collection before its image can exit.
 
   Copyright (c) 2026, contributors to the canoe ABL tree.
   SPDX-License-Identifier: BSD-3-Clause

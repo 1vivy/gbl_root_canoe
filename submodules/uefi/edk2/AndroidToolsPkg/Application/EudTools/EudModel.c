@@ -5,6 +5,28 @@
  */
 #include "EudTools.h"
 
+STATIC CONST EUD_SOC_PROFILE mSm8845Profile = {
+  AtSocSm8845,
+  L"SM8845 (Alor)",
+  0x088E0000ULL,
+  0x088E2000ULL,
+  0x90u,
+  0x00ffu,
+  0x0000u,
+  FALSE
+};
+
+STATIC CONST EUD_SOC_PROFILE mSm8850Profile = {
+  AtSocSm8850,
+  L"SM8850 (Canoe)",
+  0x088E0000ULL,
+  0x088E2000ULL,
+  0x90u,
+  0x00ffu,
+  0x0000u,
+  TRUE
+};
+
 EUD_SECURE_OUTCOME
 EudClassifySecureResult (
   IN BOOLEAN               Attempted,
@@ -21,14 +43,26 @@ EudClassifySecureResult (
          ? EudSecureAccepted : EudSecureRejected;
 }
 
+CONST EUD_SOC_PROFILE *
+EudProfileForSocKind (
+  IN AT_SOC_KIND Kind
+  )
+{
+  switch (Kind) {
+  case AtSocSm8845:  return &mSm8845Profile;
+  case AtSocSm8850:  return &mSm8850Profile;
+  default:           return NULL;
+  }
+}
+
 BOOLEAN
 EudComFrameValid (
+  IN UINT32 ExpectedId,
   IN UINT32 Id,
   IN UINT32 Length
   )
 {
-  return (BOOLEAN)(Id == EUD_COM_EXECUTION_ID &&
-                   Length <= EUD_COM_MAX_PAYLOAD);
+  return (BOOLEAN)(Id == ExpectedId && Length <= EUD_COM_MAX_PAYLOAD);
 }
 
 CONST CHAR16 *

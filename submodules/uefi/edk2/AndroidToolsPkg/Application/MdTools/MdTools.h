@@ -43,8 +43,8 @@
 /* Our own probe buffer and region. Keep the name out of the collector's
    filtered ADSP/CDSP/MSS families or the shipped collector will drop it. */
 #define MD_PROBE_BUFFER_SIZE  1024u
-#define MD_PROBE_REGION_NAME  "CANOEPROBE"
-#define MD_PROBE_BANNER       "CANOE-BDS-PLAINTEXT-PROBE"
+#define MD_PROBE_REGION_NAME  "SM8850PROBE"
+#define MD_PROBE_BANNER       "SM8850-BDS-PLAINTEXT-PROBE"
 
 
 /** Run bounded discovery once, recording and flushing each stage. **/

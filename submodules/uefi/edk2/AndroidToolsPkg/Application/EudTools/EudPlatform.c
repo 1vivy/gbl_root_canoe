@@ -23,8 +23,6 @@
 #define EUD_FLAG_COM_TRAFFIC       (1u << 6)
 
 #define EUD_STATUS_REPORT_ROWS  48u
-#define EUD_UTMI_DELAY_LOW      0x00ffu
-#define EUD_UTMI_DELAY_HIGH     0x0000u
 
 typedef struct {
   BOOLEAN                Initialized;
@@ -34,6 +32,8 @@ typedef struct {
   BOOLEAN                MinidumpArmed;
   BOOLEAN                ModeBeforeValid;
   UINT32                 ModeBefore;
+  AT_SOC_INFO            Soc;
+  CONST EUD_SOC_PROFILE *Profile;
   QCOM_SCM_PROTOCOL      *Scm;
   EFI_STATUS             ScmLocateStatus;
   EUD_REGISTER_SNAPSHOT  Baseline;
@@ -53,7 +53,15 @@ EudAddress (
   IN UINT32 Offset
   )
 {
-  return (UINTN)(EUD_REGISTER_BASE + Offset);
+  return (UINTN)(mSession.Profile->RegisterBase + Offset);
+}
+
+STATIC BOOLEAN
+EudProfileSupported (
+  VOID
+  )
+{
+  return (BOOLEAN)(mSession.Profile != NULL);
 }
 
 STATIC VOID
@@ -101,12 +109,16 @@ EudScmIoRead (
     return EFI_INVALID_PARAMETER;
   }
   ZeroMem (Result, sizeof (*Result));
+  if (!EudProfileSupported ()) {
+    Result->TransportStatus = EFI_UNSUPPORTED;
+    return Result->TransportStatus;
+  }
   if (mSession.Scm == NULL || mSession.Scm->ScmSipSysCall == NULL) {
     Result->TransportStatus = EFI_NOT_FOUND;
     return Result->TransportStatus;
   }
   ZeroMem (Parameters, sizeof (Parameters));
-  Parameters[0] = EUD_MODE_MANAGER_ADDRESS;
+  Parameters[0] = mSession.Profile->ModeManagerAddress;
   Result->TransportStatus = mSession.Scm->ScmSipSysCall (
     mSession.Scm,
     TZ_IO_ACCESS_READ_ID,
@@ -133,12 +145,16 @@ EudScmIoWrite (
     return EFI_INVALID_PARAMETER;
   }
   ZeroMem (Result, sizeof (*Result));
+  if (!EudProfileSupported ()) {
+    Result->TransportStatus = EFI_UNSUPPORTED;
+    return Result->TransportStatus;
+  }
   if (mSession.Scm == NULL || mSession.Scm->ScmSipSysCall == NULL) {
     Result->TransportStatus = EFI_NOT_FOUND;
     return Result->TransportStatus;
   }
   ZeroMem (Parameters, sizeof (Parameters));
-  Parameters[0] = EUD_MODE_MANAGER_ADDRESS;
+  Parameters[0] = mSession.Profile->ModeManagerAddress;
   Parameters[1] = Value;
   Result->TransportStatus = mSession.Scm->ScmSipSysCall (
     mSession.Scm,
@@ -217,9 +233,27 @@ EudEvidenceOpen (
   if (!EFI_ERROR (Status)) {
     Status = AtEvidencePrint (
                Evidence,
-               L"schema=1 eud_base=0x%lx mode_manager=0x%lx",
-               EUD_REGISTER_BASE,
-               EUD_MODE_MANAGER_ADDRESS
+               L"schema=2 soc=%s raw_id=0x%08x chip=%a detect=0x%016lx",
+               AtSocKindName (mSession.Soc.Kind),
+               mSession.Soc.RawChipId,
+               mSession.Soc.ChipIdString,
+               (UINT64)mSession.Soc.RawIdStatus
+               );
+  }
+  if (!EFI_ERROR (Status) && EudProfileSupported ()) {
+    Status = AtEvidencePrint (
+               Evidence,
+               L"profile=%s eud_base=0x%lx mode_manager=0x%lx com_id=0x%02x",
+               mSession.Profile->Name,
+               mSession.Profile->RegisterBase,
+               mSession.Profile->ModeManagerAddress,
+               mSession.Profile->ComExecutionId
+               );
+  }
+  if (!EFI_ERROR (Status) && !EudProfileSupported ()) {
+    Status = AtEvidencePrint (
+               Evidence,
+               L"profile=unsupported; no EUD MMIO or secure IO will run"
                );
   }
   if (!EFI_ERROR (Status)) {
@@ -277,6 +311,18 @@ EudArmMinidump (
   if (mSession.MinidumpArmed) {
     return EFI_ALREADY_STARTED;
   }
+  if (!EudProfileSupported () ||
+      !mSession.Profile->MinidumpTelemetrySupported) {
+    Status = AtEvidencePrint (
+               Evidence,
+               L"minidump.state=unsupported-for-soc soc=%s",
+               AtSocKindName (mSession.Soc.Kind)
+               );
+    if (!EFI_ERROR (Status)) {
+      Status = AtEvidenceFlush (Evidence);
+    }
+    return EFI_ERROR (Status) ? Status : EFI_UNSUPPORTED;
+  }
   Status = EudIntent (Evidence, EudStageMinidumpDiscover,
                       L"resolve bounded SMEM item 602");
   if (EFI_ERROR (Status)) {
@@ -320,7 +366,7 @@ EudArmMinidump (
                                      sizeof (mTelemetryRegion));
 
   Status = EudIntent (Evidence, EudStageMinidumpClaim,
-                      L"claim one free subsystem slot for CANOE-EUD");
+                      L"claim one free subsystem slot for SM8850-EUD");
   if (!EFI_ERROR (Status)) {
     Status = AtEvidencePrint (
                Evidence,
@@ -440,6 +486,8 @@ EudSessionInitialize (
   }
   ZeroMem (&mSession, sizeof (mSession));
   ZeroMem (&mTelemetry, sizeof (mTelemetry));
+  (VOID)AtSocDetect (&mSession.Soc);
+  mSession.Profile = EudProfileForSocKind (mSession.Soc.Kind);
   mSession.ScmLocateStatus = gBS->LocateProtocol (
     &gQcomScmProtocolGuid,
     NULL,
@@ -487,11 +535,24 @@ EudBuildStatusReport (
   if (EFI_ERROR (Status)) {
     return Status;
   }
+  AtReportAdd (Report, L"soc.kind=%s", AtSocKindName (mSession.Soc.Kind));
+  AtReportAdd (Report, L"soc.raw_id=0x%08x chip=%a",
+               mSession.Soc.RawChipId, mSession.Soc.ChipIdString);
+  AtReportAdd (Report, L"soc.locate=0x%016lx raw=0x%016lx name=0x%016lx",
+               (UINT64)mSession.Soc.LocateStatus,
+               (UINT64)mSession.Soc.RawIdStatus,
+               (UINT64)mSession.Soc.NameStatus);
+  if (!EudProfileSupported ()) {
+    AtReportAdd (Report, L"profile=unsupported; MMIO and secure IO refused");
+    return EFI_SUCCESS;
+  }
   EudSnapshotRegisters (&Snapshot);
   EudScmIoRead (&Secure);
   Outcome = EudClassifySecureResult (TRUE, &Secure);
-  AtReportAdd (Report, L"eud.base=0x%lx", EUD_REGISTER_BASE);
-  AtReportAdd (Report, L"eud.mode_manager=0x%lx", EUD_MODE_MANAGER_ADDRESS);
+  AtReportAdd (Report, L"profile=%s", mSession.Profile->Name);
+  AtReportAdd (Report, L"eud.base=0x%lx", mSession.Profile->RegisterBase);
+  AtReportAdd (Report, L"eud.mode_manager=0x%lx",
+               mSession.Profile->ModeManagerAddress);
   AtReportAdd (Report, L"scm.locate_status=0x%016lx",
                (UINT64)mSession.ScmLocateStatus);
   AtReportAdd (Report, L"scm.revision=0x%016lx",
@@ -516,6 +577,11 @@ EudBuildStatusReport (
                Snapshot.RxId, Snapshot.RxLength);
   AtReportAdd (Report, L"utmi.delay.low=0x%04x high=0x%04x",
                Snapshot.UtmiDelayLow, Snapshot.UtmiDelayHigh);
+  AtReportAdd (
+    Report,
+    L"minidump.telemetry=%s",
+    mSession.Profile->MinidumpTelemetrySupported ? L"qualified" : L"disabled"
+    );
   AtReportAdd (Report, L"session.baseline=%s enabled_by_tool=%s",
                mSession.BaselineValid ? L"saved" : L"none",
                mSession.EnabledByTool ? L"true" : L"false");
@@ -571,10 +637,13 @@ EudProbeSecureGate (
   if (EFI_ERROR (Status)) {
     return Status;
   }
+  if (!EudProfileSupported ()) {
+    return EudFinishEvidence (&Evidence, EFI_UNSUPPORTED);
+  }
   EudArmMinidump (&Evidence);
 
   Status = EudIntent (&Evidence, EudStageSecureReadBefore,
-                      L"TZ_IO_ACCESS_READ 0x88e2000");
+                      L"TZ_IO_ACCESS_READ profile mode-manager");
   if (!EFI_ERROR (Status)) {
     EudScmIoRead (&Before);
     EudRememberScmResult (&Before);
@@ -597,7 +666,7 @@ EudProbeSecureGate (
 
 
   Status = EudIntent (&Evidence, EudStageSecureWriteEnable,
-                      L"TZ_IO_ACCESS_WRITE 0x88e2000 <- 1");
+                      L"TZ_IO_ACCESS_WRITE profile mode-manager <- 1");
   if (!EFI_ERROR (Status)) {
     mTelemetry.Data.Flags |= EUD_FLAG_SECURE_ATTEMPTED;
     EudScmIoWrite (1, &Enable);
@@ -615,7 +684,7 @@ EudProbeSecureGate (
   }
 
   Status = EudIntent (&Evidence, EudStageSecureReadAfter,
-                      L"read back 0x88e2000 after enable attempt");
+                      L"read back profile mode-manager after enable attempt");
   if (!EFI_ERROR (Status)) {
     EudScmIoRead (&After);
     EudRememberScmResult (&After);
@@ -701,6 +770,9 @@ EudEnablePath (
   if (EFI_ERROR (Status)) {
     return Status;
   }
+  if (!EudProfileSupported ()) {
+    return EudFinishEvidence (&Evidence, EFI_UNSUPPORTED);
+  }
   EudArmMinidump (&Evidence);
   if (!mSession.BaselineValid) {
     EudSnapshotRegisters (&mSession.Baseline);
@@ -773,11 +845,17 @@ EudEnablePath (
 
   if (!EFI_ERROR (Status)) {
     Status = EudIntent (&Evidence, EudStageUtmiProgram,
-                        L"program captured-DT UTMI delay low=0xff high=0");
+                        L"program profile UTMI delay");
   }
   if (!EFI_ERROR (Status)) {
-    MmioWrite16 (EudAddress (EUD_REG_UTMI_DELAY_HIGH), EUD_UTMI_DELAY_HIGH);
-    MmioWrite16 (EudAddress (EUD_REG_UTMI_DELAY_LOW), EUD_UTMI_DELAY_LOW);
+    MmioWrite16 (
+      EudAddress (EUD_REG_UTMI_DELAY_HIGH),
+      mSession.Profile->UtmiDelayHigh
+      );
+    MmioWrite16 (
+      EudAddress (EUD_REG_UTMI_DELAY_LOW),
+      mSession.Profile->UtmiDelayLow
+      );
     Status = AtEvidencePrint (
                &Evidence,
                L"utmi.readback low=0x%04x high=0x%04x",
@@ -852,6 +930,10 @@ EudRestoreBaseline (
   EUD_SCM_RESULT    Verify;
   EUD_REGISTER_SNAPSHOT After;
   EFI_STATUS        Status;
+
+  if (!EudProfileSupported ()) {
+    return EFI_UNSUPPORTED;
+  }
 
   if (!mSession.BaselineValid) {
     return EFI_NOT_STARTED;
@@ -931,7 +1013,10 @@ EudComWriteFrame (
 {
   UINT32 Index;
 
-  MmioWrite32 (EudAddress (EUD_REG_COM_TX_ID), EUD_COM_EXECUTION_ID);
+  MmioWrite32 (
+    EudAddress (EUD_REG_COM_TX_ID),
+    mSession.Profile->ComExecutionId
+    );
   MmioWrite32 (EudAddress (EUD_REG_COM_TX_LEN), Length);
   for (Index = 0; Index < Length; Index++) {
     MmioWrite32 (EudAddress (EUD_REG_COM_TX_DATA), Data[Index]);
@@ -949,7 +1034,7 @@ EudComReadFrame (
 
   *Id = MmioRead32 (EudAddress (EUD_REG_COM_RX_ID));
   *Length = MmioRead32 (EudAddress (EUD_REG_COM_RX_LEN));
-  if (!EudComFrameValid (*Id, *Length)) {
+  if (!EudComFrameValid (mSession.Profile->ComExecutionId, *Id, *Length)) {
     return FALSE;
   }
   for (Index = 0; Index < *Length; Index++) {
@@ -963,7 +1048,7 @@ EudRunComTest (
   VOID
   )
 {
-  STATIC CONST UINT8 Banner[] = "CANOE-EUD OK\r\n";
+  STATIC CONST UINT8 Banner[] = "SOC-EUD OK\r\n";
   AT_EVIDENCE Evidence;
   EFI_STATUS  Status;
   UINT32      Id;
@@ -972,6 +1057,10 @@ EudRunComTest (
   UINT32      OriginalMask;
   UINT32      InterruptStatus;
   BOOLEAN     BannerSent;
+
+  if (!EudProfileSupported ()) {
+    return EFI_UNSUPPORTED;
+  }
 
   if ((MmioRead32 (EudAddress (EUD_REG_CSR_ENABLE)) & 1u) == 0) {
     return EFI_NOT_STARTED;

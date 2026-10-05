@@ -21,6 +21,8 @@
   AndroidToolsUi|AndroidToolsPkg/Library/AndroidToolsUi/AndroidToolsUi.inf
   ## Crash-safe append-only logfs evidence files.
   AndroidToolsEvidence|AndroidToolsPkg/Library/AndroidToolsEvidence/AndroidToolsEvidence.inf
+  ## Qualcomm raw-chip-ID detection and supported-SoC classification.
+  AndroidToolsSocInfo|AndroidToolsPkg/Library/AndroidToolsSocInfo/AndroidToolsSocInfo.inf
 
 [Protocols]
   ## Qualcomm Verified Boot protocol (produced by platform DXE at runtime).

@@ -40,10 +40,10 @@ MdShadowBuildAlias (
   )
 {
   ZeroMem (Alias, MD_REGION_NAME_LEN);
-  CopyMem (Alias, "CANOE-", 6);
-  Alias[6] = Code;
-  Alias[7] = (CHAR8)('0' + (EntryIndex / 10));
-  Alias[8] = (CHAR8)('0' + (EntryIndex % 10));
+  CopyMem (Alias, "SM8850-", 7);
+  Alias[7] = Code;
+  Alias[8] = (CHAR8)('0' + (EntryIndex / 10));
+  Alias[9] = (CHAR8)('0' + (EntryIndex % 10));
 }
 
 EFI_STATUS

@@ -9,11 +9,10 @@
 #include <Uefi.h>
 #include <AndroidToolsUi.h>
 #include <Library/AndroidToolsEvidence.h>
+#include <Library/AndroidToolsSocInfo.h>
 #include <MdTable.h>
 #include <Protocol/EFIScm.h>
 
-#define EUD_REGISTER_BASE          0x088E0000ULL
-#define EUD_MODE_MANAGER_ADDRESS   0x088E2000ULL
 
 #define EUD_REG_COM_TX_ID          0x0000u
 #define EUD_REG_COM_TX_LEN         0x0004u
@@ -38,14 +37,13 @@
 #define EUD_INT_SAFE_MODE          (1u << 4)
 #define EUD_ENABLE_INTERRUPT_MASK  (EUD_INT_VBUS | EUD_INT_CHARGER | EUD_INT_SAFE_MODE)
 
-#define EUD_COM_EXECUTION_ID       0x90u
 #define EUD_COM_MAX_PAYLOAD        14u
 #define EUD_COM_TEST_MS            10000u
 
 #define EUD_TELEMETRY_MAGIC        0x44554543u /* "CEUD" */
 #define EUD_TELEMETRY_VERSION      1u
 #define EUD_TELEMETRY_BYTES        EFI_PAGE_SIZE
-#define EUD_MD_REGION_NAME         "CANOE-EUD"
+#define EUD_MD_REGION_NAME         "SM8850-EUD"
 #define EUD_EVIDENCE_KEEP          8u
 
 typedef enum {
@@ -72,6 +70,18 @@ typedef enum {
   EudSecureRejected,
   EudSecureTransportError
 } EUD_SECURE_OUTCOME;
+
+typedef struct {
+  AT_SOC_KIND  SocKind;
+  CONST CHAR16 *Name;
+  UINT64       RegisterBase;
+  UINT64       ModeManagerAddress;
+  UINT32       ComExecutionId;
+  UINT16       UtmiDelayLow;
+  UINT16       UtmiDelayHigh;
+  BOOLEAN      MinidumpTelemetrySupported;
+} EUD_SOC_PROFILE;
+
 
 typedef struct {
   EFI_STATUS TransportStatus;
@@ -130,9 +140,15 @@ EudClassifySecureResult (
   IN BOOLEAN               Attempted,
   IN CONST EUD_SCM_RESULT *Result
   );
+CONST EUD_SOC_PROFILE *
+EudProfileForSocKind (
+  IN AT_SOC_KIND Kind
+  );
+
 
 BOOLEAN
 EudComFrameValid (
+  IN UINT32 ExpectedId,
   IN UINT32 Id,
   IN UINT32 Length
   );

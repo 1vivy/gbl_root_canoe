@@ -82,6 +82,7 @@ version_key = "VERSION_STRING"
 "Application/UsbTools/UsbTools.inf" = "0.1"
 "Library/AndroidToolsUi/AndroidToolsUi.inf" = "0.1"
 "Library/AndroidToolsEvidence/AndroidToolsEvidence.inf" = "0.1"
+"Library/AndroidToolsSocInfo/AndroidToolsSocInfo.inf" = "0.1"
 "Library/MdTableLib/MdTableLib.inf" = "0.1"
 
 

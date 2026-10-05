@@ -39,7 +39,7 @@ EudConfirm (
   Print (L"%s\r\n", Line1);
   Print (L"%s\r\n", Line2);
   Print (L"A unique logfs evidence file is flushed first.\r\n");
-  Print (L"CANOE-EUD minidump telemetry is armed when available.\r\n");
+  Print (L"SM8850-EUD minidump telemetry is armed only on SM8850.\r\n");
   AtUiEndScreen (L"Vol+ run; Power/Vol- cancel");
   Key = AtUiWaitForKey (0);
   return (BOOLEAN)(Key == AtKeyUp);
@@ -70,7 +70,7 @@ EudRunSecureProbeScreen (
   if (!EudConfirm (
          L"Probe Secure EUD Gate?",
          L"Writes mode-manager 1, reads back, then restores",
-         L"Calls TZ_IO_ACCESS_WRITE for physical 0x88e2000.",
+         L"Calls TZ_IO_ACCESS_WRITE for the detected SoC profile.",
          L"Does not set the nonsecure EUD CSR or attach the hub.")) {
     return;
   }
@@ -113,7 +113,7 @@ EudRunComScreen (
   if (!EudConfirm (
          L"Run EUD COM Test?",
          L"Ten-second bounded bidirectional test",
-         L"Enables RX/TX indications and emits CANOE-EUD OK.",
+         L"Enables RX/TX indications and emits SOC-EUD OK.",
          L"Received data is recorded only; no command or SysRq executes.")) {
     return;
   }
