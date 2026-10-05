@@ -1,7 +1,7 @@
 # Release runbook
 
 CANOE-BDS and Canoe Boot Manager publish from separate repositories. Firmware CI
-builds `BDS.efi` and eight standalone EFI tools. The manager repository builds
+builds `BDS.efi` and nine standalone EFI tools. The manager repository builds
 the hosted app and ARM64 KernelSU module from pinned firmware assets. It also
 deploys the published hosted archive to Cloudflare Workers at
 [canoe-boot-manager.1vv.ca](https://canoe-boot-manager.1vv.ca).
@@ -12,7 +12,7 @@ Run from the firmware repository root. `version.mk` owns the version; regenerate
 its dependent files rather than editing their version fields separately:
 
 ```sh
-make bump VERSION=7.0.9 VERSION_CODE=26
+make bump VERSION=7.0.10 VERSION_CODE=27
 make test
 docker build -t gbl_builder - < Dockerfile
 docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc \
@@ -47,7 +47,7 @@ automatically.
 
 ## 2. Verify the exact draft assets
 
-The draft contains `BDS.efi`, all eight EFI tools,
+The draft contains `BDS.efi`, all nine EFI tools,
 `canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`, `manifest.json`, and
 `SHA256SUMS`. Download the complete asset set into a dedicated directory and
 run:

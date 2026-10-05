@@ -1,7 +1,7 @@
 # 发布运行手册
 
 CANOE-BDS 与 Canoe Boot Manager 分别由两个仓库发布。固件 CI 构建 `BDS.efi`
-及八个独立 EFI 工具；管理器仓库使用固定版本的固件构建在线应用与 ARM64
+及九个独立 EFI 工具；管理器仓库使用固定版本的固件构建在线应用与 ARM64
 KernelSU 模块，并将已发布的在线应用归档部署到 Cloudflare Workers：
 [canoe-boot-manager.1vv.ca](https://canoe-boot-manager.1vv.ca)。
 
@@ -11,7 +11,7 @@ KernelSU 模块，并将已发布的在线应用归档部署到 Cloudflare Worke
 修改各处版本字段：
 
 ```sh
-make bump VERSION=7.0.9 VERSION_CODE=26
+make bump VERSION=7.0.10 VERSION_CODE=27
 make test
 docker build -t gbl_builder - < Dockerfile
 docker run --rm -v "$PWD:/workspace" -w /workspace gbl_builder bash -lc \
@@ -40,7 +40,7 @@ push 运行中仍有完整且验证通过的产物，发布流程会直接复用
 
 ## 2. 验证草稿的确切产物
 
-草稿包含 `BDS.efi`、八个 EFI 工具、
+草稿包含 `BDS.efi`、九个 EFI 工具、
 `canoe-one-shot-<CANOE_VERSION>-android-arm64.zip`、`manifest.json` 和
 `SHA256SUMS`。将完整资产集合下载到独立目录后执行：
 

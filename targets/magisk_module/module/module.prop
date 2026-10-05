@@ -1,7 +1,7 @@
 id=fake_bl_efisp
 name=Canoe Boot Manager
-version=7.0.9
-versionCode=26
+version=7.0.10
+versionCode=27
 updateJson=https://github.com/1vivy/gbl_root_canoe/releases/latest/download/update.json
 author=1vivy
 description=Manage CANOE-BDS boot entries, loaders, EFI tools, and inactive-slot OTA preparation through WebUI X.

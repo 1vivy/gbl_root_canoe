@@ -1,20 +1,32 @@
 # Changelog
 
-## 7.0.9
+## 7.0.10
 
-### Myron support (untested)
+### WebUI X support in Canoe Boot Manager
 
-Mode 2 profile derivation now falls back to `init_boot` AVB properties when
-the corresponding `boot` properties are absent, supporting root vbmeta images
-such as Myron's. Myron support has not been tested on hardware.
+The KernelSU WebUI now runs on the rewritten WebUI X host API (v608 Latest and
+later). The module declares the `SHELL` and `IO` permissions the rewrite
+requires, picks images through its path-returning `fs.openFileChooser`, saves
+logs through `fs.outputstream`, and handles Back through `addMXEventListener`.
+WebUI X v438 keeps working through the previous API. Guest testing covered v438
+and v549–v609.
 
-### DICE spoofing
+WebUI X v555–v573 only report that their file chooser opened and never return
+the selected file. The entry gate now names these builds as unsupported. Before
+this fix it told users already running WebUI X to install WebUI X.
 
-Prepared ABLs now report Normal DICE mode on both BCC paths. Mode 2 users get
-DICE spoofing, which should improve compatibility with Google's Remote Key
-Provisioning (RKP).
+WebUI X closes its newest root shell when the WebUI stops. Going Home or opening
+the v608 file chooser therefore ended an in-flight command with code -1. The
+manager now keeps its shell alive in the background. The rewrite exposes no
+pause signal, so dispatch continues in the background.
 
-Thanks to [@NullCode1337](https://github.com/NullCode1337) for bringing this up.
+### Manager fixes
+
+- A failed boot-image check can be retried again. Previously the retry was lost
+  when a new selection left the checked images unchanged.
+- The Android executor reads partition geometry up to 4 GiB. A target larger
+  than the reviewed 256 MiB range, or a missing active slot, is refused with a
+  readable error instead of a raw validation dump.
 
 ### Transient BCB and pstore tools
 
@@ -35,6 +47,36 @@ single ramoops region, validates its memory-map range and persistent-ring
 header, and emits at most the newest 48 KiB. Console and pmsg also accept an
 explicit physical zone when Linux dynamically allocated the region or UEFI did
 not publish its final address. It has no clear or write operation.
+
+### EudTools and SoC-gated diagnostics
+
+The new RAM-booted `EudTools.efi` diagnoses the Qualcomm Embedded USB Debugger
+on SM8845 and SM8850. It identifies the SoC through ChipInfo, probes the secure
+mode manager, follows the shipping OEM `eud.ko` enable sequence and register
+masks, can reannounce the USB controller, and runs a bounded COM test. Every
+action writes a new flushed `\canoe\eud-<action>-<sequence>.txt` evidence file
+before each SCM or MMIO step. The newest eight attempts are kept. Restore puts
+back exactly the state the tool changed. Unknown SoCs fail closed with
+`EFI_UNSUPPORTED`.
+
+MdTools is now gated to SM8850, and SM8845 ChipInfo ID `0x2fd` is recognized.
+Firmware releases now carry nine EFI tools.
+
+## 7.0.9
+
+### Myron support (untested)
+
+Mode 2 profile derivation now falls back to `init_boot` AVB properties when
+the corresponding `boot` properties are absent, supporting root vbmeta images
+such as Myron's. Myron support has not been tested on hardware.
+
+### DICE spoofing
+
+Prepared ABLs now report Normal DICE mode on both BCC paths. Mode 2 users get
+DICE spoofing, which should improve compatibility with Google's Remote Key
+Provisioning (RKP).
+
+Thanks to [@NullCode1337](https://github.com/NullCode1337) for bringing this up.
 
 ## 7.0.8
 

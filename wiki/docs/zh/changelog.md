@@ -1,14 +1,20 @@
 # 更新日志
 
-## 7.0.9
+## 7.0.10
 
-- **Myron 支持（未经测试）**：Mode 2 配置派生在缺少对应 `boot` AVB 属性时回退到
-  `init_boot` 属性，支持 Myron 等设备的根 vbmeta 镜像。尚未在 Myron 硬件上测试。
-- **DICE 伪装**：准备的 ABL 现在在两条 BCC 路径上报告 Normal DICE 模式。Mode 2
-  用户可获得 DICE 伪装，预期可改善与 Google 远程密钥配置（RKP）的兼容性。
-
-感谢 [@NullCode1337](https://github.com/NullCode1337) 提出此问题。
-
+- **Canoe Boot Manager 支持 WebUI X**：KernelSU WebUI 现在适配重写后的 WebUI X
+  宿主 API（v608 Latest 及更新版本）。模块声明重写版所需的 `SHELL` 与 `IO`
+  权限，通过返回路径的 `fs.openFileChooser` 选择镜像，通过 `fs.outputstream`
+  保存日志，并通过 `addMXEventListener` 处理返回键。WebUI X v438 继续使用旧 API。
+  已在 v438 与 v549–v609 上完成测试。
+- **不受支持的 WebUI X 版本**：v555–v573 只报告文件选择器已打开，不返回所选文件。
+  入口现在会写明这些版本不受支持。此前，正在使用 WebUI X 的用户会被提示去安装 WebUI X。
+- **后台命令保持运行**：WebUI 停止时，WebUI X 会关闭最新的 root shell，因此按 Home 或打开
+  v608 文件选择器会以 -1 结束进行中的命令。管理器现在在后台保持 shell 存活。
+  重写版没有暂停信号，所以后台会继续派发命令。
+- **管理器修复**：启动镜像检查失败后可再次重试，即使新的选择未改变已检查的镜像。
+  Android 执行器可解析最大 4 GiB 的分区几何；超出 256 MiB 审核范围的目标或缺少
+  活动槽位时，会给出可读错误，而不是原始校验输出。
 - **Surfacer 临时菜单目标**：新增 `fastboot oem boot-direct <selector> menu`。
   它向受管理的 Android ABL 启动项传递私有的一次性 `surfacer-menu` BCB 命令；
   Surfacer 在等待固件菜单前消费并清除该命令。`boot-once` 同样支持 `menu`
@@ -20,6 +26,21 @@
   ramoops 区域，验证内存映射与持久环形缓冲头，最多输出最新 48 KiB。若
   Linux 动态分配该区域，或 UEFI 未发布最终地址，console 与 pmsg 也接受
   显式物理 zone。不存在清除或写入操作。
+- **EudTools**：新增 RAM 启动的 `EudTools.efi`，用于诊断 SM8845 与 SM8850 上的
+  Qualcomm Embedded USB Debugger。它通过 ChipInfo 识别 SoC，并按出货 OEM `eud.ko` 的使能顺序与
+  寄存器掩码操作，可重新通告 USB 控制器并执行有界 COM 测试。每个操作在 SCM/MMIO
+  之前写入并刷新新的 `\canoe\eud-<action>-<sequence>.txt` 证据文件，并保留最新八次尝试。
+  未知 SoC 以 `EFI_UNSUPPORTED` 拒绝。MdTools 现仅限 SM8850；识别 SM8845 ChipInfo
+  `0x2fd`。固件发布现包含九个 EFI 工具。
+
+## 7.0.9
+
+- **Myron 支持（未经测试）**：Mode 2 配置派生在缺少对应 `boot` AVB 属性时回退到
+  `init_boot` 属性，支持 Myron 等设备的根 vbmeta 镜像。尚未在 Myron 硬件上测试。
+- **DICE 伪装**：准备的 ABL 现在在两条 BCC 路径上报告 Normal DICE 模式。Mode 2
+  用户可获得 DICE 伪装，预期可改善与 Google 远程密钥配置（RKP）的兼容性。
+
+感谢 [@NullCode1337](https://github.com/NullCode1337) 提出此问题。
 
 ## 7.0.8
 
