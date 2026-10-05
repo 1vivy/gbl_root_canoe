@@ -58,16 +58,25 @@ fail closed with `EFI_UNSUPPORTED`.
    portion of the shipping OEM driver's best-effort flow.
 5. **Enable: nonsecure only** skips the SCM write and isolates whether COM/hub
    enumeration works through the normal-world controls alone.
-6. **COM test** polls for ten seconds. It sends `SOC-EUD OK` only when the host
+6. **Reannounce USB controller** requires an enable run in the same EudTools
+   session, then signals the vendor `gInitUsbControllerGuid` event used by BDS
+   and fastboot. It does not toggle host mode, stop a controller, or claim a
+   gadget descriptor set. Protocol counts and UsbConfig state are recorded
+   before and after the signal.
+7. **COM test** polls for ten seconds. It sends `SOC-EUD OK` only when the host
    requests TX and records valid ID/length-bounded RX frames. Received bytes are
    never interpreted as commands or SysRq.
-7. **Restore** restores the exact nonsecure register snapshot saved by the first
+8. **Restore** restores the exact nonsecure register snapshot saved by the first
    enable-path run, including the OEM delay counter. It restores the secure bit
    only when the post-write readback proves the tool changed it, or when an
    accepted write cannot be read back.
 
 Returning to the caller deliberately leaves the current EUD state unchanged.
 Use Restore first when that is not desired.
+
+The USB-init signal is idempotent platform bring-up with no paired stop and no
+gadget ownership, matching the proven BDS mass-storage prerequisite. Restore
+therefore restores only state EudTools itself changed.
 
 ## Crash-safe evidence
 
@@ -105,3 +114,10 @@ The SCM call shape matches Qualcomm's `EudLib`: two value parameters containing
 the mode-manager address and desired value. Transport failures remain visible
 verbatim. The post-write secure read is authoritative for state tracking; an
 error with unchanged readback does not cause a redundant secure restore write.
+
+The shipping `eud.ko` is a runtime UART driver, not an early console: it is
+loaded after kernel initialization, registers `ttyEUD0`, and has no console or
+earlycon callbacks. Leaving EUD enabled in UEFI can establish the hardware
+before `ExitBootServices`, but live output from early kernel initialization
+still requires a built-in EUD earlycon/console driver and later handoff to the
+full UART driver.

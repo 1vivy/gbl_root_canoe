@@ -104,6 +104,25 @@ EudRunEnableScreen (
 }
 
 STATIC VOID
+EudRunUsbReannounceScreen (
+  VOID
+  )
+{
+  EFI_STATUS Status;
+
+  if (!EudConfirm (
+         L"Reannounce USB for EUD?",
+         L"Signals the vendor device-controller init event",
+         L"No host-mode toggle, StopController, or gadget descriptors.",
+         L"EUD must be enabled in this session; USB may reconnect.")) {
+    return;
+  }
+  AtUiShowMessage (L"Reannouncing the USB device controller...");
+  Status = EudReannounceUsb ();
+  EudShowResult (L"EUD USB Reannouncement", Status);
+}
+
+STATIC VOID
 EudRunComScreen (
   VOID
   )
@@ -154,6 +173,7 @@ EudToolsEntry (
     L"Probe secure mode-manager write and restore",
     L"Enable EUD: secure attempt + rejection continuation",
     L"Enable EUD: nonsecure rejection path only",
+    L"Reannounce USB device controller for EUD",
     L"Run bounded bidirectional EUD COM test",
     L"Restore exact pre-tool EUD state",
     L"Back (leave current EUD state unchanged)"
@@ -198,9 +218,12 @@ EudToolsEntry (
       EudRunEnableScreen (FALSE);
       break;
     case 5:
-      EudRunComScreen ();
+      EudRunUsbReannounceScreen ();
       break;
     case 6:
+      EudRunComScreen ();
+      break;
+    case 7:
       EudRunRestoreScreen ();
       break;
     default:

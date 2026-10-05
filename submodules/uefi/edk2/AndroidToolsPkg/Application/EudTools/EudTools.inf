@@ -40,4 +40,6 @@
   UefiLib
 
 [Protocols]
+  gEfiUsbfnIoProtocolGuid
+  gQcomUsbConfigProtocolGuid
   gQcomScmProtocolGuid

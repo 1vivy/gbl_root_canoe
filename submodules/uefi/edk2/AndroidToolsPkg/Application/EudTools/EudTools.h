@@ -200,6 +200,11 @@ EudEnablePath (
   );
 
 EFI_STATUS
+EudReannounceUsb (
+  VOID
+  );
+
+EFI_STATUS
 EudRestoreBaseline (
   VOID
   );

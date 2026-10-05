@@ -11,6 +11,8 @@
 #include <Library/PrintLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Protocol/scm_sip_interface.h>
+#include <Protocol/EFIUsbfnIo.h>
+#include <Protocol/QcomUsbConfig.h>
 
 #include "EudTools.h"
 
@@ -64,6 +66,97 @@ EudProfileSupported (
   )
 {
   return (BOOLEAN)(mSession.Profile != NULL);
+}
+
+STATIC UINTN
+EudCountProtocol (
+  IN EFI_GUID *ProtocolGuid
+  )
+{
+  EFI_HANDLE *Handles;
+  UINTN       Count;
+
+  Handles = NULL;
+  Count = 0;
+  if (ProtocolGuid == NULL ||
+      EFI_ERROR (gBS->LocateHandleBuffer (
+                        ByProtocol,
+                        ProtocolGuid,
+                        NULL,
+                        &Count,
+                        &Handles
+                        ))) {
+    return 0;
+  }
+  if (Handles != NULL) {
+    gBS->FreePool (Handles);
+  }
+  return Count;
+}
+
+STATIC VOID
+EudAppendUsbStatus (
+  IN OUT AT_REPORT *Report
+  )
+{
+  QCOM_USB_CONFIG_PROTOCOL *Config;
+  EFI_HANDLE               *Handles;
+  EFI_STATUS                QueryStatus;
+  UINT32                    Modes;
+  UINTN                     Count;
+  UINTN                     Index;
+
+  Handles = NULL;
+  Count = 0;
+  AtReportAdd (
+    Report,
+    L"usb.protocols config=%u usbfn=%u",
+    (UINT32)EudCountProtocol (&gQcomUsbConfigProtocolGuid),
+    (UINT32)EudCountProtocol (&gEfiUsbfnIoProtocolGuid)
+    );
+  if (EFI_ERROR (gBS->LocateHandleBuffer (
+                        ByProtocol,
+                        &gQcomUsbConfigProtocolGuid,
+                        NULL,
+                        &Count,
+                        &Handles
+                        )) ||
+      Handles == NULL) {
+    return;
+  }
+  for (Index = 0; Index < Count; Index++) {
+    Config = NULL;
+    if (EFI_ERROR (gBS->HandleProtocol (
+                          Handles[Index],
+                          &gQcomUsbConfigProtocolGuid,
+                          (VOID **)&Config
+                          )) ||
+        Config == NULL) {
+      continue;
+    }
+    Modes = 0;
+    QueryStatus = EFI_UNSUPPORTED;
+    if (Config->GetSupUsbMode != NULL &&
+        Config->ModeType != QCOM_USB_INVALID_MODE) {
+      QueryStatus = Config->GetSupUsbMode (
+                               Config,
+                               Config->CoreNum,
+                               &Modes
+                               );
+    }
+    AtReportAdd (
+      Report,
+      L"usb.config[%u] rev=0x%lx core=%u mode=0x%x always=%u supported=0x%x status=%r",
+      (UINT32)Index,
+      Config->Revision,
+      Config->CoreNum,
+      Config->ModeType,
+      Config->AlwaysConnected,
+      Modes,
+      QueryStatus
+      );
+  }
+  gBS->FreePool (Handles);
 }
 
 /**
@@ -639,6 +732,7 @@ EudBuildStatusReport (
   AtReportAdd (Report, L"minidump.armed=%s safe_to_exit=%s",
                mSession.MinidumpArmed ? L"true" : L"false",
                mSession.UnsafeToExit ? L"false" : L"true");
+  EudAppendUsbStatus (Report);
   return EFI_SUCCESS;
 }
 
@@ -1252,6 +1346,113 @@ EudRunComTest (
                mTelemetry.Data.LastRx[2], mTelemetry.Data.LastRx[3],
                mTelemetry.Data.LastRx[4], mTelemetry.Data.LastRx[5],
                mTelemetry.Data.LastRx[6], mTelemetry.Data.LastRx[7]
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = AtEvidenceFlush (&Evidence);
+  }
+  return EudFinishEvidence (&Evidence, Status);
+}
+
+STATIC VOID
+EudUsbInitNotify (
+  IN EFI_EVENT Event,
+  IN VOID     *Context
+  )
+{
+  (VOID)Event;
+  (VOID)Context;
+}
+
+EFI_STATUS
+EudReannounceUsb (
+  VOID
+  )
+{
+  STATIC CONST EFI_GUID InitUsbControllerGuid = {
+    0x1c0cffce,
+    0xfc8d,
+    0x4e44,
+    { 0x8c, 0x78, 0x9c, 0x9e, 0x5b, 0x53, 0x0d, 0x36 }
+  };
+  AT_EVIDENCE Evidence;
+  EFI_EVENT   Event;
+  EFI_STATUS  CloseStatus;
+  EFI_STATUS  Status;
+  UINTN       ConfigBefore;
+  UINTN       UsbfnBefore;
+
+  Event = NULL;
+  Status = EudEvidenceOpen (
+             L"usb",
+             L"vendor USB-controller reannouncement",
+             &Evidence
+             );
+  if (EFI_ERROR (Status)) {
+    return Status;
+  }
+  if (!EudProfileSupported ()) {
+    return EudFinishEvidence (&Evidence, EFI_UNSUPPORTED);
+  }
+  if (!mSession.EnabledByTool || !mSession.BaselineValid) {
+    AtEvidencePrint (
+      &Evidence,
+      L"usb.reannounce=refused; enable EUD in this session first"
+      );
+    AtEvidenceFlush (&Evidence);
+    return EudFinishEvidence (&Evidence, EFI_NOT_READY);
+  }
+  EudArmMinidump (&Evidence);
+  ConfigBefore = EudCountProtocol (&gQcomUsbConfigProtocolGuid);
+  UsbfnBefore = EudCountProtocol (&gEfiUsbfnIoProtocolGuid);
+  Status = AtEvidencePrint (
+             &Evidence,
+             L"usb.before config=%u usbfn=%u",
+             (UINT32)ConfigBefore,
+             (UINT32)UsbfnBefore
+             );
+  if (!EFI_ERROR (Status)) {
+    Status = EudIntent (
+               &Evidence,
+               EudStageAttach,
+               L"signal vendor USB init event; no mode toggle or gadget claim"
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = gBS->CreateEventEx (
+                    EVT_NOTIFY_SIGNAL,
+                    TPL_CALLBACK,
+                    EudUsbInitNotify,
+                    NULL,
+                    &InitUsbControllerGuid,
+                    &Event
+                    );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = gBS->SignalEvent (Event);
+  }
+  CloseStatus = EFI_SUCCESS;
+  if (Event != NULL) {
+    CloseStatus = gBS->CloseEvent (Event);
+  }
+  if (!EFI_ERROR (Status) && EFI_ERROR (CloseStatus)) {
+    Status = CloseStatus;
+  }
+  if (!EFI_ERROR (Status)) {
+    gBS->Stall (500000);
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = AtEvidencePrint (
+               &Evidence,
+               L"usb.after config=%u usbfn=%u",
+               (UINT32)EudCountProtocol (&gQcomUsbConfigProtocolGuid),
+               (UINT32)EudCountProtocol (&gEfiUsbfnIoProtocolGuid)
+               );
+  }
+  if (!EFI_ERROR (Status)) {
+    Status = AtEvidencePrint (
+               &Evidence,
+               L"usb.host_enumeration=unobserved; inspect target port 10-2"
                );
   }
   if (!EFI_ERROR (Status)) {
