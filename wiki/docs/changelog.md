@@ -1,5 +1,44 @@
 # Changelog
 
+## 7.0.11
+
+### More reliable ABL patching
+
+Prepared-loader patching now recognises the older ABL control-flow layouts that
+7.0.10 could not identify. Every patch still resolves all of its sites before it
+writes anything, and an ABL that matches neither layout, or matches ambiguously,
+is refused with no partial write.
+
+- **DICE Normal mode:** the main and dummy BCC sites are accepted in both the
+  newer conditional-select layout and the older `0x7070`/`0x77ee`
+  state-comparison layout. The dummy fallback is still patched, because the
+  stock OPlus and Myron ABLs call it directly.
+- **Fastboot lock gates:** each refusal is anchored by its command-specific
+  `Lock State` message instead of an exact sentence, so wording and line-ending
+  changes no longer hide it. The patch accepts `B.cond`, `CBZ`/`CBNZ` and
+  `TBZ`/`TBNZ` edges, and walks back only across complete `ADRP`+`ADD` argument
+  pairs. The unrelated `merging state` refusal is never a candidate.
+
+### Boot-image preparation in every mode
+
+**Prepare Mode 1 boot images** on the Canoe Boot Manager Overview is no longer
+limited to Mode 1. It uses the same readiness gates as update and OTA — a
+checked installation, a preparation-ready connection, a known active slot and no
+busy or pending action — and is then available in Modes 0, 1 and 2. It never
+changes the installed mode.
+
+Mode 1 keeps its required checks. In Modes 0 and 2 preparation is optional, so
+an image you did not select never blocks review, and missing or unusable
+verification data is optional rather than blocking. Grafting an image still
+requires matching signed verification data in every mode.
+
+### USB mass storage
+
+The bundled manual mass-storage image now reports an assigned read-only LUN as
+write-protected through the SCSI `MODE SENSE` write-protect bit. The image also
+gained a `managed` LoadOptions presentation selector. BDS starts it without
+options, so it still enumerates as the manual `1209:ca0e` device.
+
 ## 7.0.10
 
 ### WebUI X support in Canoe Boot Manager
