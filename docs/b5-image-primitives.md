@@ -41,12 +41,16 @@ an investigator for its additional BMP/all-PE modes.
 
 The host patcher also requires both BCC paths to emit Normal DICE mode for every
 prepared loader, independently of the entry's mode. It resolves each path from
-a unique DEBUG string xref and its bounded AArch64 instruction shape. The main
-path replaces the conditional mode select; the dummy fallback removes the
-branch that skipped its mode store and writes Normal instead of Debug. The
-dummy function has direct callers in the stock OPlus and myron ABLs; it is not
-safe to omit. A missing or ambiguous site rejects preparation before any
-mandatory patch writes. This does not establish device attestation behavior.
+a unique DEBUG string xref and a bounded AArch64 instruction shape. Both the
+newer conditional-select layout and the older `0x7070`/`0x77ee` state-comparison
+layout must identify one main site and one dummy site before any mandatory patch
+writes. The dummy function has direct callers in the stock OPlus and myron ABLs;
+it is not safe to omit. Fastboot lock refusals retain the command-specific
+`Lock State` message discriminator, then permit a bounded walk back only across
+complete ADRP+ADD argument pairs. A unique nearby conditional edge must enter
+that validated prefix; unrelated `merging state` refusals are not candidates.
+A missing or ambiguous site rejects that patch without partial writes. This
+does not establish device attestation behavior.
 
 `prepare_loader(abl, vbmeta, TzMapPolicy)` returns the modified PE loader, its
 120-byte GM2P, its 256-byte TZ map, and source/patch inspection. The original ABL

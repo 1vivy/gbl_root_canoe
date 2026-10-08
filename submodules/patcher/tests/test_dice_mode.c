@@ -7,6 +7,8 @@
 #define SIZE 0x1000
 #define MAIN 0x420
 #define DUMMY 0x618
+#define LEGACY_MAIN 0x540
+#define LEGACY_DUMMY 0x638
 
 static void W16(uint8_t *At, uint16_t Value) {
     At[0] = (uint8_t)Value;
@@ -55,6 +57,50 @@ static void Fixture(uint8_t Image[SIZE]) {
     W32(Image + DUMMY + 4, 0xb9006268); /* STR W8,[X19,#0x60] */
 }
 
+static void LegacyFixture(uint8_t Image[SIZE]) {
+    Fixture(Image);
+
+    /* Remove the newer sites while retaining their unique string xrefs. */
+    W32(Image + MAIN - 0x20, 0);
+    W32(Image + MAIN - 4, 0);
+    W32(Image + MAIN, 0);
+    W32(Image + MAIN + 4, 0);
+    W32(Image + MAIN + 8, 0);
+    W32(Image + DUMMY - 4, 0);
+    W32(Image + DUMMY, 0);
+    W32(Image + DUMMY + 4, 0);
+
+    /*
+     * Older ABLs derive Debug mode (2) when the state global equals either
+     * 0x7070 or 0x77ee. The main path increments Normal (1); the dummy path
+     * conditionally skips its Debug store. Both sites are after their xrefs.
+     */
+    W32(Image + LEGACY_MAIN - 0x1c, 0x90000008); /* ADRP X8,state */
+    W32(Image + LEGACY_MAIN - 0x18, 0x528e0e09); /* MOV W9,#0x7070 */
+    W32(Image + LEGACY_MAIN - 0x14, 0xb943fd08); /* LDR W8,[X8,#0x3fc] */
+    W32(Image + LEGACY_MAIN - 0x10, 0x6b09011f); /* CMP W8,W9 */
+    W32(Image + LEGACY_MAIN - 0x0c, 0x528efdc9); /* MOV W9,#0x77ee */
+    W32(Image + LEGACY_MAIN - 0x08, 0x7a491104); /* CCMP W8,W9,#4,NE */
+    W32(Image + LEGACY_MAIN - 0x04, 0x52800028); /* MOV W8,#1 */
+    W32(Image + LEGACY_MAIN, 0x1a881508);        /* CINC W8,W8,EQ */
+    W32(Image + LEGACY_MAIN + 0x04, 0x9107e3ea);
+    W32(Image + LEGACY_MAIN + 0x08, 0x90000009); /* ADRP X9,BCC global */
+    W32(Image + LEGACY_MAIN + 0x0c, 0x91001140);
+    W32(Image + LEGACY_MAIN + 0x10, 0x2a1f03e1);
+    W32(Image + LEGACY_MAIN + 0x14, 0x52800502);
+    W32(Image + LEGACY_MAIN + 0x18, 0xb90ed928); /* STR W8,[X9,#imm] */
+
+    W32(Image + LEGACY_DUMMY - 0x1c, 0x90000008); /* ADRP X8,state */
+    W32(Image + LEGACY_DUMMY - 0x18, 0x528efdc9); /* MOV W9,#0x77ee */
+    W32(Image + LEGACY_DUMMY - 0x14, 0xb943fd08); /* LDR W8,[X8,#0x3fc] */
+    W32(Image + LEGACY_DUMMY - 0x10, 0x6b09011f); /* CMP W8,W9 */
+    W32(Image + LEGACY_DUMMY - 0x0c, 0x528e0e09); /* MOV W9,#0x7070 */
+    W32(Image + LEGACY_DUMMY - 0x08, 0x7a491104); /* CCMP W8,W9,#4,NE */
+    W32(Image + LEGACY_DUMMY - 0x04, 0x54000061); /* B.NE past store */
+    W32(Image + LEGACY_DUMMY, 0x52800048);        /* MOV W8,#2 */
+    W32(Image + LEGACY_DUMMY + 4, 0xb9006268);    /* STR W8,[X19,#0x60] */
+}
+
 static void RejectsUnfamiliarShape(uint8_t Image[SIZE]) {
     uint8_t Before[SIZE];
     DICE_PLAN Plan;
@@ -79,6 +125,29 @@ int main(void) {
     W32(Image + DUMMY - 4, R32(Before + DUMMY - 4));
     W32(Image + DUMMY, R32(Before + DUMMY));
     assert(memcmp(Image, Before, SIZE) == 0);
+
+    LegacyFixture(Image);
+    memcpy(Before, Image, SIZE);
+    assert(PlanDiceModeNormal((const char *)Image, SIZE, &Plan));
+    assert(Plan.Main == LEGACY_MAIN && Plan.Dummy == LEGACY_DUMMY);
+    ApplyDiceModeNormal((char *)Image, &Plan);
+    assert(R32(Image + LEGACY_MAIN) == 0x52800028);
+    assert(R32(Image + LEGACY_DUMMY - 4) == 0xd503201f);
+    assert(R32(Image + LEGACY_DUMMY) == 0x52800028);
+    W32(Image + LEGACY_MAIN, R32(Before + LEGACY_MAIN));
+    W32(Image + LEGACY_DUMMY - 4, R32(Before + LEGACY_DUMMY - 4));
+    W32(Image + LEGACY_DUMMY, R32(Before + LEGACY_DUMMY));
+    assert(memcmp(Image, Before, SIZE) == 0);
+
+    LegacyFixture(Image);
+    W32(Image + LEGACY_MAIN - 0x18, 0x52824689); /* Unknown state tag. */
+    RejectsUnfamiliarShape(Image);
+    LegacyFixture(Image);
+    W32(Image + LEGACY_DUMMY - 4, 0x54000081); /* Branch past more than store. */
+    RejectsUnfamiliarShape(Image);
+    LegacyFixture(Image);
+    W32(Image + LEGACY_DUMMY + 4, 0xd503201f); /* No dummy BCC store. */
+    RejectsUnfamiliarShape(Image);
 
     Fixture(Image);
     W32(Image + DUMMY - 4, 0x34000088); /* Branch no longer skips store. */

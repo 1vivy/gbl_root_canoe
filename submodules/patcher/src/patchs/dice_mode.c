@@ -12,13 +12,19 @@
 static const char MainLog[] = "VB: PopulateBccParams: Parameter receivedis NULL";
 static const char DummyLog[] = "VB: Setting Dummy DICE params\n";
 
-#define CINC_W8 UINT32_C(0x1A8A0548)
+#define MODERN_CINC_W8 UINT32_C(0x1A8A0548)
 #define MOV_W9_THREE UINT32_C(0x52800069)
 #define CSEL_W8 UINT32_C(0x1A890108)
 #define MOV_W8_NORMAL UINT32_C(0x52800028)
 #define MOV_W8_DEBUG UINT32_C(0x52800048)
 #define DUMMY_CBZ UINT32_C(0x34000068)
 #define STR_W8_X19 UINT32_C(0xB9006268)
+#define LEGACY_MOV_W9_7070 UINT32_C(0x528E0E09)
+#define LEGACY_MOV_W9_77EE UINT32_C(0x528EFDC9)
+#define LEGACY_CMP_W8_W9 UINT32_C(0x6B09011F)
+#define LEGACY_CCMP_W8_W9 UINT32_C(0x7A491104)
+#define LEGACY_CINC_W8 UINT32_C(0x1A881508)
+#define LEGACY_DUMMY_BNE UINT32_C(0x54000061)
 #define NOP UINT32_C(0xD503201F)
 
 static uint32_t Word(const PE_IMAGE *Image, size_t Offset) {
@@ -68,41 +74,114 @@ static bool UniqueReference(const PE_IMAGE *Image, const char *Log,
     return Matches == 1;
 }
 
+static bool IsAdrp(const PE_IMAGE *Image, size_t Offset, unsigned Register) {
+    return (Word(Image, Offset) & UINT32_C(0x9F00001F)) ==
+           (UINT32_C(0x90000000) | Register);
+}
+
+static bool HasBccGlobalStore(const PE_IMAGE *Image, size_t Site) {
+    bool Address = false;
+    for (size_t At = Site + 4; At < Site + 0x20; At += 4) {
+        if (IsAdrp(Image, At, 9)) {
+            Address = true;
+        } else if (Address &&
+                   (Word(Image, At) & UINT32_C(0xFFC003FF)) ==
+                       UINT32_C(0xB9000128)) {
+            return true; /* STR W8,[X9,#imm] */
+        }
+    }
+    return false;
+}
+
+static bool LegacyStateComparison(const PE_IMAGE *Image, size_t Start) {
+    uint32_t First = Word(Image, Start + 4);
+    uint32_t Second = Word(Image, Start + 16);
+    bool Tags = (First == LEGACY_MOV_W9_7070 &&
+                 Second == LEGACY_MOV_W9_77EE) ||
+                (First == LEGACY_MOV_W9_77EE &&
+                 Second == LEGACY_MOV_W9_7070);
+
+    return IsAdrp(Image, Start, 8) && Tags &&
+           (Word(Image, Start + 8) & UINT32_C(0xFFC003FF)) ==
+               UINT32_C(0xB9400108) && /* LDR W8,[X8,#imm] */
+           Word(Image, Start + 12) == LEGACY_CMP_W8_W9 &&
+           Word(Image, Start + 20) == LEGACY_CCMP_W8_W9;
+}
+
+static bool ModernMainSite(const PE_IMAGE *Image, size_t Off, size_t Section) {
+    bool Cinc = false, Mov = false, Store = false;
+    if (Off < 0x30 || !InCode(Image, Off - 0x30, 0x44, Section) ||
+        Word(Image, Off) != CSEL_W8 || !IsAdrp(Image, Off + 4, 9)) {
+        return false;
+    }
+    for (size_t At = Off - 0x30; At < Off; At += 4) {
+        Cinc |= Word(Image, At) == MODERN_CINC_W8;
+        Mov |= Word(Image, At) == MOV_W9_THREE;
+    }
+    for (size_t At = Off + 4; At < Off + 20; At += 4) {
+        Store |= (Word(Image, At) & UINT32_C(0xFFC003FF)) ==
+                 UINT32_C(0xB9000128); /* STR W8,[X9,#imm] */
+    }
+    return Cinc && Mov && Store;
+}
+
+static bool LegacyMainSite(const PE_IMAGE *Image, size_t Off, size_t Section) {
+    size_t Start;
+    if (Off < 0x1c) return false;
+    Start = Off - 0x1c;
+    return InCode(Image, Start, 0x3c, Section) &&
+           LegacyStateComparison(Image, Start) &&
+           Word(Image, Off - 4) == MOV_W8_NORMAL &&
+           Word(Image, Off) == LEGACY_CINC_W8 &&
+           HasBccGlobalStore(Image, Off);
+}
+
 static bool MainSite(const PE_IMAGE *Image, size_t Reference,
                      size_t Section, size_t *Site) {
     unsigned Matches = 0;
     size_t Start = Reference > 0x200 ? Reference - 0x200 : 0;
-    for (size_t Off = Start; Off < Reference; Off += 4) {
-        bool Cinc = false, Mov = false, Store = false;
-        if (Off < 0x30 || !InCode(Image, Off - 0x30, 0x44, Section) ||
-            Word(Image, Off) != CSEL_W8 ||
-            (Word(Image, Off + 4) & UINT32_C(0x9F00001F)) !=
-                UINT32_C(0x90000009)) continue; /* ADRP X9 for BCC global */
-        for (size_t At = Off - 0x30; At < Off; At += 4) {
-            Cinc |= Word(Image, At) == CINC_W8;
-            Mov |= Word(Image, At) == MOV_W9_THREE;
-        }
-        for (size_t At = Off + 4; At < Off + 20; At += 4) {
-            Store |= (Word(Image, At) & UINT32_C(0xFFC003FF)) ==
-                     UINT32_C(0xB9000128); /* STR W8,[X9,#imm] */
-        }
-        if (!Cinc || !Mov || !Store || ++Matches > 1) continue;
+    size_t End = Image->Size;
+    if (Reference <= Image->Size && Image->Size - Reference > 0x200) {
+        End = Reference + 0x200;
+    }
+    for (size_t Off = Start; Off + 4 <= End; Off += 4) {
+        if (!ModernMainSite(Image, Off, Section) &&
+            !LegacyMainSite(Image, Off, Section)) continue;
+        if (++Matches > 1) continue;
         *Site = Off;
     }
     return Matches == 1;
 }
 
+static bool ModernDummySite(const PE_IMAGE *Image, size_t Off, size_t Section) {
+    return Off >= 4 && InCode(Image, Off - 4, 12, Section) &&
+           Word(Image, Off - 4) == DUMMY_CBZ &&
+           Word(Image, Off) == MOV_W8_DEBUG &&
+           Word(Image, Off + 4) == STR_W8_X19;
+}
+
+static bool LegacyDummySite(const PE_IMAGE *Image, size_t Off, size_t Section) {
+    size_t Start;
+    if (Off < 0x1c) return false;
+    Start = Off - 0x1c;
+    return InCode(Image, Start, 0x24, Section) &&
+           LegacyStateComparison(Image, Start) &&
+           Word(Image, Off - 4) == LEGACY_DUMMY_BNE &&
+           Word(Image, Off) == MOV_W8_DEBUG &&
+           Word(Image, Off + 4) == STR_W8_X19;
+}
+
 static bool DummySite(const PE_IMAGE *Image, size_t Reference,
                       size_t Section, size_t *Site) {
     unsigned Matches = 0;
-    size_t End = Reference + 0x38;
-    if (End > Image->Size) End = Image->Size;
+    size_t End = Image->Size;
+    if (Reference <= Image->Size && Image->Size - Reference > 0x60) {
+        End = Reference + 0x60;
+    }
     for (size_t Off = Reference + 8; Off + 8 <= End; Off += 4) {
-        if (!InCode(Image, Off - 4, 12, Section) ||
-            Word(Image, Off - 4) != DUMMY_CBZ ||
-            Word(Image, Off) != MOV_W8_DEBUG ||
-            Word(Image, Off + 4) != STR_W8_X19) continue;
-        if (++Matches > 1) return false;
+        if (!ModernDummySite(Image, Off, Section) &&
+            !LegacyDummySite(Image, Off, Section)) continue;
+        if (++Matches > 1) continue;
         *Site = Off;
     }
     return Matches == 1;
@@ -124,8 +203,8 @@ bool PlanDiceModeNormal(const char *Buffer, int32_t Size, DICE_PLAN *Plan) {
 
 void ApplyDiceModeNormal(char *Buffer, const DICE_PLAN *Plan) {
     WriteWord((uint8_t *)Buffer + Plan->Main, MOV_W8_NORMAL);
-    /* The dummy BCC was zeroed; its old CBZ skipped the Debug-mode store
-     * when locked. Make the Normal-mode store unconditional instead. */
+    /* The dummy fallback conditionally skipped its mode store. Make the
+     * Normal-mode store unconditional instead. */
     WriteWord((uint8_t *)Buffer + Plan->Dummy - 4, NOP);
     WriteWord((uint8_t *)Buffer + Plan->Dummy, MOV_W8_NORMAL);
 }

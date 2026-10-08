@@ -18,6 +18,7 @@
 /* Where each refusal string lives. Page-crossing relative to the code at 0 so
  * the ADRP page delta is non-zero, as it is in a real ABL. */
 #define STR_BASE 0x2000
+#define FORMAT_OFFSET 0x2800
 
 static const char *const kGateStrings[] = {
     "Flashing is not allowed in Lock State",
@@ -63,16 +64,27 @@ static uint32_t EncodeCbzW(uint8_t Rt, int32_t ByteDelta) {
     return 0x34000000u | (Imm19 << 5) | Rt;
 }
 
+static uint32_t EncodeTbzW(uint8_t Rt, uint8_t Bit, int32_t ByteDelta) {
+    uint32_t Imm14 = ((uint32_t)(ByteDelta >> 2)) & 0x3FFF;
+
+    return 0x36000000u | ((uint32_t)(Bit & 0x1Fu) << 19) |
+           (Imm14 << 5) | Rt;
+}
+
 static void PlaceGateString(char *Buf, int32_t Index) {
     strcpy(Buf + STR_BASE + Index * 0x100, kGateStrings[Index]);
 }
 
+static void PlaceAdrlTo(char *Buf, int32_t CodeOff, int32_t Target,
+                        uint8_t Register) {
+    write_instr(Buf, CodeOff, EncodeAdrp(Register, CodeOff, Target));
+    write_instr(Buf, CodeOff + 4,
+                EncodeAddXImm(Register, Register, (uint32_t)(Target & 0xFFF)));
+}
+
 /* Emit the ADRP+ADD pair that loads gate Index's string at CodeOff. */
 static void PlaceAdrl(char *Buf, int32_t CodeOff, int32_t Index) {
-    int32_t Target = STR_BASE + Index * 0x100;
-
-    write_instr(Buf, CodeOff, EncodeAdrp(0, CodeOff, Target));
-    write_instr(Buf, CodeOff + 4, EncodeAddXImm(0, 0, (uint32_t)(Target & 0xFFF)));
+    PlaceAdrlTo(Buf, CodeOff, STR_BASE + Index * 0x100, 0);
 }
 
 /* Prove the hand-rolled encoders agree with the decoder the patch relies on. */
@@ -230,6 +242,70 @@ static void TestPartialWritesNothing(void) {
     printf("ok - an unresolvable gate blocks the whole rewrite\n");
 }
 
+static void TestPrefixedRefusalBlock(void) {
+    char *Buf = calloc(1, BUF_SIZE);
+    char *Copy = calloc(1, BUF_SIZE);
+    int32_t Entry = 0x800;
+    int32_t Anchor = Entry + 8;
+    int32_t Branch = 0x780;
+
+    assert(Buf != NULL && Copy != NULL);
+    strcpy(Buf + STR_BASE + 3 * 0x100,
+           "Snapshot Cancel denied while in Lock State.");
+    strcpy(Buf + FORMAT_OFFSET, "ERROR: %a\n");
+    PlaceAdrlTo(Buf, Entry, FORMAT_OFFSET, 0);
+    PlaceAdrlTo(Buf, Anchor, STR_BASE + 3 * 0x100, 1);
+    write_instr(Buf, Branch, EncodeTbzW(0, 0, Entry - Branch));
+    memcpy(Copy, Buf, BUF_SIZE);
+
+    assert(patch_fastboot_lock_gates(Buf, BUF_SIZE) == LOCK_GATES_SUCCESS);
+    assert(read_instr(Buf, Branch) == NOP);
+    write_instr(Buf, Branch, read_instr(Copy, Branch));
+    assert(memcmp(Buf, Copy, BUF_SIZE) == 0);
+    free(Buf);
+    free(Copy);
+    printf("ok - bounded walk-back resolves a TBZ into a prefixed refusal block\n");
+}
+
+static void TestRejectsUnvalidatedWalkBack(void) {
+    char *Buf = calloc(1, BUF_SIZE);
+    char *Copy = calloc(1, BUF_SIZE);
+    int32_t Entry = 0x800;
+    int32_t Anchor = Entry + 8;
+    int32_t Branch = 0x780;
+
+    assert(Buf != NULL && Copy != NULL);
+    PlaceGateString(Buf, 3);
+    write_instr(Buf, Entry, NOP);
+    write_instr(Buf, Entry + 4, NOP);
+    PlaceAdrlTo(Buf, Anchor, STR_BASE + 3 * 0x100, 1);
+    write_instr(Buf, Branch, EncodeTbzW(0, 0, Entry - Branch));
+    memcpy(Copy, Buf, BUF_SIZE);
+
+    assert(patch_fastboot_lock_gates(Buf, BUF_SIZE) == LOCK_GATES_FAILURE);
+    assert(memcmp(Buf, Copy, BUF_SIZE) == 0);
+    free(Buf);
+    free(Copy);
+    printf("ok - walk-back requires an adjacent ADRP+ADD argument pair\n");
+}
+
+static void TestDoesNotMatchMergeState(void) {
+    char *Buf = calloc(1, BUF_SIZE);
+    char *Copy = calloc(1, BUF_SIZE);
+
+    assert(Buf != NULL && Copy != NULL);
+    strcpy(Buf + STR_BASE, "Slot Change is not allowed in merging state");
+    write_instr(Buf, 0x100, EncodeBCond(0x1, 0x14));
+    PlaceAdrlTo(Buf, 0x104, STR_BASE, 0);
+    memcpy(Copy, Buf, BUF_SIZE);
+
+    assert(patch_fastboot_lock_gates(Buf, BUF_SIZE) == LOCK_GATES_ABSENT);
+    assert(memcmp(Buf, Copy, BUF_SIZE) == 0);
+    free(Buf);
+    free(Copy);
+    printf("ok - shortened anchors retain the Lock State discriminator\n");
+}
+
 static void TestRejectsBadInput(void) {
     char Buf[16] = {0};
 
@@ -246,6 +322,9 @@ int main(void) {
     TestAbsent();
     TestAmbiguousAnchor();
     TestPartialWritesNothing();
+    TestPrefixedRefusalBlock();
+    TestRejectsUnvalidatedWalkBack();
+    TestDoesNotMatchMergeState();
     TestRejectsBadInput();
     printf("fastboot lock gate tests passed\n");
     return 0;
