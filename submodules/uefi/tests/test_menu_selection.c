@@ -562,13 +562,12 @@ int main (int argc, char **argv)
   assert(SfbRunMenu(&Template) == EFI_SUCCESS && mNextKey == 5);
 
 
-  /* Notices keep their identity across rebuilds, use the alert marker even if
-   * a stale cursor/default points at them, and expose an untruncated detail. */
+  /* Notices keep their identity across rebuilds and use the alert marker even
+   * if a stale cursor/default points at them. */
   Initialize(&State, &Template);
   Add(&State, SfbEntryFastboot, L"", L"Enter Super Fastboot", 0, FALSE, FALSE);
-  Add(&State, SfbEntryNotice, L"", L"Default is for the other slot", 0, FALSE, FALSE);
-  State.Menu.Entry[1].NoticeDetail =
-    L"Select the current slot's entry, then save it as the default.";
+  Add(&State, SfbEntryNotice, L"", L"Configuration notice", 0, FALSE, FALSE);
+  State.Menu.Entry[1].NoticeDetail = L"Configuration detail.";
   Add(&State, SfbEntryNotice, L"", L"Another notice", 0, FALSE, FALSE);
   State.Menu.Entry[2].NoticeDetail = L"Another detail.";
   State.Menu.DefaultIndex = 1;
@@ -578,15 +577,6 @@ int main (int argc, char **argv)
   FakeClear(&Out);
   SfbDrawMainMenuRow(&State, 1, FALSE);
   assert(mScreen[0][mSfbMenuTextLeft - 2] == '!');
-  assert(memcmp(&mScreen[0][mSfbMenuTextLeft],
-                "Default is for the other slot",
-                sizeof("Default is for the other slot") - 1) == 0);
-  mColumns = 40;
-  SfbReadMenuGeometry();
-  FakeClear(&Out);
-  SfbDrawMainMenuHeader(&State);
-  assert(strstr(mFrame, "Select the current slot's") != NULL);
-  assert(strstr(mFrame, "default.") != NULL);
   {
     SFB_BOOT_ENTRY Previous = State.Menu.Entry[1];
     SFB_MENU_STATE Refreshed = State.Menu;

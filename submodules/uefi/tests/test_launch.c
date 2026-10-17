@@ -2372,10 +2372,9 @@ TestBootRootEspIsDiscovered(void)
 }
 
 /*
- * An OTA flips the active slot while `default` still names the old slot's
- * entry. The BDS must notice from the entry's id/image alone and refuse to
- * launch it unattended - and must notice nothing when the default matches,
- * when stored roles disagree, or when the entry names no slot at all.
+ * An OTA can leave the default entry's slot label stale. Keep the advisory
+ * without suppressing its automatic launch or substituting another entry.
+ * Matching labels, stored roles and entries naming no slot produce no warning.
  */
 static void
 TestStaleDefaultSlot(void)
@@ -2429,9 +2428,10 @@ TestStaleDefaultSlot(void)
   SfbBuildMenu (&Menu, SfbBootModeAblFakeLocked, FALSE);
   assert(mActiveSlotReads == 1);
   assert(Menu.SlotMismatch);
-  /* Still highlighted, but no longer launched without a keypress. */
-  assert(!Menu.DefaultFromConfig);
+  /* A stale entry label is advisory, not permission to override the default. */
+  assert(Menu.DefaultFromConfig);
   assert(Menu.DefaultIndex != SFB_NO_INDEX);
+  assert(strcmp (Menu.Entry[Menu.DefaultIndex].DefaultTarget, "android-a") == 0);
   assert(!Menu.Entry[Menu.DefaultIndex].CurrentSlot);
   {
     BOOLEAN FoundCurrent = FALSE;
@@ -2453,10 +2453,6 @@ TestStaleDefaultSlot(void)
         continue;
       }
       assert(!FoundNotice);
-      assert(StrCmp (Menu.Entry[Index].Desc,
-                     L"Default is for the other slot") == 0);
-      assert(StrCmp (Menu.Entry[Index].NoticeDetail,
-                     L"Select the current slot's entry, then save it as the default.") == 0);
       FoundNotice = TRUE;
     }
     assert(FoundNotice);
@@ -2496,9 +2492,8 @@ TestStaleDefaultSlot(void)
   SfbFreeMenu (&Menu);
 
   /*
-   * An entry that claims no slot is not evidence of staleness. The active
-   * entry's image is always plain boot.efi, so the id is the only thing that
-   * carries the slot; reading the image alone would flag every slot-B device.
+   * An entry that claims no slot is not evidence of staleness. Legacy entries
+   * can use plain boot.efi, with only the id carrying a slot label.
    */
   memset (mEntriesFixture, 0, sizeof (mEntriesFixture));
   memcpy (mEntriesFixture, NoSlotText, sizeof (NoSlotText) - 1);

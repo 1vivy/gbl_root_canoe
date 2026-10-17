@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Nonblocking OTA entry advisory
+
+A saved default whose slot label differs from the phone's current slot no longer
+forces BDS into the menu or disables its countdown. Silent boot and menu countdown
+follow the configured policy, so saving an existing entry as default remains
+effective after an OTA even when its label has not been updated.
+
+When the menu is open, an advisory explains that the boot entry may need updating
+after an OTA. Entry names and image suffixes are metadata, not commands to switch
+the phone's Android slot or proof of loader compatibility. BDS does not substitute
+another entry or rewrite the default. Missing or invalid defaults still open the
+menu; saving a default does not regenerate its loader.
+
 ## 7.0.11
 
 ### More reliable ABL patching

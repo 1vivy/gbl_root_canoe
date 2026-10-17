@@ -1166,17 +1166,10 @@ SfbAsciiEndsWith (IN CONST CHAR8 *Text, IN CONST CHAR8 *Suffix)
 /*
  * The slot a config entry claims, or SfbSlotUnknown when it claims none.
  *
- * Two things in an entry can name a slot, and the installers use both. The
- * inactive entry gets a slot-suffixed image (`boot_a.efi` / `boot_b.efi`),
- * which is the more specific statement and so wins. The active entry does not:
- * its image is always plain `boot.efi`, and the only thing that varies with the
- * slot is its id (`android-a` / `android-b`). Reading the image alone would
- * therefore call every active entry slot A and fire a mismatch on every device
- * running from slot B.
- *
- * An entry that names no slot at all - a hand-written config, a Linux entry -
- * answers Unknown and is never checked. Verification must have something
- * definite to disagree with before it withholds a boot.
+ * Prefer the slot-suffixed image (`boot_a.efi` / `boot_b.efi`) to the id.
+ * Legacy entries using plain `boot.efi` can still carry a slot in their id.
+ * An entry that names no slot answers Unknown and is not checked. This is
+ * entry metadata, not a command to select the phone's Android slot.
  */
 STATIC
 SFB_SLOT
@@ -1198,15 +1191,11 @@ SfbConfigEntrySlot (IN CONST CHAR8 *Id, IN CONST CHAR8 *Image)
 }
 
 /*
- * Check the default entry's slot against the slot the GPT marks active.
+ * Compare the default entry's slot label with the live active slot.
  *
- * An OTA flips the active slot while `default` still names the old slot's
- * managed entry. Launching it unattended would boot a slot the device no
- * longer runs, on a device one bad boot from EDL. The slot is derived from the
- * entry's id/image, never from a stored label that an OTA leaves stale.
- *
- * Verification only: no entry is ever selected by slot and no slot is ever
- * written. Saving a default for the current slot clears the mismatch.
+ * An OTA can leave entry metadata stale. This is advisory only: an id or
+ * image suffix does not establish which Android slot the child will boot.
+ * Never change default eligibility or select another entry from this check.
  */
 STATIC
 VOID
@@ -1300,12 +1289,7 @@ SfbResolveDefault (IN OUT SFB_MENU_STATE *Menu,
       ConfiguredIndex < Menu->Count) {
     Menu->DefaultIndex = ConfiguredIndex;
     if (!Menu->Entry[Menu->DefaultIndex].IsUsb) {
-      /*
-       * A default for the other slot must not boot unattended: the flipped
-       * slot invalidated it. The row stays highlighted so it is still one
-       * keypress away, but the user has to look first.
-       */
-      Menu->DefaultFromConfig = (BOOLEAN)!Menu->SlotMismatch;
+      Menu->DefaultFromConfig = TRUE;
       return;
     }
     Menu->RejectedLines++;
@@ -1450,8 +1434,8 @@ SfbBuildMenu (OUT SFB_MENU_STATE *Menu, IN SFB_BOOT_MODE Mode, IN BOOLEAN FirstR
   }
   if (Menu->SlotMismatch) {
     SfbAppendNotice (
-      Menu, L"Default is for the other slot",
-      L"Select the current slot's entry, then save it as the default.");
+      Menu, L"Boot entry may need updating after an OTA",
+      L"Its slot label differs from the phone's current slot. This does not block boot or switch the phone's slot.");
   }
 
   SfbAppendBuiltIn (Menu, SfbEntryMassStorage, L"USB Mass Storage");

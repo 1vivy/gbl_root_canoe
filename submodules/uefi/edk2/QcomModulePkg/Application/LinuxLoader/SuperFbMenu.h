@@ -220,10 +220,8 @@ typedef struct {
    * half-applied config must be visible, never silent. */
   UINTN                  RejectedLines;
   /*
-   * TRUE when a config entry labelled `active` claims a different slot than
-   * the GPT marks active. Surfaced as a row, and it withholds the unattended
-   * launch: a stale label means the config no longer describes what it points
-   * at, which is not a thing to boot without looking.
+   * TRUE when the default entry's id/image names a different slot than the
+   * live active slot. Advisory only; never changes automatic boot policy.
    */
   BOOLEAN                SlotMismatch;
 } SFB_MENU_STATE;
