@@ -57,6 +57,13 @@ static void Fixture(uint8_t Image[SIZE]) {
     W32(Image + DUMMY + 4, 0xb9006268); /* STR W8,[X19,#0x60] */
 }
 
+static void AlternateRegisterFixture(uint8_t Image[SIZE]) {
+    Fixture(Image);
+    W32(Image + MAIN - 0x20, 0x1a8b0569); /* CINC W9,W11,NE */
+    W32(Image + MAIN - 4, 0x52800068); /* MOV W8,#3 */
+    W32(Image + MAIN, 0x1a880128); /* CSEL W8,W9,W8,EQ */
+}
+
 static void LegacyFixture(uint8_t Image[SIZE]) {
     Fixture(Image);
 
@@ -125,6 +132,29 @@ int main(void) {
     W32(Image + DUMMY - 4, R32(Before + DUMMY - 4));
     W32(Image + DUMMY, R32(Before + DUMMY));
     assert(memcmp(Image, Before, SIZE) == 0);
+
+    AlternateRegisterFixture(Image);
+    memcpy(Before, Image, SIZE);
+    assert(PlanDiceModeNormal((const char *)Image, SIZE, &Plan));
+    assert(Plan.Main == MAIN && Plan.Dummy == DUMMY);
+    ApplyDiceModeNormal((char *)Image, &Plan);
+    assert(R32(Image + MAIN) == 0x52800028);
+    assert(R32(Image + DUMMY - 4) == 0xd503201f);
+    assert(R32(Image + DUMMY) == 0x52800028);
+    W32(Image + MAIN, R32(Before + MAIN));
+    W32(Image + DUMMY - 4, R32(Before + DUMMY - 4));
+    W32(Image + DUMMY, R32(Before + DUMMY));
+    assert(memcmp(Image, Before, SIZE) == 0);
+
+    AlternateRegisterFixture(Image);
+    W32(Image + MAIN - 0x20, 0x1a8a0548); /* CINC writes the other register. */
+    RejectsUnfamiliarShape(Image);
+    AlternateRegisterFixture(Image);
+    W32(Image + MAIN - 4, 0x52800069); /* Constant writes the other register. */
+    RejectsUnfamiliarShape(Image);
+    AlternateRegisterFixture(Image);
+    W32(Image + MAIN, 0x1a890108); /* CSEL reads the other register pair. */
+    RejectsUnfamiliarShape(Image);
 
     LegacyFixture(Image);
     memcpy(Before, Image, SIZE);

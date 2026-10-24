@@ -13,8 +13,11 @@ static const char MainLog[] = "VB: PopulateBccParams: Parameter receivedis NULL"
 static const char DummyLog[] = "VB: Setting Dummy DICE params\n";
 
 #define MODERN_CINC_W8 UINT32_C(0x1A8A0548)
+#define MODERN_CINC_W9 UINT32_C(0x1A8B0569)
 #define MOV_W9_THREE UINT32_C(0x52800069)
+#define MOV_W8_THREE UINT32_C(0x52800068)
 #define CSEL_W8 UINT32_C(0x1A890108)
+#define CSEL_W8_FROM_W9 UINT32_C(0x1A880128)
 #define MOV_W8_NORMAL UINT32_C(0x52800028)
 #define MOV_W8_DEBUG UINT32_C(0x52800048)
 #define DUMMY_CBZ UINT32_C(0x34000068)
@@ -110,13 +113,26 @@ static bool LegacyStateComparison(const PE_IMAGE *Image, size_t Start) {
 
 static bool ModernMainSite(const PE_IMAGE *Image, size_t Off, size_t Section) {
     bool Cinc = false, Mov = false, Store = false;
+    uint32_t CincInstruction, MovInstruction;
     if (Off < 0x30 || !InCode(Image, Off - 0x30, 0x44, Section) ||
-        Word(Image, Off) != CSEL_W8 || !IsAdrp(Image, Off + 4, 9)) {
+        !IsAdrp(Image, Off + 4, 9)) {
         return false;
     }
+    switch (Word(Image, Off)) {
+        case CSEL_W8:
+            CincInstruction = MODERN_CINC_W8;
+            MovInstruction = MOV_W9_THREE;
+            break;
+        case CSEL_W8_FROM_W9:
+            CincInstruction = MODERN_CINC_W9;
+            MovInstruction = MOV_W8_THREE;
+            break;
+        default:
+            return false;
+    }
     for (size_t At = Off - 0x30; At < Off; At += 4) {
-        Cinc |= Word(Image, At) == MODERN_CINC_W8;
-        Mov |= Word(Image, At) == MOV_W9_THREE;
+        Cinc |= Word(Image, At) == CincInstruction;
+        Mov |= Word(Image, At) == MovInstruction;
     }
     for (size_t At = Off + 4; At < Off + 20; At += 4) {
         Store |= (Word(Image, At) & UINT32_C(0xFFC003FF)) ==
