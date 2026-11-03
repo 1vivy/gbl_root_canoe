@@ -1,7 +1,8 @@
 #!/bin/sh
 # One-shot Canoe installer for a rooted Android shell.
-# Baked assumptions: this runs as uid 0, and the ACTIVE slot's ABL/vbmeta are
-# the firmware derivation source, even when the ABL has no efisp redirect.
+# Baked assumptions: this runs as uid 0, and the ACTIVE slot's ABL, vbmeta and
+# the partitions that vbmeta chains are the firmware derivation source, even
+# when the ABL has no efisp redirect.
 #
 # Raw efisp is the ONLY partition this writes. The active slot's ABL is read
 # and never written. Do not "improve" this by flashing a patched ABL: patching
@@ -95,7 +96,7 @@ done
 
 print_plan() {
     echo "Active derivation slot: $SLOT"
-    echo "Derivation source, read only and never written: $ABL_PART"
+    echo "Derivation source, read only and never written: $ABL_PART, $VBMETA_PART and its chained $SLOT_SUFFIX partitions"
     echo "Single raw write: partition=$EFISP_PART image=$BDS_IMAGE"
     echo "Boot root: $PERSIST_MOUNT/efisp.fat entry boot_$SLOT.efi mode $MODE"
     echo 'Boot prerequisite: an active ABL without the efisp redirect will not launch Canoe; install a compatible signed vulnerable ABL separately before expecting it to boot.'
@@ -176,6 +177,8 @@ mkdir -p "$WORK_DIR"
 "$BIN_DIR/canoe-image" build \
     --abl "$ABL_PART" \
     --vbmeta "$VBMETA_PART" \
+    --chain-dir "$BY_NAME_DIR" \
+    --chain-suffix "$SLOT_SUFFIX" \
     --staged "$STAGED" \
     --tools "$BIN_DIR" \
     --efisp-tools "$SCRIPT_DIR/efisp/tools"

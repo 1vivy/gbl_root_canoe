@@ -2,8 +2,9 @@ CANOE one-shot Android install package
 
 Required before running anything: a root shell on the phone (`id -u` is 0) and
 an already-mounted ext4 persist directory (commonly /mnt/vendor/persist). The
-installer uses the active slot's stock ABL and vbmeta as read-only derivation
-sources; the ABL does not need to contain the vulnerable loader.
+installer uses the active slot's stock ABL, vbmeta and the partitions that
+vbmeta chains as read-only derivation sources; the ABL does not need to contain
+the vulnerable loader.
 
   cd /data/local/tmp && unzip -o canoe-one-shot-<version>-android-arm64.zip -d canoe && cd canoe
   chmod 755 install-canoe.sh bin/*
@@ -36,11 +37,11 @@ independent off-device persist backup and separate recovery path are recommended
 before --apply: the installer does not save the old raw efisp and has no built-in
 efisp rollback copy.
 
-install-canoe.sh reads the active slot's ABL and vbmeta without writing them,
-derives the prepared boot_a.efi/boot_b.efi loader and its sidecars, creates the
-FAT container in persist, and writes BDS only to raw efisp. It never flashes an
-ABL. The canoe-provision creation primitive refuses an existing
-persist/efisp.fat rather than overwriting it.
+install-canoe.sh reads the active slot's ABL, vbmeta and chained partitions
+without writing them, derives the prepared boot_a.efi/boot_b.efi loader and its
+sidecars, creates the FAT container in persist, and writes BDS only to raw
+efisp. It never flashes an ABL. The canoe-provision creation primitive refuses
+an existing persist/efisp.fat rather than overwriting it.
 
 Preparation is not bootability. A stock ABL has no efisp redirect, so this
 setup alone cannot launch Canoe. Before expecting it to boot, obtain a

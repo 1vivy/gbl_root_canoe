@@ -14,7 +14,21 @@ impl Footer {
         let Some(start) = image.len().checked_sub(SIZE) else {
             return Ok(None);
         };
-        let footer = &image[start..];
+        let tail = image[start..].try_into().unwrap();
+        let Some(result) = Self::parse_tail(tail, image.len())? else {
+            return Ok(None);
+        };
+        if image.get(result.vbmeta_offset..result.vbmeta_offset + 4) != Some(b"AVB0") {
+            return Err(DeriveError::BadMagic);
+        }
+        Ok(Some(result))
+    }
+    /// Parse the final `SIZE` bytes of an image of `image_len` bytes. The referenced vbmeta
+    /// remains unread, so the caller must validate it.
+    pub fn parse_tail(footer: &[u8; SIZE], image_len: usize) -> Result<Option<Self>, DeriveError> {
+        let Some(start) = image_len.checked_sub(SIZE) else {
+            return Ok(None);
+        };
         if &footer[..4] != b"AVBf" {
             return Ok(None);
         }
@@ -44,9 +58,6 @@ impl Footer {
             || end > start
         {
             return Err(DeriveError::VbmetaPastImage);
-        }
-        if image.get(result.vbmeta_offset..result.vbmeta_offset + 4) != Some(b"AVB0") {
-            return Err(DeriveError::BadMagic);
         }
         Ok(Some(result))
     }
