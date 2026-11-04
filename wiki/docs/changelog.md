@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Correct Mode 2 verified-boot hash
+
+The verified-boot hash in a Mode 2 `.gm2p` profile covered only the root `vbmeta`,
+so hardware attestation disagreed with Android's `ro.boot.vbmeta.digest` on any
+firmware with chained partitions. It now covers the root and every chained vbmeta,
+matching `avbtool calculate_vbmeta_digest` and libavb. Derivation reads the chained
+partitions and refuses to produce a profile without them.
+
+The sidecar format is unchanged and BDS needs no update, but existing profiles keep
+their old hash until regenerated. Regenerate after flashing any chained partition
+whose vbmeta differs, because the hash describes the images present at derivation.
+
 ### Nonblocking OTA entry advisory
 
 A saved default whose slot label differs from the phone's current slot no longer

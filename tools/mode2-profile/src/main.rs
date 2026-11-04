@@ -7,8 +7,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use header_output::header_envelope;
 use mode2_profile::{
-    DeriveError, ValidateFileError, VbmetaKeyCheck, check_vbmeta, derive_to_file, inspect_vbmeta,
-    inspect_vbmeta_header_evidence, validate_file,
+    ChainSource, DeriveError, ValidateFileError, VbmetaKeyCheck, check_vbmeta, derive_to_file,
+    inspect_vbmeta, inspect_vbmeta_header_evidence, validate_file,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -22,10 +22,15 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Derive boot.efi.gm2p from a matching stock root vbmeta image.
+    /// Derive boot.efi.gm2p from a slot's root vbmeta and the partitions it chains.
     Derive {
         #[arg(long)]
         vbmeta: PathBuf,
+        /// Directory holding each chained partition as <partition><suffix>.
+        #[arg(long)]
+        chain_dir: Option<PathBuf>,
+        #[arg(long, default_value = "", requires = "chain_dir")]
+        chain_suffix: String,
         #[arg(long)]
         out: PathBuf,
     },
@@ -124,6 +129,12 @@ fn inspect_error_code(error: &DeriveError) -> &'static str {
         DeriveError::InvalidPartitionNameUtf8 => "vbmeta-partition-name-utf8",
         DeriveError::DuplicateProperty(_) => "vbmeta-duplicate-property",
         DeriveError::ChainPartitionMissing(_) => "vbmeta-chain-partition-missing",
+        DeriveError::UnsafeChainPartitionName(_) => "vbmeta-chain-name-unsafe",
+        DeriveError::DuplicateChainPartition(_) => "vbmeta-chain-duplicate",
+        DeriveError::ChainImageMissing(_) => "vbmeta-chain-image-missing",
+        DeriveError::UnexpectedChainImage(_) => "vbmeta-chain-image-unexpected",
+        DeriveError::NestedChainPartition(_) => "vbmeta-chain-nested",
+        DeriveError::InvalidChainImage { .. } => "vbmeta-chain-image-invalid",
         DeriveError::NoOsVersionProperty => "vbmeta-os-version-missing",
         DeriveError::NoSecurityPatchProperty => "vbmeta-security-patch-missing",
         DeriveError::OsVersionMalformed => "vbmeta-os-version-malformed",
@@ -347,7 +358,18 @@ fn inspect_header(path: &Path) -> ExitCode {
 
 fn run(command: Command) -> Result<(), CliError> {
     match command {
-        Command::Derive { vbmeta, out } => derive_to_file(&vbmeta, &out).map_err(CliError::from),
+        Command::Derive {
+            vbmeta,
+            chain_dir,
+            chain_suffix,
+            out,
+        } => {
+            let chain = chain_dir.as_deref().map(|dir| ChainSource {
+                dir,
+                suffix: &chain_suffix,
+            });
+            derive_to_file(&vbmeta, chain, &out).map_err(CliError::from)
+        }
         Command::Validate { input } => {
             validate_file(&input)?;
             Ok(())

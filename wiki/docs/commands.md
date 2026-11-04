@@ -120,7 +120,8 @@ No prior-state `efisp` image is captured.
 Use regular input image files and a new or empty staging directory:
 
 ```sh
-canoe-image build --abl firmware-abl.img --vbmeta firmware-vbmeta.img --staged prepared
+canoe-image build --abl firmware/abl.img --vbmeta firmware/vbmeta.img \
+  --chain-dir firmware --chain-suffix .img --staged prepared
 canoe-bootmgr --boot-root /mnt/canoe loader install --slot a --from prepared
 canoe-bootmgr --boot-root /mnt/canoe entry set --id android-a --title 'Android A' \
   --image boot_a.efi --role active --mode 1 --default
@@ -132,6 +133,9 @@ loader. Do not substitute `vbmeta_system.img` or the AVB metadata embedded in
 `boot.os_version` and `boot.security_patch` properties where present; each
 falls back to its `init_boot.*` counterpart when absent. This supports root
 vbmeta images such as myron's without mixing firmware generations or regions.
+The build reads each partition that vbmeta chains from
+`<chain-dir>/<partition><chain-suffix>` and refuses if one is missing, because
+the Mode 2 verified-boot hash covers them all.
 
 `loader install` checks the triplet and publishes the sidecars before the EFI
 file. Add `--replace` only when replacement is intended. It does not rotate an
