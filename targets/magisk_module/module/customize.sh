@@ -1,6 +1,10 @@
 #!/system/bin/sh
 # Manager-only package setup. Full deployment belongs to the activated WebUI X.
 
+# KernelSU hot install (PR #3901): request immediate activation when the manager
+# supports it. Magisk and older KernelSU builds ignore this request.
+export MODULE_HOT_INSTALL_REQUEST=true
+
 if [ -z "${MODPATH:-}" ]; then
   ui_print "Canoe Boot Manager module path is unavailable"
   abort "MODPATH is unavailable"
@@ -47,6 +51,27 @@ else
   T_PERM="- Setting permissions"
 fi
 
+# The activation hint depends on both the language and whether the running
+# manager actually supports KernelSU hot install. Managers without the feature
+# (Magisk, older KernelSU) keep the original reboot guidance.
+if [ "$user_lang" = "zh" ]; then
+  if [ "${KSU_HAS_HOT_INSTALL:-false}" = true ]; then
+    T_ACTIVATE="- KernelSU 支持热安装：安装完成后模块立即激活，通常无需重启。"
+    T_VERSION="- 安装完成后 WebUI X 即显示新版本。"
+  else
+    T_ACTIVATE="- 按 KernelSU 提示重启以激活模块，然后在 WebUI X 中打开 Canoe Boot Manager。"
+    T_VERSION="- 更新激活前，Canoe Boot Manager 可能仍显示旧版本。"
+  fi
+else
+  if [ "${KSU_HAS_HOT_INSTALL:-false}" = true ]; then
+    T_ACTIVATE="- KernelSU hot install is supported: the module activates when installation completes, usually without a reboot."
+    T_VERSION="- WebUI X shows the new version as soon as installation completes."
+  else
+    T_ACTIVATE="- Reboot when KernelSU requests module activation, then open Canoe Boot Manager in WebUI X."
+    T_VERSION="- Before an update activates, Canoe Boot Manager may still show the previous version."
+  fi
+fi
+
 # These reads are facts displayed to the operator, not a supported-device
 # claim: no allow-list is inferred from them.
 ui_print "$T_VERIFY"
@@ -68,14 +93,14 @@ ui_print ""
 ui_print "Canoe Boot Manager"
 if [ "$user_lang" = "zh" ]; then
   ui_print "- 仅安装管理界面和工具时不会更改启动分区，不修改启动分区或手机数据。"
-  ui_print "- 按 KernelSU 提示重启以激活模块，然后在 WebUI X 中打开 Canoe Boot Manager。"
-  ui_print "- 更新激活前，Canoe Boot Manager 可能仍显示旧版本。"
+  ui_print "$T_ACTIVATE"
+  ui_print "$T_VERSION"
   ui_print "- 完整安装、模式选择和 OTA 准备可在模块激活后通过 WebUI X 完成。"
   ui_print "- 安装本模块本身不需要格式化数据。"
 else
   ui_print "- Installing the manager alone does not change boot partitions or phone data."
-  ui_print "- Reboot when KernelSU requests module activation, then open Canoe Boot Manager in WebUI X."
-  ui_print "- Before an update activates, Canoe Boot Manager may still show the previous version."
+  ui_print "$T_ACTIVATE"
+  ui_print "$T_VERSION"
   ui_print "- Full installation, mode selection, and OTA preparation are available in WebUI X after activation."
   ui_print "- Installing this module alone does not require formatting data."
 fi
