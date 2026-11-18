@@ -315,15 +315,17 @@ ExportDisk (IN CONST CHAR16 *Name, IN CONST CHAR8 *Tag, IN CONST CHAR8 *Identity
    * confirm keystroke is still queued here, so the screen must be visible
    * before the drain hands control to the export loop.
    */
-  SfbBeginScreen (Managed ? L"CANOE BOOT MANAGER" : L"USB Mass Storage",
-    Managed ? L"The app controls this storage session." : L"The host may now mount the disk.", NULL);
-  UnicodeSPrint (Detail, sizeof (Detail), L"Partition: %a", (Tag != NULL) ? Tag : "?");
-  SfbDrawInfoLine (Detail);
-  UnicodeSPrint (Detail, sizeof (Detail), L"Size: %Lu bytes", SfbMassStoragePartitionBytes (BlockIo));
-  SfbDrawInfoLine (Detail);
-  Print (L"\r\n");
-  SfbDrawInfoLine (L"Volume Down ends this session.");
-  SfbEndScreen (L"Volume Down: stop export");
+  do {
+    SfbBeginScreen (Managed ? L"CANOE BOOT MANAGER" : L"USB Mass Storage",
+      Managed ? L"The app controls this storage session." : L"The host may now mount the disk.", NULL);
+    UnicodeSPrint (Detail, sizeof (Detail), L"Partition: %a", (Tag != NULL) ? Tag : "?");
+    SfbDrawInfoLine (Detail);
+    UnicodeSPrint (Detail, sizeof (Detail), L"Size: %Lu bytes", SfbMassStoragePartitionBytes (BlockIo));
+    SfbDrawInfoLine (Detail);
+    SfbDrawScreenGap ();
+    SfbDrawInfoLine (L"Volume Down ends this session.");
+    SfbEndScreen (L"Volume Down: stop export");
+  } while (SfbRetryScreenText ());
 
   /* Nothing queued may reach the cancel test: the confirm press that opened
    * this screen is still in the queue at this point. */
@@ -470,7 +472,7 @@ SfbDrawPersistWarning (IN VOID *Context)
 {
   (VOID)Context;
   SfbDrawWrappedInfo (L"A host writing persist while the device is elsewhere can corrupt canoe.cfg, boot.efi, or its sidecars.");
-  Print (L"\r\n");
+  SfbDrawScreenGap ();
 }
 
 STATIC

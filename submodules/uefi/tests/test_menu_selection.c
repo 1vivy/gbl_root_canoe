@@ -12,6 +12,35 @@
 #include <Protocol/SimpleTextOut.h>
 #include <Protocol/SimpleTextInEx.h>
 #include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbMenu.h"
+#include "../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbGraphics.h"
+
+/* Inject a failed graphics frame to exercise the real menu's text replay.
+ * Memory, geometry and actual GOP calls belong to test_graphics.c. */
+static BOOLEAN mGraphicsActive, mFailNextPresent, mGraphicsRetry;
+BOOLEAN SfbGfxActive(VOID) { return mGraphicsActive; }
+BOOLEAN SfbGfxBegin(CONST CHAR16 *Title, CONST CHAR16 *Subtitle, CONST UINT32 *Ms)
+{ (void)Title; (void)Subtitle; (void)Ms; mGraphicsActive = mFailNextPresent; return mGraphicsActive; }
+VOID SfbGfxText(CONST CHAR16 *Text, BOOLEAN Centered, BOOLEAN Wrap)
+{ (void)Text; (void)Centered; (void)Wrap; assert(mGraphicsActive); }
+VOID SfbGfxSelectionDetail(CONST CHAR16 *Text, BOOLEAN Wrap)
+{ SfbGfxText(Text, FALSE, Wrap); }
+VOID SfbGfxRow(BOOLEAN Selected, CONST CHAR16 *Marker, CONST CHAR16 *Text)
+{ (void)Selected; (void)Marker; (void)Text; assert(mGraphicsActive); }
+VOID SfbGfxGap(VOID) { assert(mGraphicsActive); }
+VOID SfbGfxDivider(VOID) { assert(mGraphicsActive); }
+UINTN SfbGfxRowsAvailable(CONST CHAR16 *Footer, UINTN Extra)
+{ (void)Footer; (void)Extra; assert(mGraphicsActive); return SFB_VISIBLE_ROWS; }
+BOOLEAN SfbGfxCountdown(UINT32 Ms) { (void)Ms; assert(0); return FALSE; }
+VOID SfbGfxEnd(CONST CHAR16 *Footer)
+{
+  (void)Footer;
+  assert(mGraphicsActive && mFailNextPresent);
+  mGraphicsActive = mFailNextPresent = FALSE;
+  mGraphicsRetry = TRUE;
+}
+BOOLEAN SfbGfxRetryText(VOID)
+{ BOOLEAN Retry = mGraphicsRetry; mGraphicsRetry = FALSE; return Retry; }
+VOID SfbGfxRelease(VOID) { mGraphicsActive = mGraphicsRetry = FALSE; }
 
 EFI_SYSTEM_TABLE *gST;
 EFI_BOOT_SERVICES *gBS;
@@ -35,7 +64,7 @@ static UINTN mConsoleRows = 32;
 static BOOLEAN mEmitFrames;
 static CHAR8 mScreen[64][256];
 static UINTN mScreenAttributes[64][256];
-static UINTN mScrolls;
+static UINTN mScrolls, mTextClears;
 static EFI_SIMPLE_TEXT_OUTPUT_MODE *mOutputMode;
 static BOOLEAN mUseFirmwareKeys;
 static EFI_INPUT_KEY mQueuedInput[8];
@@ -59,6 +88,12 @@ Format16 (CHAR16 *Out, UINTN Chars, CONST CHAR16 *Format, va_list Args)
     } else if (*Format == L'u') {
       CHAR8 Number[32];
       snprintf(Number, sizeof Number, "%u", va_arg(Args, UINT32));
+      for (UINTN I = 0; Number[I] != 0; I++) {
+        assert(Count + 1 < Chars); Out[Count++] = (CHAR16)Number[I];
+      }
+    } else if (*Format == L'r') {
+      CHAR8 Number[32];
+      snprintf(Number, sizeof Number, "%llx", (unsigned long long)va_arg(Args, EFI_STATUS));
       for (UINTN I = 0; Number[I] != 0; I++) {
         assert(Count + 1 < Chars); Out[Count++] = (CHAR16)Number[I];
       }
@@ -145,6 +180,7 @@ FakeSetCursor (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This, UINTN Column, UINTN Row)
 static EFI_STATUS EFIAPI
 FakeClear (EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This)
 {
+  mTextClears++;
   This->Mode->CursorColumn = This->Mode->CursorRow = 0;
   memset(mScreen, ' ', sizeof mScreen);
   for (UINTN R = 0; R < ARRAY_SIZE(mScreenAttributes); R++) {
@@ -260,6 +296,7 @@ static VOID TestSetLockPolicy (SFB_CONFIG_LOCK_POLICY Policy) { (void)Policy; }
 SFB_KEY
 SfbWaitForKey (UINT32 TimeoutMs)
 {
+  assert(!mGraphicsRetry); /* A failed frame must be replayed before input. */
   assert(mNextKey < mFrames);
   assert(TimeoutMs == mExpectedTimeout[mNextKey]);
   /* Optional frames support manual/agent visual review; wording and geometry
@@ -419,6 +456,7 @@ int main (int argc, char **argv)
   Add(&State, SfbEntryBlsEfi, L"\\EFI\\mu.efi", L"Mu", 0, FALSE, FALSE);
   Template.Cursor = 1; Template.TimeoutMs = 2500;
   Template.ShowCountdown = TRUE;
+  mFailNextPresent = TRUE; /* Replay must not consume a key or restart the budget. */
 
   CountdownFrame(1000, SfbKeyTimeout);
   CountdownFrame(1000, SfbKeyTimeout);
@@ -732,6 +770,22 @@ int main (int argc, char **argv)
   SfbShowBootingScreen(L"Android",L"\\boot_a.efi",TRUE); assert(mFrameBytes==0);
   SfbSetShowBooting(TRUE); SfbShowBootingScreen(L"Android",L"\\boot.efi",FALSE);
   assert(mFrameBytes>0);
+
+  /* Standalone handoff/status screens also replay failed GOP output instead
+   * of leaving the user on a blank screen or a stale, non-interactive menu. */
+  UINTN ClearsBefore = mTextClears;
+  mFailNextPresent = TRUE;
+  SfbShowBootingScreen(L"Android", L"\\boot_a.efi", TRUE);
+  assert(!mGraphicsRetry && !mGraphicsActive && mTextClears > ClearsBefore && mFrameBytes > 0);
+  ClearsBefore = mTextClears;
+  mFailNextPresent = TRUE;
+  SfbShowActionScreen(L"Super Fastboot");
+  assert(!mGraphicsRetry && !mGraphicsActive && mTextClears > ClearsBefore && mFrameBytes > 0);
+  ClearsBefore = mTextClears;
+  mFailNextPresent = TRUE;
+  Services.WaitForEvent = FakeWaitFailure;
+  SfbReportStatus(L"Injected failure", EFI_DEVICE_ERROR);
+  assert(!mGraphicsRetry && !mGraphicsActive && mTextClears > ClearsBefore && mFrameBytes > 0);
 
   /* Long names cannot wrap the header and shift every menu row on small
    * consoles. A BLS/EFI image retains its type instead of an Android policy. */

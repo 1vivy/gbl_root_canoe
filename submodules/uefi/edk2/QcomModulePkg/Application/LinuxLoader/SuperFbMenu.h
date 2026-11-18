@@ -696,6 +696,15 @@ VOID
 SfbDrawInfoLine (IN CONST CHAR16 *Text);
 
 VOID
+SfbDrawScreenGap (VOID);
+
+/* Consume a failed graphics frame request. Redraw the complete screen before
+ * waiting for input or handing control to an action. Text redraw cannot retry.
+ */
+BOOLEAN
+SfbRetryScreenText (VOID);
+
+VOID
 SfbDrawWrappedInfo (IN CONST CHAR16 *Text);
 
 VOID

@@ -101,6 +101,9 @@
 	SuperFbMsdLease.c
 	SuperFbEntries.c
 	SuperFbMenu.c
+	SuperFbGraphics.c
+	SuperFbGraphics.h
+	SuperFbGraphicsFont.h
 	SuperFbMenuScaffold.c
 	SuperFbBrowser.c
 	SuperFbSlots.h
@@ -211,6 +214,7 @@
 	gFdtTableGuid
 
 [Protocols]
+	gEfiGraphicsOutputProtocolGuid
 	gEfiSimpleTextInputExProtocolGuid
 	gEfiBlockIoProtocolGuid
 	gEfiLoadedImageProtocolGuid
