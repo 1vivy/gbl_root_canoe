@@ -12,7 +12,8 @@ CFLAGS += $(SFB_VERSION_CFLAGS)
 
 .PHONY: test clean
 
-test: test_usb_serial test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface test_md_table test_md_discovery test_md_shadow test_eud_model test_soc_info
+test: test_graphics test_usb_serial test_profile test_deviceinfo test_devinfo test_slot_attributes test_slot_retries test_last_launch test_boot_root test_tzmap test_fat test_hooks test_launch test_config test_config_store test_bls test_linuxboot test_log test_surface test_md_table test_md_discovery test_md_shadow test_eud_model test_soc_info
+	./test_graphics
 	./test_usb_serial
 	./test_profile
 	./test_deviceinfo
@@ -174,6 +175,12 @@ test_linuxboot: test_linuxboot.c \
 	$(CC) $(CFLAGS) -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
 
 # EDK2's x64 varargs helpers assume the firmware ABI; use the host ABI here.
+test_graphics: test_graphics.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbGraphics.c \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbGraphics.h \
+	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbGraphicsFont.h
+	$(CC) $(CFLAGS) -DNO_MSABI_VA_FUNCS -Wno-unused-function -fno-builtin -fshort-wchar $(HOOK_INCLUDES) -o $@ $(filter %.c,$^)
+
 test_log: test_log.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLog.c \
 	../edk2/QcomModulePkg/Application/LinuxLoader/SuperFbLogRing.c \
@@ -218,6 +225,7 @@ test_soc_info: test_soc_info.c \
 		-I../edk2/AndroidToolsPkg/Include -o $@ $^
 
 clean:
+	rm -f test_graphics
 	rm -f test_menu_selection
 	rm -f test_fastboot_rx
 	rm -f test_root_observation

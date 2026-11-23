@@ -2993,6 +2993,7 @@ SfbBeginScreen(IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle, IN CONST UINT3
 }
 
 BOOLEAN SfbUpdateMenuCountdown(IN UINT32 RemainingMs) { (VOID)RemainingMs; return TRUE; }
+BOOLEAN SfbRetryScreenText(VOID) { return FALSE; }
 VOID SfbDrawWrappedInfo(IN CONST CHAR16 *Text) { (VOID)Text; }
 
 UINTN

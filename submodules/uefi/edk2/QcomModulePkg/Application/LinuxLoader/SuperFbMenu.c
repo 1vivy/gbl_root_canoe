@@ -14,6 +14,7 @@
 #include "SuperFbLastBoot.h"
 #include "SuperFbConfigStore.h"
 #include "SuperFbBootOnce.h"
+#include "SuperFbGraphics.h"
 
 #include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
@@ -282,6 +283,7 @@ SfbDrawWrappedMenuText (IN CONST CHAR16 *Text, IN BOOLEAN Centered)
 {
   CHAR16 Line[SFB_MENU_BLOCK_MAX + 1];
   UINTN Width = Centered ? mSfbMenuWidth - 2 * mSfbMenuPadding : mSfbMenuTextWidth;
+  if (SfbGfxActive ()) { SfbGfxText (Text, Centered, TRUE); return; }
   do {
     UINTN Index, Length = SfbMenuLineChars (Text, Width);
     for (Index = 0; Index < Length; Index++) { Line[Index] = Text[Index]; }
@@ -317,6 +319,7 @@ VOID
 SfbDrawInfoLine (IN CONST CHAR16 *Text)
 {
   CHAR16 Line[SFB_MENU_BLOCK_MAX + 1];
+  if (SfbGfxActive ()) { SfbGfxText (Text, FALSE, FALSE); return; }
   SfbCopyMenuLine (Line, Text);
   SfbMenuColumn (mSfbMenuTextLeft);
   Print (L"%s\r\n", Line);
@@ -325,7 +328,24 @@ SfbDrawInfoLine (IN CONST CHAR16 *Text)
 STATIC VOID
 SfbDrawMenuDivider (VOID)
 {
+  if (SfbGfxActive ()) { SfbGfxDivider (); return; }
   SfbDrawInfoLine (L"--------");
+}
+
+VOID
+SfbDrawScreenGap (VOID)
+{
+  if (SfbGfxActive ()) {
+    SfbGfxGap ();
+  } else {
+    Print (L"\r\n");
+  }
+}
+
+BOOLEAN
+SfbRetryScreenText (VOID)
+{
+  return SfbGfxRetryText ();
 }
 
 STATIC VOID
@@ -350,6 +370,7 @@ VOID
 SfbBeginScreen (IN CONST CHAR16 *Title, IN CONST CHAR16 *Subtitle,
                  IN CONST UINT32 *RemainingMs)
 {
+  if (SfbGfxBegin (Title, Subtitle, RemainingMs)) { return; }
   SfbReadMenuGeometry ();
   mSfbCountdownRows = 0;
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
@@ -375,6 +396,7 @@ SfbUpdateMenuCountdown (IN UINT32 RemainingMs)
   CHAR16 Blank[SFB_MENU_BLOCK_MAX + 1];
   UINTN Index, Column, Row, Attribute, Width = mSfbMenuWidth - 2 * mSfbMenuPadding;
   EFI_STATUS Status = EFI_SUCCESS;
+  if (SfbGfxActive ()) { return SfbGfxCountdown (RemainingMs); }
   if (Out->Mode == NULL || Out->SetCursorPosition == NULL || mSfbCountdownRows == 0) { return FALSE; }
   Column = (UINTN)Out->Mode->CursorColumn;
   Row = (UINTN)Out->Mode->CursorRow;
@@ -399,6 +421,7 @@ SfbUpdateMenuCountdown (IN UINT32 RemainingMs)
 VOID
 SfbEndScreen (IN CONST CHAR16 *Footer)
 {
+  if (SfbGfxActive ()) { SfbGfxEnd (Footer); return; }
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
   Print (L"\r\n");
   SfbDrawWrappedMenuText (Footer, TRUE);
@@ -408,6 +431,7 @@ UINTN
 SfbMenuRowsAvailable (IN CONST CHAR16 *Footer, IN UINTN ExtraRows)
 {
   UINTN Used;
+  if (SfbGfxActive ()) { return SfbGfxRowsAvailable (Footer, ExtraRows); }
   if (gST->ConOut->Mode == NULL) { return SFB_VISIBLE_ROWS; }
   /* Current header rows, footer gap, optional more row and final console row.
    * Screens reserve their own list separators or overflow notices. */
@@ -420,7 +444,9 @@ VOID
 SfbDrawRow (IN BOOLEAN Selected, IN CONST CHAR16 *Marker, IN CONST CHAR16 *Text)
 {
   CHAR16 Line[SFB_MENU_BLOCK_MAX + 1];
-  UINTN Length = SfbCopyMenuLine (Line, Text);
+  UINTN Length;
+  if (SfbGfxActive ()) { SfbGfxRow (Selected, Marker, Text); return; }
+  Length = SfbCopyMenuLine (Line, Text);
   /* Positioning precedes the highlight, so outer margins remain unselected. */
   SfbMenuColumn (mSfbMenuLeft + mSfbMenuPadding);
   gST->ConOut->SetAttribute (gST->ConOut,
@@ -500,10 +526,8 @@ SfbMoveCursor (IN OUT UINTN *Cursor, IN UINTN Count, IN SFB_KEY Key)
  * return, so they survive a boot that dies at the menu or in fastboot, and the
  * seven stages no longer cost 120 ms each on every boot that works.
  *
- * Note that Print output is not lost either way: the platform's ConOut also
- * reaches its serial ring, so the rendered screen - menu rows, cursor and all
- * - shows up in a flushed log beside these marks. That is a bonus for reading
- * a failed boot, not a reason to draw progress twice.
+ * Text fallback output also reaches the platform serial ring. The GOP menu
+ * draws pixels directly, so boot marks remain the display-independent record.
  */
 VOID
 SfbBootMark (IN CONST CHAR16 *Stage)
@@ -515,9 +539,13 @@ SfbBootMark (IN CONST CHAR16 *Stage)
 VOID
 SfbReportStatus (IN CONST CHAR16 *What, IN EFI_STATUS Status)
 {
-  gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_NORMAL);
-  Print (L"\r\n%s: %r\r\n", What, Status);
-  Print (L"Press power to continue.\r\n");
+  CHAR16 Detail[96];
+  UnicodeSPrint (Detail, sizeof (Detail), L"Status: %r", Status);
+  do {
+    SfbBeginScreen (What, NULL, NULL);
+    SfbDrawInfoLine (Detail);
+    SfbEndScreen (L"Press power to continue.");
+  } while (SfbRetryScreenText ());
   SfbWaitForKey (0);
 }
 
@@ -546,6 +574,17 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name,
                       IN CONST CHAR16 *FilePath,
                       IN BOOLEAN       ClearScreen)
 {
+  /* Silent default launch preserves the inherited splash. Menu launches may
+   * replace it, and release all renderer memory before the child runs. */
+  if (ClearScreen && SfbGfxBegin (mSfbShowBooting ? L"Booting" : L"",
+                                 mSfbShowBooting ? Name : NULL, NULL)) {
+    SfbGfxEnd (L"");
+    if (!SfbRetryScreenText ()) {
+      SfbGfxRelease ();
+      return;
+    }
+  }
+  SfbGfxRelease ();
   gST->ConOut->SetAttribute (gST->ConOut, SFB_ATTR_TITLE);
   /*
    * An unattended default boot must not blank whatever is already on screen
@@ -573,7 +612,11 @@ SfbShowBootingScreen (IN CONST CHAR16 *Name,
 VOID
 SfbShowActionScreen (IN CONST CHAR16 *Text)
 {
-  SfbBeginScreen (Text, NULL, NULL);
+  do {
+    SfbBeginScreen (Text, NULL, NULL);
+    SfbEndScreen (L"");
+  } while (SfbRetryScreenText ());
+  SfbGfxRelease ();
   gST->ConOut->EnableCursor (gST->ConOut, FALSE);
 }
 
@@ -611,8 +654,16 @@ SfbIsConfiguredFastboot (IN CONST SFB_BOOT_ENTRY *Entry)
                    Entry->DefaultTarget[0] != '\0');
 }
 
-/* Ordinary selection details stay two bounded lines; notice details wrap. */
+/* Selection names/paths stay single-line; explanatory descriptions wrap. */
 STATIC VOID SfbDrawSelectionLine (IN CONST CHAR16 *Text) { SfbDrawInfoLine (Text); }
+
+STATIC VOID
+SfbDrawSelectionDetail (IN CONST CHAR16 *Text, IN BOOLEAN Wrap)
+{
+  if (SfbGfxActive ()) { SfbGfxSelectionDetail (Text, Wrap); }
+  else if (Wrap) { SfbDrawWrappedInfo (Text); }
+  else { SfbDrawInfoLine (Text); }
+}
 
 /* Drawing is deliberately observational: use the same configured/fallback
  * choice as SfbLaunchEntry without opening files or preparing launch hooks.
@@ -632,14 +683,14 @@ SfbDrawMainMenuHeader (IN VOID *Context)
   if (SfbIsManagedAblEntry (Entry)) {
     SFB_BOOT_MODE Mode = Entry->ModeFromConfig ? Entry->Mode : State->CurrentMode;
     SfbDrawSelectionLine (SfbBootModeLabel (Mode));
-    SfbDrawSelectionLine (Entry->Path);
-    Print (L"\r\n");
+    SfbDrawSelectionDetail (Entry->Path, FALSE);
+    SfbDrawScreenGap ();
     return;
   }
   if (Entry->Kind == SfbEntryNotice) {
     SfbDrawSelectionLine (Entry->Desc);
-    SfbDrawWrappedInfo (Entry->NoticeDetail);
-    Print (L"\r\n");
+    SfbDrawSelectionDetail (Entry->NoticeDetail, TRUE);
+    SfbDrawScreenGap ();
     return;
   }
   switch (Entry->Kind) {
@@ -654,8 +705,8 @@ SfbDrawMainMenuHeader (IN VOID *Context)
     break;
   case SfbEntryMode:
     SfbDrawSelectionLine (L"Fallback for unconfigured managed loaders");
-    SfbDrawSelectionLine (SfbBootModeLabel (State->CurrentMode));
-    Print (L"\r\n");
+    SfbDrawSelectionDetail (SfbBootModeLabel (State->CurrentMode), FALSE);
+    SfbDrawScreenGap ();
     return;
   case SfbEntryFastboot:
     Detail = L"Connect to a host for device maintenance.";
@@ -697,12 +748,12 @@ SfbDrawMainMenuHeader (IN VOID *Context)
   if (Entry->Kind == SfbEntryEfiFile || Entry->Kind == SfbEntryBlsLinux ||
       Entry->Kind == SfbEntryBlsEfi) {
     SfbDrawSelectionLine (Detail);
-    SfbDrawSelectionLine (Entry->Path);
+    SfbDrawSelectionDetail (Entry->Path, FALSE);
   } else {
     SfbDrawSelectionLine (Entry->Desc);
-    SfbDrawSelectionLine (Detail);
+    SfbDrawSelectionDetail (Detail, TRUE);
   }
-  Print (L"\r\n");
+  SfbDrawScreenGap ();
 }
 
 STATIC

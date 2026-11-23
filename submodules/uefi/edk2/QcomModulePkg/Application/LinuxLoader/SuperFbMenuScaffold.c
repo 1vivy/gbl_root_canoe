@@ -112,6 +112,7 @@ SfbRunMenu (IN OUT SFB_MENU_TEMPLATE *Template)
       }
     }
     SfbEndScreen (Template->Footer);
+    if (SfbRetryScreenText ()) { continue; }
 
     /* Only an opted-in countdown needs intermediate redraws. Other menus retain
      * their original single wait. Interaction permanently consumes this
