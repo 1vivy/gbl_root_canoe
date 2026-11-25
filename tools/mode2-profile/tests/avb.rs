@@ -1,11 +1,22 @@
 use std::fs;
 
 use mode2_profile::{
-    BuildProperties, DeriveError, DeriveFileError, GraftClassification, GraftConfidence,
-    GraftState, VbmetaHeader, classify_graft, derive_profile, derive_to_file, inspect_vbmeta,
-    inspect_vbmeta_header, inspect_vbmeta_header_evidence,
+    BuildProperties, ChainSource, ChainedImages, DeriveError, DeriveFileError, GraftClassification,
+    GraftConfidence, GraftState, Profile, VbmetaHeader, chain_digest_partitions, classify_graft,
+    inspect_vbmeta, inspect_vbmeta_header, inspect_vbmeta_header_evidence, read_chained_vbmeta,
 };
+use sha2::{Digest, Sha256};
+use std::io::Cursor;
+use std::path::Path;
 use tempfile::tempdir;
+
+fn derive_profile(vbmeta: &[u8]) -> Result<Profile, DeriveError> {
+    mode2_profile::derive_profile(vbmeta, &ChainedImages::new())
+}
+
+fn derive_to_file(vbmeta: &Path, output: &Path) -> Result<(), DeriveFileError> {
+    mode2_profile::derive_to_file(vbmeta, None, output)
+}
 
 fn be_u64(target: &mut [u8], offset: usize, value: u64) {
     target[offset..offset + 8].copy_from_slice(&value.to_be_bytes());
@@ -454,8 +465,8 @@ fn boot_properties_win_independently_of_init_boot_and_descriptor_order() {
 fn donor_infiniti_vbmeta_accepts_identical_named_property() {
     let vbmeta = include_bytes!("fixtures/vbmeta-infiniti-IN-16.0.7.201.img");
     let inspection = inspect_vbmeta(vbmeta).expect("identical named property derives");
-    assert_eq!(inspection.profile.system_version, 0x40000);
-    assert_eq!(inspection.profile.system_spl, 0x9a5);
+    assert_eq!(inspection.system_version, 0x40000);
+    assert_eq!(inspection.system_spl, 0x9a5);
     assert_eq!(
         inspection.build_properties,
         BuildProperties {
@@ -735,4 +746,189 @@ fn successful_derivation_replaces_existing_profile() {
     let replacement = fs::read(&output).expect("read replacement profile");
     assert_eq!(&replacement[0..4], b"GM2P");
     assert_ne!(replacement, b"original");
+}
+
+const VERIFICATION_DISABLED: u32 = 2;
+
+fn chained_structure(marker: u8) -> Vec<u8> {
+    let mut vbmeta = vec![0; 256];
+    vbmeta[0..4].copy_from_slice(b"AVB0");
+    // A distinct release string keeps each structure's bytes in the digest distinguishable.
+    vbmeta[128] = marker;
+    vbmeta
+}
+
+fn with_flags(mut vbmeta: Vec<u8>, flags: u32) -> Vec<u8> {
+    vbmeta[120..124].copy_from_slice(&flags.to_be_bytes());
+    vbmeta
+}
+
+/// A root chaining a footer-bearing partition and a raw `vbmeta_*` partition, in that order.
+fn chained_root() -> (Vec<u8>, ChainedImages, Vec<u8>) {
+    let mut descriptors = property(b"com.android.build.boot.os_version", b"16.0.7");
+    descriptors.extend(property(
+        b"com.android.build.boot.security_patch",
+        b"2026-05-01",
+    ));
+    descriptors.extend(chain(1, b"vbmeta_system", b"system-key"));
+    descriptors.extend(chain(2, b"boot", b"boot-key"));
+    let root = fixture_from_descriptors(descriptors);
+    let system = chained_structure(b's');
+    let boot = chained_structure(b'b');
+    let mut padded_system = system.clone();
+    padded_system.resize(4096, 0);
+    let images = ChainedImages::from([
+        ("boot".to_owned(), footer_image(&boot)),
+        ("vbmeta_system".to_owned(), padded_system),
+    ]);
+    let mut digest = Sha256::new();
+    digest.update(&root);
+    digest.update(&system);
+    digest.update(&boot);
+    (root, images, digest.finalize().to_vec())
+}
+
+#[test]
+fn profile_digest_covers_the_root_and_chained_vbmeta_in_descriptor_order() {
+    let (root, images, expected) = chained_root();
+    assert_eq!(
+        chain_digest_partitions(&root).unwrap(),
+        ["vbmeta_system", "boot"],
+    );
+    let profile = mode2_profile::derive_profile(&root, &images).unwrap();
+    assert_eq!(profile.vbh.to_vec(), expected);
+    // A chain-free root remains a digest of itself alone.
+    let alone = fixture(true, true);
+    assert_eq!(
+        derive_profile(&alone).unwrap().vbh.to_vec(),
+        Sha256::digest(&alone).to_vec(),
+    );
+}
+
+#[test]
+fn profile_requires_exactly_the_chained_images() {
+    let (root, images, _) = chained_root();
+    assert_eq!(
+        derive_profile(&root),
+        Err(DeriveError::ChainImageMissing("vbmeta_system".to_owned())),
+    );
+    let mut extra = images.clone();
+    extra.insert("dtbo".to_owned(), chained_structure(b'd'));
+    assert_eq!(
+        mode2_profile::derive_profile(&root, &extra),
+        Err(DeriveError::UnexpectedChainImage("dtbo".to_owned())),
+    );
+    let mut corrupt = images.clone();
+    corrupt.insert("boot".to_owned(), vec![0; 4096]);
+    assert_eq!(
+        mode2_profile::derive_profile(&root, &corrupt),
+        Err(DeriveError::InvalidChainImage {
+            partition: "boot".to_owned(),
+            reason: Box::new(DeriveError::BadMagic),
+        }),
+    );
+}
+
+#[test]
+fn verification_disabled_stops_the_digest_at_that_image() {
+    let (root, images, _) = chained_root();
+    let disabled = with_flags(root, VERIFICATION_DISABLED);
+    assert!(chain_digest_partitions(&disabled).unwrap().is_empty());
+    assert_eq!(
+        derive_profile(&disabled).unwrap().vbh.to_vec(),
+        Sha256::digest(&disabled).to_vec(),
+    );
+    assert_eq!(
+        mode2_profile::derive_profile(&disabled, &images),
+        Err(DeriveError::UnexpectedChainImage("boot".to_owned())),
+    );
+}
+
+#[test]
+fn chain_descriptors_outside_the_root_and_ambiguous_names_are_rejected() {
+    let (root, mut images, _) = chained_root();
+    let nested = fixture_from_descriptors(chain(9, b"dtbo", b"dtbo-key"));
+    images.insert("vbmeta_system".to_owned(), nested.clone());
+    assert_eq!(
+        mode2_profile::derive_profile(&root, &images),
+        Err(DeriveError::NestedChainPartition(
+            "vbmeta_system".to_owned()
+        )),
+    );
+    images.insert(
+        "vbmeta_system".to_owned(),
+        with_flags(nested, VERIFICATION_DISABLED),
+    );
+    assert!(mode2_profile::derive_profile(&root, &images).is_ok());
+
+    for name in ["../boot", "boot/a", "..", "boot\\a"] {
+        let traversal = fixture_from_descriptors(chain(1, name.as_bytes(), b"key"));
+        assert_eq!(
+            chain_digest_partitions(&traversal),
+            Err(DeriveError::UnsafeChainPartitionName(name.to_owned())),
+        );
+    }
+    let mut twice = chain(1, b"boot", b"key");
+    twice.extend(chain(2, b"boot", b"key"));
+    assert_eq!(
+        chain_digest_partitions(&fixture_from_descriptors(twice)),
+        Err(DeriveError::DuplicateChainPartition("boot".to_owned())),
+    );
+}
+
+#[test]
+fn chained_vbmeta_is_located_like_libavb_without_reading_the_payload() {
+    let boot = chained_structure(b'b');
+    // The footer's vbmeta sits beyond any bound that would apply to the whole image.
+    let mut image = vec![0; 32 * 1024 * 1024];
+    image[1024 * 1024..1024 * 1024 + boot.len()].copy_from_slice(&boot);
+    let footer_start = image.len() - 64;
+    let footer = &mut image[footer_start..];
+    footer[0..4].copy_from_slice(b"AVBf");
+    footer[4..8].copy_from_slice(&1u32.to_be_bytes());
+    footer[12..20].copy_from_slice(&1024u64.to_be_bytes());
+    footer[20..28].copy_from_slice(&(1024u64 * 1024).to_be_bytes());
+    footer[28..36].copy_from_slice(&(boot.len() as u64).to_be_bytes());
+    assert_eq!(
+        read_chained_vbmeta("boot", &mut Cursor::new(&image)).unwrap(),
+        boot,
+    );
+    // vbmeta_* partitions hold it at offset zero, whatever their final bytes look like.
+    let raw = read_chained_vbmeta("vbmeta_x", &mut Cursor::new(&image)).unwrap();
+    assert_eq!(raw.len(), 64 * 1024);
+    assert_eq!(&raw[..4], &[0; 4]);
+}
+
+#[cfg(unix)]
+#[test]
+fn derivation_reads_chained_partitions_through_a_slot_source() {
+    let directory = tempdir().unwrap();
+    let (root, images, expected) = chained_root();
+    let vbmeta = directory.path().join("vbmeta_b");
+    let output = directory.path().join("boot.efi.gm2p");
+    fs::write(&vbmeta, &root).unwrap();
+    for (partition, image) in &images {
+        let target = directory.path().join(format!("{partition}.target"));
+        fs::write(&target, image).unwrap();
+        // Partition devices are reached through by-name symlinks.
+        std::os::unix::fs::symlink(&target, directory.path().join(format!("{partition}_b")))
+            .unwrap();
+    }
+    let source = ChainSource {
+        dir: directory.path(),
+        suffix: "_b",
+    };
+    mode2_profile::derive_to_file(&vbmeta, Some(source), &output).unwrap();
+    assert_eq!(fs::read(&output).unwrap()[88..120], expected[..]);
+
+    let alias = directory.path().join("boot.target");
+    let dumps = ChainSource {
+        dir: directory.path(),
+        suffix: ".target",
+    };
+    assert!(matches!(
+        mode2_profile::derive_to_file(&vbmeta, Some(dumps), &alias),
+        Err(DeriveFileError::SameInputAndOutput),
+    ));
+    assert_eq!(fs::read(&alias).unwrap(), images["boot"]);
 }

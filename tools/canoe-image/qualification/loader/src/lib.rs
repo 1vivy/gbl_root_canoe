@@ -38,9 +38,17 @@ pub unsafe extern "C" fn qualify(pointer: *mut u8, length: u32, case: u32) -> u3
     let vbmeta = include_bytes!(
         "../../../../mode2-profile/tests/fixtures/vbmeta-infiniti-IN-16.0.7.201.img"
     );
+    let mut chained_vbmeta = vec![0; 256];
+    chained_vbmeta[..4].copy_from_slice(b"AVB0");
+    let chained = canoe_image::loader::chain_digest_partitions(vbmeta)
+        .unwrap()
+        .into_iter()
+        .map(|partition| (partition, chained_vbmeta.clone()))
+        .collect();
     let prepared = match canoe_image::loader::prepare_loader(
         &input,
         vbmeta,
+        &chained,
         canoe_image::loader::TzMapPolicy::ProtocolFallback,
     ) {
         Ok(value) => value,

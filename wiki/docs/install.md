@@ -97,8 +97,9 @@ The firmware draft's
 ext4 persist directory is already mounted. The archive is built from the same
 firmware output as the draft's raw EFI assets and is covered by its manifest
 and checksums. It does not unlock the bootloader or install an ABL. This route
-uses the active slot's stock ABL and vbmeta as read-only derivation sources; it
-does not choose a catalogue image or assess userdata compatibility.
+uses the active slot's stock ABL, vbmeta and the partitions that vbmeta chains
+as read-only derivation sources; it does not choose a catalogue image or assess
+userdata compatibility.
 
 Run the wrapper first without `--apply`, supplying an explicit `--mode 0|1|2`,
 the mounted persist directory, and an unused `--work-dir` such as
@@ -125,10 +126,11 @@ installer neither saves the previous raw `efisp` nor provides a built-in
 rollback copy or restore command.
 
 The confirmed run prepares the loader and matching sidecars from the read-only
-active-slot ABL and vbmeta, creates and mounts `persist/efisp.fat`, installs the
-prepared active-slot loader, EFI tools and explicit default entry there, and
-unmounts the FAT container before writing BDS only to raw `efisp`. It verifies
-BDS by readback into the work directory and never writes any ABL partition.
+active-slot ABL, vbmeta and chained partitions, creates and mounts
+`persist/efisp.fat`, installs the prepared active-slot loader, EFI tools and
+explicit default entry there, and unmounts the FAT container before writing BDS
+only to raw `efisp`. It verifies BDS by readback into the work directory and
+never writes any ABL partition.
 The `canoe-provision` creation primitive refuses an existing
 `persist/efisp.fat` rather than overwriting it.
 

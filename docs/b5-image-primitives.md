@@ -8,7 +8,7 @@ they do not own device writes, source selection, review or installed-state claim
 
 | Manifest / crate | Portable API | Evidence | Remaining boundary |
 | --- | --- | --- | --- |
-| `tools/mode2-profile/Cargo.toml` / `mode2_profile` | `inspect_vbmeta`, `inspect_vbmeta_header_evidence`, `check_vbmeta`, `derive_profile`, `Profile::{to_bytes,decode}`, `footer::Footer::parse` | Native suite and WASM target check pass | Caller must attribute the previous/current signing evidence and apply the data-compatibility policy. |
+| `tools/mode2-profile/Cargo.toml` / `mode2_profile` | `inspect_vbmeta`, `inspect_vbmeta_header_evidence`, `check_vbmeta`, `chain_digest_partitions`, `read_chained_vbmeta`, `derive_profile`, `Profile::{to_bytes,decode}`, `footer::Footer::{parse,parse_tail}` | Native suite and WASM target check pass | Caller must attribute the previous/current signing evidence and apply the data-compatibility policy. |
 | `tools/canoe-image/Cargo.toml` / `canoe_image` | `graft::extract_bytes(&[u8]) -> Result<&[u8], GraftError>`; `graft::graft_bytes(&[u8], Vec<u8>) -> Result<Vec<u8>, GraftError>` | Native suite, WASM target check and exact pre-extraction CLI output comparison pass | Input is a partition-sized candidate. Grafting is not proof the resulting chain will boot; inspect/check it separately. |
 | `tools/canoe-image/Cargo.toml` / `canoe_image` | `vendorboot::patch_bytes(Vec<u8>) -> Result<(Vec<u8>, bool), VendorBootError>` | Native and actual WASM CPIO/gzip/LZ4 outputs match pre-extraction CLI goldens | Output remains a local prepared image; boot-chain and device compatibility checks belong to the coordinator. |
 | `tools/abl-tzmap/Cargo.toml` / `abl_tzmap` | `derive_bytes(&[u8], bool) -> Result<[u8; TZMAP_SIZE], DeriveFileError>`; `scan::scan`; `manifest::TzMap::decode` | Native suite and WASM target check pass | Input is already-extracted ABL PE. This is TZ-map derivation, not a replacement for the vulnerability check or patcher. |
@@ -52,13 +52,16 @@ that validated prefix; unrelated `merging state` refusals are not candidates.
 A missing or ambiguous site rejects that patch without partial writes. This
 does not establish device attestation behavior.
 
-`prepare_loader(abl, vbmeta, TzMapPolicy)` returns the modified PE loader, its
-120-byte GM2P, its 256-byte TZ map, and source/patch inspection. The original ABL
-is borrowed and never becomes an implicit flash payload. The TZ map binds the
-unmodified extracted ABL digest. `RecordedEvidence` requires a committed evidence
-table for that exact source; explicit `ProtocolFallback` retains the existing
-native CLI policy and reports `tzmap_evidence: null` when appropriate. This is
-not a new sidecar format. Vulnerable boot-path detection is distinct from managed
+`prepare_loader(abl, vbmeta, chained, TzMapPolicy)` returns the modified PE loader,
+its 120-byte GM2P, its 256-byte TZ map, and source/patch inspection. `chained` holds
+exactly the partitions `chain_digest_partitions(vbmeta)` names, read from the slot
+this loader boots; a caller gathers them with `read_chained_vbmeta` or any equivalent
+ranged read, and a missing one is an error rather than a root-only digest. The
+original ABL is borrowed and never becomes an implicit flash payload. The TZ map
+binds the unmodified extracted ABL digest. `RecordedEvidence` requires a committed
+evidence table for that exact source; explicit `ProtocolFallback` retains the
+existing native CLI policy and reports `tzmap_evidence: null` when appropriate.
+This is not a new sidecar format. Vulnerable boot-path detection is distinct from managed
 loader preparation: firmware without the vulnerable `efisp` path can still
 produce a valid managed loader. Container signatures are not verified by this
 structural inspection.

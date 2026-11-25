@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub use abl_patch::PatchReport;
+pub use mode2_profile::{ChainedImages, chain_digest_partitions, read_chained_vbmeta};
 pub const MAX_ABL_BYTES: usize = abl_extract::MAX_INPUT;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -84,15 +85,18 @@ pub fn inspect_abl(abl: &[u8]) -> Result<AblInspection, Error> {
     inspect_and_patch(abl, None).map(|(_, source, _)| source)
 }
 
+/// `chained` holds the partitions `chain_digest_partitions` names for this vbmeta, as they will be
+/// on the slot this loader boots: the GM2P verified-boot digest covers all of them.
 pub fn prepare_loader(
     abl: &[u8],
     vbmeta: &[u8],
+    chained: &ChainedImages,
     policy: TzMapPolicy,
 ) -> Result<PreparedLoader, Error> {
     if vbmeta.is_empty() || vbmeta.len() > 16 * 1024 * 1024 {
         return Err(Error::Profile("vbmeta must be 1 byte to 16 MiB".into()));
     }
-    let gm2p = mode2_profile::derive_profile(vbmeta)
+    let gm2p = mode2_profile::derive_profile(vbmeta, chained)
         .map_err(|e| Error::Profile(e.to_string()))?
         .to_bytes();
     let (loader, source, tzmap) = inspect_and_patch(abl, Some(policy))?;

@@ -18,6 +18,11 @@ pub struct BuildArgs {
     pub abl: PathBuf,
     #[cfg_attr(feature = "cli", arg(long))]
     pub vbmeta: Option<PathBuf>,
+    /// Directory holding each partition --vbmeta chains as <partition><chain-suffix>.
+    #[cfg_attr(feature = "cli", arg(long))]
+    pub chain_dir: Option<PathBuf>,
+    #[cfg_attr(feature = "cli", arg(long, default_value = "", requires = "chain_dir"))]
+    pub chain_suffix: String,
     #[cfg_attr(feature = "cli", arg(long))]
     pub staged: Option<PathBuf>,
     #[cfg_attr(feature = "cli", arg(long))]
@@ -111,10 +116,10 @@ pub fn execute(args: &BuildArgs, tools: &dyn ToolResolver) -> Result<BuildOutcom
 }
 
 fn validate_probe_args(args: &BuildArgs) -> Result<(), BuildError> {
-    if args.vbmeta.is_some() || args.staged.is_some() {
+    if args.vbmeta.is_some() || args.chain_dir.is_some() || args.staged.is_some() {
         return Err(BuildError::Invalid {
             step: "arguments",
-            message: "--probe cannot be combined with --vbmeta or --staged".to_owned(),
+            message: "--probe cannot be combined with --vbmeta, --chain-dir or --staged".to_owned(),
         });
     }
     if args.keep_unpatched.is_some() || args.patch_log.is_some() {
@@ -133,6 +138,7 @@ fn run_full(
     tools: &dyn ToolResolver,
 ) -> Result<BuildOutcome, BuildError> {
     validate_output_paths(args, staged, vbmeta)?;
+    let chained = read_chained(args, vbmeta)?;
     fs::create_dir_all(staged).map_err(|e| io_error("create output directory", staged, e))?;
     let destination = canoe_fs::confined::Root::open(staged)
         .map_err(|e| io_error("open output directory", staged, e))?;
@@ -158,7 +164,7 @@ fn run_full(
         .patch_log
         .as_ref()
         .map(|_| private.path().join("patch.log"));
-    let mut receipt = derive_full(&private_args, &generated, vbmeta, tools)?;
+    let mut receipt = derive_full(&private_args, &generated, vbmeta, &chained, tools)?;
     if !destination
         .names("")
         .map_err(|e| io_error("recheck output directory", staged, e))?
@@ -250,6 +256,37 @@ fn validate_output_paths(args: &BuildArgs, staged: &Path, vbmeta: &Path) -> Resu
     Ok(())
 }
 
+// Partitions the supplied vbmeta chains, refusing any auxiliary output that would replace one.
+fn read_chained(
+    args: &BuildArgs,
+    vbmeta: &Path,
+) -> Result<mode2_profile::ChainedImages, BuildError> {
+    let Some(dir) = args.chain_dir.as_deref() else {
+        return Ok(Default::default());
+    };
+    let source = mode2_profile::ChainSource {
+        dir,
+        suffix: &args.chain_suffix,
+    };
+    let root = read_input(vbmeta, 16 * 1024 * 1024)?;
+    let chained = mode2_profile::load_chained_images(&root, source)
+        .map_err(|e| crate::loader::Error::Profile(e.to_string()))?;
+    for output in args.keep_unpatched.iter().chain(args.patch_log.iter()) {
+        for partition in chained.keys() {
+            if output.exists()
+                && same_file::is_same_file(output, source.path(partition))
+                    .map_err(|e| io_error("validate output", output, e))?
+            {
+                return Err(BuildError::Invalid {
+                    step: "arguments",
+                    message: "build outputs must not replace a chained partition".to_owned(),
+                });
+            }
+        }
+    }
+    Ok(chained)
+}
+
 fn read_input(path: &Path, maximum: usize) -> Result<Vec<u8>, BuildError> {
     let file = fs::File::open(path).map_err(|e| io_error("read image", path, e))?;
     let mut bytes = Vec::new();
@@ -278,6 +315,7 @@ fn derive_full(
     args: &BuildArgs,
     staged: &Path,
     vbmeta: &Path,
+    chained: &mode2_profile::ChainedImages,
     _tools: &dyn ToolResolver,
 ) -> Result<BuildReceipt, BuildError> {
     let abl_bytes = read_input(&args.abl, crate::loader::MAX_ABL_BYTES)?;
@@ -287,6 +325,7 @@ fn derive_full(
     let prepared = crate::loader::prepare_loader(
         &abl_bytes,
         &vbmeta_bytes,
+        chained,
         crate::loader::TzMapPolicy::ProtocolFallback,
     )?;
     let boot = staged.join("boot.efi");

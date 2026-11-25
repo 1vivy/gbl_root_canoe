@@ -64,6 +64,8 @@ pub fn verify(
         &crate::build::BuildArgs {
             abl: request.image.clone(),
             vbmeta: None,
+            chain_dir: None,
+            chain_suffix: String::new(),
             staged: None,
             tools: None,
             efisp_tools: None,

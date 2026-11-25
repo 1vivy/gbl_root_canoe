@@ -66,6 +66,17 @@ fn probe_and_full_build_use_shared_bytes_without_helpers() {
         String::from_utf8_lossy(&probe.stdout)
     );
     let staged = d.path().join("prepared");
+    let chain_dir = d.path().join("chain");
+    fs::create_dir(&chain_dir).unwrap();
+    let mut chained = canoe_image::loader::ChainedImages::new();
+    for partition in
+        canoe_image::loader::chain_digest_partitions(&fs::read(&vbmeta).unwrap()).unwrap()
+    {
+        let mut image = vec![0; 256];
+        image[..4].copy_from_slice(b"AVB0");
+        fs::write(chain_dir.join(format!("{partition}_a")), &image).unwrap();
+        chained.insert(partition, image);
+    }
     let full = cli(&[
         "--json".as_ref(),
         "build".as_ref(),
@@ -73,6 +84,10 @@ fn probe_and_full_build_use_shared_bytes_without_helpers() {
         abl.as_os_str(),
         "--vbmeta".as_ref(),
         vbmeta.as_os_str(),
+        "--chain-dir".as_ref(),
+        chain_dir.as_os_str(),
+        "--chain-suffix".as_ref(),
+        "_a".as_ref(),
         "--staged".as_ref(),
         staged.as_os_str(),
         "--tools".as_ref(),
@@ -86,6 +101,7 @@ fn probe_and_full_build_use_shared_bytes_without_helpers() {
     let expected = canoe_image::loader::prepare_loader(
         &fs::read(&abl).unwrap(),
         &fs::read(&vbmeta).unwrap(),
+        &chained,
         canoe_image::loader::TzMapPolicy::ProtocolFallback,
     )
     .unwrap();

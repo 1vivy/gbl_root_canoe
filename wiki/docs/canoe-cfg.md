@@ -215,6 +215,12 @@ public-key digest changed since the last installed generation. A changed signer
 is expected when moving to or from a custom ROM and requires the operator's
 explicit allowance for that supplied firmware.
 
+The profile's verified-boot hash is the digest Android reports as
+`ro.boot.vbmeta.digest`, covering the root `vbmeta` and every vbmeta it chains, so
+derivation refuses to run without those partitions. Regenerate the profile after
+flashing a chained partition whose vbmeta differs, including a root image that
+does not carry the same vbmeta.
+
 ## DeviceInfo repair
 
 `devinfo-repair` gates one step inside a managed Mode 1 or Mode 2 preparation.

@@ -7,7 +7,7 @@
     "patch_ok": true,
     "patched_sha256": "bf1d469fabc9d611b9a3d521e25b916a8bb1e05175ad93e122adfdee837633e0",
     "tzmap_sha256": "29d5ede8991d5461be63dd08eabb15b43f6eb1f9df231a05c77b4e255f0f6c57",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -18,7 +18,7 @@
     "patch_ok": true,
     "patched_sha256": "3dfcd30596fb884ea520f4c27194011844679727a86e3e7fa30ef4f30ad4eae1",
     "tzmap_sha256": "bdcfa5575c3953aacf4b1cd49f800b8ddb46e9127b033dc633807446f291371c",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -29,7 +29,7 @@
     "patch_ok": true,
     "patched_sha256": "3dfcd30596fb884ea520f4c27194011844679727a86e3e7fa30ef4f30ad4eae1",
     "tzmap_sha256": "bdcfa5575c3953aacf4b1cd49f800b8ddb46e9127b033dc633807446f291371c",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -40,7 +40,7 @@
     "patch_ok": true,
     "patched_sha256": "eaeb1372ec018c02f86f29451b6caa349ec36137540ef91d2105a93fd05d74f3",
     "tzmap_sha256": "dc3ade577fd7a3371da74056cfacfc800dc693f7a7dd38a9ba459bda426721cc",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -51,7 +51,7 @@
     "patch_ok": true,
     "patched_sha256": "3dfcd30596fb884ea520f4c27194011844679727a86e3e7fa30ef4f30ad4eae1",
     "tzmap_sha256": "bdcfa5575c3953aacf4b1cd49f800b8ddb46e9127b033dc633807446f291371c",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -62,7 +62,7 @@
     "patch_ok": true,
     "patched_sha256": "733d2bc34738786a30f092e878c5a1215a1afba8229a4d1bb0c1a652d6f0982b",
     "tzmap_sha256": "c2cd2ee356975ced1ded323bdc7cd081d171252e7b65f30a5b404989baeb4f1b",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -73,7 +73,7 @@
     "patch_ok": true,
     "patched_sha256": "3dfcd30596fb884ea520f4c27194011844679727a86e3e7fa30ef4f30ad4eae1",
     "tzmap_sha256": "bdcfa5575c3953aacf4b1cd49f800b8ddb46e9127b033dc633807446f291371c",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -84,7 +84,7 @@
     "patch_ok": true,
     "patched_sha256": "33784cd9297fda4dc757f6cd8aea16031dbce98036b4418246a18a9b554c366e",
     "tzmap_sha256": "a894e7f7502877fc63a55d2ce91e36f3401183a7a9f3d6dd0cfff01c8a3023c5",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -95,7 +95,7 @@
     "patch_ok": true,
     "patched_sha256": "e2e55f58ae06324e454bc9b1a23d819a1d0a1925d4f77c2290b53cb9378138e5",
     "tzmap_sha256": "2bd1b5b41355debc6ecca0f68feef9623d38bb8b73460b2af2a00b6b0f6e9e31",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -106,7 +106,7 @@
     "patch_ok": true,
     "patched_sha256": "fe180226294f0e8aba2eecd8726730e03c0c307b28903932294ef3f1c66be905",
     "tzmap_sha256": "6ffe4ac345c32f11312cae06438558ebae9d7b0dce543ecbdea2f549395465cb",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -117,7 +117,7 @@
     "patch_ok": true,
     "patched_sha256": "a52b36096f58b6f474f88424b79c392bff08dca6c6b64601c37ff65d2e83c86d",
     "tzmap_sha256": "675ef59f997e199b0b0b43db15b3226984e691f64eac49aabea26bf6ce62c974",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -128,7 +128,7 @@
     "patch_ok": true,
     "patched_sha256": "02bc1a1e9dcec9e025c478743c6042ef3b5074c093db37caaf8588b290cfb03c",
     "tzmap_sha256": "36f3ed4f05da8d72604a170efe1a6ce6ec340b6b9118b901a1e087bcee3fbf60",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -139,7 +139,7 @@
     "patch_ok": true,
     "patched_sha256": "2077a6b7e291941f46f4235a1a13f59088601cd50bff13a71cfa70efb63b7891",
     "tzmap_sha256": "4ac53a8751b7bbeb9c73c43936f273a5e9e6c03c44033bf866efc3efb376320b",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -150,7 +150,7 @@
     "patch_ok": true,
     "patched_sha256": "33784cd9297fda4dc757f6cd8aea16031dbce98036b4418246a18a9b554c366e",
     "tzmap_sha256": "a894e7f7502877fc63a55d2ce91e36f3401183a7a9f3d6dd0cfff01c8a3023c5",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -162,7 +162,7 @@
     "patch_ok": true,
     "patched_sha256": "76b866c348f326327d042c201f9f1954023cb55d3a1650f5265cfca515bd43a0",
     "tzmap_sha256": "7fdfd260de0fe0018790011b1a0cb0fe41d2a6439142060f48b35883f68980e1",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": false
   },
   {
@@ -174,7 +174,7 @@
     "patch_ok": true,
     "patched_sha256": "1a4ed898c6814e64a05558a52609504b31ed211664ad4afc5105fa63113358a8",
     "tzmap_sha256": "887f04edd71809a7a06ee34ee7cba724d59d2ed74f9628930da0c04dc3271230",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   },
   {
@@ -186,7 +186,7 @@
     "patch_ok": true,
     "patched_sha256": "d38ceca81f61ed3f1a337af6a510d6613c04408a5bbbc2da66c378497695943f",
     "tzmap_sha256": "eccccaced8c53839aa94831ac837e7f441634040457fa84ac9e446296a493ab0",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": false
   },
   {
@@ -198,7 +198,7 @@
     "patch_ok": true,
     "patched_sha256": "2077a6b7e291941f46f4235a1a13f59088601cd50bff13a71cfa70efb63b7891",
     "tzmap_sha256": "4ac53a8751b7bbeb9c73c43936f273a5e9e6c03c44033bf866efc3efb376320b",
-    "gm2p_sha256": "71f72bf5725e70c6506af82e3ec43a3b1b32c70a5d242c754422c2f9c937a8a5",
+    "gm2p_sha256": "351a027ffdc5acd0c041a7a8e30a7342f242f3d176155948afac57761b9578ff",
     "vulnerable_boot_path": true
   }
 ]

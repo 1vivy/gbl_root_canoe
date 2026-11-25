@@ -1,7 +1,11 @@
+use std::collections::BTreeMap;
+use std::io::{self, Read, Seek, SeekFrom};
+
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::footer::{self, Footer};
 use crate::profile::Profile;
 
 pub(crate) const HEADER_SIZE: usize = 256;
@@ -9,6 +13,9 @@ const RELEASE_STRING_OFFSET: usize = 128;
 const RELEASE_STRING_SIZE: usize = 48;
 const PROPERTY_TAG: u64 = 0;
 const CHAIN_PARTITION_TAG: u64 = 4;
+const FLAG_VERIFICATION_DISABLED: u32 = 1 << 1;
+// libavb's VBMETA_MAX_SIZE: the most it reads for one chained vbmeta.
+const CHAINED_VBMETA_MAX_SIZE: usize = 64 * 1024;
 const OS_VERSION_KEY: &[u8] = b"com.android.build.boot.os_version";
 const INIT_BOOT_OS_VERSION_KEY: &[u8] = b"com.android.build.init_boot.os_version";
 const INIT_BOOT_SECURITY_PATCH_KEY: &[u8] = b"com.android.build.init_boot.security_patch";
@@ -67,10 +74,18 @@ pub struct GraftClassification {
     pub algorithm_type: u32,
 }
 
+/// Each chained partition's complete image or vbmeta structure, keyed by unsuffixed name.
+pub type ChainedImages = BTreeMap<String, Vec<u8>>;
+
 /// Parsed AVB inputs shared by profile derivation and vbmeta inspection.
+///
+/// One root vbmeta cannot establish the verified-boot digest, so inspection carries no profile.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VbmetaInspection {
-    pub profile: Profile,
+    pub system_version: u32,
+    pub system_spl: u32,
+    pub rot_digest: [u8; 32],
+    pub pubkey_digest: [u8; 32],
     pub rollback_index: u64,
     pub chain_partitions: Vec<ChainPartition>,
     pub build_properties: BuildProperties,
@@ -124,6 +139,21 @@ pub enum DeriveError {
     DuplicateProperty(String),
     #[error("no chain descriptor for partition: {0}")]
     ChainPartitionMissing(String),
+    #[error("chain partition name is not a plain partition name: {0}")]
+    UnsafeChainPartitionName(String),
+    #[error("duplicate chain descriptor for partition: {0}")]
+    DuplicateChainPartition(String),
+    #[error("no image supplied for chained partition: {0}")]
+    ChainImageMissing(String),
+    #[error("image supplied for a partition the vbmeta does not chain: {0}")]
+    UnexpectedChainImage(String),
+    #[error("chained partition {0} carries its own chain descriptor")]
+    NestedChainPartition(String),
+    #[error("chained partition {partition}: {reason}")]
+    InvalidChainImage {
+        partition: String,
+        reason: Box<DeriveError>,
+    },
     #[error("required os-version property is absent")]
     NoOsVersionProperty,
     #[error("required security-patch property is absent")]
@@ -479,6 +509,7 @@ fn expected_auth_sizes(algorithm_type: u32) -> Option<(u64, u64)> {
     }
 }
 pub(crate) struct CheckVbmeta<'a> {
+    pub(crate) bytes: &'a [u8],
     pub(crate) public_key: &'a [u8],
     pub(crate) descriptors: &'a [u8],
 }
@@ -560,6 +591,7 @@ pub(crate) fn check_vbmeta_layout(vbmeta: &[u8]) -> Result<CheckVbmeta<'_>, Deri
         .checked_add(descriptors_size)
         .ok_or(DeriveError::MalformedHeader)?;
     Ok(CheckVbmeta {
+        bytes: &vbmeta[..total],
         public_key: &vbmeta[public_key_start..public_key_end],
         descriptors: &vbmeta[descriptor_start..descriptor_end],
     })
@@ -725,7 +757,6 @@ pub fn inspect_vbmeta(vbmeta: &[u8]) -> Result<VbmetaInspection, DeriveError> {
     rot_hasher.update([0]);
     let rot_digest: [u8; 32] = rot_hasher.finalize().into();
     let pubkey_digest: [u8; 32] = Sha256::digest(public_key).into();
-    let vbh: [u8; 32] = Sha256::digest(&vbmeta[..total]).into();
 
     let descriptor_start = aux_start
         .checked_add(descriptors_offset)
@@ -750,30 +781,144 @@ pub fn inspect_vbmeta(vbmeta: &[u8]) -> Result<VbmetaInspection, DeriveError> {
         .or(properties.init_boot_security_patch)
         .ok_or(DeriveError::NoSecurityPatchProperty)?;
     Ok(VbmetaInspection {
-        profile: Profile {
-            magic: *b"GM2P",
-            version: 1,
-            reserved: 0,
-            is_unlocked: 0,
-            color: 0,
-            system_version: encode_os_version(&os_version)?,
-            system_spl: encode_security_patch(&security_patch)?,
-            rot_digest,
-            pubkey_digest,
-            vbh,
-        },
+        system_version: encode_os_version(&os_version)?,
+        system_spl: encode_security_patch(&security_patch)?,
+        rot_digest,
+        pubkey_digest,
         rollback_index,
         chain_partitions,
         build_properties: properties.build,
     })
 }
 
-/// Derive the locked/green GM2P profile from one stock root vbmeta image.
-pub fn derive_profile(vbmeta: &[u8]) -> Result<Profile, DeriveError> {
-    inspect_vbmeta(vbmeta).map(|inspection| inspection.profile)
+/// Name every partition libavb hashes after the root vbmeta, in hash order.
+///
+/// Unlike [`VbmetaInspection::chain_partitions`], which lists graft targets, this includes
+/// `vbmeta_*` partitions. Names come from untrusted metadata, so they are restricted to what a
+/// caller can safely resolve into a path.
+pub fn chain_digest_partitions(vbmeta: &[u8]) -> Result<Vec<String>, DeriveError> {
+    let layout = check_vbmeta_layout(vbmeta)?;
+    let mut partitions = Vec::new();
+    if parse_header(vbmeta)?.flags & FLAG_VERIFICATION_DISABLED != 0 {
+        return Ok(partitions);
+    }
+    walk_descriptors(layout.descriptors, |tag, body| {
+        if tag != CHAIN_PARTITION_TAG {
+            return Ok(());
+        }
+        let name = parse_chain_partition(body)?.partition_name;
+        if !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        {
+            return Err(DeriveError::UnsafeChainPartitionName(name));
+        }
+        if partitions.contains(&name) {
+            return Err(DeriveError::DuplicateChainPartition(name));
+        }
+        partitions.push(name);
+        Ok(())
+    })?;
+    Ok(partitions)
+}
+
+/// Read one chained partition's vbmeta the way libavb locates it, without loading the image.
+///
+/// `vbmeta*` partitions hold it at offset zero; others prefer an AVB footer and fall back to it.
+pub fn read_chained_vbmeta<R: Read + Seek>(partition: &str, image: &mut R) -> io::Result<Vec<u8>> {
+    let invalid = |error| io::Error::new(io::ErrorKind::InvalidData, error);
+    let length = image.seek(SeekFrom::End(0))?;
+    let mut offset = 0;
+    let mut size = usize::try_from(length)
+        .unwrap_or(usize::MAX)
+        .min(CHAINED_VBMETA_MAX_SIZE);
+    if !partition.starts_with("vbmeta") && length >= footer::SIZE as u64 {
+        image.seek(SeekFrom::Start(length - footer::SIZE as u64))?;
+        let mut tail = [0; footer::SIZE];
+        image.read_exact(&mut tail)?;
+        let image_length =
+            usize::try_from(length).map_err(|_| invalid(DeriveError::VbmetaPastImage))?;
+        if let Some(found) = Footer::parse_tail(&tail, image_length).map_err(invalid)? {
+            if found.vbmeta_size > CHAINED_VBMETA_MAX_SIZE {
+                return Err(invalid(DeriveError::MalformedHeader));
+            }
+            offset = found.vbmeta_offset as u64;
+            size = found.vbmeta_size;
+        }
+    }
+    image.seek(SeekFrom::Start(offset))?;
+    let mut vbmeta = vec![0; size];
+    image.read_exact(&mut vbmeta)?;
+    Ok(vbmeta)
+}
+
+fn chained_vbmeta<'a>(partition: &str, image: &'a [u8]) -> Result<&'a [u8], DeriveError> {
+    let found = if partition.starts_with("vbmeta") {
+        None
+    } else {
+        Footer::parse(image)?
+    };
+    let vbmeta = match found {
+        Some(found) => found.vbmeta(image)?,
+        None => image,
+    };
+    let layout = check_vbmeta_layout(vbmeta)?;
+    if parse_header(vbmeta)?.flags & FLAG_VERIFICATION_DISABLED == 0 {
+        walk_descriptors(layout.descriptors, |tag, _| {
+            if tag == CHAIN_PARTITION_TAG {
+                return Err(DeriveError::NestedChainPartition(partition.to_owned()));
+            }
+            Ok(())
+        })?;
+    }
+    Ok(layout.bytes)
+}
+
+/// Calculate the digest libavb reports as `androidboot.vbmeta.digest`.
+fn vbmeta_digest(vbmeta: &[u8], chained: &ChainedImages) -> Result<[u8; 32], DeriveError> {
+    let partitions = chain_digest_partitions(vbmeta)?;
+    if let Some(extra) = chained.keys().find(|name| !partitions.contains(name)) {
+        return Err(DeriveError::UnexpectedChainImage(extra.clone()));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(check_vbmeta_layout(vbmeta)?.bytes);
+    for partition in partitions {
+        let image = chained
+            .get(&partition)
+            .ok_or_else(|| DeriveError::ChainImageMissing(partition.clone()))?;
+        let chained_bytes = chained_vbmeta(&partition, image).map_err(|reason| match reason {
+            DeriveError::NestedChainPartition(_) => reason,
+            _ => DeriveError::InvalidChainImage {
+                partition: partition.clone(),
+                reason: Box::new(reason),
+            },
+        })?;
+        hasher.update(chained_bytes);
+    }
+    Ok(hasher.finalize().into())
+}
+
+/// Derive the locked/green GM2P profile from a stock root vbmeta and the images it chains.
+///
+/// `chained` must hold exactly the partitions named by [`chain_digest_partitions`], as they will
+/// be on the slot this profile boots: any later change to one of them changes the real digest.
+pub fn derive_profile(vbmeta: &[u8], chained: &ChainedImages) -> Result<Profile, DeriveError> {
+    let inspection = inspect_vbmeta(vbmeta)?;
+    Ok(Profile {
+        magic: *b"GM2P",
+        version: 1,
+        reserved: 0,
+        is_unlocked: 0,
+        color: 0,
+        system_version: inspection.system_version,
+        system_spl: inspection.system_spl,
+        rot_digest: inspection.rot_digest,
+        pubkey_digest: inspection.pubkey_digest,
+        vbh: vbmeta_digest(vbmeta, chained)?,
+    })
 }
 
 /// Compatibility alias for callers that name the operation `derive`.
-pub fn derive(vbmeta: &[u8]) -> Result<Profile, DeriveError> {
-    derive_profile(vbmeta)
+pub fn derive(vbmeta: &[u8], chained: &ChainedImages) -> Result<Profile, DeriveError> {
+    derive_profile(vbmeta, chained)
 }
